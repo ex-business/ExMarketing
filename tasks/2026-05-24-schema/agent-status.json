@@ -1,0 +1,30 @@
+{
+  "requirementId": "2026-05-24-schema",
+  "updatedAt": "2026-05-24T11:39:29.020996Z",
+  "agents": {
+    "analysis": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-24-schema/analysis.md"
+    },
+    "commit": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-24-schema/commit.md"
+    },
+    "dev": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-24-schema/implementation.md"
+    },
+    "review": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-24-schema/review.md"
+    },
+    "test": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-24-schema/test.md"
+    },
+    "test-plan": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-24-schema/test-plan.md"
+    }
+  }
+}

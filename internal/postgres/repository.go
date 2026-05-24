@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -168,6 +169,7 @@ func (r *Repository) FindMatchingActivities(ctx context.Context, tenantID string
 }
 
 func (r *Repository) CreateInbox(ctx context.Context, inbox marketing.EventInbox) (marketing.EventInbox, bool, error) {
+	inbox.Event = inbox.Event.Normalized()
 	payload, err := json.Marshal(inbox.Event)
 	if err != nil {
 		return marketing.EventInbox{}, false, err
@@ -200,6 +202,9 @@ func (r *Repository) CreateInbox(ctx context.Context, inbox marketing.EventInbox
 	existing, err := r.inboxByIdempotency(ctx, inbox.IdempotencyKey)
 	if err != nil {
 		return marketing.EventInbox{}, false, err
+	}
+	if !existing.Event.SameStandardPayload(inbox.Event) {
+		return marketing.EventInbox{}, false, marketing.ErrIdempotencyConflict
 	}
 	existing.ProcessStatus = marketing.InboxDuplicate
 	return existing, true, nil
@@ -557,9 +562,12 @@ func (r *Repository) inboxByIdempotency(ctx context.Context, key string) (market
 	if err != nil {
 		return marketing.EventInbox{}, err
 	}
-	if err := json.Unmarshal(payload, &inbox.Event); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.UseNumber()
+	if err := decoder.Decode(&inbox.Event); err != nil {
 		return marketing.EventInbox{}, err
 	}
+	inbox.Event = inbox.Event.Normalized()
 	return inbox, nil
 }
 

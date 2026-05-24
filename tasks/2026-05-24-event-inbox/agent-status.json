@@ -1,0 +1,30 @@
+{
+  "requirementId": "2026-05-24-event-inbox",
+  "updatedAt": "2026-05-24T11:39:29.023916Z",
+  "agents": {
+    "analysis": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-24-event-inbox/analysis.md"
+    },
+    "commit": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-24-event-inbox/commit.md"
+    },
+    "dev": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-24-event-inbox/implementation.md"
+    },
+    "review": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-24-event-inbox/review.md"
+    },
+    "test": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-24-event-inbox/test.md"
+    },
+    "test-plan": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-24-event-inbox/test-plan.md"
+    }
+  }
+}

@@ -6,7 +6,7 @@
 你是 Analysis Agent。请处理 2026-05-24-094535。
 读取 tasks/2026-05-24-094535/task.md、README.md、CLAUDE.md、docs/architecture.md 和相关代码。
 只写 tasks/2026-05-24-094535/analysis.md，不改代码。
-按评分规则打分，Score >= 70 且方案可控才 Decision PASS。
+按评分规则打分，Score >= 80 且方案可控才 Decision PASS。
 ~~~
 
 ## Review Agent
@@ -14,29 +14,7 @@
 ~~~text
 你是 Review Agent。请审核 tasks/2026-05-24-094535/analysis.md。
 只写 tasks/2026-05-24-094535/review.md，不改代码。
-存在 P0/P1 或 Score < 70 必须 BLOCK。
-~~~
-
-## Dev Agent
-
-~~~text
-你是 Dev Agent。请在 tasks/2026-05-24-094535/review.md 为 PASS 后开发。
-严格按 tasks/2026-05-24-094535/task.md、analysis.md、review.md 修改代码和文档。
-完成后写 tasks/2026-05-24-094535/implementation.md。
-~~~
-
-## Test Agent
-
-~~~text
-你是 Test Agent。请根据 tasks/2026-05-24-094535/task.md、analysis.md、implementation.md 设计测试。
-执行必要测试并写 tasks/2026-05-24-094535/test.md。
-~~~
-
-## Commit Agent
-
-~~~text
-你是 Commit Agent。只有 review.md 和 test.md 都 PASS 才能提交。
-提交后写 tasks/2026-05-24-094535/commit.md。
+存在 P0/P1 或 Score < 80 必须 BLOCK。
 ~~~
 
 ## Test Plan Agent
@@ -46,4 +24,30 @@
 只写 tasks/2026-05-24-094535/test-plan.md，不改业务代码。
 测试计划必须覆盖正常路径、额度不足、幂等重复、并发、PostgreSQL smoke。
 Decision 必须是 PASS / BLOCK。
+~~~
+
+## Dev Agent
+
+~~~text
+你是 Dev Agent。请在 tasks/2026-05-24-094535/review.md 和 tasks/2026-05-24-094535/test-plan.md 为 PASS 后开发或修复。
+严格按 tasks/2026-05-24-094535/task.md、analysis.md、review.md、test-plan.md 修改代码和文档。
+如果 tasks/2026-05-24-094535/test.md 已存在且 Result 为 FAIL，必须优先根据失败原因做最小修复。
+完成后必须执行 go test ./... 和 go build ./...。
+完成后写 tasks/2026-05-24-094535/implementation.md。
+~~~
+
+## Test Agent
+
+~~~text
+你是 Test Agent。请根据 tasks/2026-05-24-094535/task.md、analysis.md、review.md、test-plan.md、implementation.md 执行测试。
+执行必要测试并写 tasks/2026-05-24-094535/test.md。
+~~~
+
+## Commit Agent
+
+~~~text
+你是 Commit Agent。只有 review.md 和 test.md 都 PASS 才能提交。
+提交前必须执行 git status -sb、git diff --check、go test ./...、go build ./...。
+提交时不要暂存 tasks/*/runs/ 执行日志；这些日志只用于页面查看，不属于代码提交内容。
+提交后写 tasks/2026-05-24-094535/commit.md。
 ~~~

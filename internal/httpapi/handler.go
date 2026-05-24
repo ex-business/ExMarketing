@@ -34,6 +34,8 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /admin/v1/simulate", h.simulate)
 	mux.HandleFunc("GET /admin/v1/workflow/requirements", h.listWorkflowRequirements)
 	mux.HandleFunc("GET /admin/v1/workflow/config", h.getWorkflowConfig)
+	mux.HandleFunc("GET /admin/v1/workflow/templates", h.listWorkflowTemplates)
+	mux.HandleFunc("POST /admin/v1/workflow/templates/{id}/apply", h.applyWorkflowTemplate)
 	mux.HandleFunc("POST /admin/v1/workflow/requirements", h.createWorkflowRequirement)
 	mux.HandleFunc("DELETE /admin/v1/workflow/requirements", h.deleteWorkflowRequirements)
 	mux.HandleFunc("POST /admin/v1/workflow/intake", h.intakeWorkflowRequirements)
@@ -138,19 +140,32 @@ func (h *Handler) createEvent(w http.ResponseWriter, r *http.Request) {
 	decoder.UseNumber()
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&event); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json body")
+		writeErrorCode(w, http.StatusBadRequest, "INVALID_EVENT", "invalid json body")
 		return
 	}
 
-	if key := r.Header.Get("Idempotency-Key"); key != "" && key != event.IdempotencyKey() {
-		writeError(w, http.StatusBadRequest, "Idempotency-Key does not match event payload")
+	key := r.Header.Get("Idempotency-Key")
+	if key == "" {
+		writeErrorCode(w, http.StatusBadRequest, "INVALID_IDEMPOTENCY_KEY", "Idempotency-Key is required")
+		return
+	}
+	if err := event.Validate(); err != nil {
+		writeErrorCode(w, http.StatusBadRequest, "INVALID_EVENT", err.Error())
+		return
+	}
+	if key != event.IdempotencyKey() {
+		writeErrorCode(w, http.StatusBadRequest, "INVALID_IDEMPOTENCY_KEY", "Idempotency-Key does not match event payload")
 		return
 	}
 
 	result, err := h.engine.ProcessEvent(r.Context(), event)
 	if err != nil {
 		if errors.Is(err, marketing.ErrInvalidEvent) {
-			writeError(w, http.StatusBadRequest, err.Error())
+			writeErrorCode(w, http.StatusBadRequest, "INVALID_EVENT", err.Error())
+			return
+		}
+		if errors.Is(err, marketing.ErrIdempotencyConflict) {
+			writeErrorCode(w, http.StatusBadRequest, "INVALID_IDEMPOTENCY_KEY", err.Error())
 			return
 		}
 		if errors.Is(err, marketing.ErrQuotaExceeded) {
@@ -212,6 +227,7 @@ func (h *Handler) listWorkflowRequirements(w http.ResponseWriter, r *http.Reques
 	}
 	items := make([]map[string]any, 0, len(backlog.Items))
 	for _, req := range backlog.Items {
+		reconcileCommitFailure(&req)
 		status, _ := workflow.EnsureAgentStatus(req)
 		items = append(items, map[string]any{
 			"id":          req.ID,
@@ -240,6 +256,7 @@ func (h *Handler) getWorkflowRequirement(w http.ResponseWriter, r *http.Request)
 		if req.ID != id {
 			continue
 		}
+		reconcileCommitFailure(&req)
 		if err := workflow.EnsureTaskFiles(req); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
@@ -299,6 +316,10 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
+}
+
+func writeErrorCode(w http.ResponseWriter, status int, code string, message string) {
+	writeJSON(w, status, map[string]string{"code": code, "error": message})
 }
 
 func writeQuotaError(w http.ResponseWriter, err error) {

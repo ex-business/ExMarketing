@@ -98,6 +98,8 @@ func fieldValue(event marketing.ActivityEvent, path string) (any, bool) {
 		current = event.SourceSystem
 	case "tenantId":
 		current = event.TenantID
+	case "occurredAt":
+		current = event.OccurredAt.Format("2006-01-02T15:04:05Z07:00")
 	case "subject":
 		current = map[string]any{"type": event.Subject.Type, "id": event.Subject.ID}
 	case "biz":

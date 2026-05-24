@@ -1,0 +1,30 @@
+{
+  "requirementId": "2026-05-24-risk-limit-budget",
+  "updatedAt": "2026-05-24T11:39:29.029666Z",
+  "agents": {
+    "analysis": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-24-risk-limit-budget/analysis.md"
+    },
+    "commit": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-24-risk-limit-budget/commit.md"
+    },
+    "dev": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-24-risk-limit-budget/implementation.md"
+    },
+    "review": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-24-risk-limit-budget/review.md"
+    },
+    "test": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-24-risk-limit-budget/test.md"
+    },
+    "test-plan": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-24-risk-limit-budget/test-plan.md"
+    }
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "requirementId": "2026-05-24-outbox-http-sender",
+  "updatedAt": "2026-05-24T11:39:29.03511Z",
+  "agents": {
+    "analysis": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-24-outbox-http-sender/analysis.md"
+    },
+    "commit": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-24-outbox-http-sender/commit.md"
+    },
+    "dev": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-24-outbox-http-sender/implementation.md"
+    },
+    "review": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-24-outbox-http-sender/review.md"
+    },
+    "test": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-24-outbox-http-sender/test.md"
+    },
+    "test-plan": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-24-outbox-http-sender/test-plan.md"
+    }
+  }
+}

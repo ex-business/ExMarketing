@@ -1,0 +1,30 @@
+{
+  "requirementId": "2026-05-24-mq-event-consumer",
+  "updatedAt": "2026-05-24T11:39:29.022377Z",
+  "agents": {
+    "analysis": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-24-mq-event-consumer/analysis.md"
+    },
+    "commit": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-24-mq-event-consumer/commit.md"
+    },
+    "dev": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-24-mq-event-consumer/implementation.md"
+    },
+    "review": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-24-mq-event-consumer/review.md"
+    },
+    "test": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-24-mq-event-consumer/test.md"
+    },
+    "test-plan": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-24-mq-event-consumer/test-plan.md"
+    }
+  }
+}

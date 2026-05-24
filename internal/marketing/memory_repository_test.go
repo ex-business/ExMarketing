@@ -2,7 +2,9 @@ package marketing
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -98,4 +100,75 @@ func TestMemoryAtomicGrantDoesNotDoubleReserveOnDuplicateInbox(t *testing.T) {
 			t.Fatalf("expected stock used 1, got %s", quota.UsedValue)
 		}
 	}
+}
+
+func TestMemoryCreateInboxDetectsDuplicateAndConflict(t *testing.T) {
+	repo := NewMemoryRepository()
+	now := time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
+	event := testInboxEvent(now)
+	inbox := EventInbox{
+		ID:             "inbox_1",
+		Event:          event,
+		IdempotencyKey: event.IdempotencyKey(),
+		ProcessStatus:  InboxReceived,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+
+	if _, duplicate, err := repo.CreateInbox(context.Background(), inbox); err != nil || duplicate {
+		t.Fatalf("create inbox duplicate=%v err=%v", duplicate, err)
+	}
+
+	same := inbox
+	same.ID = "inbox_2"
+	same.Event.Attributes = map[string]any{"count": 2, "amount": "12.34", "nested": map[string]any{"ok": true}}
+	existing, duplicate, err := repo.CreateInbox(context.Background(), same)
+	if err != nil || !duplicate {
+		t.Fatalf("expected duplicate inbox, duplicate=%v err=%v", duplicate, err)
+	}
+	if existing.ProcessStatus != InboxDuplicate {
+		t.Fatalf("expected duplicate status, got %s", existing.ProcessStatus)
+	}
+
+	conflict := inbox
+	conflict.ID = "inbox_3"
+	conflict.Event.EventID = "evt_conflict"
+	if _, duplicate, err := repo.CreateInbox(context.Background(), conflict); !errors.Is(err, ErrIdempotencyConflict) || duplicate {
+		t.Fatalf("expected idempotency conflict, duplicate=%v err=%v", duplicate, err)
+	}
+}
+
+func TestActivityEventSameStandardPayloadCanonicalizesNumbers(t *testing.T) {
+	now := time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
+	left := testInboxEvent(now)
+	left.Attributes = map[string]any{"amount": jsonNumber("12.3400"), "count": jsonNumber("2")}
+	right := testInboxEvent(now)
+	right.Attributes = map[string]any{"count": jsonNumber("2.0"), "amount": 12.34}
+
+	if !left.SameStandardPayload(right) {
+		t.Fatal("expected canonical payload comparison to treat equivalent numeric attributes as equal")
+	}
+}
+
+func testInboxEvent(now time.Time) ActivityEvent {
+	return ActivityEvent{
+		EventID:      "evt_1",
+		EventType:    "DEPOSIT_SUCCESS",
+		SourceSystem: "payment",
+		TenantID:     "site_001",
+		Subject:      EventSubject{Type: "USER", ID: "10001"},
+		Biz:          EventBiz{BizType: "DEPOSIT", BizID: "pay_1"},
+		OccurredAt:   now,
+		Attributes:   map[string]any{"amount": "12.34", "count": 2, "nested": map[string]any{"ok": true}},
+	}
+}
+
+func jsonNumber(value string) any {
+	decoder := json.NewDecoder(strings.NewReader(value))
+	decoder.UseNumber()
+	var out any
+	if err := decoder.Decode(&out); err != nil {
+		panic(err)
+	}
+	return out
 }

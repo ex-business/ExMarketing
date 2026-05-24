@@ -78,6 +78,9 @@ func (r *MemoryRepository) CreateInbox(ctx context.Context, inbox EventInbox) (E
 
 	existing, ok := r.inboxByIdempotency[inbox.IdempotencyKey]
 	if ok {
+		if !existing.Event.SameStandardPayload(inbox.Event) {
+			return EventInbox{}, false, ErrIdempotencyConflict
+		}
 		existing.ProcessStatus = InboxDuplicate
 		return existing, true, nil
 	}

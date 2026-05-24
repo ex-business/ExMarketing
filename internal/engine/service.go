@@ -103,6 +103,7 @@ func (s *Service) ProcessEvent(ctx context.Context, event marketing.ActivityEven
 	if err := event.Validate(); err != nil {
 		return marketing.ProcessEventResult{}, err
 	}
+	event = event.Normalized()
 
 	now := s.now()
 	inbox := marketing.EventInbox{

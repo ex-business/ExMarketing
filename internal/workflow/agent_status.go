@@ -3,8 +3,11 @@ package workflow
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -15,6 +18,7 @@ const (
 	AgentStatusRunning = "RUNNING"
 	AgentStatusDone    = "DONE"
 	AgentStatusFailed  = "FAILED"
+	AgentStatusStale   = "INTERRUPTED"
 )
 
 type AgentStatusFile struct {
@@ -105,9 +109,50 @@ func EnsureAgentStatus(req Requirement) (AgentStatusFile, error) {
 		if current.Output == "" {
 			current.Output = filepath.Join(req.TaskDir, ArtifactForAgent(agent))
 		}
+		current = markStaleRunningIfNeeded(current)
 		status.Agents[key] = current
 	}
 	return status, nil
+}
+
+func markStaleRunningIfNeeded(current AgentStatus) AgentStatus {
+	if current.Status != AgentStatusRunning || current.Log == "" {
+		return current
+	}
+	bytes, err := os.ReadFile(current.Log)
+	if err == nil && strings.Contains(string(bytes), "finishedAt=") {
+		return current
+	}
+	info, statErr := os.Stat(current.Log)
+	if statErr != nil {
+		if current.StartedAt != nil && time.Since(*current.StartedAt) > staleRunningTimeout() {
+			now := time.Now().UTC()
+			current.Status = AgentStatusStale
+			current.FinishedAt = &now
+			current.Error = fmt.Sprintf("agent interrupted: log %s is not readable", current.Log)
+		}
+		return current
+	}
+	if time.Since(info.ModTime()) <= staleRunningTimeout() {
+		return current
+	}
+	now := time.Now().UTC()
+	current.Status = AgentStatusStale
+	current.FinishedAt = &now
+	current.Error = fmt.Sprintf("agent interrupted: no log update since %s", info.ModTime().UTC().Format(time.RFC3339))
+	return current
+}
+
+func staleRunningTimeout() time.Duration {
+	value := strings.TrimSpace(os.Getenv("EX_MARKETING_STALE_AGENT_SECONDS"))
+	if value == "" {
+		return 5 * time.Minute
+	}
+	seconds, err := strconv.Atoi(value)
+	if err != nil || seconds <= 0 {
+		return 5 * time.Minute
+	}
+	return time.Duration(seconds) * time.Second
 }
 
 func MarkAgentRunning(req Requirement, agent Agent, logPath string) error {

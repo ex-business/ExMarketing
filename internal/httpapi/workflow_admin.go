@@ -23,6 +23,10 @@ type createWorkflowRequirementRequest struct {
 	Risk        string `json:"risk"`
 }
 
+type applyWorkflowTemplateRequest struct {
+	Intake bool `json:"intake"`
+}
+
 type deleteWorkflowRequirementsRequest struct {
 	IDs []string `json:"ids"`
 }
@@ -51,6 +55,84 @@ func (h *Handler) getWorkflowConfig(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *Handler) listWorkflowTemplates(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"items": workflow.BuiltinTemplates()})
+}
+
+func (h *Handler) applyWorkflowTemplate(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(r.PathValue("id"))
+	var request applyWorkflowTemplateRequest
+	if r.Body != nil && r.ContentLength != 0 {
+		decoder := json.NewDecoder(r.Body)
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&request); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid json body")
+			return
+		}
+	}
+	var selected workflow.WorkflowTemplate
+	found := false
+	for _, template := range workflow.BuiltinTemplates() {
+		if template.ID == id {
+			selected = template
+			found = true
+			break
+		}
+	}
+	if !found {
+		writeError(w, http.StatusNotFound, "workflow template not found")
+		return
+	}
+
+	backlog, err := workflow.Load(workflowBacklogPath)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	existsByTitle := make(map[string]bool, len(backlog.Items))
+	for _, item := range backlog.Items {
+		existsByTitle[item.Title] = true
+	}
+	now := time.Now().UTC()
+	created := make([]workflow.Requirement, 0, len(selected.Items))
+	skipped := make([]workflow.RequirementTemplate, 0)
+	for _, item := range selected.Items {
+		if existsByTitle[item.Title] {
+			skipped = append(skipped, item)
+			continue
+		}
+		req := workflow.Requirement{
+			ID:          uniqueRequirementID(backlog, now, item.Title),
+			Title:       item.Title,
+			Description: item.Description,
+			Status:      workflow.StatusNew,
+			Risk:        item.Risk,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		}
+		if request.Intake {
+			req.TaskDir = workflow.TaskDirFor(req.ID)
+			req.Status = workflow.StatusAnalysisReady
+			if err := workflow.CreateTaskFiles(req); err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+		}
+		backlog.Items = append(backlog.Items, req)
+		existsByTitle[item.Title] = true
+		created = append(created, req)
+	}
+	if err := workflow.Save(workflowBacklogPath, backlog); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"template": selected,
+		"created":  created,
+		"skipped":  skipped,
+	})
+}
+
 func (h *Handler) createWorkflowRequirement(w http.ResponseWriter, r *http.Request) {
 	var request createWorkflowRequirementRequest
 	decoder := json.NewDecoder(r.Body)
@@ -76,10 +158,7 @@ func (h *Handler) createWorkflowRequirement(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	now := time.Now().UTC()
-	id := now.Format("2006-01-02") + "-" + workflow.Slug(title)
-	if id == now.Format("2006-01-02")+"-" {
-		id = now.Format("2006-01-02-150405")
-	}
+	id := requirementID(now, title)
 	for _, item := range backlog.Items {
 		if item.ID == id {
 			writeError(w, http.StatusConflict, "requirement already exists")
@@ -101,6 +180,31 @@ func (h *Handler) createWorkflowRequirement(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	writeJSON(w, http.StatusCreated, req)
+}
+
+func requirementID(now time.Time, title string) string {
+	slug := workflow.Slug(title)
+	if slug == "" {
+		slug = now.Format("150405")
+	}
+	return now.Format("2006-01-02") + "-" + slug
+}
+
+func uniqueRequirementID(backlog workflow.Backlog, now time.Time, title string) string {
+	base := requirementID(now, title)
+	exists := make(map[string]bool, len(backlog.Items))
+	for _, item := range backlog.Items {
+		exists[item.ID] = true
+	}
+	if !exists[base] {
+		return base
+	}
+	for seq := 2; ; seq++ {
+		id := fmt.Sprintf("%s-%d", base, seq)
+		if !exists[id] {
+			return id
+		}
+	}
 }
 
 func (h *Handler) deleteWorkflowRequirement(w http.ResponseWriter, r *http.Request) {
@@ -232,6 +336,7 @@ func (h *Handler) runWorkflowAgent(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		reconcileCommitFailure(item)
 		agent, err := workflow.ResolveAgent(item.Status, workflow.Agent(strings.ToLower(strings.TrimSpace(request.Agent))))
 		if err != nil {
 			writeError(w, http.StatusBadRequest, err.Error())
@@ -239,6 +344,12 @@ func (h *Handler) runWorkflowAgent(w http.ResponseWriter, r *http.Request) {
 		}
 		run, err := workflow.RunAgent(*item, agent, request.Command)
 		if err != nil {
+			if agent == workflow.AgentCommit {
+				item.Status = workflow.StatusCommitFail
+				item.UpdatedAt = time.Now().UTC()
+				_ = workflow.Save(workflowBacklogPath, backlog)
+				_ = workflow.WriteAgentReport(*item, []workflow.AgentRun{run}, item.Status, fmt.Sprintf("Commit Agent 失败，已打回 Dev Agent: %v", err))
+			}
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("agent %s failed: %v; log=%s", agent, err, run.OutputPath))
 			return
 		}
@@ -272,8 +383,8 @@ func (h *Handler) runWorkflowPipeline(w http.ResponseWriter, r *http.Request) {
 	if request.Command == "" {
 		request.Command = os.Getenv("EX_MARKETING_AGENT_CMD")
 	}
-	if request.MaxSteps <= 0 || request.MaxSteps > 6 {
-		request.MaxSteps = 6
+	if request.MaxSteps <= 0 || request.MaxSteps > 12 {
+		request.MaxSteps = 12
 	}
 
 	backlog, err := workflow.Load(workflowBacklogPath)
@@ -294,6 +405,7 @@ func (h *Handler) runWorkflowPipeline(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		reconcileCommitFailure(item)
 		runs := make([]workflow.AgentRun, 0, request.MaxSteps)
 		message := "自动流水线运行完成。"
 		for step := 0; step < request.MaxSteps; step++ {
@@ -304,11 +416,26 @@ func (h *Handler) runWorkflowPipeline(w http.ResponseWriter, r *http.Request) {
 			}
 			run, err := workflow.RunAgent(*item, agent, request.Command)
 			if err != nil {
+				if agent == workflow.AgentCommit {
+					run.NextStatus = workflow.StatusCommitFail
+					runs = append(runs, run)
+					item.Status = workflow.StatusCommitFail
+					item.UpdatedAt = time.Now().UTC()
+					if err := workflow.Save(workflowBacklogPath, backlog); err != nil {
+						writeError(w, http.StatusInternalServerError, err.Error())
+						return
+					}
+					if err := workflow.WriteAgentReport(*item, runs, item.Status, fmt.Sprintf("Commit Agent 失败，已打回 Dev Agent: %v", err)); err != nil {
+						writeError(w, http.StatusInternalServerError, err.Error())
+						return
+					}
+					continue
+				}
 				_ = workflow.WriteAgentReport(*item, runs, item.Status, fmt.Sprintf("自动流水线在 %s 失败: %v", agent, err))
 				logContent := ""
 				if run.OutputPath != "" {
 					if bytes, readErr := os.ReadFile(run.OutputPath); readErr == nil {
-						logContent = string(bytes)
+						logContent = filterAgentLogNoise(string(bytes))
 					}
 				}
 				writeJSON(w, http.StatusInternalServerError, map[string]any{
@@ -329,7 +456,7 @@ func (h *Handler) runWorkflowPipeline(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
-			if item.Status == workflow.StatusReviewBlock || item.Status == workflow.StatusTestFail || item.Status == workflow.StatusCommitted {
+			if item.Status == workflow.StatusReviewBlock || item.Status == workflow.StatusCommitted {
 				break
 			}
 		}
@@ -346,6 +473,20 @@ func (h *Handler) runWorkflowPipeline(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeError(w, http.StatusNotFound, "requirement not found")
+}
+
+func reconcileCommitFailure(item *workflow.Requirement) {
+	if item == nil || item.Status != workflow.StatusCommitReady || item.TaskDir == "" {
+		return
+	}
+	status, err := workflow.EnsureAgentStatus(*item)
+	if err != nil {
+		return
+	}
+	if status.Agents[string(workflow.AgentCommit)].Status == workflow.AgentStatusFailed {
+		item.Status = workflow.StatusCommitFail
+		item.UpdatedAt = time.Now().UTC()
+	}
 }
 
 func (h *Handler) getWorkflowAgentLog(w http.ResponseWriter, r *http.Request) {
@@ -371,6 +512,7 @@ func (h *Handler) getWorkflowAgentLog(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	content = filterAgentLogNoise(content)
 	writeJSON(w, http.StatusOK, map[string]string{"content": content, "path": current.Log})
 }
 
@@ -392,6 +534,7 @@ func (h *Handler) getWorkflowRunLog(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	content = filterAgentLogNoise(content)
 	writeJSON(w, http.StatusOK, map[string]string{"content": content, "path": path, "runId": runID})
 }
 
@@ -501,6 +644,27 @@ func readSafeTaskFile(taskDir, path string) (string, error) {
 		return "", err
 	}
 	return string(bytes), nil
+}
+
+func filterAgentLogNoise(content string) string {
+	if content == "" {
+		return content
+	}
+	lines := strings.Split(content, "\n")
+	kept := lines[:0]
+	for _, line := range lines {
+		if isNoisyCodexSkillIconWarning(line) {
+			continue
+		}
+		kept = append(kept, line)
+	}
+	return strings.Join(kept, "\n")
+}
+
+func isNoisyCodexSkillIconWarning(line string) bool {
+	return strings.Contains(line, "codex_core_skills::loader") &&
+		strings.Contains(line, "icon path must not contain '..'") &&
+		(strings.Contains(line, "interface.icon_small") || strings.Contains(line, "interface.icon_large"))
 }
 
 func runLocalCommand(ctx context.Context, timeout time.Duration, name string, args ...string) (string, int, error) {

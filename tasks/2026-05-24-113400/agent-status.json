@@ -1,0 +1,52 @@
+{
+  "requirementId": "2026-05-24-113400",
+  "updatedAt": "2026-05-24T12:40:57.502573Z",
+  "agents": {
+    "analysis": {
+      "status": "DONE",
+      "startedAt": "2026-05-24T11:34:11.274674Z",
+      "finishedAt": "2026-05-24T11:37:06.837551Z",
+      "output": "tasks/2026-05-24-113400/analysis.md",
+      "log": "tasks/2026-05-24-113400/runs/20260524T113411Z-analysis.log",
+      "nextStatus": "REVIEW_READY"
+    },
+    "commit": {
+      "status": "RUNNING",
+      "startedAt": "2026-05-24T12:40:57.502571Z",
+      "output": "tasks/2026-05-24-113400/commit.md",
+      "log": "tasks/2026-05-24-113400/runs/20260524T124057Z-commit.log"
+    },
+    "dev": {
+      "status": "DONE",
+      "startedAt": "2026-05-24T12:15:20.034795Z",
+      "finishedAt": "2026-05-24T12:17:15.023545Z",
+      "output": "tasks/2026-05-24-113400/implementation.md",
+      "log": "tasks/2026-05-24-113400/runs/20260524T121520Z-dev.log",
+      "nextStatus": "TEST_EXEC_READY"
+    },
+    "review": {
+      "status": "DONE",
+      "startedAt": "2026-05-24T11:37:54.986523Z",
+      "finishedAt": "2026-05-24T11:38:48.756974Z",
+      "output": "tasks/2026-05-24-113400/review.md",
+      "log": "tasks/2026-05-24-113400/runs/20260524T113754Z-review.log",
+      "nextStatus": "TEST_PLAN_READY"
+    },
+    "test": {
+      "status": "DONE",
+      "startedAt": "2026-05-24T12:18:34.172248Z",
+      "finishedAt": "2026-05-24T12:21:37.241527Z",
+      "output": "tasks/2026-05-24-113400/test.md",
+      "log": "tasks/2026-05-24-113400/runs/20260524T121834Z-test.log",
+      "nextStatus": "COMMIT_READY"
+    },
+    "test-plan": {
+      "status": "DONE",
+      "startedAt": "2026-05-24T11:44:34.172023Z",
+      "finishedAt": "2026-05-24T11:45:47.149711Z",
+      "output": "tasks/2026-05-24-113400/test-plan.md",
+      "log": "tasks/2026-05-24-113400/runs/20260524T114434Z-test-plan.log",
+      "nextStatus": "DEV_READY"
+    }
+  }
+}

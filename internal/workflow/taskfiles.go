@@ -244,9 +244,10 @@ func renderImplementation(req Requirement) string {
 
 ## Agent 指令
 
-你是 Dev Agent。只有 review.md 为 PASS 且 test-plan.md 为 PASS 时才能开发。
+你是 Dev Agent。只有 review.md 为 PASS 且 test-plan.md 为 PASS 时才能开发或修复。
 
 必须按 task.md、analysis.md、review.md、test-plan.md 执行，不得扩大范围。
+如果 test.md 已存在且 Result 为 FAIL，必须优先读取失败原因，做最小修复后再更新 implementation.md。
 
 完成开发后必须先做基础验证：
 
@@ -417,8 +418,9 @@ func renderAgentPrompts(req Requirement) string {
 ## Dev Agent
 
 ~~~text
-你是 Dev Agent。请在 %s/review.md 和 %s/test-plan.md 为 PASS 后开发。
+你是 Dev Agent。请在 %s/review.md 和 %s/test-plan.md 为 PASS 后开发或修复。
 严格按 %s/task.md、analysis.md、review.md、test-plan.md 修改代码和文档。
+如果 %s/test.md 已存在且 Result 为 FAIL，必须优先根据失败原因做最小修复。
 完成后必须执行 go test ./... 和 go build ./...。
 完成后写 %s/implementation.md。
 ~~~
@@ -434,9 +436,11 @@ func renderAgentPrompts(req Requirement) string {
 
 ~~~text
 你是 Commit Agent。只有 review.md 和 test.md 都 PASS 才能提交。
+提交前必须执行 git status -sb、git diff --check、go test ./...、go build ./...。
+提交时不要暂存 tasks/*/runs/ 执行日志；这些日志只用于页面查看，不属于代码提交内容。
 提交后写 %s/commit.md。
 ~~~
-`, req.ID, req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir, renderTestPlanAgentPrompt(req), req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir)
+`, req.ID, req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir, renderTestPlanAgentPrompt(req), req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir)
 }
 
 func renderTestPlanAgentPrompt(req Requirement) string {

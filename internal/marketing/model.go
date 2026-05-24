@@ -1,8 +1,10 @@
 package marketing
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"time"
 
@@ -401,11 +403,12 @@ type CreateActivityCommand struct {
 }
 
 var (
-	ErrInvalidActivity = errors.New("invalid activity")
-	ErrInvalidEvent    = errors.New("invalid event")
-	ErrDuplicateEvent  = errors.New("duplicate event")
-	ErrNotFound        = errors.New("not found")
-	ErrQuotaExceeded   = errors.New("quota exceeded")
+	ErrInvalidActivity     = errors.New("invalid activity")
+	ErrInvalidEvent        = errors.New("invalid event")
+	ErrDuplicateEvent      = errors.New("duplicate event")
+	ErrIdempotencyConflict = errors.New("idempotency key payload conflict")
+	ErrNotFound            = errors.New("not found")
+	ErrQuotaExceeded       = errors.New("quota exceeded")
 )
 
 func (cmd CreateActivityCommand) Validate(now time.Time) error {
@@ -439,7 +442,7 @@ func (cmd CreateActivityCommand) Validate(now time.Time) error {
 	return nil
 }
 
-func (event ActivityEvent) Validate() error {
+func (event *ActivityEvent) Validate() error {
 	if event.EventID == "" || event.EventType == "" || event.SourceSystem == "" || event.TenantID == "" {
 		return errors.Join(ErrInvalidEvent, errors.New("eventId, eventType, sourceSystem and tenantId are required"))
 	}
@@ -458,6 +461,20 @@ func (event ActivityEvent) Validate() error {
 	return nil
 }
 
+func (event ActivityEvent) Normalized() ActivityEvent {
+	event.OccurredAt = event.OccurredAt.UTC()
+	if event.Attributes == nil {
+		event.Attributes = map[string]any{}
+	}
+	return event
+}
+
+func (event ActivityEvent) SameStandardPayload(other ActivityEvent) bool {
+	left := canonicalEventPayload(event.Normalized())
+	right := canonicalEventPayload(other.Normalized())
+	return reflect.DeepEqual(left, right)
+}
+
 func (event ActivityEvent) IdempotencyKey() string {
 	return strings.Join([]string{
 		event.TenantID,
@@ -466,6 +483,64 @@ func (event ActivityEvent) IdempotencyKey() string {
 		event.Biz.BizType,
 		event.Biz.BizID,
 	}, ":")
+}
+
+func canonicalEventPayload(event ActivityEvent) map[string]any {
+	return map[string]any{
+		"eventId":      event.EventID,
+		"eventType":    event.EventType,
+		"sourceSystem": event.SourceSystem,
+		"tenantId":     event.TenantID,
+		"subject": map[string]any{
+			"type": event.Subject.Type,
+			"id":   event.Subject.ID,
+		},
+		"biz": map[string]any{
+			"bizType": event.Biz.BizType,
+			"bizId":   event.Biz.BizID,
+		},
+		"occurredAt": event.OccurredAt.Format(time.RFC3339Nano),
+		"attributes": canonicalJSONValue(event.Attributes),
+	}
+}
+
+func canonicalJSONValue(value any) any {
+	bytesValue, err := json.Marshal(value)
+	if err != nil {
+		return value
+	}
+	decoder := json.NewDecoder(bytes.NewReader(bytesValue))
+	decoder.UseNumber()
+	var decoded any
+	if err := decoder.Decode(&decoded); err != nil {
+		return value
+	}
+	return normalizeJSONValue(decoded)
+}
+
+func normalizeJSONValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(typed))
+		for key, item := range typed {
+			out[key] = normalizeJSONValue(item)
+		}
+		return out
+	case []any:
+		out := make([]any, len(typed))
+		for i, item := range typed {
+			out[i] = normalizeJSONValue(item)
+		}
+		return out
+	case json.Number:
+		number, err := decimal.Parse(typed.String())
+		if err != nil {
+			return typed.String()
+		}
+		return map[string]string{"$number": number.String()}
+	default:
+		return typed
+	}
 }
 
 func (cmd CreateQuotaCommand) Validate() error {

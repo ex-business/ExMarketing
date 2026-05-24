@@ -135,6 +135,14 @@ curl -X POST http://localhost:8080/openapi/v1/events \
   }'
 ```
 
+The event endpoint accepts only the standard event fields:
+
+```text
+eventId, eventType, sourceSystem, tenantId, subject, biz, occurredAt, attributes
+```
+
+`Idempotency-Key` is required and must equal `tenantId:sourceSystem:eventType:bizType:bizId`. Reposting the same payload with the same key returns `200 OK` with `duplicate=true` and does not create another participation, grant order, or outbox message. Reusing the same key for a different payload returns `400 INVALID_IDEMPOTENCY_KEY`.
+
 ## Layout
 
 ```text

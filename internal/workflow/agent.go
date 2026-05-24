@@ -54,6 +54,8 @@ func ResolveAgent(status string, requested Agent) (Agent, error) {
 		return AgentDev, nil
 	case StatusTestExecReady, StatusTestReady:
 		return AgentTest, nil
+	case StatusTestFail, StatusCommitFail:
+		return AgentDev, nil
 	case StatusCommitReady:
 		return AgentCommit, nil
 	default:
@@ -82,7 +84,74 @@ func PromptForAgent(taskDir string, agent Agent) (string, error) {
 	if len(match) != 2 {
 		return "", fmt.Errorf("prompt for %s not found in %s", heading, filepath.Join(taskDir, "agent-prompts.md"))
 	}
-	return strings.TrimSpace(string(match[1])) + "\n", nil
+	prompt := strings.TrimSpace(string(match[1])) + "\n"
+	if agent == AgentDev {
+		prompt += renderDevFeedbackContext(taskDir)
+	}
+	return prompt, nil
+}
+
+func renderDevFeedbackContext(taskDir string) string {
+	testContent, _ := os.ReadFile(filepath.Join(taskDir, "test.md"))
+	commitContent, _ := os.ReadFile(filepath.Join(taskDir, "commit.md"))
+	status, _ := LoadAgentStatus(taskDir)
+	testStatus := status.Agents[string(AgentTest)]
+	commitStatus := status.Agents[string(AgentCommit)]
+	hasTestFailure := strings.Contains(strings.ToUpper(string(testContent)), "FAIL") || testStatus.Status == AgentStatusFailed || testStatus.Error != ""
+	hasCommitFailure := strings.Contains(strings.ToUpper(string(commitContent)), "BLOCK") || commitStatus.Status == AgentStatusFailed || commitStatus.Error != ""
+	if !hasTestFailure && !hasCommitFailure {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\n\n## 返工反馈\n\n")
+	b.WriteString("请根据下面失败反馈做最小修复，然后必须重新运行 go test ./... 和 go build ./...。修复完成后继续交给 Test Agent 验证。\n\n")
+	appendAgentFailureFeedback(&b, "Test", "test.md", string(testContent), testStatus)
+	appendAgentFailureFeedback(&b, "Commit", "commit.md", string(commitContent), commitStatus)
+	return b.String()
+}
+
+func appendAgentFailureFeedback(b *strings.Builder, label, artifactName, artifactContent string, status AgentStatus) {
+	if !strings.Contains(strings.ToUpper(artifactContent), "FAIL") &&
+		!strings.Contains(strings.ToUpper(artifactContent), "BLOCK") &&
+		status.Status != AgentStatusFailed &&
+		status.Error == "" {
+		return
+	}
+	b.WriteString("### ")
+	b.WriteString(label)
+	b.WriteString(" 失败\n\n")
+	if status.Log != "" {
+		b.WriteString("最近日志：")
+		b.WriteString(status.Log)
+		b.WriteString("\n")
+	}
+	if status.Error != "" {
+		b.WriteString("错误：")
+		b.WriteString(status.Error)
+		b.WriteString("\n")
+	}
+	if artifactContent != "" {
+		b.WriteString("\n#### ")
+		b.WriteString(artifactName)
+		b.WriteString(" 摘要\n\n~~~markdown\n")
+		b.WriteString(tailForPrompt(artifactContent, 12000))
+		b.WriteString("\n~~~\n")
+	}
+	if status.Log != "" {
+		if bytes, err := os.ReadFile(status.Log); err == nil && len(bytes) > 0 {
+			b.WriteString("\n#### 日志摘要\n\n~~~text\n")
+			b.WriteString(tailForPrompt(string(bytes), 12000))
+			b.WriteString("\n~~~\n")
+		}
+	}
+	b.WriteString("\n")
+}
+
+func tailForPrompt(content string, maxBytes int) string {
+	if len(content) <= maxBytes {
+		return content
+	}
+	return content[len(content)-maxBytes:]
 }
 
 func RunAgent(req Requirement, agent Agent, command string) (AgentRun, error) {
@@ -91,6 +160,9 @@ func RunAgent(req Requirement, agent Agent, command string) (AgentRun, error) {
 	}
 	if strings.TrimSpace(command) == "" {
 		return AgentRun{}, fmt.Errorf("agent command is required; set EX_MARKETING_AGENT_CMD or pass --cmd")
+	}
+	if err := ensureAgentCanRun(req, agent); err != nil {
+		return AgentRun{}, err
 	}
 	prompt, err := PromptForAgent(req.TaskDir, agent)
 	if err != nil {
@@ -183,6 +255,18 @@ func RunAgent(req Requirement, agent Agent, command string) (AgentRun, error) {
 		return AgentRun{}, err
 	}
 	return run, nil
+}
+
+func ensureAgentCanRun(req Requirement, agent Agent) error {
+	status, err := EnsureAgentStatus(req)
+	if err != nil {
+		return err
+	}
+	current := status.Agents[string(agent)]
+	if current.Status == AgentStatusRunning {
+		return fmt.Errorf("agent %s is already running", agent)
+	}
+	return nil
 }
 
 func agentTimeout() time.Duration {

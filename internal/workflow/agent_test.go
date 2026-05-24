@@ -3,7 +3,9 @@ package workflow
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestPromptForAgent(t *testing.T) {
@@ -51,6 +53,133 @@ PASS
 	}
 	if status != StatusReviewReady || score != 85 {
 		t.Fatalf("status=%s score=%d, want %s 85", status, score, StatusReviewReady)
+	}
+}
+
+func TestResolveAgentRoutesTestFailBackToDev(t *testing.T) {
+	agent, err := ResolveAgent(StatusTestFail, AgentAuto)
+	if err != nil {
+		t.Fatalf("resolve agent: %v", err)
+	}
+	if agent != AgentDev {
+		t.Fatalf("agent = %s, want %s", agent, AgentDev)
+	}
+}
+
+func TestResolveAgentRoutesCommitFailBackToDev(t *testing.T) {
+	agent, err := ResolveAgent(StatusCommitFail, AgentAuto)
+	if err != nil {
+		t.Fatalf("resolve agent: %v", err)
+	}
+	if agent != AgentDev {
+		t.Fatalf("agent = %s, want %s", agent, AgentDev)
+	}
+}
+
+func TestDevPromptIncludesTestFailureFeedback(t *testing.T) {
+	dir := t.TempDir()
+	req := Requirement{
+		ID:      "req-1",
+		Title:   "Title",
+		TaskDir: dir,
+	}
+	if err := CreateTaskFiles(req); err != nil {
+		t.Fatalf("create task files: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "test.md"), []byte(`# Test
+
+## Result
+
+~~~text
+FAIL
+~~~
+
+## Evidence
+
+PostgreSQL smoke failed: duplicate inbox row.
+`), 0o644); err != nil {
+		t.Fatalf("write test: %v", err)
+	}
+	prompt, err := PromptForAgent(dir, AgentDev)
+	if err != nil {
+		t.Fatalf("prompt for dev: %v", err)
+	}
+	if !strings.Contains(prompt, "返工反馈") || !strings.Contains(prompt, "PostgreSQL smoke failed") {
+		t.Fatalf("expected dev prompt to include test failure feedback, got: %s", prompt)
+	}
+}
+
+func TestDevPromptIncludesCommitFailureFeedback(t *testing.T) {
+	dir := t.TempDir()
+	req := Requirement{
+		ID:      "req-1",
+		Title:   "Title",
+		TaskDir: dir,
+	}
+	if err := CreateTaskFiles(req); err != nil {
+		t.Fatalf("create task files: %v", err)
+	}
+	logPath := filepath.Join(dir, "runs", "commit.log")
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
+		t.Fatalf("mkdir runs: %v", err)
+	}
+	if err := os.WriteFile(logPath, []byte("git diff --check failed\n"), 0o644); err != nil {
+		t.Fatalf("write log: %v", err)
+	}
+	run := AgentRun{Agent: AgentCommit, OutputPath: logPath, ExitCode: 1}
+	if err := MarkAgentFailed(req, run, os.ErrInvalid); err != nil {
+		t.Fatalf("mark commit failed: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "commit.md"), []byte(`# Commit
+
+## Review
+
+~~~text
+BLOCK
+~~~
+
+git diff --check failed.
+`), 0o644); err != nil {
+		t.Fatalf("write commit: %v", err)
+	}
+	prompt, err := PromptForAgent(dir, AgentDev)
+	if err != nil {
+		t.Fatalf("prompt for dev: %v", err)
+	}
+	if !strings.Contains(prompt, "Commit 失败") || !strings.Contains(prompt, "git diff --check failed") {
+		t.Fatalf("expected dev prompt to include commit failure feedback, got: %s", prompt)
+	}
+}
+
+func TestEnsureTaskFilesPreservesExistingAgentPrompts(t *testing.T) {
+	dir := t.TempDir()
+	req := Requirement{
+		ID:      "req-1",
+		Title:   "Title",
+		TaskDir: dir,
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir task dir: %v", err)
+	}
+	original := "# Agent Prompts\n\ncustom prompt edits\n"
+	if err := os.WriteFile(filepath.Join(dir, "agent-prompts.md"), []byte(original), 0o644); err != nil {
+		t.Fatalf("write prompts: %v", err)
+	}
+
+	if err := EnsureTaskFiles(req); err != nil {
+		t.Fatalf("ensure task files: %v", err)
+	}
+
+	bytes, err := os.ReadFile(filepath.Join(dir, "agent-prompts.md"))
+	if err != nil {
+		t.Fatalf("read prompts: %v", err)
+	}
+	got := string(bytes)
+	if !strings.HasPrefix(got, strings.TrimRight(original, "\n")) {
+		t.Fatalf("expected existing prompt content to be preserved, got: %s", got)
+	}
+	if !strings.Contains(got, "## Test Plan Agent") {
+		t.Fatalf("expected missing test plan prompt to be appended, got: %s", got)
 	}
 }
 
@@ -130,5 +259,47 @@ func TestRunAgentMarksFailed(t *testing.T) {
 	}
 	if current.Log != run.OutputPath {
 		t.Fatalf("agent log = %s, want %s", current.Log, run.OutputPath)
+	}
+}
+
+func TestEnsureAgentStatusMarksStaleRunningInterrupted(t *testing.T) {
+	t.Setenv("EX_MARKETING_STALE_AGENT_SECONDS", "1")
+	dir := t.TempDir()
+	req := Requirement{
+		ID:      "req-1",
+		Title:   "Title",
+		TaskDir: dir,
+	}
+	if err := CreateTaskFiles(req); err != nil {
+		t.Fatalf("create task files: %v", err)
+	}
+	logPath := filepath.Join(dir, "runs", "old-dev.log")
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
+		t.Fatalf("mkdir runs: %v", err)
+	}
+	if err := os.WriteFile(logPath, []byte("startedAt=old\n"), 0o644); err != nil {
+		t.Fatalf("write log: %v", err)
+	}
+	old := time.Now().Add(-2 * time.Minute)
+	if err := os.Chtimes(logPath, old, old); err != nil {
+		t.Fatalf("chtimes log: %v", err)
+	}
+	if err := MarkAgentRunning(req, AgentDev, logPath); err != nil {
+		t.Fatalf("mark running: %v", err)
+	}
+	if err := os.Chtimes(logPath, old, old); err != nil {
+		t.Fatalf("restore log mtime: %v", err)
+	}
+
+	status, err := EnsureAgentStatus(req)
+	if err != nil {
+		t.Fatalf("ensure status: %v", err)
+	}
+	current := status.Agents[string(AgentDev)]
+	if current.Status != AgentStatusStale {
+		t.Fatalf("agent status = %s, want %s", current.Status, AgentStatusStale)
+	}
+	if current.Error == "" {
+		t.Fatal("expected interrupted error")
 	}
 }

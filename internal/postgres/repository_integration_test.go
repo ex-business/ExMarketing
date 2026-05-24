@@ -2,8 +2,10 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -79,6 +81,64 @@ func TestPostgresAtomicGrantRollsBackOnStockExceeded(t *testing.T) {
 	assertPostgresCount(t, repo, `SELECT COUNT(*) FROM marketing_quota WHERE activity_id = $1 AND used_value <> 0`, activityID, 0)
 }
 
+func TestPostgresCreateInboxDetectsDuplicateAndConflict(t *testing.T) {
+	databaseURL := os.Getenv("EX_MARKETING_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("EX_MARKETING_DATABASE_URL is not set")
+	}
+	ctx := context.Background()
+	repo, err := NewRepository(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("connect postgres: %v", err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+
+	prefix := "pg_inbox_idem"
+	cleanupPostgresInboxTest(t, repo, prefix)
+	t.Cleanup(func() { cleanupPostgresInboxTest(t, repo, prefix) })
+
+	now := time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
+	event := marketing.ActivityEvent{
+		EventID:      prefix + "_evt",
+		EventType:    "DEPOSIT_SUCCESS",
+		SourceSystem: "payment",
+		TenantID:     "site_001",
+		Subject:      marketing.EventSubject{Type: "USER", ID: "10001"},
+		Biz:          marketing.EventBiz{BizType: "DEPOSIT", BizID: prefix + "_pay"},
+		OccurredAt:   now,
+		Attributes:   map[string]any{"amount": jsonNumber("12.34"), "count": jsonNumber("2")},
+	}
+	inbox := marketing.EventInbox{
+		ID:             prefix + "_inbox_1",
+		Event:          event,
+		IdempotencyKey: event.IdempotencyKey(),
+		ProcessStatus:  marketing.InboxReceived,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	if _, duplicate, err := repo.CreateInbox(ctx, inbox); err != nil || duplicate {
+		t.Fatalf("create inbox duplicate=%v err=%v", duplicate, err)
+	}
+
+	same := inbox
+	same.ID = prefix + "_inbox_2"
+	same.Event.Attributes = map[string]any{"count": 2.0, "amount": 12.34}
+	existing, duplicate, err := repo.CreateInbox(ctx, same)
+	if err != nil || !duplicate {
+		t.Fatalf("expected duplicate inbox, duplicate=%v err=%v", duplicate, err)
+	}
+	if existing.ID != inbox.ID {
+		t.Fatalf("expected existing inbox %s, got %s", inbox.ID, existing.ID)
+	}
+
+	conflict := inbox
+	conflict.ID = prefix + "_inbox_3"
+	conflict.Event.EventID = prefix + "_evt_conflict"
+	if _, duplicate, err := repo.CreateInbox(ctx, conflict); !errors.Is(err, marketing.ErrIdempotencyConflict) || duplicate {
+		t.Fatalf("expected idempotency conflict, duplicate=%v err=%v", duplicate, err)
+	}
+}
+
 func cleanupPostgresAtomicTest(t *testing.T, repo *Repository, prefix string) {
 	t.Helper()
 	ctx := context.Background()
@@ -92,6 +152,23 @@ func cleanupPostgresAtomicTest(t *testing.T, repo *Repository, prefix string) {
 			t.Fatalf("cleanup %q: %v", stmt, err)
 		}
 	}
+}
+
+func cleanupPostgresInboxTest(t *testing.T, repo *Repository, prefix string) {
+	t.Helper()
+	if _, err := repo.db.ExecContext(context.Background(), `DELETE FROM marketing_event_inbox WHERE id LIKE $1 OR event_id LIKE $1`, prefix+"_%"); err != nil {
+		t.Fatalf("cleanup inbox: %v", err)
+	}
+}
+
+func jsonNumber(value string) any {
+	decoder := json.NewDecoder(strings.NewReader(value))
+	decoder.UseNumber()
+	var out any
+	if err := decoder.Decode(&out); err != nil {
+		panic(err)
+	}
+	return out
 }
 
 func assertPostgresCount(t *testing.T, repo *Repository, query string, arg any, want int) {

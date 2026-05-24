@@ -1,0 +1,30 @@
+{
+  "requirementId": "2026-05-24-webhook-receiver",
+  "updatedAt": "2026-05-24T11:39:29.023054Z",
+  "agents": {
+    "analysis": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-24-webhook-receiver/analysis.md"
+    },
+    "commit": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-24-webhook-receiver/commit.md"
+    },
+    "dev": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-24-webhook-receiver/implementation.md"
+    },
+    "review": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-24-webhook-receiver/review.md"
+    },
+    "test": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-24-webhook-receiver/test.md"
+    },
+    "test-plan": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-24-webhook-receiver/test-plan.md"
+    }
+  }
+}

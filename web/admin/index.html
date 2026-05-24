@@ -406,6 +406,34 @@
       margin-bottom: 6px;
       color: #0f3b66;
     }
+    .template-list {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .template-item {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 12px;
+    }
+    .template-title {
+      display: flex;
+      gap: 8px;
+      align-items: flex-start;
+      justify-content: space-between;
+      font-weight: 850;
+      margin-bottom: 6px;
+    }
+    .template-desc {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
     .panel {
       background: var(--panel);
       border: 1px solid var(--line);
@@ -881,7 +909,7 @@
         align-items: flex-start;
         flex-direction: column;
       }
-      .workflow-grid, .forms, .hero-cards {
+      .workflow-grid, .forms, .hero-cards, .template-list {
         grid-template-columns: 1fr;
       }
       .flow-add {
@@ -989,6 +1017,23 @@
         </div>
       </div>
     </div>
+    <div class="panel">
+      <div class="panel-head">
+        <div>
+          <h3 class="panel-title">工作流模板</h3>
+          <div class="subtitle">从设计文档拆分任务，一键进入需求列表并按顺序执行。</div>
+        </div>
+        <div class="ops" style="margin:0">
+          <button class="button secondary" onclick="loadWorkflowTemplates()">刷新模板</button>
+          <button class="button" onclick="applyWorkflowTemplate('marketing-platform-22')">添加 22 模板并接收</button>
+        </div>
+      </div>
+      <div class="detail-body">
+        <div class="template-list" id="workflowTemplates">
+          <div class="empty">模板加载中...</div>
+        </div>
+      </div>
+    </div>
   </section>
 
   <section id="workflowView">
@@ -999,6 +1044,8 @@
       </div>
       <div class="workspace-actions">
         <button class="button secondary" onclick="switchTab('create')">新增需求</button>
+        <button class="button secondary" onclick="applyWorkflowTemplate('marketing-platform-22')">添加 22 模板</button>
+        <button class="button secondary" onclick="runNextTemplateRequirement()">运行下一个模板任务</button>
         <button class="button secondary" onclick="intakeRequirements()">接收 NEW 需求</button>
         <button class="button secondary" onclick="showGitDiff()">查看 Git Diff</button>
         <span class="refresh-countdown" id="refreshCountdown">10s 后刷新</span>
@@ -1141,7 +1188,8 @@ const statusNames = {
   WAITING: '等待中',
   RUNNING: '运行中',
   DONE: '已完成',
-  FAILED: '失败'
+  FAILED: '失败',
+  INTERRUPTED: '已中断'
 };
 const requirementStatusNames = {
   NEW: '新需求',
@@ -1159,6 +1207,7 @@ const requirementStatusNames = {
   TEST_PASS: '测试通过',
   TEST_FAIL: '测试失败',
   COMMIT_READY: '待提交',
+  COMMIT_FAIL: '提交失败',
   COMMITTED: '已提交'
 };
 const artifactFiles = ['task.md', 'analysis.md', 'review.md', 'test-plan.md', 'implementation.md', 'test.md', 'commit.md', 'agent-report.md', 'agent-status.json', 'agent-prompts.md'];
@@ -1170,7 +1219,14 @@ const agentArtifacts = {
   test: 'test.md',
   commit: 'commit.md'
 };
+const templateRequirementMarker = '来源：22-独立活动营销中台设计';
 let selectedId = '';
+let lastWorkflowItems = [];
+let lastRequirementListHTML = '';
+let lastDetailHTML = '';
+let lastRunHistoryHTML = '';
+let lastConsoleStagesHTML = '';
+let lastConsoleText = '';
 let currentArtifacts = {};
 let currentArtifact = 'task.md';
 let currentRuns = [];
@@ -1188,6 +1244,7 @@ let refreshRemaining = 10;
 let logTimer = 0;
 let liveLog = { requirementId: '', agent: '' };
 let confirmResolver = null;
+let autoRunQueue = false;
 let batchMode = false;
 
 function toggleSidebar() {
@@ -1208,17 +1265,22 @@ function switchTab(name) {
   document.getElementById('workflowView').classList.toggle('hidden', name !== 'workflow');
   document.getElementById('activityView').classList.toggle('hidden', name !== 'activity');
   document.getElementById('simulateView').classList.toggle('hidden', name !== 'simulate');
-  if (name === 'create') loadConfig();
+  if (name === 'create') {
+    loadConfig();
+    loadWorkflowTemplates();
+  }
   if (name === 'workflow') loadWorkflow();
   if (name !== 'workflow') stopRefreshCountdown();
   if (name === 'activity') loadActivities();
 }
 
-async function loadWorkflow() {
+async function loadWorkflow(options = {}) {
+  const viewportState = captureWorkflowViewport();
   await loadConfig();
   const res = await fetch('/admin/v1/workflow/requirements');
   const data = await res.json();
   const items = data.items || [];
+  lastWorkflowItems = items;
   scheduleRefresh(items);
   document.getElementById('requirementCount').textContent = String(items.length);
   const list = document.getElementById('requirements');
@@ -1230,21 +1292,30 @@ async function loadWorkflow() {
     currentArtifact = 'task.md';
     selectedAgent = 'analysis';
     batchMode = false;
-    list.innerHTML = '<div class="empty">还没有需求。先用 workflowctl add 和 intake 创建一个任务。</div>';
-    document.getElementById('detailTitle').textContent = '选择一个需求';
-    document.getElementById('consoleTitle').textContent = '选择一个需求';
+    setHTMLIfChanged(list, '<div class="empty">还没有需求。先用 workflowctl add 和 intake 创建一个任务。</div>');
+    setTextIfChanged(document.getElementById('detailTitle'), '选择一个需求');
+    setTextIfChanged(document.getElementById('consoleTitle'), '选择一个需求');
     document.getElementById('detailRefresh').disabled = true;
-    document.getElementById('detail').innerHTML = '<div class="empty">从左侧选择需求查看 Agent 流程。</div>';
+    setHTMLIfChanged(document.getElementById('detail'), '<div class="empty">从左侧选择需求查看 Agent 流程。</div>');
     renderArtifact();
     renderRunHistory();
     updateBatchDeleteVisibility();
+    restoreWorkflowViewport(viewportState);
     return;
   }
-  list.innerHTML = items.map(item => renderRequirementRow(item)).join('');
+  const listHTML = items.map(item => renderRequirementRow(item)).join('');
+  if (listHTML !== lastRequirementListHTML) {
+    setHTMLIfChanged(list, listHTML);
+    lastRequirementListHTML = listHTML;
+  }
   updateBatchDeleteVisibility();
   if (!selectedId || !items.some(item => item.id === selectedId)) selectedId = items[0].id;
   markSelected();
   await loadDetail(selectedId);
+  restoreWorkflowViewport(viewportState);
+  if (options.scrollSelected) {
+    setTimeout(() => scrollRequirementIntoView(options.behavior || 'smooth'), 40);
+  }
 }
 
 async function loadConfig() {
@@ -1257,6 +1328,72 @@ async function loadConfig() {
   }
   target.textContent = 'Agent 命令：已配置 - ' + data.body.agentCommandPreview + '；Analysis 阈值：' + data.body.analysisPassScore;
   target.style.color = 'var(--green)';
+}
+
+async function loadWorkflowTemplates() {
+  const data = await requestJson('/admin/v1/workflow/templates');
+  const target = document.getElementById('workflowTemplates');
+  if (!target) return;
+  if (!data.ok) {
+    target.innerHTML = `<div class="empty">${escapeHtml(JSON.stringify(data.body))}</div>`;
+    return;
+  }
+  const templates = data.body.items || [];
+  target.innerHTML = templates.map(renderWorkflowTemplate).join('');
+}
+
+function renderWorkflowTemplate(template) {
+  const items = template.items || [];
+  return `
+    <div class="template-item">
+      <div class="template-title">
+        <span>${escapeHtml(template.name)}</span>
+        <span class="badge blue">${items.length} 项</span>
+      </div>
+      <div class="template-desc">${escapeHtml(template.description || '')}</div>
+      <div class="badges" style="margin-top:10px">
+        ${items.slice(0, 8).map(item => `<span class="badge">${item.order}. ${escapeHtml(item.title)}</span>`).join('')}
+      </div>
+      <div class="ops">
+        <button class="button" onclick="applyWorkflowTemplate('${escapeJs(template.id)}')">添加并接收</button>
+      </div>
+    </div>
+  `;
+}
+
+async function applyWorkflowTemplate(templateId) {
+  const ok = await showConfirm('添加工作流模板', '确认把 22-独立活动营销中台设计拆分为需求任务吗？\n\n已存在的同名任务会自动跳过，新任务会直接接收进入 Agent 工作流。', '确认添加');
+  if (!ok) return;
+  const data = await requestJson('/admin/v1/workflow/templates/' + encodeURIComponent(templateId) + '/apply', {
+    method: 'POST',
+    body: JSON.stringify({ intake: true })
+  });
+  if (!data.ok) {
+    writeConsole(JSON.stringify(data.body, null, 2));
+    return;
+  }
+  const created = data.body.created || [];
+  const skipped = data.body.skipped || [];
+  writeConsole('模板已添加。\n新增：' + created.length + '\n跳过：' + skipped.length);
+  if (created[0]?.id) selectedId = created[0].id;
+  await loadWorkflow();
+  switchTab('workflow');
+}
+
+async function runNextTemplateRequirement() {
+  if (!lastWorkflowItems.length) await loadWorkflow();
+  const blocked = new Set(['COMMITTED', 'REVIEW_BLOCK']);
+  const next = lastWorkflowItems.find(item => String(item.description || '').includes(templateRequirementMarker) && !blocked.has(item.status));
+  if (!next) {
+    writeConsole('没有可运行的 22 模板任务。');
+    return;
+  }
+  selectedId = next.id;
+  markSelected();
+  scrollRequirementIntoView('smooth');
+  await loadDetail(next.id);
+  autoRunQueue = true;
+  await runPipeline(true);
 }
 
 async function createRequirement() {
@@ -1314,11 +1451,19 @@ function renderRequirementRow(item) {
 function selectRequirement(id) {
   selectedId = id;
   markSelected();
+  scrollRequirementIntoView('smooth');
   loadDetail(id);
 }
 
 function markSelected() {
   for (const row of document.querySelectorAll('.req-row')) row.classList.toggle('active', row.dataset.id === selectedId);
+}
+
+function scrollRequirementIntoView(behavior = 'auto') {
+  if (!selectedId) return;
+  const row = document.querySelector(`.req-card[data-id="${cssEscape(selectedId)}"]`);
+  if (!row) return;
+  row.scrollIntoView({ behavior, block: 'center', inline: 'nearest' });
 }
 
 function toggleBatchMode(enabled) {
@@ -1333,7 +1478,7 @@ function toggleBatchMode(enabled) {
 
 async function deleteRequirement(id, event) {
   event?.stopPropagation();
-  const ok = await showConfirm('删除需求', '确认删除这个需求吗？\n\n' + id);
+  const ok = await showConfirm('删除需求', '确认删除这个需求吗？\n\n' + id, '确认删除');
   if (!ok) return;
   const data = await requestJson('/admin/v1/workflow/requirements/' + encodeURIComponent(id), { method: 'DELETE' });
   if (!data.ok) {
@@ -1351,7 +1496,7 @@ async function deleteSelectedRequirements() {
     writeConsole('请先勾选要删除的需求');
     return;
   }
-  const ok = await showConfirm('批量删除需求', '确认批量删除 ' + ids.length + ' 个需求吗？\n\n' + ids.join('\n'));
+  const ok = await showConfirm('批量删除需求', '确认批量删除 ' + ids.length + ' 个需求吗？\n\n' + ids.join('\n'), '确认删除');
   if (!ok) return;
   const data = await requestJson('/admin/v1/workflow/requirements', {
     method: 'DELETE',
@@ -1379,9 +1524,10 @@ function updateBatchDeleteVisibility() {
   deleteButton.textContent = count > 0 ? '批量删除 ' + count : '批量删除';
 }
 
-function showConfirm(title, message) {
+function showConfirm(title, message, okLabel = '确认') {
   document.getElementById('confirmTitle').textContent = title;
   document.getElementById('confirmMessage').textContent = message;
+  document.getElementById('confirmOkButton').textContent = okLabel;
   document.getElementById('confirmBackdrop').classList.add('visible');
   return new Promise(resolve => {
     confirmResolver = resolve;
@@ -1404,12 +1550,20 @@ async function loadDetail(id) {
     return;
   }
   const req = data.requirement || {};
+  const previousArtifacts = currentArtifacts;
   currentArtifacts = data.artifacts || {};
+  if (!currentArtifacts[currentArtifact] && previousArtifacts[currentArtifact]) {
+    currentArtifacts[currentArtifact] = previousArtifacts[currentArtifact];
+  }
   currentRuns = data.runs || [];
   if (!currentArtifacts[currentArtifact]) currentArtifact = 'task.md';
-  document.getElementById('detailTitle').textContent = req.title || req.id;
-  document.getElementById('consoleTitle').textContent = req.title || req.id || '选择一个需求';
-  document.getElementById('detail').innerHTML = renderDetail(req, data.agents || {});
+  setTextIfChanged(document.getElementById('detailTitle'), req.title || req.id);
+  setTextIfChanged(document.getElementById('consoleTitle'), req.title || req.id || '选择一个需求');
+  const detailHTML = renderDetail(req, data.agents || {});
+  if (detailHTML !== lastDetailHTML) {
+    setDetailHTMLIfChanged(detailHTML);
+    lastDetailHTML = detailHTML;
+  }
   renderArtifact();
   renderConsoleStages(data.agents || {});
   renderRunHistory();
@@ -1420,6 +1574,7 @@ function renderDetail(req, agents) {
     <div class="summary">
       ${metric('需求 ID', req.id || '-')}
       ${metric('流程状态', localRequirementStatus(req.status))}
+      ${metric('当前 Agent', activeAgentLabel(req, agents))}
       ${metric('风险', req.risk || '-')}
       ${metric('评分', String(req.score || 0))}
     </div>
@@ -1447,8 +1602,8 @@ function renderDetail(req, agents) {
         <option value="test">Test Agent</option>
         <option value="commit">Commit Agent</option>
       </select>
-      <button class="button" onclick="runSelectedAgent()">运行 Agent</button>
-      <button class="button" onclick="runPipeline()">自动运行全部</button>
+      <button class="button" onclick="runSelectedAgent()">自动运行后续节点</button>
+      <button class="button secondary" onclick="runSingleAgent()">只运行当前 Agent</button>
       <button class="button secondary" onclick="loadSelectedLog()">查看日志</button>
       <button class="button secondary" onclick="showGitDiff()">查看 Git Diff</button>
     </div>
@@ -1473,6 +1628,32 @@ function renderFlowCanvas(agents) {
       </div>
     </div>
   `;
+}
+
+function activeAgentLabel(req, agents) {
+  const running = Object.entries(agents || {}).find(([, state]) => state.status === 'RUNNING');
+  if (running) return '运行中：' + (agentNames[running[0]] || running[0]);
+  const interrupted = Object.entries(agents || {}).find(([, state]) => state.status === 'INTERRUPTED');
+  if (interrupted) return '已中断：' + (agentNames[interrupted[0]] || interrupted[0]);
+  const next = runnableAgentForStatus(req.status);
+  if (next) return '下一步：' + (agentNames[next] || next);
+  return '无可运行 Agent';
+}
+
+function runnableAgentForStatus(status) {
+  const mapping = {
+    ANALYSIS_READY: 'analysis',
+    REVIEW_READY: 'review',
+    TEST_PLAN_READY: 'test-plan',
+    TEST_PLAN_DONE: 'dev',
+    DEV_READY: 'dev',
+    TEST_EXEC_READY: 'test',
+    TEST_READY: 'test',
+    TEST_FAIL: 'dev',
+    COMMIT_READY: 'commit',
+    COMMIT_FAIL: 'dev'
+  };
+  return mapping[status] || '';
 }
 
 function flowNodes() {
@@ -1717,12 +1898,16 @@ function runningIcon() {
 function renderConsoleStages(agents) {
   const target = document.getElementById('consoleStages');
   if (!target) return;
-  target.innerHTML = agentOrder.map(agent => {
+  const html = agentOrder.map(agent => {
     const state = agents[agent] || {};
     const tone = agentTone(state.status || 'WAITING');
     const active = selectedAgent === agent ? ' active' : '';
     return `<button class="badge ${tone} console-stage${active}" type="button" title="${escapeHtml(localStatus(state.status || 'WAITING'))}" onclick="selectAgentOutput('${agent}')">${escapeHtml(agentNames[agent])}</button>`;
   }).join('');
+  if (html !== lastConsoleStagesHTML) {
+    setHTMLIfChanged(target, html);
+    lastConsoleStagesHTML = html;
+  }
 }
 
 async function selectAgentOutput(agent) {
@@ -1759,16 +1944,21 @@ function renderRunHistory() {
   if (!target) return;
   if (count) count.textContent = String(currentRuns.length);
   if (!currentRuns.length) {
-    target.innerHTML = '<div class="subtitle">还没有运行记录。</div>';
+    setHTMLIfChanged(target, '<div class="subtitle">还没有运行记录。</div>');
+    lastRunHistoryHTML = '<div class="subtitle">还没有运行记录。</div>';
     return;
   }
-  target.innerHTML = currentRuns.map(run => {
+  const html = currentRuns.map(run => {
     const tone = runTone(run);
     const active = currentRunId === run.id ? ' active' : '';
     const label = `${agentNames[run.agent] || run.agent || 'Agent'} ${run.id}`;
     const meta = run.current ? '当前' : formatTime(run.modifiedAt);
     return `<button class="run-item ${tone}${active}" type="button" onclick="loadRunLog('${escapeJs(run.id)}')" title="${escapeHtml(run.path || run.id)}"><strong>${escapeHtml(label)}</strong><br>${escapeHtml(meta)}</button>`;
   }).join('');
+  if (html !== lastRunHistoryHTML) {
+    setHTMLIfChanged(target, html);
+    lastRunHistoryHTML = html;
+  }
 }
 
 async function loadRunLog(runId) {
@@ -1861,38 +2051,122 @@ async function pollLiveLog() {
   if (selectedId === liveLog.requirementId && currentArtifact === key) {
     renderArtifact(true);
   }
-  writeConsole('实时日志：' + (data.body.path || key) + '\n\n' + currentArtifacts[key]);
 }
 
 async function runSelectedAgent() {
   if (!selectedId) return;
   const agent = document.getElementById('agentSelect').value;
-  writeConsole('开始运行 ' + agent + ' ...');
-  const data = await requestJson('/admin/v1/workflow/requirements/' + encodeURIComponent(selectedId) + '/run-agent', {
-    method: 'POST',
-    body: JSON.stringify({ agent })
-  });
-  writeConsole(JSON.stringify(data.body, null, 2));
-  await loadWorkflow();
+  if (agent === 'auto') {
+    autoRunQueue = true;
+    await runPipeline(true);
+    return;
+  }
+  autoRunQueue = false;
+  await runSingleAgent();
 }
 
-async function runPipeline() {
+function runSingleAgent() {
   if (!selectedId) return;
-  writeConsole('开始自动运行 Agent 流水线 ...');
-  const data = await requestJson('/admin/v1/workflow/requirements/' + encodeURIComponent(selectedId) + '/run-pipeline', {
+  const requirementId = selectedId;
+  const agent = document.getElementById('agentSelect').value;
+  autoRunQueue = false;
+  showPendingLog(agent);
+  writeConsole('开始运行 ' + agent + ' ...');
+  startLiveLog(requirementId, agent);
+  setTimeout(loadWorkflow, 800);
+  requestJson('/admin/v1/workflow/requirements/' + encodeURIComponent(requirementId) + '/run-agent', {
     method: 'POST',
-    body: JSON.stringify({ maxSteps: 6 })
-  });
-  if (!data.ok && data.body.logContent) {
-    writeConsole('运行失败：' + (data.body.error || '') + '\n\n日志：' + (data.body.log || '') + '\n\n' + data.body.logContent);
-    currentArtifact = 'log:' + (data.body.agent || 'agent');
-    currentArtifacts[currentArtifact] = data.body.logContent;
-    if (!artifactFiles.includes(currentArtifact)) artifactFiles.push(currentArtifact);
-  } else {
+    body: JSON.stringify({ agent })
+  }).then(data => {
     writeConsole(JSON.stringify(data.body, null, 2));
-    currentArtifact = 'agent-report.md';
+    if (data.ok) {
+      const runAgent = data.body.run?.Agent || agent;
+      startLiveLog(requirementId, runAgent);
+      if (data.body.requirement?.status === 'COMMIT_READY') {
+        writeConsole(JSON.stringify(data.body, null, 2) + '\n\n测试已通过，自动提交给 Commit Agent ...');
+        setTimeout(() => runPipeline(false), 300);
+        return;
+      }
+    }
+    return loadWorkflow();
+  }).catch(err => {
+    writeConsole('运行请求失败：' + err.message);
+  });
+}
+
+function runPipeline(continueQueue = false) {
+  if (!selectedId) return;
+  const requirementId = selectedId;
+  const agent = inferAgentFromStatus();
+  showPendingLog(agent);
+  writeConsole('开始自动运行 Agent 流水线 ...');
+  startLiveLog(requirementId, agent);
+  setTimeout(loadWorkflow, 800);
+  requestJson('/admin/v1/workflow/requirements/' + encodeURIComponent(requirementId) + '/run-pipeline', {
+    method: 'POST',
+    body: JSON.stringify({ maxSteps: 12 })
+  }).then(data => {
+    if (!data.ok && data.body.logContent) {
+      writeConsole('运行失败：' + (data.body.error || '') + '\n\n日志：' + (data.body.log || '') + '\n\n' + data.body.logContent);
+      currentArtifact = 'log:' + (data.body.agent || 'agent');
+      currentArtifacts[currentArtifact] = data.body.logContent;
+      if (!artifactFiles.includes(currentArtifact)) artifactFiles.push(currentArtifact);
+    } else {
+      writeConsole(JSON.stringify(data.body, null, 2));
+      currentArtifact = 'agent-report.md';
+    }
+    if (data.ok) {
+      const lastRun = (data.body.runs || []).slice(-1)[0];
+      if (lastRun?.Agent) startLiveLog(requirementId, lastRun.Agent);
+      if (continueQueue && data.body.requirement?.status === 'COMMITTED') {
+        return continueWithNextRequirement(requirementId);
+      }
+    }
+    return loadWorkflow();
+  }).catch(err => {
+    writeConsole('自动流水线请求失败：' + err.message);
+  });
+}
+
+async function continueWithNextRequirement(currentId) {
+  await loadWorkflow({ scrollSelected: true });
+  const next = findNextRunnableRequirement(currentId);
+  if (!next) {
+    autoRunQueue = false;
+    writeConsole('当前需求已完成。需求列表里没有下一个可运行任务。');
+    return;
   }
-  await loadWorkflow();
+  selectedId = next.id;
+  markSelected();
+  scrollRequirementIntoView('smooth');
+  await loadDetail(next.id);
+  const nextAgent = runnableAgentForStatus(next.status) || 'analysis';
+  showPendingLog(nextAgent);
+  writeConsole('当前需求已完成，自动切换到下一个需求：' + (next.title || next.id));
+  setTimeout(() => runPipeline(autoRunQueue), 500);
+}
+
+function findNextRunnableRequirement(currentId) {
+  const items = lastWorkflowItems || [];
+  if (!items.length) return null;
+  const currentIndex = Math.max(0, items.findIndex(item => item.id === currentId));
+  const ordered = items.slice(currentIndex + 1).concat(items.slice(0, currentIndex));
+  return ordered.find(item => isRunnableRequirement(item)) || null;
+}
+
+function isRunnableRequirement(item) {
+  if (!item || item.id === selectedId) return false;
+  if (!runnableAgentForStatus(item.status)) return false;
+  return !Object.values(item.agents || {}).some(agent => agent.status === 'RUNNING');
+}
+
+function showPendingLog(agent) {
+  selectedAgent = agent;
+  consoleMode = 'log';
+  currentArtifact = 'log:' + agent;
+  currentArtifacts[currentArtifact] = '等待 ' + (agentNames[agent] || agent) + ' 日志输出...';
+  if (!artifactFiles.includes(currentArtifact)) artifactFiles.push(currentArtifact);
+  renderArtifact(true);
 }
 
 async function loadSelectedLog() {
@@ -1929,6 +2203,9 @@ async function commitRequirement() {
 }
 
 function inferAgentFromStatus() {
+  const item = lastWorkflowItems.find(item => item.id === selectedId);
+  const agent = runnableAgentForStatus(item?.status);
+  if (agent) return agent;
   const status = document.querySelector('.metric:nth-child(2) .metric-value')?.textContent || '';
   if (status === 'ANALYSIS_READY') return 'analysis';
   if (status === 'REVIEW_READY') return 'review';
@@ -1936,6 +2213,7 @@ function inferAgentFromStatus() {
   if (status === 'TEST_PLAN_DONE') return 'dev';
   if (status === 'DEV_READY') return 'dev';
   if (status === 'TEST_EXEC_READY' || status === 'TEST_READY') return 'test';
+  if (status === 'TEST_FAIL' || status === 'COMMIT_FAIL') return 'dev';
   if (status === 'COMMIT_READY') return 'commit';
   return 'analysis';
 }
@@ -1951,7 +2229,18 @@ function renderArtifact(autoScroll = false) {
   const content = currentArtifacts[currentArtifact] || '(empty)';
   const target = document.getElementById('workflowConsole');
   if (!target) return;
-  target.textContent = '## ' + currentArtifact + '\n\n' + content;
+  const text = '## ' + currentArtifact + '\n\n' + content;
+  if (text !== lastConsoleText) {
+    const wasAtBottom = target.scrollTop + target.clientHeight >= target.scrollHeight - 12;
+    const previousScrollTop = target.scrollTop;
+    target.textContent = text;
+    lastConsoleText = text;
+    if (autoScroll || wasAtBottom) {
+      target.scrollTop = target.scrollHeight;
+    } else {
+      target.scrollTop = previousScrollTop;
+    }
+  }
   if (autoScroll) target.scrollTop = target.scrollHeight;
   document.getElementById('artifactModeButton')?.classList.toggle('active', consoleMode === 'artifact');
   document.getElementById('logModeButton')?.classList.toggle('active', consoleMode === 'log');
@@ -1985,7 +2274,64 @@ async function requestJson(url, options = {}) {
 }
 
 function writeConsole(text) {
-  document.getElementById('workflowConsole').textContent = text;
+  const target = document.getElementById('workflowConsole');
+  if (!target || text === lastConsoleText) return;
+  target.textContent = text;
+  lastConsoleText = text;
+}
+
+function setHTMLIfChanged(target, html) {
+  if (!target || target.innerHTML === html) return;
+  const previousScrollTop = target.scrollTop;
+  target.innerHTML = html;
+  target.scrollTop = previousScrollTop;
+}
+
+function setDetailHTMLIfChanged(html) {
+  const detail = document.getElementById('detail');
+  if (!detail || detail.innerHTML === html) return;
+  const viewportState = captureWorkflowViewport();
+  detail.innerHTML = html;
+  restoreWorkflowViewport(viewportState);
+}
+
+function captureWorkflowViewport() {
+  const workspace = document.querySelector('.workspace');
+  const detail = document.getElementById('detail');
+  const canvas = detail?.querySelector('.flow-canvas');
+  const selectedRow = document.querySelector('.req-row.active');
+  return {
+    workspaceTop: workspace ? workspace.scrollTop : 0,
+    detailTop: detail ? detail.scrollTop : 0,
+    flowLeft: canvas ? canvas.scrollLeft : 0,
+    flowTop: canvas ? canvas.scrollTop : 0,
+    selectedRowTop: selectedRow ? selectedRow.getBoundingClientRect().top : null
+  };
+}
+
+function restoreWorkflowViewport(state) {
+  if (!state) return;
+  const apply = () => {
+    const workspace = document.querySelector('.workspace');
+    const detail = document.getElementById('detail');
+    const canvas = detail?.querySelector('.flow-canvas');
+    if (workspace) workspace.scrollTop = state.workspaceTop;
+    if (detail) detail.scrollTop = state.detailTop;
+    if (canvas) {
+      canvas.scrollLeft = state.flowLeft;
+      canvas.scrollTop = state.flowTop;
+    }
+  };
+  apply();
+  requestAnimationFrame(() => {
+    apply();
+    requestAnimationFrame(apply);
+  });
+}
+
+function setTextIfChanged(target, text) {
+  if (!target || target.textContent === text) return;
+  target.textContent = text;
 }
 
 function metric(label, value) {
@@ -2008,7 +2354,7 @@ function countAgents(agents) {
 function agentTone(status) {
   if (status === 'DONE') return 'green';
   if (status === 'RUNNING') return 'blue';
-  if (status === 'FAILED') return 'red';
+  if (status === 'FAILED' || status === 'INTERRUPTED') return 'red';
   return 'amber';
 }
 
@@ -2063,6 +2409,11 @@ function escapeHtml(value) {
 
 function escapeJs(value) {
   return String(value ?? '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+}
+
+function cssEscape(value) {
+  if (window.CSS && typeof window.CSS.escape === 'function') return window.CSS.escape(String(value ?? ''));
+  return String(value ?? '').replace(/["\\]/g, '\\$&');
 }
 
 loadWorkflow();

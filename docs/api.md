@@ -375,6 +375,14 @@ POST /openapi/v1/events
 Idempotency-Key: site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:pay_123
 ```
 
+`Idempotency-Key` 为必填 Header，必须等于：
+
+```text
+tenantId + ":" + sourceSystem + ":" + eventType + ":" + biz.bizType + ":" + biz.bizId
+```
+
+事件模型只允许以下字段：`eventId`、`eventType`、`sourceSystem`、`tenantId`、`subject`、`biz`、`occurredAt`、`attributes`。业务扩展字段必须放在 `attributes` 内；顶层、`subject`、`biz` 中的未知字段会返回 `INVALID_EVENT`。
+
 示例：
 
 ```bash
@@ -414,10 +422,24 @@ curl -X POST http://localhost:8080/openapi/v1/events \
 错误码：
 
 ```text
-400  事件格式错误 / Idempotency-Key 不匹配
-409  quota exceeded: <quotaType>: <scope>: <scopeKey>
+400  INVALID_EVENT: 事件格式错误、缺少必填字段或未知字段
+400  INVALID_IDEMPOTENCY_KEY: 缺少 Idempotency-Key、Header 与 payload 不匹配，或同一 key 的 payload 不一致
+409  QUOTA_EXCEEDED: <quotaType>: <scope>: <scopeKey>
 500  非预期内部错误
 ```
+
+重复事件响应：
+
+```json
+{
+  "duplicate": true,
+  "participations": null,
+  "grantOrders": null,
+  "outboxMessages": null
+}
+```
+
+完全重复的事件返回 `200 OK` 且 `duplicate=true`，不会再次创建 participation、grant_order 或 outbox。相同 `Idempotency-Key` 但 payload 不一致返回 `400 INVALID_IDEMPOTENCY_KEY`。
 
 Quota 不足响应体：
 

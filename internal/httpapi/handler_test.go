@@ -73,6 +73,218 @@ func TestActivityEventCreatesGrantCommand(t *testing.T) {
 	}
 }
 
+func TestActivityEventRequiresIdempotencyKey(t *testing.T) {
+	handler := newTestHandler()
+
+	rec := postRawEvent(t, handler, depositEventJSON("evt_missing_idem", "pay_missing_idem", `"amount":"299.00","vipLevel":3,"isFirstDeposit":true`), "")
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusBadRequest, rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"code":"INVALID_IDEMPOTENCY_KEY"`) {
+		t.Fatalf("expected idempotency error code, got: %s", rec.Body.String())
+	}
+}
+
+func TestActivityEventRejectsMismatchedIdempotencyKey(t *testing.T) {
+	handler := newTestHandler()
+
+	rec := postRawEvent(t, handler, depositEventJSON("evt_bad_idem", "pay_bad_idem", `"amount":"299.00"`), "site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:other_pay")
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusBadRequest, rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"code":"INVALID_IDEMPOTENCY_KEY"`) {
+		t.Fatalf("expected idempotency error code, got: %s", rec.Body.String())
+	}
+}
+
+func TestActivityEventRejectsUnknownFields(t *testing.T) {
+	handler := newTestHandler()
+
+	event := `{
+		"eventId": "evt_unknown",
+		"eventType": "DEPOSIT_SUCCESS",
+		"sourceSystem": "payment",
+		"tenantId": "site_001",
+		"subject": {"type": "USER", "id": "10001"},
+		"biz": {"bizType": "DEPOSIT", "bizId": "pay_unknown"},
+		"occurredAt": "2026-05-24T12:00:00Z",
+		"attributes": {},
+		"orderAmount": "299.00"
+	}`
+	rec := postRawEvent(t, handler, event, "site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:pay_unknown")
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusBadRequest, rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"code":"INVALID_EVENT"`) {
+		t.Fatalf("expected invalid event code, got: %s", rec.Body.String())
+	}
+}
+
+func TestActivityEventRejectsNestedUnknownFields(t *testing.T) {
+	handler := newTestHandler()
+
+	event := `{
+		"eventId": "evt_nested_unknown",
+		"eventType": "DEPOSIT_SUCCESS",
+		"sourceSystem": "payment",
+		"tenantId": "site_001",
+		"subject": {"type": "USER", "id": "10001", "name": "Alice"},
+		"biz": {"bizType": "DEPOSIT", "bizId": "pay_nested_unknown"},
+		"occurredAt": "2026-05-24T12:00:00Z",
+		"attributes": {}
+	}`
+	rec := postRawEvent(t, handler, event, "site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:pay_nested_unknown")
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusBadRequest, rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"code":"INVALID_EVENT"`) {
+		t.Fatalf("expected invalid event code, got: %s", rec.Body.String())
+	}
+}
+
+func TestActivityEventRejectsMissingRequiredField(t *testing.T) {
+	handler := newTestHandler()
+
+	tests := []struct {
+		name  string
+		event string
+		key   string
+	}{
+		{
+			name: "missing occurredAt",
+			event: `{
+				"eventId": "evt_missing_required",
+				"eventType": "DEPOSIT_SUCCESS",
+				"sourceSystem": "payment",
+				"tenantId": "site_001",
+				"subject": {"type": "USER", "id": "10001"},
+				"biz": {"bizType": "DEPOSIT", "bizId": "pay_missing_required"},
+				"attributes": {}
+			}`,
+			key: "site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:pay_missing_required",
+		},
+		{
+			name: "missing eventType",
+			event: `{
+				"eventId": "evt_missing_event_type",
+				"sourceSystem": "payment",
+				"tenantId": "site_001",
+				"subject": {"type": "USER", "id": "10001"},
+				"biz": {"bizType": "DEPOSIT", "bizId": "pay_missing_event_type"},
+				"occurredAt": "2026-05-24T12:00:00Z",
+				"attributes": {}
+			}`,
+			key: "site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:pay_missing_event_type",
+		},
+		{
+			name: "missing biz",
+			event: `{
+				"eventId": "evt_missing_biz",
+				"eventType": "DEPOSIT_SUCCESS",
+				"sourceSystem": "payment",
+				"tenantId": "site_001",
+				"subject": {"type": "USER", "id": "10001"},
+				"occurredAt": "2026-05-24T12:00:00Z",
+				"attributes": {}
+			}`,
+			key: "site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:pay_missing_biz",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := postRawEvent(t, handler, tt.event, tt.key)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("expected status %d, got %d: %s", http.StatusBadRequest, rec.Code, rec.Body.String())
+			}
+			if !strings.Contains(rec.Body.String(), `"code":"INVALID_EVENT"`) {
+				t.Fatalf("expected invalid event code, got: %s", rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestActivityEventDuplicateAndConflict(t *testing.T) {
+	handler := newTestHandler()
+	createActivity(t, handler)
+
+	event := depositEventJSON("evt_duplicate", "pay_duplicate", `"amount":299.00,"currency":"CNY","vipLevel":3,"isFirstDeposit":true`)
+	first := postRawEvent(t, handler, event, "site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:pay_duplicate")
+	if first.Code != http.StatusAccepted {
+		t.Fatalf("expected first status %d, got %d: %s", http.StatusAccepted, first.Code, first.Body.String())
+	}
+
+	reordered := `{
+		"tenantId": "site_001",
+		"sourceSystem": "payment",
+		"eventType": "DEPOSIT_SUCCESS",
+		"eventId": "evt_duplicate",
+		"subject": {"id": "10001", "type": "USER"},
+		"biz": {"bizId": "pay_duplicate", "bizType": "DEPOSIT"},
+		"occurredAt": "2026-05-24T12:00:00Z",
+		"attributes": {
+			"isFirstDeposit": true,
+			"vipLevel": 3.0,
+			"currency": "CNY",
+			"amount": 299.000
+		}
+	}`
+	second := postRawEvent(t, handler, reordered, "site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:pay_duplicate")
+	if second.Code != http.StatusOK || !strings.Contains(second.Body.String(), `"duplicate":true`) {
+		t.Fatalf("expected duplicate 200 response, got %d: %s", second.Code, second.Body.String())
+	}
+	if strings.Contains(second.Body.String(), `"grantOrders":[{`) || strings.Contains(second.Body.String(), `"outboxMessages":[{`) {
+		t.Fatalf("expected duplicate response without new grant/outbox, got: %s", second.Body.String())
+	}
+
+	conflict := depositEventJSON("evt_conflict", "pay_duplicate", `"amount":299.00,"currency":"CNY","vipLevel":3,"isFirstDeposit":true`)
+	conflictRec := postRawEvent(t, handler, conflict, "site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:pay_duplicate")
+	if conflictRec.Code != http.StatusBadRequest {
+		t.Fatalf("expected conflict status %d, got %d: %s", http.StatusBadRequest, conflictRec.Code, conflictRec.Body.String())
+	}
+	if !strings.Contains(conflictRec.Body.String(), `"code":"INVALID_IDEMPOTENCY_KEY"`) {
+		t.Fatalf("expected idempotency conflict code, got: %s", conflictRec.Body.String())
+	}
+}
+
+func TestActivityEventNormalizesNullAttributes(t *testing.T) {
+	handler := newTestHandler()
+
+	event := depositEventJSON("evt_null_attrs", "pay_null_attrs", `null`)
+	rec := postRawEvent(t, handler, event, "site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:pay_null_attrs")
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusAccepted, rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"attributes":{}`) {
+		t.Fatalf("expected attributes to normalize to empty object, got: %s", rec.Body.String())
+	}
+}
+
+func TestActivityEventNormalizesMissingAttributes(t *testing.T) {
+	handler := newTestHandler()
+
+	event := `{
+		"eventId": "evt_missing_attrs",
+		"eventType": "DEPOSIT_SUCCESS",
+		"sourceSystem": "payment",
+		"tenantId": "site_001",
+		"subject": {"type": "USER", "id": "10001"},
+		"biz": {"bizType": "DEPOSIT", "bizId": "pay_missing_attrs"},
+		"occurredAt": "2026-05-24T12:00:00Z"
+	}`
+	rec := postRawEvent(t, handler, event, "site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:pay_missing_attrs")
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusAccepted, rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"attributes":{}`) {
+		t.Fatalf("expected attributes to normalize to empty object, got: %s", rec.Body.String())
+	}
+}
+
 func TestActivityEventBudgetExceededReturnsConflictAndAudit(t *testing.T) {
 	handler := newTestHandler()
 	activityID := createActivity(t, handler)
@@ -273,6 +485,85 @@ func TestCreateAndIntakeWorkflowRequirement(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `"status":"ANALYSIS_READY"`) {
 		t.Fatalf("expected intake status, got: %s", rec.Body.String())
+	}
+}
+
+func TestListWorkflowTemplates(t *testing.T) {
+	handler := newTestHandler()
+	reqHTTP := httptest.NewRequest(http.MethodGet, "/admin/v1/workflow/templates", nil)
+	rec := httptest.NewRecorder()
+
+	handler.Routes().ServeHTTP(rec, reqHTTP)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"id":"marketing-platform-22"`) ||
+		!strings.Contains(body, `"order":35`) ||
+		!strings.Contains(body, "标准事件模型 Schema 校验") ||
+		!strings.Contains(body, "管理后台通用配置页面") {
+		t.Fatalf("expected marketing platform template, got: %s", body)
+	}
+}
+
+func TestApplyWorkflowTemplateCreatesIntakeTasks(t *testing.T) {
+	t.Chdir(t.TempDir())
+	handler := newTestHandler()
+	reqHTTP := httptest.NewRequest(http.MethodPost, "/admin/v1/workflow/templates/marketing-platform-22/apply", strings.NewReader(`{"intake":true}`))
+	rec := httptest.NewRecorder()
+
+	handler.Routes().ServeHTTP(rec, reqHTTP)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Created []workflow.Requirement `json:"created"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(body.Created) != len(workflow.MarketingPlatformTemplate().Items) {
+		t.Fatalf("expected %d created requirements, got %d", len(workflow.MarketingPlatformTemplate().Items), len(body.Created))
+	}
+	if body.Created[0].Status != workflow.StatusAnalysisReady || body.Created[0].TaskDir == "" {
+		t.Fatalf("expected intake-created task, got: %+v", body.Created[0])
+	}
+	if _, err := os.Stat(body.Created[0].TaskDir + "/agent-prompts.md"); err != nil {
+		t.Fatalf("expected task files: %v", err)
+	}
+
+	rec = httptest.NewRecorder()
+	handler.Routes().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/admin/v1/workflow/templates/marketing-platform-22/apply", strings.NewReader(`{"intake":true}`)))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected idempotent status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	var second struct {
+		Created []workflow.Requirement         `json:"created"`
+		Skipped []workflow.RequirementTemplate `json:"skipped"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &second); err != nil {
+		t.Fatalf("decode second response: %v", err)
+	}
+	if len(second.Created) != 0 || len(second.Skipped) != len(workflow.MarketingPlatformTemplate().Items) {
+		t.Fatalf("expected duplicate titles skipped, got created=%d skipped=%d", len(second.Created), len(second.Skipped))
+	}
+}
+
+func TestFilterAgentLogNoise(t *testing.T) {
+	content := strings.Join([]string{
+		"before",
+		"2026-05-24T12:04:05.228825Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'",
+		"2026-05-24T12:04:05.228829Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'",
+		"after",
+	}, "\n")
+	got := filterAgentLogNoise(content)
+	if strings.Contains(got, "codex_core_skills::loader") || strings.Contains(got, "interface.icon_large") || strings.Contains(got, "interface.icon_small") {
+		t.Fatalf("expected noisy Codex skill icon warnings filtered, got: %s", got)
+	}
+	if !strings.Contains(got, "before") || !strings.Contains(got, "after") {
+		t.Fatalf("expected useful log lines preserved, got: %s", got)
 	}
 }
 
@@ -530,7 +821,20 @@ func createQuota(t *testing.T, handler *Handler, activityID string, quotaType ma
 
 func postDepositEvent(t *testing.T, handler *Handler, eventID string, bizID string) *httptest.ResponseRecorder {
 	t.Helper()
-	event := `{
+	event := depositEventJSON(eventID, bizID, `{
+			"amount": "299.00",
+			"currency": "CNY",
+			"vipLevel": 3,
+			"isFirstDeposit": true
+		}`)
+	return postRawEvent(t, handler, event, "site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:"+bizID)
+}
+
+func depositEventJSON(eventID string, bizID string, attributesJSON string) string {
+	if attributesJSON != "null" && !strings.HasPrefix(strings.TrimSpace(attributesJSON), "{") {
+		attributesJSON = "{" + attributesJSON + "}"
+	}
+	return `{
 		"eventId": "` + eventID + `",
 		"eventType": "DEPOSIT_SUCCESS",
 		"sourceSystem": "payment",
@@ -538,15 +842,16 @@ func postDepositEvent(t *testing.T, handler *Handler, eventID string, bizID stri
 		"subject": {"type": "USER", "id": "10001"},
 		"biz": {"bizType": "DEPOSIT", "bizId": "` + bizID + `"},
 		"occurredAt": "2026-05-24T12:00:00Z",
-		"attributes": {
-			"amount": "299.00",
-			"currency": "CNY",
-			"vipLevel": 3,
-			"isFirstDeposit": true
-		}
+		"attributes": ` + attributesJSON + `
 	}`
+}
+
+func postRawEvent(t *testing.T, handler *Handler, event string, idempotencyKey string) *httptest.ResponseRecorder {
+	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, "/openapi/v1/events", strings.NewReader(event))
-	req.Header.Set("Idempotency-Key", "site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:"+bizID)
+	if idempotencyKey != "" {
+		req.Header.Set("Idempotency-Key", idempotencyKey)
+	}
 	rec := httptest.NewRecorder()
 	handler.Routes().ServeHTTP(rec, req)
 	return rec

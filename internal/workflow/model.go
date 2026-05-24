@@ -34,5 +34,6 @@ const (
 	StatusTestPass      = "TEST_PASS"
 	StatusTestFail      = "TEST_FAIL"
 	StatusCommitReady   = "COMMIT_READY"
+	StatusCommitFail    = "COMMIT_FAIL"
 	StatusCommitted     = "COMMITTED"
 )

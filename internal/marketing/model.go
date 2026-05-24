@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/url"
 	"reflect"
 	"strings"
 	"time"
@@ -132,6 +134,26 @@ type Rule struct {
 	UpdatedAt time.Time       `json:"updatedAt"`
 }
 
+func (r *Rule) UnmarshalJSON(data []byte) error {
+	type alias Rule
+	aux := struct {
+		alias
+		Enabled *bool `json:"enabled"`
+	}{}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&aux); err != nil {
+		return err
+	}
+	*r = Rule(aux.alias)
+	if aux.Enabled == nil {
+		r.Enabled = true
+	} else {
+		r.Enabled = *aux.Enabled
+	}
+	return nil
+}
+
 type ConditionRuleConfig struct {
 	Logic      string      `json:"logic"`
 	Conditions []Condition `json:"conditions"`
@@ -153,8 +175,29 @@ type Reward struct {
 	GrantChannel  GrantChannel    `json:"grantChannel"`
 	FlowMultiple  string          `json:"flowMultiple"`
 	Enabled       bool            `json:"enabled"`
+	Version       int             `json:"version"`
 	CreatedAt     time.Time       `json:"createdAt"`
 	UpdatedAt     time.Time       `json:"updatedAt"`
+}
+
+func (r *Reward) UnmarshalJSON(data []byte) error {
+	type alias Reward
+	aux := struct {
+		alias
+		Enabled *bool `json:"enabled"`
+	}{}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&aux); err != nil {
+		return err
+	}
+	*r = Reward(aux.alias)
+	if aux.Enabled == nil {
+		r.Enabled = true
+	} else {
+		r.Enabled = *aux.Enabled
+	}
+	return nil
 }
 
 type RewardConfig struct {
@@ -397,6 +440,7 @@ type CreateActivityCommand struct {
 	Priority       int             `json:"priority"`
 	ExclusiveGroup string          `json:"exclusiveGroup"`
 	Stackable      bool            `json:"stackable"`
+	Version        int             `json:"version"`
 	Config         json.RawMessage `json:"config,omitempty"`
 	Rules          []Rule          `json:"rules"`
 	Rewards        []Reward        `json:"rewards"`
@@ -427,6 +471,17 @@ func (cmd CreateActivityCommand) Validate(now time.Time) error {
 	if len(cmd.TriggerEvents) == 0 {
 		return errors.Join(ErrInvalidActivity, errors.New("triggerEvents is required"))
 	}
+	seenEvents := map[string]struct{}{}
+	for i, eventType := range cmd.TriggerEvents {
+		eventType = strings.TrimSpace(eventType)
+		if eventType == "" {
+			return invalidActivityf("triggerEvents[%d] is required", i)
+		}
+		if _, ok := seenEvents[eventType]; ok {
+			return invalidActivityf("triggerEvents[%d] is duplicated", i)
+		}
+		seenEvents[eventType] = struct{}{}
+	}
 	if cmd.StartTime.IsZero() || cmd.EndTime.IsZero() || !cmd.EndTime.After(cmd.StartTime) {
 		return errors.Join(ErrInvalidActivity, errors.New("valid startTime and endTime are required"))
 	}
@@ -436,8 +491,320 @@ func (cmd CreateActivityCommand) Validate(now time.Time) error {
 	if strings.TrimSpace(cmd.Timezone) == "" {
 		return errors.Join(ErrInvalidActivity, errors.New("timezone is required"))
 	}
+	if _, err := time.LoadLocation(cmd.Timezone); err != nil {
+		return invalidActivityf("timezone is invalid")
+	}
+	if cmd.Status != "" && !validActivityStatus(cmd.Status) {
+		return invalidActivityf("status is invalid")
+	}
+	if cmd.Version > 1 {
+		return invalidActivityf("version must be 0 or 1")
+	}
+	if err := validateActivityConfig(cmd.Config); err != nil {
+		return err
+	}
+	for i, rule := range cmd.Rules {
+		if err := validateRule(i, rule); err != nil {
+			return err
+		}
+	}
 	if len(cmd.Rewards) == 0 {
 		return errors.Join(ErrInvalidActivity, errors.New("at least one reward is required"))
+	}
+	enabledRewards := 0
+	for i, reward := range cmd.Rewards {
+		if err := validateReward(i, reward); err != nil {
+			return err
+		}
+		if reward.Enabled {
+			enabledRewards++
+		}
+	}
+	if enabledRewards == 0 {
+		return errors.Join(ErrInvalidActivity, errors.New("at least one enabled reward is required"))
+	}
+	return nil
+}
+
+func invalidActivityf(format string, args ...any) error {
+	return errors.Join(ErrInvalidActivity, fmt.Errorf(format, args...))
+}
+
+func validActivityStatus(status ActivityStatus) bool {
+	switch status {
+	case ActivityDraft, ActivityScheduled, ActivityActive, ActivityPaused, ActivityEnded:
+		return true
+	default:
+		return false
+	}
+}
+
+type activityConfig struct {
+	Entry    *entryConfig    `json:"entry,omitempty"`
+	Display  *displayConfig  `json:"display,omitempty"`
+	Audience *audienceConfig `json:"audience,omitempty"`
+	Metadata map[string]any  `json:"metadata,omitempty"`
+}
+
+type entryConfig struct {
+	Channels      []string `json:"channels,omitempty"`
+	EntranceCodes []string `json:"entranceCodes,omitempty"`
+	LandingURL    string   `json:"landingUrl,omitempty"`
+}
+
+type displayConfig struct {
+	Title       string `json:"title,omitempty"`
+	Subtitle    string `json:"subtitle,omitempty"`
+	BannerURL   string `json:"bannerUrl,omitempty"`
+	TermsURL    string `json:"termsUrl,omitempty"`
+	VisibleFrom string `json:"visibleFrom,omitempty"`
+	VisibleTo   string `json:"visibleTo,omitempty"`
+	Sort        *int   `json:"sort,omitempty"`
+}
+
+type audienceConfig struct {
+	SegmentCodes []string `json:"segmentCodes,omitempty"`
+	Tags         []string `json:"tags,omitempty"`
+	Countries    []string `json:"countries,omitempty"`
+}
+
+func validateActivityConfig(raw json.RawMessage) error {
+	if emptyOrNullJSON(raw) {
+		return nil
+	}
+	var cfg activityConfig
+	if err := decodeStrict(raw, &cfg); err != nil {
+		return invalidActivityf("config is invalid: %v", err)
+	}
+	if cfg.Entry != nil {
+		if err := validateStringSlice("config.entry.channels", cfg.Entry.Channels); err != nil {
+			return err
+		}
+		if err := validateStringSlice("config.entry.entranceCodes", cfg.Entry.EntranceCodes); err != nil {
+			return err
+		}
+		if err := validateHTTPURL("config.entry.landingUrl", cfg.Entry.LandingURL, false); err != nil {
+			return err
+		}
+	}
+	if cfg.Display != nil {
+		if err := validateHTTPURL("config.display.bannerUrl", cfg.Display.BannerURL, false); err != nil {
+			return err
+		}
+		if err := validateHTTPURL("config.display.termsUrl", cfg.Display.TermsURL, false); err != nil {
+			return err
+		}
+		from, fromOK, err := parseOptionalTime("config.display.visibleFrom", cfg.Display.VisibleFrom)
+		if err != nil {
+			return err
+		}
+		to, toOK, err := parseOptionalTime("config.display.visibleTo", cfg.Display.VisibleTo)
+		if err != nil {
+			return err
+		}
+		if fromOK && toOK && from.After(to) {
+			return invalidActivityf("config.display.visibleFrom must be before or equal to visibleTo")
+		}
+	}
+	if cfg.Audience != nil {
+		if err := validateStringSlice("config.audience.segmentCodes", cfg.Audience.SegmentCodes); err != nil {
+			return err
+		}
+		if err := validateStringSlice("config.audience.tags", cfg.Audience.Tags); err != nil {
+			return err
+		}
+		if err := validateStringSlice("config.audience.countries", cfg.Audience.Countries); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateRule(index int, rule Rule) error {
+	if strings.TrimSpace(rule.Code) == "" {
+		return invalidActivityf("rules[%d].ruleCode is required", index)
+	}
+	if rule.Phase != RulePhaseMatch && rule.Phase != RulePhaseQualify && rule.Phase != RulePhaseReward && rule.Phase != RulePhaseRisk && rule.Phase != RulePhaseLimit {
+		return invalidActivityf("rules[%d].rulePhase is invalid", index)
+	}
+	if rule.Type != RuleTypeCondition {
+		return invalidActivityf("rules[%d].ruleType is unsupported", index)
+	}
+	if rule.Version > 1 {
+		return invalidActivityf("rules[%d].version must be 0 or 1", index)
+	}
+	var cfg ConditionRuleConfig
+	if err := decodeStrict(rule.Config, &cfg); err != nil {
+		return invalidActivityf("rules[%d].ruleConfig is invalid: %v", index, err)
+	}
+	logic := strings.ToUpper(strings.TrimSpace(cfg.Logic))
+	if logic != "" && logic != "AND" && logic != "OR" {
+		return invalidActivityf("rules[%d].ruleConfig.logic is invalid", index)
+	}
+	for i, condition := range cfg.Conditions {
+		if strings.TrimSpace(condition.Field) == "" {
+			return invalidActivityf("rules[%d].ruleConfig.conditions[%d].field is required", index, i)
+		}
+		if !supportedRuleField(condition.Field) {
+			return invalidActivityf("rules[%d].ruleConfig.conditions[%d].field is unsupported", index, i)
+		}
+		op := strings.ToUpper(strings.TrimSpace(condition.Op))
+		switch op {
+		case "=", "==", "!=", "<>":
+		case ">", ">=", "<", "<=":
+			if _, err := decimal.Parse(jsonScalarString(condition.Value)); err != nil {
+				return invalidActivityf("rules[%d].ruleConfig.conditions[%d].value must be decimal", index, i)
+			}
+		case "IN", "NOT_IN":
+			if _, ok := condition.Value.([]any); !ok {
+				return invalidActivityf("rules[%d].ruleConfig.conditions[%d].value must be array", index, i)
+			}
+		default:
+			return invalidActivityf("rules[%d].ruleConfig.conditions[%d].op is invalid", index, i)
+		}
+	}
+	return nil
+}
+
+func validateReward(index int, reward Reward) error {
+	if strings.TrimSpace(reward.Code) == "" {
+		return invalidActivityf("rewards[%d].rewardCode is required", index)
+	}
+	switch reward.Type {
+	case RewardBonus, RewardCash, RewardPoint:
+	default:
+		return invalidActivityf("rewards[%d].rewardType is unsupported", index)
+	}
+	if reward.CalculateType != CalculateFixed && reward.CalculateType != CalculateRatio {
+		return invalidActivityf("rewards[%d].calculateType is unsupported", index)
+	}
+	if reward.GrantMode != GrantAuto {
+		return invalidActivityf("rewards[%d].grantMode is unsupported", index)
+	}
+	if reward.GrantChannel != GrantHTTP && reward.GrantChannel != GrantWebhook {
+		return invalidActivityf("rewards[%d].grantChannel is unsupported", index)
+	}
+	if reward.Version > 1 {
+		return invalidActivityf("rewards[%d].version must be 0 or 1", index)
+	}
+	var cfg RewardConfig
+	if err := decodeStrict(reward.Config, &cfg); err != nil {
+		return invalidActivityf("rewards[%d].rewardConfig is invalid: %v", index, err)
+	}
+	if err := validateHTTPURL(fmt.Sprintf("rewards[%d].rewardConfig.targetRef", index), cfg.TargetRef, true); err != nil {
+		return err
+	}
+	if reward.FlowMultiple != "" && cfg.FlowMultiple != "" && reward.FlowMultiple != cfg.FlowMultiple {
+		return invalidActivityf("rewards[%d].flowMultiple conflicts with rewardConfig.flowMultiple", index)
+	}
+	if reward.FlowMultiple != "" {
+		if _, err := decimal.Parse(reward.FlowMultiple); err != nil {
+			return invalidActivityf("rewards[%d].flowMultiple must be decimal", index)
+		}
+	}
+	if cfg.FlowMultiple != "" {
+		if _, err := decimal.Parse(cfg.FlowMultiple); err != nil {
+			return invalidActivityf("rewards[%d].rewardConfig.flowMultiple must be decimal", index)
+		}
+	}
+	if reward.CalculateType == CalculateFixed {
+		return validatePositiveDecimal(fmt.Sprintf("rewards[%d].rewardConfig.amount", index), cfg.Amount)
+	}
+	if strings.TrimSpace(cfg.BaseField) == "" {
+		return invalidActivityf("rewards[%d].rewardConfig.baseField is required", index)
+	}
+	if !strings.HasPrefix(cfg.BaseField, "attributes.") {
+		return invalidActivityf("rewards[%d].rewardConfig.baseField is unsupported", index)
+	}
+	if err := validatePositiveDecimal(fmt.Sprintf("rewards[%d].rewardConfig.rate", index), cfg.Rate); err != nil {
+		return err
+	}
+	if cfg.MaxAmount != "" {
+		if err := validatePositiveDecimal(fmt.Sprintf("rewards[%d].rewardConfig.maxAmount", index), cfg.MaxAmount); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func decodeStrict(raw json.RawMessage, dst any) error {
+	if emptyOrNullJSON(raw) {
+		return errors.New("must be object")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	decoder.DisallowUnknownFields()
+	return decoder.Decode(dst)
+}
+
+func emptyOrNullJSON(raw json.RawMessage) bool {
+	text := strings.TrimSpace(string(raw))
+	return text == "" || text == "null"
+}
+
+func validateStringSlice(name string, values []string) error {
+	for i, value := range values {
+		if strings.TrimSpace(value) == "" {
+			return invalidActivityf("%s[%d] is required", name, i)
+		}
+	}
+	return nil
+}
+
+func validateHTTPURL(name, value string, required bool) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		if required {
+			return invalidActivityf("%s is required", name)
+		}
+		return nil
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return invalidActivityf("%s must be http or https URL", name)
+	}
+	return nil
+}
+
+func parseOptionalTime(name, value string) (time.Time, bool, error) {
+	if strings.TrimSpace(value) == "" {
+		return time.Time{}, false, nil
+	}
+	parsed, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return time.Time{}, false, invalidActivityf("%s must be RFC3339 time", name)
+	}
+	return parsed, true, nil
+}
+
+func supportedRuleField(field string) bool {
+	if strings.HasPrefix(field, "attributes.") && len(field) > len("attributes.") {
+		return true
+	}
+	switch field {
+	case "eventId", "eventType", "sourceSystem", "tenantId", "occurredAt", "subject.type", "subject.id", "biz.bizType", "biz.bizId":
+		return true
+	default:
+		return false
+	}
+}
+
+func jsonScalarString(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return typed
+	case json.Number:
+		return typed.String()
+	default:
+		bytesValue, _ := json.Marshal(typed)
+		return string(bytesValue)
+	}
+}
+
+func validatePositiveDecimal(name, value string) error {
+	parsed, err := decimal.Parse(value)
+	if err != nil || parsed.Cmp(decimal.Zero()) <= 0 {
+		return invalidActivityf("%s must be positive decimal", name)
 	}
 	return nil
 }

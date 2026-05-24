@@ -482,7 +482,6 @@ func normalizeRules(rules []marketing.Rule, now time.Time) []marketing.Rule {
 		if rules[i].Version == 0 {
 			rules[i].Version = 1
 		}
-		rules[i].Enabled = true
 		rules[i].CreatedAt = now
 		rules[i].UpdatedAt = now
 	}
@@ -503,7 +502,9 @@ func normalizeRewards(rewards []marketing.Reward, now time.Time) []marketing.Rew
 		if rewards[i].GrantChannel == "" {
 			rewards[i].GrantChannel = marketing.GrantHTTP
 		}
-		rewards[i].Enabled = true
+		if rewards[i].Version == 0 {
+			rewards[i].Version = 1
+		}
 		rewards[i].CreatedAt = now
 		rewards[i].UpdatedAt = now
 	}

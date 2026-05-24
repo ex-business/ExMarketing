@@ -1175,6 +1175,10 @@
 </div>
 
 <script>
+if (window.location.protocol === 'file:') {
+  window.location.replace('http://localhost:8080/admin/');
+}
+
 const agentOrder = ['analysis', 'review', 'test-plan', 'dev', 'test', 'commit'];
 const agentNames = {
   analysis: '需求分析',
@@ -1195,9 +1199,10 @@ const requirementStatusNames = {
   NEW: '新需求',
   ANALYSIS_READY: '待分析',
   ANALYSIS_DONE: '分析完成',
+  ANALYSIS_FAIL: '待需求细化',
   REVIEW_READY: '待审核',
   REVIEW_PASS: '审核通过',
-  REVIEW_BLOCK: '审核阻塞',
+  REVIEW_BLOCK: '待需求细化',
   TEST_PLAN_READY: '待写测试用例',
   TEST_PLAN_DONE: '测试用例完成',
   DEV_READY: '待开发',
@@ -1382,7 +1387,7 @@ async function applyWorkflowTemplate(templateId) {
 
 async function runNextTemplateRequirement() {
   if (!lastWorkflowItems.length) await loadWorkflow();
-  const blocked = new Set(['COMMITTED', 'REVIEW_BLOCK']);
+  const blocked = new Set(['COMMITTED']);
   const next = lastWorkflowItems.find(item => String(item.description || '').includes(templateRequirementMarker) && !blocked.has(item.status));
   if (!next) {
     writeConsole('没有可运行的 22 模板任务。');
@@ -1435,7 +1440,7 @@ function renderRequirementRow(item) {
       <button class="req-row" data-id="${escapeHtml(item.id)}" onclick="selectRequirement('${escapeJs(item.id)}')">
         <div class="req-title">
           <span>${escapeHtml(item.title || item.id)}</span>
-          ${badge(localRequirementStatus(item.status), statusTone(item.status))}
+          ${requirementStatusBadge(item, item.agents || {})}
         </div>
         <div class="req-desc">${escapeHtml(item.description || '')}</div>
         <div class="badges">
@@ -1573,7 +1578,7 @@ function renderDetail(req, agents) {
   return `
     <div class="summary">
       ${metric('需求 ID', req.id || '-')}
-      ${metric('流程状态', localRequirementStatus(req.status))}
+      ${metric('流程状态', displayRequirementStatus(req, agents))}
       ${metric('当前 Agent', activeAgentLabel(req, agents))}
       ${metric('风险', req.risk || '-')}
       ${metric('评分', String(req.score || 0))}
@@ -1636,14 +1641,41 @@ function activeAgentLabel(req, agents) {
   const interrupted = Object.entries(agents || {}).find(([, state]) => state.status === 'INTERRUPTED');
   if (interrupted) return '已中断：' + (agentNames[interrupted[0]] || interrupted[0]);
   const next = runnableAgentForStatus(req.status);
+  if (req.status === 'REVIEW_PASS') return '下一步：测试用例 + 开发实现';
   if (next) return '下一步：' + (agentNames[next] || next);
   return '无可运行 Agent';
+}
+
+function displayRequirementStatus(req, agents) {
+  const running = Object.entries(agents || {}).find(([, state]) => state.status === 'RUNNING');
+  if (running) return (agentNames[running[0]] || running[0]) + '运行中';
+  const failed = Object.entries(agents || {}).find(([, state]) => state.status === 'FAILED');
+  if (failed) return (agentNames[failed[0]] || failed[0]) + '失败';
+  const interrupted = Object.entries(agents || {}).find(([, state]) => state.status === 'INTERRUPTED');
+  if (interrupted) return (agentNames[interrupted[0]] || interrupted[0]) + '已中断';
+  if (req.status === 'REVIEW_BLOCK') return '等待需求分析细化';
+  if (req.status === 'ANALYSIS_FAIL') return '等待需求分析细化';
+  return localRequirementStatus(req.status);
+}
+
+function requirementStatusBadge(req, agents) {
+  const running = Object.entries(agents || {}).find(([, state]) => state.status === 'RUNNING');
+  if (running) return badge((agentNames[running[0]] || running[0]) + '运行中', 'blue');
+  const failed = Object.entries(agents || {}).find(([, state]) => state.status === 'FAILED');
+  if (failed) return badge((agentNames[failed[0]] || failed[0]) + '失败', 'red');
+  const interrupted = Object.entries(agents || {}).find(([, state]) => state.status === 'INTERRUPTED');
+  if (interrupted) return badge((agentNames[interrupted[0]] || interrupted[0]) + '已中断', 'red');
+  if (req.status === 'REVIEW_BLOCK' || req.status === 'ANALYSIS_FAIL') return badge('等待需求分析', 'amber');
+  return badge(localRequirementStatus(req.status), statusTone(req.status));
 }
 
 function runnableAgentForStatus(status) {
   const mapping = {
     ANALYSIS_READY: 'analysis',
+    ANALYSIS_FAIL: 'analysis',
+    REVIEW_BLOCK: 'analysis',
     REVIEW_READY: 'review',
+    REVIEW_PASS: 'test-plan',
     TEST_PLAN_READY: 'test-plan',
     TEST_PLAN_DONE: 'dev',
     DEV_READY: 'dev',
@@ -1697,10 +1729,11 @@ function flowLinePath(from, to) {
 function renderStageNode(node, state) {
   const agent = node.agent;
   const status = state.status || 'WAITING';
-  const tone = agentTone(status);
+  const tone = agentToneForState(state);
+  const displayStatus = displayAgentStatus(state);
   const collapsed = Boolean(collapsedNodes[node.id]);
   return `
-    <div class="flow-node ${tone}${collapsed ? ' collapsed' : ''}" data-node-id="${escapeHtml(node.id)}" style="left:${node.x}px;top:${node.y}px" title="${escapeHtml(localStatus(status))}" onpointerdown="startNodeDrag(event, '${escapeJs(node.id)}')">
+    <div class="flow-node ${tone}${collapsed ? ' collapsed' : ''}" data-node-id="${escapeHtml(node.id)}" style="left:${node.x}px;top:${node.y}px" title="${escapeHtml(displayStatus)}" onpointerdown="startNodeDrag(event, '${escapeJs(node.id)}')">
       <span class="node-port in"></span>
       <span class="node-port out"></span>
       <div class="node-name">
@@ -1708,6 +1741,7 @@ function renderStageNode(node, state) {
         <span class="node-actions">${status === 'RUNNING' ? runningIcon() : ''}<button class="node-toggle" type="button" title="展开/折叠节点" onclick="toggleFlowNode('${escapeJs(node.id)}', event)">${collapsed ? '▾' : '▴'}</button></span>
       </div>
       <div class="node-body">
+        <div class="node-meta">status: ${escapeHtml(displayStatus)}</div>
         <div class="node-meta">output: ${escapeHtml(state.output || '-')}</div>
         <div class="node-meta">log: ${escapeHtml(state.log || '-')}</div>
         <div class="node-meta">start: ${formatTime(state.startedAt)}</div>
@@ -1900,9 +1934,9 @@ function renderConsoleStages(agents) {
   if (!target) return;
   const html = agentOrder.map(agent => {
     const state = agents[agent] || {};
-    const tone = agentTone(state.status || 'WAITING');
+    const tone = agentToneForState(state);
     const active = selectedAgent === agent ? ' active' : '';
-    return `<button class="badge ${tone} console-stage${active}" type="button" title="${escapeHtml(localStatus(state.status || 'WAITING'))}" onclick="selectAgentOutput('${agent}')">${escapeHtml(agentNames[agent])}</button>`;
+    return `<button class="badge ${tone} console-stage${active}" type="button" title="${escapeHtml(displayAgentStatus(state))}" onclick="selectAgentOutput('${agent}')">${escapeHtml(agentNames[agent])}</button>`;
   }).join('');
   if (html !== lastConsoleStagesHTML) {
     setHTMLIfChanged(target, html);
@@ -2208,7 +2242,9 @@ function inferAgentFromStatus() {
   if (agent) return agent;
   const status = document.querySelector('.metric:nth-child(2) .metric-value')?.textContent || '';
   if (status === 'ANALYSIS_READY') return 'analysis';
+  if (status === 'ANALYSIS_FAIL' || status === 'REVIEW_BLOCK') return 'analysis';
   if (status === 'REVIEW_READY') return 'review';
+  if (status === 'REVIEW_PASS') return 'test-plan';
   if (status === 'TEST_PLAN_READY') return 'test-plan';
   if (status === 'TEST_PLAN_DONE') return 'dev';
   if (status === 'DEV_READY') return 'dev';
@@ -2358,6 +2394,26 @@ function agentTone(status) {
   return 'amber';
 }
 
+function agentToneForState(state = {}) {
+  if (state.status === 'DONE' && isReturnToAnalysisStatus(state.nextStatus)) return 'amber';
+  if (state.status === 'DONE' && isRetryStatus(state.nextStatus)) return 'amber';
+  return agentTone(state.status || 'WAITING');
+}
+
+function displayAgentStatus(state = {}) {
+  if (state.status === 'DONE' && isReturnToAnalysisStatus(state.nextStatus)) return '等待需求分析';
+  if (state.status === 'DONE' && isRetryStatus(state.nextStatus)) return '等待返工';
+  return localStatus(state.status || 'WAITING');
+}
+
+function isReturnToAnalysisStatus(status) {
+  return status === 'REVIEW_BLOCK' || status === 'ANALYSIS_FAIL';
+}
+
+function isRetryStatus(status) {
+  return status === 'TEST_FAIL' || status === 'COMMIT_FAIL';
+}
+
 function localStatus(status) {
   return statusNames[status] || status || '-';
 }
@@ -2368,6 +2424,7 @@ function localRequirementStatus(status) {
 
 function statusTone(status) {
   if (String(status || '').includes('PASS') || status === 'COMMITTED') return 'green';
+  if (status === 'REVIEW_BLOCK' || status === 'ANALYSIS_FAIL') return 'amber';
   if (String(status || '').includes('FAIL') || String(status || '').includes('BLOCK')) return 'red';
   if (String(status || '').includes('READY')) return 'blue';
   return 'amber';

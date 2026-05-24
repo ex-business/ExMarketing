@@ -83,10 +83,10 @@ func (r *Repository) CreateActivity(ctx context.Context, activity marketing.Acti
 		_, err = tx.ExecContext(ctx, `
 			INSERT INTO marketing_reward (
 				id, activity_id, reward_code, reward_type, calculate_type, reward_config_json,
-				grant_mode, grant_channel, flow_multiple, enabled, created_at, updated_at
-			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+				grant_mode, grant_channel, flow_multiple, enabled, version, created_at, updated_at
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 		`, reward.ID, activity.ID, reward.Code, reward.Type, reward.CalculateType, reward.Config,
-			reward.GrantMode, reward.GrantChannel, emptyDecimal(reward.FlowMultiple), reward.Enabled, reward.CreatedAt, reward.UpdatedAt)
+			reward.GrantMode, reward.GrantChannel, emptyDecimal(reward.FlowMultiple), reward.Enabled, reward.Version, reward.CreatedAt, reward.UpdatedAt)
 		if err != nil {
 			return marketing.Activity{}, err
 		}
@@ -529,7 +529,7 @@ func (r *Repository) rulesForActivity(ctx context.Context, activityID string) ([
 func (r *Repository) rewardsForActivity(ctx context.Context, activityID string) ([]marketing.Reward, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, reward_code, reward_type, calculate_type, reward_config_json, grant_mode,
-		       grant_channel, flow_multiple::text, enabled, created_at, updated_at
+		       grant_channel, flow_multiple::text, enabled, version, created_at, updated_at
 		FROM marketing_reward
 		WHERE activity_id = $1
 		ORDER BY created_at ASC
@@ -543,7 +543,7 @@ func (r *Repository) rewardsForActivity(ctx context.Context, activityID string) 
 	for rows.Next() {
 		var item marketing.Reward
 		if err := rows.Scan(&item.ID, &item.Code, &item.Type, &item.CalculateType, &item.Config,
-			&item.GrantMode, &item.GrantChannel, &item.FlowMultiple, &item.Enabled, &item.CreatedAt, &item.UpdatedAt); err != nil {
+			&item.GrantMode, &item.GrantChannel, &item.FlowMultiple, &item.Enabled, &item.Version, &item.CreatedAt, &item.UpdatedAt); err != nil {
 			return nil, err
 		}
 		rewards = append(rewards, item)

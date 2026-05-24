@@ -104,10 +104,12 @@ curl -X POST http://localhost:8080/admin/v1/activities \
           "rate": "0.20",
           "maxAmount": "500.00",
           "currency": "CNY",
-          "flowMultiple": "3"
+          "flowMultiple": "3",
+          "targetRef": "https://wallet.example.com/reward"
         },
         "grantMode": "AUTO",
-        "grantChannel": "HTTP"
+        "grantChannel": "HTTP",
+        "enabled": true
       }
     ]
   }'

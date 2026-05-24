@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ex-stack/ExMarketing/internal/workflow"
@@ -347,8 +348,12 @@ func (h *Handler) runWorkflowAgent(w http.ResponseWriter, r *http.Request) {
 			if agent == workflow.AgentCommit {
 				item.Status = workflow.StatusCommitFail
 				item.UpdatedAt = time.Now().UTC()
+				if resetErr := workflow.ResetDevAndTestAfterCommitFailure(*item); resetErr != nil {
+					writeError(w, http.StatusInternalServerError, resetErr.Error())
+					return
+				}
 				_ = workflow.Save(workflowBacklogPath, backlog)
-				_ = workflow.WriteAgentReport(*item, []workflow.AgentRun{run}, item.Status, fmt.Sprintf("Commit Agent 失败，已打回 Dev Agent: %v", err))
+				_ = workflow.WriteAgentReport(*item, []workflow.AgentRun{run}, item.Status, fmt.Sprintf("Commit Agent 失败，已重置开发实现和实际测试，并把失败上下文打回 Dev Agent: %v", err))
 			}
 			writeError(w, http.StatusInternalServerError, fmt.Sprintf("agent %s failed: %v; log=%s", agent, err, run.OutputPath))
 			return
@@ -409,6 +414,27 @@ func (h *Handler) runWorkflowPipeline(w http.ResponseWriter, r *http.Request) {
 		runs := make([]workflow.AgentRun, 0, request.MaxSteps)
 		message := "自动流水线运行完成。"
 		for step := 0; step < request.MaxSteps; step++ {
+			if item.Status == workflow.StatusReviewPass {
+				parallelRuns, nextStatus, err := runReviewPassParallel(*item, request.Command)
+				runs = append(runs, parallelRuns...)
+				if err != nil {
+					_ = workflow.WriteAgentReport(*item, runs, item.Status, fmt.Sprintf("测试用例和开发并行阶段失败: %v", err))
+					writeJSON(w, http.StatusInternalServerError, map[string]any{
+						"error": fmt.Sprintf("parallel test-plan/dev failed: %v", err),
+						"runs":  parallelRuns,
+					})
+					return
+				}
+				item.Status = nextStatus
+				item.UpdatedAt = time.Now().UTC()
+				if err := workflow.Save(workflowBacklogPath, backlog); err != nil {
+					writeError(w, http.StatusInternalServerError, err.Error())
+					return
+				}
+				if item.Status == workflow.StatusTestExecReady {
+					continue
+				}
+			}
 			agent, err := workflow.ResolveAgent(item.Status, workflow.AgentAuto)
 			if err != nil {
 				message = err.Error()
@@ -421,11 +447,15 @@ func (h *Handler) runWorkflowPipeline(w http.ResponseWriter, r *http.Request) {
 					runs = append(runs, run)
 					item.Status = workflow.StatusCommitFail
 					item.UpdatedAt = time.Now().UTC()
+					if resetErr := workflow.ResetDevAndTestAfterCommitFailure(*item); resetErr != nil {
+						writeError(w, http.StatusInternalServerError, resetErr.Error())
+						return
+					}
 					if err := workflow.Save(workflowBacklogPath, backlog); err != nil {
 						writeError(w, http.StatusInternalServerError, err.Error())
 						return
 					}
-					if err := workflow.WriteAgentReport(*item, runs, item.Status, fmt.Sprintf("Commit Agent 失败，已打回 Dev Agent: %v", err)); err != nil {
+					if err := workflow.WriteAgentReport(*item, runs, item.Status, fmt.Sprintf("Commit Agent 失败，已重置开发实现和实际测试，并把失败上下文打回 Dev Agent: %v", err)); err != nil {
 						writeError(w, http.StatusInternalServerError, err.Error())
 						return
 					}
@@ -456,7 +486,7 @@ func (h *Handler) runWorkflowPipeline(w http.ResponseWriter, r *http.Request) {
 				writeError(w, http.StatusInternalServerError, err.Error())
 				return
 			}
-			if item.Status == workflow.StatusReviewBlock || item.Status == workflow.StatusCommitted {
+			if item.Status == workflow.StatusCommitted {
 				break
 			}
 		}
@@ -475,6 +505,48 @@ func (h *Handler) runWorkflowPipeline(w http.ResponseWriter, r *http.Request) {
 	writeError(w, http.StatusNotFound, "requirement not found")
 }
 
+func runReviewPassParallel(item workflow.Requirement, command string) ([]workflow.AgentRun, string, error) {
+	status, err := workflow.EnsureAgentStatus(item)
+	if err != nil {
+		return nil, item.Status, err
+	}
+	agents := make([]workflow.Agent, 0, 2)
+	if status.Agents[string(workflow.AgentTestPlan)].Status != workflow.AgentStatusDone {
+		agents = append(agents, workflow.AgentTestPlan)
+	}
+	if status.Agents[string(workflow.AgentDev)].Status != workflow.AgentStatusDone {
+		agents = append(agents, workflow.AgentDev)
+	}
+	if len(agents) == 0 {
+		return nil, workflow.StatusTestExecReady, nil
+	}
+	runs := make([]workflow.AgentRun, len(agents))
+	errs := make([]error, len(agents))
+	var wg sync.WaitGroup
+	for i, agent := range agents {
+		wg.Add(1)
+		go func(index int, current workflow.Agent) {
+			defer wg.Done()
+			runs[index], errs[index] = workflow.RunAgent(item, current, command)
+		}(i, agent)
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			return runs, item.Status, fmt.Errorf("%s failed: %w", agents[i], err)
+		}
+	}
+	status, err = workflow.EnsureAgentStatus(item)
+	if err != nil {
+		return runs, item.Status, err
+	}
+	if status.Agents[string(workflow.AgentTestPlan)].Status == workflow.AgentStatusDone &&
+		status.Agents[string(workflow.AgentDev)].Status == workflow.AgentStatusDone {
+		return runs, workflow.StatusTestExecReady, nil
+	}
+	return runs, workflow.StatusReviewPass, nil
+}
+
 func reconcileCommitFailure(item *workflow.Requirement) {
 	if item == nil || item.Status != workflow.StatusCommitReady || item.TaskDir == "" {
 		return
@@ -486,6 +558,7 @@ func reconcileCommitFailure(item *workflow.Requirement) {
 	if status.Agents[string(workflow.AgentCommit)].Status == workflow.AgentStatusFailed {
 		item.Status = workflow.StatusCommitFail
 		item.UpdatedAt = time.Now().UTC()
+		_ = workflow.ResetDevAndTestAfterCommitFailure(*item)
 	}
 }
 

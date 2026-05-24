@@ -8,10 +8,14 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 )
 
 const AgentStatusFileName = "agent-status.json"
+
+var agentStatusMu sync.Mutex
 
 const (
 	AgentStatusWaiting = "WAITING"
@@ -33,6 +37,7 @@ type AgentStatus struct {
 	FinishedAt *time.Time `json:"finishedAt,omitempty"`
 	Output     string     `json:"output,omitempty"`
 	Log        string     `json:"log,omitempty"`
+	PID        int        `json:"pid,omitempty"`
 	ExitCode   int        `json:"exitCode,omitempty"`
 	NextStatus string     `json:"nextStatus,omitempty"`
 	Error      string     `json:"error,omitempty"`
@@ -91,28 +96,62 @@ func EnsureAgentStatus(req Requirement) (AgentStatusFile, error) {
 	if err != nil {
 		return AgentStatusFile{}, err
 	}
+	changed := false
 	if status.RequirementID == "" {
 		status = NewAgentStatusFile(req)
+		changed = true
 	}
 	if status.Agents == nil {
 		status.Agents = map[string]AgentStatus{}
+		changed = true
 	}
 	for _, agent := range []Agent{AgentAnalysis, AgentReview, AgentTestPlan, AgentDev, AgentTest, AgentCommit} {
 		key := string(agent)
 		current, ok := status.Agents[key]
 		if !ok {
 			current = AgentStatus{Status: AgentStatusWaiting}
+			changed = true
 		}
 		if current.Status == "" {
 			current.Status = AgentStatusWaiting
+			changed = true
 		}
 		if current.Output == "" {
 			current.Output = filepath.Join(req.TaskDir, ArtifactForAgent(agent))
+			changed = true
 		}
+		before := current
 		current = markStaleRunningIfNeeded(current)
+		if agentStatusChanged(before, current) {
+			changed = true
+		}
 		status.Agents[key] = current
 	}
+	if changed {
+		if err := SaveAgentStatus(req.TaskDir, status); err != nil {
+			return AgentStatusFile{}, err
+		}
+	}
 	return status, nil
+}
+
+func agentStatusChanged(left AgentStatus, right AgentStatus) bool {
+	return left.Status != right.Status ||
+		left.Log != right.Log ||
+		left.Output != right.Output ||
+		left.PID != right.PID ||
+		left.ExitCode != right.ExitCode ||
+		left.NextStatus != right.NextStatus ||
+		left.Error != right.Error ||
+		!sameTimePtr(left.StartedAt, right.StartedAt) ||
+		!sameTimePtr(left.FinishedAt, right.FinishedAt)
+}
+
+func sameTimePtr(left, right *time.Time) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return left.Equal(*right)
 }
 
 func markStaleRunningIfNeeded(current AgentStatus) AgentStatus {
@@ -120,7 +159,17 @@ func markStaleRunningIfNeeded(current AgentStatus) AgentStatus {
 		return current
 	}
 	bytes, err := os.ReadFile(current.Log)
-	if err == nil && strings.Contains(string(bytes), "finishedAt=") {
+	if err == nil && hasAgentFinishedMarker(string(bytes)) {
+		return current
+	}
+	if current.PID > 0 && !processExists(current.PID) {
+		now := time.Now().UTC()
+		current.Status = AgentStatusStale
+		current.FinishedAt = &now
+		current.Error = fmt.Sprintf("agent interrupted: process %d is not running", current.PID)
+		return current
+	}
+	if current.PID > 0 {
 		return current
 	}
 	info, statErr := os.Stat(current.Log)
@@ -143,19 +192,43 @@ func markStaleRunningIfNeeded(current AgentStatus) AgentStatus {
 	return current
 }
 
+func hasAgentFinishedMarker(content string) bool {
+	lines := strings.Split(content, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		line := strings.TrimSpace(lines[i])
+		if line == "" {
+			continue
+		}
+		return strings.HasPrefix(line, "finishedAt=") &&
+			strings.Contains(line, " exitCode=") &&
+			strings.Contains(line, " error=")
+	}
+	return false
+}
+
+func processExists(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	err := syscall.Kill(pid, 0)
+	return err == nil || errors.Is(err, syscall.EPERM)
+}
+
 func staleRunningTimeout() time.Duration {
 	value := strings.TrimSpace(os.Getenv("EX_MARKETING_STALE_AGENT_SECONDS"))
 	if value == "" {
-		return 5 * time.Minute
+		return time.Minute
 	}
 	seconds, err := strconv.Atoi(value)
 	if err != nil || seconds <= 0 {
-		return 5 * time.Minute
+		return time.Minute
 	}
 	return time.Duration(seconds) * time.Second
 }
 
-func MarkAgentRunning(req Requirement, agent Agent, logPath string) error {
+func MarkAgentRunning(req Requirement, agent Agent, logPath string, pid int) error {
+	agentStatusMu.Lock()
+	defer agentStatusMu.Unlock()
 	status, err := EnsureAgentStatus(req)
 	if err != nil {
 		return err
@@ -166,11 +239,14 @@ func MarkAgentRunning(req Requirement, agent Agent, logPath string) error {
 		StartedAt: &now,
 		Output:    filepath.Join(req.TaskDir, ArtifactForAgent(agent)),
 		Log:       logPath,
+		PID:       pid,
 	}
 	return SaveAgentStatus(req.TaskDir, status)
 }
 
 func MarkAgentDone(req Requirement, run AgentRun) error {
+	agentStatusMu.Lock()
+	defer agentStatusMu.Unlock()
 	status, err := EnsureAgentStatus(req)
 	if err != nil {
 		return err
@@ -181,6 +257,7 @@ func MarkAgentDone(req Requirement, run AgentRun) error {
 	current.FinishedAt = &now
 	current.Output = filepath.Join(req.TaskDir, ArtifactForAgent(run.Agent))
 	current.Log = run.OutputPath
+	current.PID = 0
 	current.ExitCode = run.ExitCode
 	current.NextStatus = run.NextStatus
 	current.Error = ""
@@ -189,6 +266,8 @@ func MarkAgentDone(req Requirement, run AgentRun) error {
 }
 
 func MarkAgentFailed(req Requirement, run AgentRun, runErr error) error {
+	agentStatusMu.Lock()
+	defer agentStatusMu.Unlock()
 	status, err := EnsureAgentStatus(req)
 	if err != nil {
 		return err
@@ -199,11 +278,28 @@ func MarkAgentFailed(req Requirement, run AgentRun, runErr error) error {
 	current.FinishedAt = &now
 	current.Output = filepath.Join(req.TaskDir, ArtifactForAgent(run.Agent))
 	current.Log = run.OutputPath
+	current.PID = 0
 	current.ExitCode = run.ExitCode
 	if runErr != nil {
 		current.Error = runErr.Error()
 	}
 	status.Agents[string(run.Agent)] = current
+	return SaveAgentStatus(req.TaskDir, status)
+}
+
+func ResetDevAndTestAfterCommitFailure(req Requirement) error {
+	agentStatusMu.Lock()
+	defer agentStatusMu.Unlock()
+	status, err := EnsureAgentStatus(req)
+	if err != nil {
+		return err
+	}
+	for _, agent := range []Agent{AgentDev, AgentTest} {
+		status.Agents[string(agent)] = AgentStatus{
+			Status: AgentStatusWaiting,
+			Output: filepath.Join(req.TaskDir, ArtifactForAgent(agent)),
+		}
+	}
 	return SaveAgentStatus(req.TaskDir, status)
 }
 

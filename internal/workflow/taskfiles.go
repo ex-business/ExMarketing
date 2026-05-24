@@ -43,19 +43,7 @@ func EnsureTaskFiles(req Requirement) error {
 	if err := writeFileIfMissing(filepath.Join(req.TaskDir, "test-plan.md"), renderTestPlan(req)); err != nil {
 		return err
 	}
-	promptsPath := filepath.Join(req.TaskDir, "agent-prompts.md")
-	bytes, err := os.ReadFile(promptsPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return os.WriteFile(promptsPath, []byte(renderAgentPrompts(req)), 0o644)
-		}
-		return err
-	}
-	if !strings.Contains(string(bytes), "## Test Plan Agent") {
-		content := strings.TrimRight(string(bytes), "\n") + "\n\n" + renderTestPlanAgentPrompt(req)
-		return os.WriteFile(promptsPath, []byte(content), 0o644)
-	}
-	return nil
+	return os.WriteFile(filepath.Join(req.TaskDir, "agent-prompts.md"), []byte(renderAgentPrompts(req)), 0o644)
 }
 
 func writeFileIfMissing(path, content string) error {
@@ -144,9 +132,13 @@ func renderAnalysis(req Requirement) string {
 
 ## Agent 指令
 
-你是 Analysis Agent。请读取本目录 task.md、项目 README.md、CLAUDE.md、docs/architecture.md 和相关代码。
+你是 Analysis Agent，只负责需求分析和需求细化。
+请读取本目录 task.md、PRD/设计文档、业务规则文档、已有 API/数据字典说明。
+不需要读取代码，不允许用代码实现细节替代需求澄清。
 
-只做分析，不改代码，不提交。
+只写 analysis.md，不写代码，不改代码，不提交，不做实现，不设计具体代码改法。
+你的目标是把需求细节一定一定搞清楚：背景、目标、参与方、输入输出、业务规则、边界条件、异常场景、非目标范围、验收标准和待确认问题。
+如果关键信息不清楚，必须 Decision BLOCK，并列出需要补充的问题；不要用代码实现假设替代需求澄清。
 
 ## 评分规则
 
@@ -154,13 +146,13 @@ func renderAnalysis(req Requirement) string {
 
 ~~~text
 需求清晰度        20
-范围可控          20
-风险可控          20
+业务规则完整      20
+边界异常清楚      20
 验收标准明确      20
-架构一致性        20
+约束一致性        20
 ~~~
 
-## 现状
+## 背景和已知信息
 
 待填写。
 
@@ -168,11 +160,27 @@ func renderAnalysis(req Requirement) string {
 
 待填写。
 
-## 方案
+## 细化需求
 
 待填写。
 
-## 改动范围
+## 业务规则
+
+待填写。
+
+## 输入输出
+
+待填写。
+
+## 异常场景
+
+待填写。
+
+## 边界条件
+
+待填写。
+
+## 非目标范围
 
 待填写。
 
@@ -181,6 +189,10 @@ func renderAnalysis(req Requirement) string {
 待填写。
 
 ## 验收方式
+
+待填写。
+
+## 待确认问题
 
 待填写。
 
@@ -248,6 +260,7 @@ func renderImplementation(req Requirement) string {
 
 必须按 task.md、analysis.md、review.md、test-plan.md 执行，不得扩大范围。
 如果 test.md 已存在且 Result 为 FAIL，必须优先读取失败原因，做最小修复后再更新 implementation.md。
+如果 commit.md 或提交日志存在 BLOCK / FAILED / 提交失败，必须优先读取提交失败上下文，做最小修复后再更新 implementation.md。
 
 完成开发后必须先做基础验证：
 
@@ -281,9 +294,12 @@ func renderTestPlan(req Requirement) string {
 
 ## Agent 指令
 
-你是 Test Plan Agent。请在 Review PASS 后、Dev 开发前，根据 task.md、analysis.md、review.md 设计测试用例。
+你是 Test Plan Agent。请在 Review PASS 后根据 task.md、analysis.md、review.md 设计测试用例。
 
-只写 test-plan.md，不改业务代码，不执行提交。
+只允许写 test-plan.md。
+禁止修改业务代码、测试代码、文档代码、配置文件或任何其他文件。
+禁止执行测试命令、构建命令、格式化命令或 git 命令。
+你的职责只是写清楚后续 Test Agent 应执行的测试用例和命令清单。
 
 ## Test Strategy
 
@@ -356,6 +372,8 @@ func renderCommit(req Requirement) string {
 ## Agent 指令
 
 你是 Commit Agent。只有 review.md 为 PASS 且 test.md 为 PASS 时才能提交。
+只允许写 commit.md；禁止修改业务代码、测试代码、文档代码、配置文件或任何其他文件。
+如果提交前检查发现代码需要修复，必须在 commit.md 写明 BLOCK 和原因，让流程打回 Dev Agent，不能自己修。
 
 提交前必须检查：
 
@@ -399,10 +417,13 @@ func renderAgentPrompts(req Requirement) string {
 ## Analysis Agent
 
 ~~~text
-你是 Analysis Agent。请处理 %s。
-读取 %s/task.md、README.md、CLAUDE.md、docs/architecture.md 和相关代码。
-只写 %s/analysis.md，不改代码。
-按评分规则打分，Score >= 80 且方案可控才 Decision PASS。
+你是 Analysis Agent，只负责需求分析和需求细化。请处理 %s。
+读取 %s/task.md、PRD/设计文档、业务规则文档、已有 API/数据字典说明。
+不需要读取代码，不允许用代码实现细节替代需求澄清。
+只写 %s/analysis.md，不写代码，不改代码，不提交，不做实现，不设计具体代码改法。
+输出细化后的需求说明、背景目标、参与方、输入输出、业务规则、边界条件、异常场景、非目标范围、风险、验收标准和待确认问题。
+如果关键信息不清楚，必须 Decision BLOCK，并列出需要补充的问题；不要用代码实现假设替代需求澄清。
+按评分规则打分，Score >= 80 且需求细节清楚、可审核、可验收才 Decision PASS。
 ~~~
 
 ## Review Agent
@@ -421,6 +442,7 @@ func renderAgentPrompts(req Requirement) string {
 你是 Dev Agent。请在 %s/review.md 和 %s/test-plan.md 为 PASS 后开发或修复。
 严格按 %s/task.md、analysis.md、review.md、test-plan.md 修改代码和文档。
 如果 %s/test.md 已存在且 Result 为 FAIL，必须优先根据失败原因做最小修复。
+如果 %s/commit.md 或提交日志存在 BLOCK / FAILED / 提交失败，必须优先根据提交失败上下文做最小修复。
 完成后必须执行 go test ./... 和 go build ./...。
 完成后写 %s/implementation.md。
 ~~~
@@ -429,6 +451,8 @@ func renderAgentPrompts(req Requirement) string {
 
 ~~~text
 你是 Test Agent。请根据 %s/task.md、analysis.md、review.md、test-plan.md、implementation.md 执行测试。
+只允许写 %s/test.md；禁止修改业务代码、测试代码、文档代码、配置文件或任何其他文件。
+如果测试失败，必须在 test.md 写清失败命令、失败日志摘要、失败原因和复现方式，让流程打回 Dev Agent，不能自己修。
 执行必要测试并写 %s/test.md。
 ~~~
 
@@ -436,11 +460,13 @@ func renderAgentPrompts(req Requirement) string {
 
 ~~~text
 你是 Commit Agent。只有 review.md 和 test.md 都 PASS 才能提交。
+只允许写 %s/commit.md；禁止修改业务代码、测试代码、文档代码、配置文件或任何其他文件。
+如果提交前检查发现代码需要修复，必须在 commit.md 写明 BLOCK 和原因，让流程打回 Dev Agent，不能自己修。
 提交前必须执行 git status -sb、git diff --check、go test ./...、go build ./...。
 提交时不要暂存 tasks/*/runs/ 执行日志；这些日志只用于页面查看，不属于代码提交内容。
 提交后写 %s/commit.md。
 ~~~
-`, req.ID, req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir, renderTestPlanAgentPrompt(req), req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir)
+`, req.ID, req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir, renderTestPlanAgentPrompt(req), req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir)
 }
 
 func renderTestPlanAgentPrompt(req Requirement) string {
@@ -448,7 +474,10 @@ func renderTestPlanAgentPrompt(req Requirement) string {
 
 ~~~text
 你是 Test Plan Agent。请在 %s/review.md 为 PASS 后，先设计测试用例。
-只写 %s/test-plan.md，不改业务代码。
+只允许写 %s/test-plan.md。
+禁止修改业务代码、测试代码、文档代码、配置文件或任何其他文件。
+禁止执行测试命令、构建命令、格式化命令或 git 命令。
+你的职责只是写清楚后续 Test Agent 应执行的测试用例和命令清单。
 测试计划必须覆盖正常路径、额度不足、幂等重复、并发、PostgreSQL smoke。
 Decision 必须是 PASS / BLOCK。
 ~~~`, req.TaskDir, req.TaskDir)

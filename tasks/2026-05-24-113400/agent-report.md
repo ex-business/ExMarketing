@@ -6,9 +6,9 @@
 
 风险: 高
 
-最终状态: COMMIT_READY
+最终状态: COMMITTED
 
-生成时间: 2026-05-24T12:21:37Z
+生成时间: 2026-05-24T12:47:10Z
 
 说明: 单步 Agent 运行完成。
 
@@ -21,17 +21,17 @@
 | test-plan | DONE | tasks/2026-05-24-113400/test-plan.md | tasks/2026-05-24-113400/runs/20260524T114434Z-test-plan.log | DEV_READY |
 | dev | DONE | tasks/2026-05-24-113400/implementation.md | tasks/2026-05-24-113400/runs/20260524T121520Z-dev.log | TEST_EXEC_READY |
 | test | DONE | tasks/2026-05-24-113400/test.md | tasks/2026-05-24-113400/runs/20260524T121834Z-test.log | COMMIT_READY |
-| commit | WAITING | tasks/2026-05-24-113400/commit.md |  |  |
+| commit | DONE | tasks/2026-05-24-113400/commit.md | tasks/2026-05-24-113400/runs/20260524T124057Z-commit.log | COMMITTED |
 
 ## 本次运行
 
-### test
+### commit
 
 - ExitCode: 0
-- NextStatus: COMMIT_READY
+- NextStatus: COMMITTED
 - Score: -1
-- Log: tasks/2026-05-24-113400/runs/20260524T121834Z-test.log
-- Artifact: tasks/2026-05-24-113400/test.md
+- Log: tasks/2026-05-24-113400/runs/20260524T124057Z-commit.log
+- Artifact: tasks/2026-05-24-113400/commit.md
 
 
 ## 产物文件

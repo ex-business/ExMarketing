@@ -93,7 +93,7 @@ tasks/<id>/task.md
 README.md
 CLAUDE.md
 docs/architecture.md
-相关代码
+已有接口和数据模型文档
 ```
 
 写入：
@@ -106,10 +106,10 @@ tasks/<id>/analysis.md
 
 ```text
 需求清晰度        20
-范围可控          20
+需求边界清楚      20
 风险可控          20
 验收标准明确      20
-架构一致性        20
+约束一致性        20
 ```
 
 默认低于 80 分不得进入研发。可通过 `EX_MARKETING_ANALYSIS_PASS_SCORE` 调整。

@@ -33,6 +33,63 @@ func TestHealth(t *testing.T) {
 	}
 }
 
+func TestCreateActivityReturnsUnifiedConfigVersions(t *testing.T) {
+	handler := newTestHandler()
+	rec := postActivity(t, handler, validActivityBody())
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusCreated, rec.Code, rec.Body.String())
+	}
+
+	var activity marketing.Activity
+	if err := json.NewDecoder(rec.Body).Decode(&activity); err != nil {
+		t.Fatalf("decode activity: %v", err)
+	}
+	if activity.Version != 1 || len(activity.Rules) != 1 || activity.Rules[0].Version != 1 || len(activity.Rewards) != 1 || activity.Rewards[0].Version != 1 {
+		t.Fatalf("expected activity/rule/reward version 1, got activity=%d rules=%v rewards=%v", activity.Version, activity.Rules, activity.Rewards)
+	}
+	if !strings.Contains(string(activity.Config), `"entry"`) {
+		t.Fatalf("expected activity config to be stored, got: %s", string(activity.Config))
+	}
+	if !strings.Contains(string(activity.Rewards[0].Config), `"targetRef":"https://wallet.example.com/reward"`) {
+		t.Fatalf("expected reward targetRef to be stored, got: %s", string(activity.Rewards[0].Config))
+	}
+}
+
+func TestCreateActivityRejectsUnsupportedRewardDelivery(t *testing.T) {
+	handler := newTestHandler()
+	for name, body := range map[string]string{
+		"missing targetRef": strings.Replace(validActivityBody(), `,
+					"targetRef": "https://wallet.example.com/reward"`, "", 1),
+		"mq channel":     strings.Replace(validActivityBody(), `"grantChannel": "HTTP"`, `"grantChannel": "MQ"`, 1),
+		"manual mode":    strings.Replace(validActivityBody(), `"grantMode": "AUTO"`, `"grantMode": "MANUAL"`, 1),
+		"unknown config": strings.Replace(validActivityBody(), `"targetRef": "https://wallet.example.com/reward"`, `"targetRef": "https://wallet.example.com/reward", "unknown": true`, 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec := postActivity(t, handler, body)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("expected status %d, got %d: %s", http.StatusBadRequest, rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestCreateActivityRejectsInvalidConfigAndRuleSchema(t *testing.T) {
+	handler := newTestHandler()
+	for name, body := range map[string]string{
+		"duplicate trigger": strings.Replace(validActivityBody(), `"triggerEvents": ["DEPOSIT_SUCCESS"]`, `"triggerEvents": ["DEPOSIT_SUCCESS", "DEPOSIT_SUCCESS"]`, 1),
+		"unknown config":    strings.Replace(validActivityBody(), `"metadata": {"owner": "growth"}`, `"metadata": {"owner": "growth"}, "quota": {}`, 1),
+		"bad rule op":       strings.Replace(validActivityBody(), `"op": ">="`, `"op": "BETWEEN"`, 1),
+		"bad version":       strings.Replace(validActivityBody(), `"version": 1,`, `"version": 2,`, 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec := postActivity(t, handler, body)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("expected status %d, got %d: %s", http.StatusBadRequest, rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
 func TestActivityEventCreatesGrantCommand(t *testing.T) {
 	handler := newTestHandler()
 	createActivity(t, handler)
@@ -673,7 +730,7 @@ EOF`
 	}
 }
 
-func TestRunWorkflowPipelineStopsOnAnalysisBlock(t *testing.T) {
+func TestRunWorkflowPipelineReturnsAnalysisBlockToAnalysis(t *testing.T) {
 	t.Chdir(t.TempDir())
 	now := time.Now().UTC()
 	req := workflow.Requirement{
@@ -707,7 +764,7 @@ func TestRunWorkflowPipelineStopsOnAnalysisBlock(t *testing.T) {
 BLOCK
 ~~~
 EOF`
-	body := `{"command":` + quoteJSON(command) + `}`
+	body := `{"maxSteps":1,"command":` + quoteJSON(command) + `}`
 	reqHTTP := httptest.NewRequest(http.MethodPost, "/admin/v1/workflow/requirements/2026-05-24-test/run-pipeline", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 
@@ -717,14 +774,14 @@ EOF`
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), `"status":"REVIEW_BLOCK"`) {
-		t.Fatalf("expected review block, got: %s", rec.Body.String())
+	if !strings.Contains(rec.Body.String(), `"status":"ANALYSIS_FAIL"`) {
+		t.Fatalf("expected analysis fail, got: %s", rec.Body.String())
 	}
 	report, err := os.ReadFile("tasks/2026-05-24-test/agent-report.md")
 	if err != nil {
 		t.Fatalf("read report: %v", err)
 	}
-	if !strings.Contains(string(report), "最终状态: REVIEW_BLOCK") {
+	if !strings.Contains(string(report), "最终状态: ANALYSIS_FAIL") {
 		t.Fatalf("expected report final status, got: %s", string(report))
 	}
 }
@@ -736,7 +793,21 @@ func quoteJSON(s string) string {
 
 func createActivity(t *testing.T, handler *Handler) string {
 	t.Helper()
-	body := `{
+	body := validActivityBody()
+	rec := postActivity(t, handler, body)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusCreated, rec.Code, rec.Body.String())
+	}
+	var activity marketing.Activity
+	if err := json.NewDecoder(rec.Body).Decode(&activity); err != nil {
+		t.Fatalf("decode activity: %v", err)
+	}
+	return activity.ID
+}
+
+func validActivityBody() string {
+	return `{
 		"tenantId": "site_001",
 		"activityCode": "FIRST_DEPOSIT_BONUS",
 		"activityName": "First Deposit Bonus",
@@ -749,6 +820,28 @@ func createActivity(t *testing.T, handler *Handler) string {
 		"priority": 100,
 		"exclusiveGroup": "deposit_bonus",
 		"stackable": false,
+		"version": 1,
+		"config": {
+			"entry": {
+				"channels": ["APP", "WEB"],
+				"entranceCodes": ["deposit_page"],
+				"landingUrl": "https://example.com/promo/first-deposit"
+			},
+			"display": {
+				"title": "First Deposit Bonus",
+				"bannerUrl": "https://example.com/banner.png",
+				"termsUrl": "https://example.com/terms",
+				"visibleFrom": "2026-05-01T00:00:00Z",
+				"visibleTo": "2026-06-01T00:00:00Z",
+				"sort": 100
+			},
+			"audience": {
+				"segmentCodes": ["new_user"],
+				"tags": ["first_deposit"],
+				"countries": ["CN"]
+			},
+			"metadata": {"owner": "growth"}
+		},
 		"rules": [
 			{
 				"ruleCode": "FIRST_DEPOSIT_AND_AMOUNT",
@@ -763,7 +856,8 @@ func createActivity(t *testing.T, handler *Handler) string {
 					]
 				},
 				"sort": 1,
-				"enabled": true
+				"enabled": true,
+				"version": 1
 			}
 		],
 		"rewards": [
@@ -776,28 +870,25 @@ func createActivity(t *testing.T, handler *Handler) string {
 					"rate": "0.20",
 					"maxAmount": "500.00",
 					"currency": "CNY",
-					"flowMultiple": "3"
+					"flowMultiple": "3",
+					"targetRef": "https://wallet.example.com/reward"
 				},
 				"grantMode": "AUTO",
 				"grantChannel": "HTTP",
 				"flowMultiple": "3",
-				"enabled": true
+				"enabled": true,
+				"version": 1
 			}
 		]
 	}`
+}
+
+func postActivity(t *testing.T, handler *Handler, body string) *httptest.ResponseRecorder {
+	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, "/admin/v1/activities", strings.NewReader(body))
 	rec := httptest.NewRecorder()
-
 	handler.Routes().ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusCreated {
-		t.Fatalf("expected status %d, got %d: %s", http.StatusCreated, rec.Code, rec.Body.String())
-	}
-	var activity marketing.Activity
-	if err := json.NewDecoder(rec.Body).Decode(&activity); err != nil {
-		t.Fatalf("decode activity: %v", err)
-	}
-	return activity.ID
+	return rec
 }
 
 func createQuota(t *testing.T, handler *Handler, activityID string, quotaType marketing.QuotaType, scope marketing.QuotaScope, scopeKey string, totalValue string) {

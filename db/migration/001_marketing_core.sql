@@ -43,6 +43,7 @@ CREATE TABLE marketing_reward (
   grant_channel VARCHAR(32) NOT NULL,
   flow_multiple DECIMAL(18,4) DEFAULT 0,
   enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  version INT NOT NULL DEFAULT 1,
   created_at TIMESTAMP NOT NULL,
   updated_at TIMESTAMP NOT NULL
 );

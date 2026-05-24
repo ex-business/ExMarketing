@@ -22,6 +22,7 @@ const (
 	StatusNew           = "NEW"
 	StatusAnalysisReady = "ANALYSIS_READY"
 	StatusAnalysisDone  = "ANALYSIS_DONE"
+	StatusAnalysisFail  = "ANALYSIS_FAIL"
 	StatusReviewReady   = "REVIEW_READY"
 	StatusReviewPass    = "REVIEW_PASS"
 	StatusReviewBlock   = "REVIEW_BLOCK"

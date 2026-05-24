@@ -15,23 +15,23 @@
       "id": "2026-05-24-113400",
       "title": "标准事件接入与幂等收件箱",
       "description": "来源：22-独立活动营销中台设计。实现 HTTP Event API 的标准事件模型、Idempotency-Key 校验、marketing_event_inbox 写入、重复事件去重，以及事件字段只依赖 eventId/eventType/sourceSystem/tenantId/subject/biz/occurredAt/attributes 的边界约束。验收：重复上报不会重复参与、不会重复发奖；非法事件返回明确错误；补充单元测试和 API 文档。",
-      "status": "COMMIT_READY",
+      "status": "COMMITTED",
       "risk": "高",
       "score": 86,
       "taskDir": "tasks/2026-05-24-113400",
       "createdAt": "2026-05-24T11:34:00.355875Z",
-      "updatedAt": "2026-05-24T12:21:37.241859Z"
+      "updatedAt": "2026-05-24T12:47:10.782264Z"
     },
     {
       "id": "2026-05-24-113400-2",
       "title": "活动配置统一模型",
       "description": "来源：22-独立活动营销中台设计。完善 marketing_activity、marketing_rule、marketing_reward 的配置模型和管理接口，覆盖活动基础信息、时间、入口、参与人群、互斥叠加、发奖方式和版本字段。验收：普通活动可通过配置创建，不需要新增 controller/model/job；配置 JSON 有基础 Schema 校验。",
-      "status": "ANALYSIS_READY",
+      "status": "COMMIT_READY",
       "risk": "中",
-      "score": 0,
+      "score": 93,
       "taskDir": "tasks/2026-05-24-113400-2",
       "createdAt": "2026-05-24T11:34:00.355875Z",
-      "updatedAt": "2026-05-24T11:34:00.355875Z"
+      "updatedAt": "2026-05-24T14:53:10.789851Z"
     },
     {
       "id": "2026-05-24-113400-3",

@@ -126,19 +126,16 @@ NOT_IN
 | `grant_channel` | 发奖通道 |
 | `flow_multiple` | 流水倍数 |
 | `enabled` | 是否启用 |
+| `version` | 版本 |
 | `created_at` | 创建时间 |
 | `updated_at` | 更新时间 |
 
-奖励类型：
+当前普通活动可创建的奖励类型：
 
 ```text
 BONUS
 CASH
-COUPON
 POINT
-GIFT
-DRAW_CHANCE
-MEMBERSHIP
 ```
 
 当前已实现计算方式：
@@ -158,6 +155,16 @@ POOL_SPLIT
 DRAW_CHANCE
 GIFT
 ```
+
+当前可执行发奖边界：
+
+```text
+grant_mode    AUTO
+grant_channel HTTP / WEBHOOK
+targetRef     reward_config_json 内必填，且必须是 http(s) URL
+```
+
+`MQ`、`MANUAL_EXPORT` 和 `MANUAL` 发奖模式尚无完整 sender、导出或人工状态机，创建活动时会被拒绝。
 
 ## marketing_event_inbox
 

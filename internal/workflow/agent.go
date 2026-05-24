@@ -37,15 +37,22 @@ type AgentRun struct {
 	ExitCode   int
 }
 
+type writeGuardSnapshot struct {
+	Enabled bool
+	Files   map[string]bool
+}
+
 func ResolveAgent(status string, requested Agent) (Agent, error) {
 	if requested != "" && requested != AgentAuto {
 		return requested, nil
 	}
 	switch status {
-	case StatusAnalysisReady:
+	case StatusAnalysisReady, StatusAnalysisFail, StatusReviewBlock:
 		return AgentAnalysis, nil
 	case StatusReviewReady:
 		return AgentReview, nil
+	case StatusReviewPass:
+		return AgentTestPlan, nil
 	case StatusTestPlanReady:
 		return AgentTestPlan, nil
 	case StatusTestPlanDone:
@@ -85,10 +92,33 @@ func PromptForAgent(taskDir string, agent Agent) (string, error) {
 		return "", fmt.Errorf("prompt for %s not found in %s", heading, filepath.Join(taskDir, "agent-prompts.md"))
 	}
 	prompt := strings.TrimSpace(string(match[1])) + "\n"
-	if agent == AgentDev {
+	if agent == AgentAnalysis {
+		prompt += renderAnalysisFeedbackContext(taskDir)
+	} else if agent == AgentDev {
 		prompt += renderDevFeedbackContext(taskDir)
 	}
 	return prompt, nil
+}
+
+func renderAnalysisFeedbackContext(taskDir string) string {
+	analysisContent, _ := os.ReadFile(filepath.Join(taskDir, "analysis.md"))
+	reviewContent, _ := os.ReadFile(filepath.Join(taskDir, "review.md"))
+	status, _ := LoadAgentStatus(taskDir)
+	analysisStatus := status.Agents[string(AgentAnalysis)]
+	reviewStatus := status.Agents[string(AgentReview)]
+	score := parseScore(string(analysisContent))
+	hasAnalysisFailure := score > 0 && score < AnalysisPassScore() || parseDecision(string(analysisContent)) == "BLOCK" || analysisStatus.Status == AgentStatusFailed || analysisStatus.Error != ""
+	hasReviewFailure := parseDecision(string(reviewContent)) == "BLOCK" || reviewStatus.Status == AgentStatusFailed || reviewStatus.Error != ""
+	if !hasAnalysisFailure && !hasReviewFailure {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\n\n## 分析返工反馈\n\n")
+	b.WriteString("上一轮分析或审核未通过。请根据下面反馈重新梳理需求细节，补齐业务规则、边界条件、异常场景、待确认问题和验收方式；只有 Score >= 80 且 Decision PASS 才能继续交给 Review Agent。\n\n")
+	b.WriteString("注意：Analysis Agent 只完善需求细节，不读代码、不写代码、不改代码、不提交；如果历史 analysis.md 中出现实现指令，以本次 prompt 为准。\n\n")
+	appendAgentFailureFeedback(&b, "Analysis", "analysis.md", string(analysisContent), analysisStatus)
+	appendAgentFailureFeedback(&b, "Review", "review.md", string(reviewContent), reviewStatus)
+	return b.String()
 }
 
 func renderDevFeedbackContext(taskDir string) string {
@@ -113,6 +143,7 @@ func renderDevFeedbackContext(taskDir string) string {
 func appendAgentFailureFeedback(b *strings.Builder, label, artifactName, artifactContent string, status AgentStatus) {
 	if !strings.Contains(strings.ToUpper(artifactContent), "FAIL") &&
 		!strings.Contains(strings.ToUpper(artifactContent), "BLOCK") &&
+		!(parseScore(artifactContent) > 0 && parseScore(artifactContent) < AnalysisPassScore()) &&
 		status.Status != AgentStatusFailed &&
 		status.Error == "" {
 		return
@@ -168,15 +199,16 @@ func RunAgent(req Requirement, agent Agent, command string) (AgentRun, error) {
 	if err != nil {
 		return AgentRun{}, err
 	}
+	writeGuard, err := newWriteGuardSnapshot(agent)
+	if err != nil {
+		return AgentRun{}, err
+	}
 
 	runDir := filepath.Join(req.TaskDir, "runs")
 	if err := os.MkdirAll(runDir, 0o755); err != nil {
 		return AgentRun{}, err
 	}
 	outputPath := filepath.Join(runDir, time.Now().UTC().Format("20060102T150405Z")+"-"+string(agent)+".log")
-	if err := MarkAgentRunning(req, agent, outputPath); err != nil {
-		return AgentRun{}, err
-	}
 	logFile, err := os.OpenFile(outputPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return AgentRun{}, err
@@ -196,7 +228,27 @@ func RunAgent(req Requirement, agent Agent, command string) (AgentRun, error) {
 	)
 	cmd.Stdout = io.MultiWriter(logFile)
 	cmd.Stderr = io.MultiWriter(logFile)
-	err = cmd.Run()
+	err = cmd.Start()
+	if err != nil {
+		run := AgentRun{
+			ID:         req.ID,
+			Agent:      agent,
+			Command:    command,
+			Prompt:     prompt,
+			OutputPath: outputPath,
+			ExitCode:   1,
+		}
+		_, _ = fmt.Fprintf(logFile, "\nfinishedAt=%s exitCode=%d error=%v\n", time.Now().UTC().Format(time.RFC3339), 1, err)
+		if statusErr := MarkAgentFailed(req, run, err); statusErr != nil {
+			return run, statusErr
+		}
+		return run, err
+	}
+	if err := MarkAgentRunning(req, agent, outputPath, cmd.Process.Pid); err != nil {
+		_ = cmd.Process.Kill()
+		return AgentRun{}, err
+	}
+	err = cmd.Wait()
 
 	exitCode := 0
 	if err != nil {
@@ -220,6 +272,22 @@ func RunAgent(req Requirement, agent Agent, command string) (AgentRun, error) {
 			OutputPath: outputPath,
 			ExitCode:   exitCode,
 		}
+		if statusErr := MarkAgentFailed(req, run, err); statusErr != nil {
+			return run, statusErr
+		}
+		return run, err
+	}
+
+	if err := validateReadOnlyAgentWrites(req, agent, writeGuard, logFile); err != nil {
+		run := AgentRun{
+			ID:         req.ID,
+			Agent:      agent,
+			Command:    command,
+			Prompt:     prompt,
+			OutputPath: outputPath,
+			ExitCode:   exitCode,
+		}
+		_, _ = fmt.Fprintf(logFile, "\nwriteGuard=%v\n", err)
 		if statusErr := MarkAgentFailed(req, run, err); statusErr != nil {
 			return run, statusErr
 		}
@@ -257,6 +325,86 @@ func RunAgent(req Requirement, agent Agent, command string) (AgentRun, error) {
 	return run, nil
 }
 
+func newWriteGuardSnapshot(agent Agent) (writeGuardSnapshot, error) {
+	if !readOnlyAgent(agent) {
+		return writeGuardSnapshot{}, nil
+	}
+	files, err := gitChangedFiles()
+	if err != nil {
+		return writeGuardSnapshot{}, err
+	}
+	return writeGuardSnapshot{Enabled: true, Files: files}, nil
+}
+
+func validateReadOnlyAgentWrites(req Requirement, agent Agent, snapshot writeGuardSnapshot, logFile *os.File) error {
+	if !snapshot.Enabled {
+		return nil
+	}
+	if agent == AgentTestPlan && hasMutatingAgentRunning(req) {
+		_, _ = fmt.Fprintln(logFile, "\nwriteGuard=skipped because Dev/Test/Commit is running in parallel")
+		return nil
+	}
+	after, err := gitChangedFiles()
+	if err != nil {
+		return err
+	}
+	allowed := filepath.ToSlash(filepath.Clean(filepath.Join(req.TaskDir, ArtifactForAgent(agent))))
+	var violations []string
+	for file := range after {
+		if snapshot.Files[file] || file == allowed {
+			continue
+		}
+		violations = append(violations, file)
+	}
+	if len(violations) == 0 {
+		return nil
+	}
+	return fmt.Errorf("%s agent is read-only and may only write %s; unexpected changed files: %s", agent, allowed, strings.Join(violations, ", "))
+}
+
+func readOnlyAgent(agent Agent) bool {
+	return agent == AgentAnalysis || agent == AgentReview || agent == AgentTestPlan || agent == AgentTest || agent == AgentCommit
+}
+
+func hasMutatingAgentRunning(req Requirement) bool {
+	status, err := LoadAgentStatus(req.TaskDir)
+	if err != nil {
+		return false
+	}
+	for _, agent := range []Agent{AgentDev, AgentTest, AgentCommit} {
+		if status.Agents[string(agent)].Status == AgentStatusRunning {
+			return true
+		}
+	}
+	return false
+}
+
+func gitChangedFiles() (map[string]bool, error) {
+	files := map[string]bool{}
+	if _, err := exec.Command("git", "rev-parse", "--is-inside-work-tree").Output(); err != nil {
+		return files, nil
+	}
+	commands := [][]string{
+		{"git", "diff", "--name-only", "--"},
+		{"git", "diff", "--cached", "--name-only", "--"},
+		{"git", "ls-files", "--others", "--exclude-standard"},
+	}
+	for _, args := range commands {
+		out, err := exec.Command(args[0], args[1:]...).Output()
+		if err != nil {
+			return nil, fmt.Errorf("read git changed files: %w", err)
+		}
+		for _, line := range strings.Split(string(out), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			files[filepath.ToSlash(filepath.Clean(line))] = true
+		}
+	}
+	return files, nil
+}
+
 func ensureAgentCanRun(req Requirement, agent Agent) error {
 	status, err := EnsureAgentStatus(req)
 	if err != nil {
@@ -292,14 +440,14 @@ func EvaluateAgentResult(taskDir string, agent Agent) (string, int, error) {
 		if score >= AnalysisPassScore() && parseDecision(content) == "PASS" {
 			return StatusReviewReady, score, nil
 		}
-		return StatusReviewBlock, score, nil
+		return StatusAnalysisFail, score, nil
 	case AgentReview:
 		content, err := readTaskFile(taskDir, "review.md")
 		if err != nil {
 			return "", 0, err
 		}
 		if parseDecision(content) == "PASS" {
-			return StatusTestPlanReady, -1, nil
+			return StatusReviewPass, -1, nil
 		}
 		return StatusReviewBlock, -1, nil
 	case AgentTestPlan:
@@ -308,11 +456,11 @@ func EvaluateAgentResult(taskDir string, agent Agent) (string, int, error) {
 			return "", 0, err
 		}
 		if parseDecision(content) == "PASS" {
-			return StatusDevReady, -1, nil
+			return StatusReviewPass, -1, nil
 		}
 		return StatusTestFail, -1, nil
 	case AgentDev:
-		return StatusTestExecReady, -1, nil
+		return StatusReviewPass, -1, nil
 	case AgentTest:
 		content, err := readTaskFile(taskDir, "test.md")
 		if err != nil {
@@ -365,6 +513,14 @@ func parseResult(content string) string {
 
 func parseScore(content string) int {
 	section := sectionAfterHeading(content, "Score")
+	totalRe := regexp.MustCompile(`\b([0-9]{1,3})\s*/\s*100\b`)
+	totalMatches := totalRe.FindAllStringSubmatch(section, -1)
+	if len(totalMatches) > 0 {
+		score, err := strconv.Atoi(totalMatches[len(totalMatches)-1][1])
+		if err == nil {
+			return clampScore(score)
+		}
+	}
 	re := regexp.MustCompile(`\b([0-9]{1,3})\b`)
 	match := re.FindStringSubmatch(section)
 	if len(match) != 2 {
@@ -374,6 +530,13 @@ func parseScore(content string) int {
 	if err != nil || score < 0 {
 		return 0
 	}
+	return clampScore(score)
+}
+
+func clampScore(score int) int {
+	if score < 0 {
+		return 0
+	}
 	if score > 100 {
 		return 100
 	}
@@ -381,13 +544,32 @@ func parseScore(content string) int {
 }
 
 func parseTokenAfterHeading(content, heading string, allowed []string) string {
-	section := strings.ToUpper(sectionAfterHeading(content, heading))
+	section := sectionAfterHeading(content, heading)
+	if fenced := firstFenceContent(section); fenced != "" {
+		if token := firstAllowedToken(fenced, allowed); token != "" {
+			return token
+		}
+	}
+	return firstAllowedToken(section, allowed)
+}
+
+func firstAllowedToken(content string, allowed []string) string {
+	section := strings.ToUpper(content)
 	for _, token := range allowed {
 		if regexp.MustCompile(`\b` + regexp.QuoteMeta(token) + `\b`).MatchString(section) {
 			return token
 		}
 	}
 	return ""
+}
+
+func firstFenceContent(content string) string {
+	re := regexp.MustCompile("(?ms)(?:~~~|```)[a-zA-Z0-9_-]*\\s*\\n(.*?)\\n(?:~~~|```)")
+	match := re.FindStringSubmatch(content)
+	if len(match) != 2 {
+		return ""
+	}
+	return match[1]
 }
 
 func sectionAfterHeading(content, heading string) string {

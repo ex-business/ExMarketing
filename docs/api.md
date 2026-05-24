@@ -221,7 +221,8 @@ curl -X POST http://localhost:8080/admin/v1/activities \
         },
         "grantMode": "AUTO",
         "grantChannel": "HTTP",
-        "enabled": true
+        "enabled": true,
+        "version": 1
       }
     ]
   }'
@@ -241,6 +242,8 @@ stackable         是否允许叠加命中
 rules             活动规则
 rewards           奖励配置
 ```
+
+创建阶段会进行基础 Schema 校验。当前普通活动只允许 `CONDITION` 规则、`FIXED` / `RATIO` 奖励计算、`AUTO` 发奖模式，以及 `HTTP` / `WEBHOOK` 发奖通道；`rewardConfig.targetRef` 对可执行发奖必填且必须是 `http` 或 `https` URL。`MQ`、`MANUAL_EXPORT`、`MANUAL`、未知配置字段、非法版本或不可解析 Decimal 会返回 `400 Bad Request`。
 
 ## 查询活动
 

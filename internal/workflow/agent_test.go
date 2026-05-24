@@ -26,6 +26,9 @@ func TestPromptForAgent(t *testing.T) {
 	if want := "你是 Analysis Agent"; len(prompt) < len(want) || prompt[:len(want)] != want {
 		t.Fatalf("prompt = %q, want prefix %q", prompt, want)
 	}
+	if !strings.Contains(prompt, "只负责需求分析和需求细化") || !strings.Contains(prompt, "不写代码") {
+		t.Fatalf("analysis prompt should forbid coding, got: %s", prompt)
+	}
 }
 
 func TestEvaluateAgentResult(t *testing.T) {
@@ -56,6 +59,67 @@ PASS
 	}
 }
 
+func TestEvaluateAgentResultUsesTotalScoreInMarkdownFence(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "analysis.md"), []byte(`# Analysis
+
+## Score
+
+`+"```text"+`
+需求清晰度        19/20
+需求边界清楚      18/20
+风险可控          17/20
+验收标准明确      19/20
+约束一致性        19/20
+总分              92/100
+`+"```"+`
+
+## Decision
+
+`+"```text"+`
+PASS
+`+"```"+`
+`), 0o644); err != nil {
+		t.Fatalf("write analysis: %v", err)
+	}
+
+	status, score, err := EvaluateAgentResult(dir, AgentAnalysis)
+	if err != nil {
+		t.Fatalf("evaluate analysis: %v", err)
+	}
+	if status != StatusReviewReady || score != 92 {
+		t.Fatalf("status=%s score=%d, want %s 92", status, score, StatusReviewReady)
+	}
+}
+
+func TestEvaluateReviewResultUsesFirstDecisionFence(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "review.md"), []byte(`# Review
+
+## Decision
+
+~~~text
+BLOCK
+~~~
+
+规则：
+
+~~~text
+无 P0/P1 且 Score >= 80 -> PASS
+~~~
+`), 0o644); err != nil {
+		t.Fatalf("write review: %v", err)
+	}
+
+	status, _, err := EvaluateAgentResult(dir, AgentReview)
+	if err != nil {
+		t.Fatalf("evaluate review: %v", err)
+	}
+	if status != StatusReviewBlock {
+		t.Fatalf("status=%s, want %s", status, StatusReviewBlock)
+	}
+}
+
 func TestResolveAgentRoutesTestFailBackToDev(t *testing.T) {
 	agent, err := ResolveAgent(StatusTestFail, AgentAuto)
 	if err != nil {
@@ -66,6 +130,18 @@ func TestResolveAgentRoutesTestFailBackToDev(t *testing.T) {
 	}
 }
 
+func TestResolveAgentRoutesAnalysisFailureBackToAnalysis(t *testing.T) {
+	for _, status := range []string{StatusAnalysisFail, StatusReviewBlock} {
+		agent, err := ResolveAgent(status, AgentAuto)
+		if err != nil {
+			t.Fatalf("resolve agent for %s: %v", status, err)
+		}
+		if agent != AgentAnalysis {
+			t.Fatalf("status %s resolved to %s, want %s", status, agent, AgentAnalysis)
+		}
+	}
+}
+
 func TestResolveAgentRoutesCommitFailBackToDev(t *testing.T) {
 	agent, err := ResolveAgent(StatusCommitFail, AgentAuto)
 	if err != nil {
@@ -73,6 +149,43 @@ func TestResolveAgentRoutesCommitFailBackToDev(t *testing.T) {
 	}
 	if agent != AgentDev {
 		t.Fatalf("agent = %s, want %s", agent, AgentDev)
+	}
+}
+
+func TestDevPromptIncludesAnalysisFailureFeedback(t *testing.T) {
+	dir := t.TempDir()
+	req := Requirement{
+		ID:      "req-1",
+		Title:   "Title",
+		TaskDir: dir,
+	}
+	if err := CreateTaskFiles(req); err != nil {
+		t.Fatalf("create task files: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "analysis.md"), []byte(`# Analysis
+
+## Score
+
+~~~text
+72
+~~~
+
+## Decision
+
+~~~text
+BLOCK
+~~~
+
+缺少边界条件。
+`), 0o644); err != nil {
+		t.Fatalf("write analysis: %v", err)
+	}
+	prompt, err := PromptForAgent(dir, AgentAnalysis)
+	if err != nil {
+		t.Fatalf("prompt for analysis: %v", err)
+	}
+	if !strings.Contains(prompt, "分析返工反馈") || !strings.Contains(prompt, "缺少边界条件") {
+		t.Fatalf("expected analysis prompt to include failure feedback, got: %s", prompt)
 	}
 }
 
@@ -151,7 +264,72 @@ git diff --check failed.
 	}
 }
 
-func TestEnsureTaskFilesPreservesExistingAgentPrompts(t *testing.T) {
+func TestResetDevAndTestAfterCommitFailureKeepsCommitContext(t *testing.T) {
+	dir := t.TempDir()
+	req := Requirement{
+		ID:      "req-1",
+		Title:   "Title",
+		TaskDir: dir,
+	}
+	if err := CreateTaskFiles(req); err != nil {
+		t.Fatalf("create task files: %v", err)
+	}
+	if err := MarkAgentDone(req, AgentRun{Agent: AgentDev, OutputPath: filepath.Join(dir, "runs", "dev.log"), NextStatus: StatusReviewPass}); err != nil {
+		t.Fatalf("mark dev done: %v", err)
+	}
+	if err := MarkAgentDone(req, AgentRun{Agent: AgentTest, OutputPath: filepath.Join(dir, "runs", "test.log"), NextStatus: StatusCommitReady}); err != nil {
+		t.Fatalf("mark test done: %v", err)
+	}
+	commitLog := filepath.Join(dir, "runs", "commit.log")
+	if err := os.MkdirAll(filepath.Dir(commitLog), 0o755); err != nil {
+		t.Fatalf("mkdir runs: %v", err)
+	}
+	if err := os.WriteFile(commitLog, []byte("git diff --check failed\n"), 0o644); err != nil {
+		t.Fatalf("write commit log: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "commit.md"), []byte(`# Commit
+
+## Review
+
+~~~text
+BLOCK
+~~~
+
+git diff --check failed.
+`), 0o644); err != nil {
+		t.Fatalf("write commit artifact: %v", err)
+	}
+	if err := MarkAgentFailed(req, AgentRun{Agent: AgentCommit, OutputPath: commitLog, ExitCode: 1}, os.ErrInvalid); err != nil {
+		t.Fatalf("mark commit failed: %v", err)
+	}
+
+	if err := ResetDevAndTestAfterCommitFailure(req); err != nil {
+		t.Fatalf("reset dev/test: %v", err)
+	}
+
+	status, err := LoadAgentStatus(dir)
+	if err != nil {
+		t.Fatalf("load status: %v", err)
+	}
+	if got := status.Agents[string(AgentDev)].Status; got != AgentStatusWaiting {
+		t.Fatalf("dev status = %s, want %s", got, AgentStatusWaiting)
+	}
+	if got := status.Agents[string(AgentTest)].Status; got != AgentStatusWaiting {
+		t.Fatalf("test status = %s, want %s", got, AgentStatusWaiting)
+	}
+	if got := status.Agents[string(AgentCommit)].Status; got != AgentStatusFailed {
+		t.Fatalf("commit status = %s, want %s", got, AgentStatusFailed)
+	}
+	prompt, err := PromptForAgent(dir, AgentDev)
+	if err != nil {
+		t.Fatalf("prompt for dev: %v", err)
+	}
+	if !strings.Contains(prompt, "Commit 失败") || !strings.Contains(prompt, "git diff --check failed") {
+		t.Fatalf("expected dev prompt to keep commit failure context, got: %s", prompt)
+	}
+}
+
+func TestEnsureTaskFilesRefreshesCanonicalAgentPrompts(t *testing.T) {
 	dir := t.TempDir()
 	req := Requirement{
 		ID:      "req-1",
@@ -175,11 +353,14 @@ func TestEnsureTaskFilesPreservesExistingAgentPrompts(t *testing.T) {
 		t.Fatalf("read prompts: %v", err)
 	}
 	got := string(bytes)
-	if !strings.HasPrefix(got, strings.TrimRight(original, "\n")) {
-		t.Fatalf("expected existing prompt content to be preserved, got: %s", got)
-	}
 	if !strings.Contains(got, "## Test Plan Agent") {
 		t.Fatalf("expected missing test plan prompt to be appended, got: %s", got)
+	}
+	if strings.Contains(got, "custom prompt edits") {
+		t.Fatalf("expected stale prompt edits to be replaced, got: %s", got)
+	}
+	if !strings.Contains(got, "只负责需求分析和需求细化") || !strings.Contains(got, "不写代码") {
+		t.Fatalf("expected canonical analysis prompt, got: %s", got)
 	}
 }
 
@@ -284,7 +465,7 @@ func TestEnsureAgentStatusMarksStaleRunningInterrupted(t *testing.T) {
 	if err := os.Chtimes(logPath, old, old); err != nil {
 		t.Fatalf("chtimes log: %v", err)
 	}
-	if err := MarkAgentRunning(req, AgentDev, logPath); err != nil {
+	if err := MarkAgentRunning(req, AgentDev, logPath, 0); err != nil {
 		t.Fatalf("mark running: %v", err)
 	}
 	if err := os.Chtimes(logPath, old, old); err != nil {
@@ -301,5 +482,40 @@ func TestEnsureAgentStatusMarksStaleRunningInterrupted(t *testing.T) {
 	}
 	if current.Error == "" {
 		t.Fatal("expected interrupted error")
+	}
+}
+
+func TestEnsureAgentStatusMarksMissingProcessInterrupted(t *testing.T) {
+	t.Setenv("EX_MARKETING_STALE_AGENT_SECONDS", "300")
+	dir := t.TempDir()
+	req := Requirement{
+		ID:      "req-1",
+		Title:   "Title",
+		TaskDir: dir,
+	}
+	if err := CreateTaskFiles(req); err != nil {
+		t.Fatalf("create task files: %v", err)
+	}
+	logPath := filepath.Join(dir, "runs", "missing-process.log")
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
+		t.Fatalf("mkdir runs: %v", err)
+	}
+	if err := os.WriteFile(logPath, []byte("startedAt=now\n"), 0o644); err != nil {
+		t.Fatalf("write log: %v", err)
+	}
+	if err := MarkAgentRunning(req, AgentAnalysis, logPath, 999999); err != nil {
+		t.Fatalf("mark running: %v", err)
+	}
+
+	status, err := EnsureAgentStatus(req)
+	if err != nil {
+		t.Fatalf("ensure status: %v", err)
+	}
+	current := status.Agents[string(AgentAnalysis)]
+	if current.Status != AgentStatusStale {
+		t.Fatalf("agent status = %s, want %s", current.Status, AgentStatusStale)
+	}
+	if !strings.Contains(current.Error, "process 999999 is not running") {
+		t.Fatalf("unexpected error: %s", current.Error)
 	}
 }

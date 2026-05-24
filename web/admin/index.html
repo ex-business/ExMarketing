@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ExMarketing Admin</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 24px; color: #1f2937; }
+    main { max-width: 1120px; margin: 0 auto; }
+    h1 { font-size: 24px; margin: 0 0 16px; }
+    section { border: 1px solid #d1d5db; border-radius: 8px; padding: 16px; margin: 16px 0; }
+    textarea { width: 100%; min-height: 220px; font-family: ui-monospace, monospace; font-size: 13px; }
+    button { padding: 8px 12px; border: 1px solid #111827; background: #111827; color: white; border-radius: 6px; cursor: pointer; }
+    pre { background: #f3f4f6; padding: 12px; overflow: auto; border-radius: 6px; min-height: 80px; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>ExMarketing Admin</h1>
+  <section>
+    <button onclick="loadActivities()">Refresh Activities</button>
+    <pre id="activities"></pre>
+  </section>
+  <section>
+    <h2>Create Activity</h2>
+    <textarea id="activity">{}</textarea>
+    <button onclick="postJson('/admin/v1/activities', 'activity', 'activityResult')">Create</button>
+    <pre id="activityResult"></pre>
+  </section>
+  <section>
+    <h2>Simulate Event</h2>
+    <textarea id="event">{}</textarea>
+    <button onclick="postJson('/admin/v1/simulate', 'event', 'simulationResult')">Simulate</button>
+    <pre id="simulationResult"></pre>
+  </section>
+</main>
+<script>
+async function loadActivities() {
+  const res = await fetch('/admin/v1/activities');
+  document.getElementById('activities').textContent = JSON.stringify(await res.json(), null, 2);
+}
+async function postJson(url, inputId, outputId) {
+  const res = await fetch(url, {method: 'POST', headers: {'content-type': 'application/json'}, body: document.getElementById(inputId).value});
+  document.getElementById(outputId).textContent = JSON.stringify(await res.json(), null, 2);
+}
+loadActivities();
+</script>
+</body>
+</html>

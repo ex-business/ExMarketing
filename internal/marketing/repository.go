@@ -1,0 +1,32 @@
+package marketing
+
+import (
+	"context"
+	"time"
+)
+
+type Repository interface {
+	CreateActivity(ctx context.Context, activity Activity) (Activity, error)
+	ListActivities(ctx context.Context) ([]Activity, error)
+	FindMatchingActivities(ctx context.Context, tenantID string, eventType string) ([]Activity, error)
+
+	CreateInbox(ctx context.Context, inbox EventInbox) (EventInbox, bool, error)
+	UpdateInbox(ctx context.Context, inbox EventInbox) error
+
+	CreateParticipation(ctx context.Context, participation Participation) (Participation, error)
+	CreateGrantOrder(ctx context.Context, order GrantOrder) (GrantOrder, error)
+	UpdateGrantOrderByCommandID(ctx context.Context, tenantID string, commandID string, status GrantStatus, message string) error
+	CreateOutbox(ctx context.Context, message OutboxMessage) (OutboxMessage, error)
+	CreateGrantOutboxesWithQuota(ctx context.Context, activityID string, subjectID string, totalRewardAmount string, reserveUserLimit bool, orders []GrantOrder, messages []OutboxMessage) ([]GrantOrder, []OutboxMessage, bool, error)
+
+	CreateQuota(ctx context.Context, quota Quota) (Quota, error)
+	ReserveQuota(ctx context.Context, activityID string, quotaType QuotaType, scope QuotaScope, scopeKey string, amount string) (bool, error)
+
+	ListPendingOutbox(ctx context.Context, limit int) ([]OutboxMessage, error)
+	MarkOutboxSent(ctx context.Context, id string) error
+	MarkOutboxFailed(ctx context.Context, id string, retryCount int, nextRetryAt time.Time, message string) error
+	MarkOutboxDLQ(ctx context.Context, id string, message string) error
+
+	CreateAudit(ctx context.Context, record AuditRecord) error
+	ListAudit(ctx context.Context, limit int) ([]AuditRecord, error)
+}

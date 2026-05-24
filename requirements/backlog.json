@@ -37,12 +37,12 @@
       "id": "2026-05-24-113400-3",
       "title": "规则引擎四阶段执行",
       "description": "来源：22-独立活动营销中台设计。将规则引擎拆成 MATCH、QUALIFY、REWARD、RISK/LIMIT/BUDGET 阶段，支持事件 attributes、活动自身 state、可选 facts 字段路径读取。验收：每条规则输出通过/失败原因；新增规则只注册 evaluator，不修改主流程。",
-      "status": "REVIEW_READY",
+      "status": "COMMIT_READY",
       "risk": "高",
       "score": 90,
       "taskDir": "tasks/2026-05-24-113400-3",
       "createdAt": "2026-05-24T11:34:00.355875Z",
-      "updatedAt": "2026-05-24T15:32:03.189151Z"
+      "updatedAt": "2026-05-24T15:46:12.719135Z"
     },
     {
       "id": "2026-05-24-113400-4",

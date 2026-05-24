@@ -1,35 +1,38 @@
 # Review
 
-## Agent 指令
-
-你是 Review Agent。请审核 analysis.md。
-
-不改代码，不提交。
-
 ## Findings
 
-~~~text
+```text
 P0:
+无。
+
 P1:
+无。
+
 P2:
-~~~
+1. analysis.md 已定义规则级 explain 字段，但没有明确阶段级结果是否必须保留规则列表的稳定排序字段或原始 sort 值。后续实现时建议在阶段明细中保留执行顺序，便于审计和回放。
+2. analysis.md 将正式处理的后续阶段执行策略留作待确认问题。后续 test-plan 应明确“正式处理首个失败阶段停止”和“模拟运行是否继续收集原因”的具体测试口径，避免 Dev/Test Agent 各自解释。
+3. reasonCode 目前仅给出示例和原则，没有沉淀最小枚举集。实现前建议至少列出配置错误、字段缺失、类型错误、fact 不可用、quota 不足、互斥拒绝、规则禁用等核心 reasonCode，减少返回值漂移。
+```
 
 ## Open Questions
 
-待填写。
+```text
+1. 正式事件处理是否需要对外返回完整阶段/规则明细，还是仅落审计、对外只返回最终原因？
+2. 模拟运行对已拒绝活动是否必须继续执行后续阶段以收集完整原因？
+3. state.* 命名空间是否需要在数据字典中同步固化为稳定 schema？
+```
+
+## Score
+
+```text
+90 / 100
+```
 
 ## Decision
 
-~~~text
-PASS / BLOCK
-~~~
-
-规则：
-
-~~~text
-存在 P0/P1 -> BLOCK
-Score < 80 -> BLOCK
-无 P0/P1 且 Score >= 80 -> PASS
-~~~
+```text
+PASS
+```
 
 需求：2026-05-24-113400-3

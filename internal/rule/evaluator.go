@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -12,17 +13,201 @@ import (
 	"github.com/ex-stack/ExMarketing/internal/marketing"
 )
 
+const (
+	ReasonRulePassed        = "RULE_PASSED"
+	ReasonRuleDisabled      = "RULE_DISABLED"
+	ReasonInvalidConfig     = "INVALID_RULE_CONFIG"
+	ReasonFieldMissing      = "FIELD_MISSING"
+	ReasonFactFieldMissing  = "FACT_FIELD_MISSING"
+	ReasonTypeMismatch      = "TYPE_MISMATCH"
+	ReasonUnsupportedOp     = "UNSUPPORTED_OPERATOR"
+	ReasonEvaluatorNotFound = "EVALUATOR_NOT_FOUND"
+	ReasonInvalidPhase      = "INVALID_RULE_PHASE"
+	ReasonConditionFailed   = "CONDITION_NOT_MET"
+)
+
 type Context struct {
 	Event marketing.ActivityEvent
+	State map[string]any
+	Facts map[string]any
 }
 
 type Result struct {
-	Passed bool   `json:"passed"`
-	Reason string `json:"reason,omitempty"`
+	Passed     bool           `json:"passed"`
+	Reason     string         `json:"reason,omitempty"`
+	ReasonCode string         `json:"reasonCode,omitempty"`
+	Field      string         `json:"field,omitempty"`
+	Expected   any            `json:"expected,omitempty"`
+	Actual     any            `json:"actual,omitempty"`
+	Detail     map[string]any `json:"detail,omitempty"`
 }
 
 type Evaluator interface {
 	Evaluate(ctx Context, rule marketing.Rule) Result
+}
+
+type Registry struct {
+	evaluators map[marketing.RuleType]Evaluator
+}
+
+func NewRegistry() *Registry {
+	registry := &Registry{evaluators: map[marketing.RuleType]Evaluator{}}
+	registry.Register(marketing.RuleTypeCondition, ConditionEvaluator{})
+	return registry
+}
+
+func (r *Registry) Register(ruleType marketing.RuleType, evaluator Evaluator) {
+	if r.evaluators == nil {
+		r.evaluators = map[marketing.RuleType]Evaluator{}
+	}
+	r.evaluators[ruleType] = evaluator
+}
+
+func (r *Registry) Evaluate(ctx Context, rule marketing.Rule) marketing.RuleExecutionResult {
+	if !validPhase(rule.Phase) {
+		return executionResult(rule, marketing.RuleDecisionError, false, Result{
+			ReasonCode: ReasonInvalidPhase,
+			Reason:     "rule phase is invalid",
+		})
+	}
+	if !rule.Enabled {
+		return executionResult(rule, marketing.RuleDecisionSkipped, false, Result{
+			ReasonCode: ReasonRuleDisabled,
+			Reason:     "rule is disabled",
+		})
+	}
+	evaluator, ok := r.evaluators[rule.Type]
+	if !ok {
+		return executionResult(rule, marketing.RuleDecisionError, false, Result{
+			ReasonCode: ReasonEvaluatorNotFound,
+			Reason:     "rule evaluator is not registered",
+		})
+	}
+	result := evaluator.Evaluate(ctx, rule)
+	if result.Passed {
+		if result.ReasonCode == "" {
+			result.ReasonCode = ReasonRulePassed
+		}
+		if result.Reason == "" {
+			result.Reason = "rule passed"
+		}
+		return executionResult(rule, marketing.RuleDecisionPassed, true, result)
+	}
+	status := marketing.RuleDecisionRejected
+	if result.ReasonCode == ReasonInvalidConfig || result.ReasonCode == ReasonUnsupportedOp || result.ReasonCode == ReasonEvaluatorNotFound {
+		status = marketing.RuleDecisionError
+	}
+	return executionResult(rule, status, false, result)
+}
+
+func Execute(ctx Context, rules []marketing.Rule, registry *Registry) marketing.ActivityRuleResult {
+	if registry == nil {
+		registry = NewRegistry()
+	}
+	ordered := stableRules(rules)
+	out := marketing.ActivityRuleResult{
+		Decision:        marketing.RuleDecisionPassed,
+		CanReward:       true,
+		CanReserveQuota: true,
+	}
+	for _, stage := range stagePlan() {
+		stageResult := marketing.RuleStageResult{
+			Stage:  stage.stage,
+			Status: marketing.RuleDecisionPassed,
+		}
+		for _, activityRule := range ordered {
+			if !slices.Contains(stage.phases, activityRule.Phase) {
+				continue
+			}
+			ruleResult := registry.Evaluate(ctx, activityRule)
+			stageResult.RuleResults = append(stageResult.RuleResults, ruleResult)
+			switch ruleResult.Status {
+			case marketing.RuleDecisionSkipped:
+				stageResult.SkippedCount++
+			case marketing.RuleDecisionPassed:
+				stageResult.ExecutedCount++
+			default:
+				stageResult.ExecutedCount++
+				stageResult.FailedCount++
+				if stageResult.Status == marketing.RuleDecisionPassed {
+					stageResult.Status = ruleResult.Status
+					stageResult.ReasonCode = ruleResult.ReasonCode
+					stageResult.Reason = ruleResult.Reason
+				}
+			}
+		}
+		out.StageResults = append(out.StageResults, stageResult)
+		if stageResult.Status != marketing.RuleDecisionPassed {
+			out.Decision = marketing.RuleDecisionRejected
+			if stageResult.Status == marketing.RuleDecisionError {
+				out.Decision = marketing.RuleDecisionError
+			}
+			out.FailedStage = stage.stage
+			out.ReasonCode = stageResult.ReasonCode
+			out.Reason = stageResult.Reason
+			out.CanReward = false
+			out.CanReserveQuota = false
+			return out
+		}
+	}
+	return out
+}
+
+type stageSpec struct {
+	stage  marketing.RuleStage
+	phases []marketing.RulePhase
+}
+
+func stagePlan() []stageSpec {
+	return []stageSpec{
+		{stage: marketing.RuleStageMatch, phases: []marketing.RulePhase{marketing.RulePhaseMatch}},
+		{stage: marketing.RuleStageQualify, phases: []marketing.RulePhase{marketing.RulePhaseQualify}},
+		{stage: marketing.RuleStageReward, phases: []marketing.RulePhase{marketing.RulePhaseReward}},
+		{stage: marketing.RuleStageRiskLimitBudget, phases: []marketing.RulePhase{marketing.RulePhaseRisk, marketing.RulePhaseLimit}},
+	}
+}
+
+func stableRules(rules []marketing.Rule) []marketing.Rule {
+	out := slices.Clone(rules)
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Sort != out[j].Sort {
+			return out[i].Sort < out[j].Sort
+		}
+		return out[i].Code < out[j].Code
+	})
+	return out
+}
+
+func validPhase(phase marketing.RulePhase) bool {
+	switch phase {
+	case marketing.RulePhaseMatch, marketing.RulePhaseQualify, marketing.RulePhaseReward, marketing.RulePhaseRisk, marketing.RulePhaseLimit:
+		return true
+	default:
+		return false
+	}
+}
+
+func executionResult(rule marketing.Rule, status marketing.RuleDecision, passed bool, result Result) marketing.RuleExecutionResult {
+	if result.ReasonCode == "" {
+		result.ReasonCode = ReasonConditionFailed
+	}
+	if result.Reason == "" {
+		result.Reason = "rule failed"
+	}
+	return marketing.RuleExecutionResult{
+		RuleCode:   rule.Code,
+		RulePhase:  rule.Phase,
+		RuleType:   rule.Type,
+		Status:     status,
+		Passed:     passed,
+		ReasonCode: result.ReasonCode,
+		Reason:     result.Reason,
+		Field:      result.Field,
+		Expected:   result.Expected,
+		Actual:     result.Actual,
+		Sort:       rule.Sort,
+		Detail:     result.Detail,
+	}
 }
 
 type ConditionEvaluator struct{}
@@ -30,59 +215,81 @@ type ConditionEvaluator struct{}
 func (e ConditionEvaluator) Evaluate(ctx Context, rule marketing.Rule) Result {
 	var config marketing.ConditionRuleConfig
 	if err := json.Unmarshal(rule.Config, &config); err != nil {
-		return Result{Passed: false, Reason: "invalid rule config"}
+		return Result{Passed: false, ReasonCode: ReasonInvalidConfig, Reason: "invalid rule config"}
 	}
 
 	logic := strings.ToUpper(strings.TrimSpace(config.Logic))
 	if logic == "" {
 		logic = "AND"
 	}
+	if logic != "AND" && logic != "OR" {
+		return Result{Passed: false, ReasonCode: ReasonInvalidConfig, Reason: "invalid rule logic"}
+	}
 	if len(config.Conditions) == 0 {
 		return Result{Passed: true}
 	}
 
 	anyPassed := false
+	var lastFailure Result
 	for _, condition := range config.Conditions {
-		ok, reason := evaluateCondition(ctx, condition)
-		if logic == "AND" && !ok {
-			return Result{Passed: false, Reason: reason}
+		result := evaluateCondition(ctx, condition)
+		if logic == "AND" && !result.Passed {
+			return result
 		}
-		if logic == "OR" && ok {
+		if logic == "OR" && result.Passed {
 			return Result{Passed: true}
 		}
-		anyPassed = anyPassed || ok
+		if !result.Passed {
+			lastFailure = result
+		}
+		anyPassed = anyPassed || result.Passed
 	}
 
 	if logic == "OR" {
-		return Result{Passed: anyPassed, Reason: "no OR condition passed"}
+		if lastFailure.Reason == "" {
+			lastFailure = Result{Passed: false, ReasonCode: ReasonConditionFailed, Reason: "no OR condition passed"}
+		}
+		lastFailure.Passed = anyPassed
+		return lastFailure
 	}
 	return Result{Passed: true}
 }
 
-func evaluateCondition(ctx Context, condition marketing.Condition) (bool, string) {
-	actual, ok := fieldValue(ctx.Event, condition.Field)
+func evaluateCondition(ctx Context, condition marketing.Condition) Result {
+	actual, ok := fieldValue(ctx, condition.Field)
 	if !ok {
-		return false, fmt.Sprintf("field %s not found", condition.Field)
+		reasonCode := ReasonFieldMissing
+		if strings.HasPrefix(condition.Field, "facts.") {
+			reasonCode = ReasonFactFieldMissing
+		}
+		return Result{Passed: false, ReasonCode: reasonCode, Reason: fmt.Sprintf("field %s not found", condition.Field), Field: condition.Field, Expected: condition.Value}
 	}
 
 	op := strings.ToUpper(strings.TrimSpace(condition.Op))
 	switch op {
 	case "=", "==":
-		return valuesEqual(actual, condition.Value), fmt.Sprintf("%s != %v", condition.Field, condition.Value)
+		return conditionResult(valuesEqual(actual, condition.Value), condition, actual, ReasonConditionFailed, fmt.Sprintf("%s != %v", condition.Field, condition.Value))
 	case "!=", "<>":
-		return !valuesEqual(actual, condition.Value), fmt.Sprintf("%s == %v", condition.Field, condition.Value)
+		return conditionResult(!valuesEqual(actual, condition.Value), condition, actual, ReasonConditionFailed, fmt.Sprintf("%s == %v", condition.Field, condition.Value))
 	case ">=", ">", "<=", "<":
-		return compareDecimal(actual, condition.Value, op)
+		return compareDecimal(condition, actual, condition.Value, op)
 	case "IN":
-		return contains(condition.Value, actual), fmt.Sprintf("%s not in %v", condition.Field, condition.Value)
+		return conditionResult(contains(condition.Value, actual), condition, actual, ReasonConditionFailed, fmt.Sprintf("%s not in %v", condition.Field, condition.Value))
 	case "NOT_IN":
-		return !contains(condition.Value, actual), fmt.Sprintf("%s in %v", condition.Field, condition.Value)
+		return conditionResult(!contains(condition.Value, actual), condition, actual, ReasonConditionFailed, fmt.Sprintf("%s in %v", condition.Field, condition.Value))
 	default:
-		return false, fmt.Sprintf("unsupported op %s", condition.Op)
+		return Result{Passed: false, ReasonCode: ReasonUnsupportedOp, Reason: fmt.Sprintf("unsupported op %s", condition.Op), Field: condition.Field, Expected: condition.Value, Actual: actual}
 	}
 }
 
-func fieldValue(event marketing.ActivityEvent, path string) (any, bool) {
+func conditionResult(passed bool, condition marketing.Condition, actual any, reasonCode string, reason string) Result {
+	if passed {
+		return Result{Passed: true}
+	}
+	return Result{Passed: false, ReasonCode: reasonCode, Reason: reason, Field: condition.Field, Expected: condition.Value, Actual: actual}
+}
+
+func fieldValue(ctx Context, path string) (any, bool) {
 	parts := strings.Split(path, ".")
 	if len(parts) == 0 {
 		return nil, false
@@ -91,21 +298,25 @@ func fieldValue(event marketing.ActivityEvent, path string) (any, bool) {
 	var current any
 	switch parts[0] {
 	case "eventId":
-		current = event.EventID
+		current = ctx.Event.EventID
 	case "eventType":
-		current = event.EventType
+		current = ctx.Event.EventType
 	case "sourceSystem":
-		current = event.SourceSystem
+		current = ctx.Event.SourceSystem
 	case "tenantId":
-		current = event.TenantID
+		current = ctx.Event.TenantID
 	case "occurredAt":
-		current = event.OccurredAt.Format("2006-01-02T15:04:05Z07:00")
+		current = ctx.Event.OccurredAt.Format("2006-01-02T15:04:05Z07:00")
 	case "subject":
-		current = map[string]any{"type": event.Subject.Type, "id": event.Subject.ID}
+		current = map[string]any{"type": ctx.Event.Subject.Type, "id": ctx.Event.Subject.ID}
 	case "biz":
-		current = map[string]any{"bizType": event.Biz.BizType, "bizId": event.Biz.BizID}
+		current = map[string]any{"bizType": ctx.Event.Biz.BizType, "bizId": ctx.Event.Biz.BizID}
 	case "attributes":
-		current = event.Attributes
+		current = ctx.Event.Attributes
+	case "state":
+		current = ctx.State
+	case "facts":
+		current = ctx.Facts
 	default:
 		return nil, false
 	}
@@ -132,28 +343,35 @@ func valuesEqual(a, b any) bool {
 	return fmt.Sprint(a) == fmt.Sprint(b) || reflect.DeepEqual(a, b)
 }
 
-func compareDecimal(a, b any, op string) (bool, string) {
-	ad, ok := toDecimal(a)
+func compareDecimal(condition marketing.Condition, actual any, expected any, op string) Result {
+	ad, ok := toDecimal(actual)
 	if !ok {
-		return false, "actual value is not decimal"
+		return Result{Passed: false, ReasonCode: ReasonTypeMismatch, Reason: "actual value is not decimal", Field: condition.Field, Expected: expected, Actual: actual}
 	}
-	bd, ok := toDecimal(b)
+	bd, ok := toDecimal(expected)
 	if !ok {
-		return false, "expected value is not decimal"
+		return Result{Passed: false, ReasonCode: ReasonTypeMismatch, Reason: "expected value is not decimal", Field: condition.Field, Expected: expected, Actual: actual}
 	}
 	cmp := ad.Cmp(bd)
+	var passed bool
+	var reason string
 	switch op {
 	case ">=":
-		return cmp >= 0, fmt.Sprintf("%s < %s", ad.String(), bd.String())
+		passed = cmp >= 0
+		reason = fmt.Sprintf("%s < %s", ad.String(), bd.String())
 	case ">":
-		return cmp > 0, fmt.Sprintf("%s <= %s", ad.String(), bd.String())
+		passed = cmp > 0
+		reason = fmt.Sprintf("%s <= %s", ad.String(), bd.String())
 	case "<=":
-		return cmp <= 0, fmt.Sprintf("%s > %s", ad.String(), bd.String())
+		passed = cmp <= 0
+		reason = fmt.Sprintf("%s > %s", ad.String(), bd.String())
 	case "<":
-		return cmp < 0, fmt.Sprintf("%s >= %s", ad.String(), bd.String())
+		passed = cmp < 0
+		reason = fmt.Sprintf("%s >= %s", ad.String(), bd.String())
 	default:
-		return false, "unsupported decimal op"
+		return Result{Passed: false, ReasonCode: ReasonUnsupportedOp, Reason: "unsupported decimal op", Field: condition.Field, Expected: expected, Actual: actual}
 	}
+	return conditionResult(passed, condition, actual, ReasonConditionFailed, reason)
 }
 
 func contains(haystack any, needle any) bool {

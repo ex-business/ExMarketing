@@ -245,6 +245,14 @@ rewards           奖励配置
 
 创建阶段会进行基础 Schema 校验。当前普通活动只允许 `CONDITION` 规则、`FIXED` / `RATIO` 奖励计算、`AUTO` 发奖模式，以及 `HTTP` / `WEBHOOK` 发奖通道；`rewardConfig.targetRef` 对可执行发奖必填且必须是 `http` 或 `https` URL。`MQ`、`MANUAL_EXPORT`、`MANUAL`、未知配置字段、非法版本或不可解析 Decimal 会返回 `400 Bad Request`。
 
+规则执行顺序固定为：
+
+```text
+MATCH -> QUALIFY -> REWARD -> RISK_LIMIT_BUDGET
+```
+
+`RISK_LIMIT_BUDGET` 是业务阶段名称，实际规则阶段仍使用 `RISK` 或 `LIMIT`；`BUDGET` 是 quota 类型，不是合法 `rulePhase`。`CONDITION` 字段路径支持 `attributes.*`、`state.*` 和 `facts.*`，字段缺失、类型不匹配、非法操作符或未注册 evaluator 不会默认通过。
+
 ## 查询活动
 
 ```http
@@ -369,6 +377,7 @@ curl -X POST http://localhost:8080/admin/v1/simulate \
 预计 grant_order
 预计 outbox reward command
 拒绝原因
+ruleResults 规则阶段与规则级解释
 ```
 
 ## 上报标准事件
@@ -415,7 +424,7 @@ curl -X POST http://localhost:8080/openapi/v1/events \
 2. 校验 Idempotency-Key
 3. 写入 marketing_event_inbox
 4. 匹配活动
-5. 执行规则
+5. 按 MATCH -> QUALIFY -> REWARD -> RISK_LIMIT_BUDGET 执行规则
 6. 规则拒绝时写 REJECTED participation
 7. 规则通过后计算全部奖励
 8. 在同一 activity 级事务内写 REWARDABLE participation、扣 BUDGET/STOCK/USER_LIMIT、写 grant_order、写 outbox

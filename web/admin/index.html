@@ -2116,8 +2116,10 @@ function runSingleAgent() {
     if (data.ok) {
       const runAgent = data.body.run?.Agent || agent;
       startLiveLog(requirementId, runAgent);
-      if (data.body.requirement?.status === 'COMMIT_READY') {
-        writeConsole(JSON.stringify(data.body, null, 2) + '\n\n测试已通过，自动提交给 Commit Agent ...');
+      const nextStatus = data.body.requirement?.status || '';
+      const nextAgent = runnableAgentForStatus(nextStatus);
+      if (nextAgent) {
+        writeConsole(JSON.stringify(data.body, null, 2) + '\n\n当前节点已完成，自动继续执行：' + (agentNames[nextAgent] || nextAgent));
         setTimeout(() => runPipeline(false), 300);
         return;
       }

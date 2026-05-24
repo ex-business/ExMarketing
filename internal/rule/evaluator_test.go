@@ -62,3 +62,88 @@ func TestConditionEvaluatorRejectsNonStandardTopLevelField(t *testing.T) {
 		t.Fatalf("unexpected reason: %q", result.Reason)
 	}
 }
+
+func TestExecuteRunsFourStagesWithStableRuleDetails(t *testing.T) {
+	rules := []marketing.Rule{
+		conditionRule("limit", marketing.RulePhaseLimit, 20, `{"conditions":[{"field":"state.quota.USER_LIMIT.remaining","op":">","value":"0"}]}`),
+		conditionRule("match", marketing.RulePhaseMatch, 10, `{"conditions":[{"field":"eventType","op":"=","value":"DEPOSIT_SUCCESS"}]}`),
+		conditionRule("reward", marketing.RulePhaseReward, 10, `{"conditions":[{"field":"attributes.amount","op":">=","value":"100"}]}`),
+		conditionRule("risk", marketing.RulePhaseRisk, 10, `{"conditions":[{"field":"facts.RISK.score","op":"<","value":"80"}]}`),
+		conditionRule("qualify", marketing.RulePhaseQualify, 10, `{"conditions":[{"field":"state.activity.status","op":"=","value":"ACTIVE"}]}`),
+	}
+	event := marketing.ActivityEvent{
+		EventType:  "DEPOSIT_SUCCESS",
+		Attributes: map[string]any{"amount": "100.00"},
+	}
+	result := Execute(Context{
+		Event: event,
+		State: map[string]any{
+			"activity": map[string]any{"status": "ACTIVE"},
+			"quota":    map[string]any{"USER_LIMIT": map[string]any{"remaining": "1"}},
+		},
+		Facts: map[string]any{"RISK": map[string]any{"score": "20"}},
+	}, rules, NewRegistry())
+
+	if result.Decision != marketing.RuleDecisionPassed {
+		t.Fatalf("expected pass, got %+v", result)
+	}
+	wantStages := []marketing.RuleStage{
+		marketing.RuleStageMatch,
+		marketing.RuleStageQualify,
+		marketing.RuleStageReward,
+		marketing.RuleStageRiskLimitBudget,
+	}
+	for i, want := range wantStages {
+		if result.StageResults[i].Stage != want {
+			t.Fatalf("stage[%d] expected %s, got %s", i, want, result.StageResults[i].Stage)
+		}
+	}
+	riskLimit := result.StageResults[3].RuleResults
+	if len(riskLimit) != 2 || riskLimit[0].RuleCode != "risk" || riskLimit[1].RuleCode != "limit" {
+		t.Fatalf("expected RISK then LIMIT in grouped stage, got %+v", riskLimit)
+	}
+}
+
+func TestExecuteReportsDisabledAndMissingFact(t *testing.T) {
+	disabled := conditionRule("disabled", marketing.RulePhaseMatch, 1, `{"conditions":[{"field":"eventType","op":"=","value":"OTHER"}]}`)
+	disabled.Enabled = false
+	missingFact := conditionRule("fact", marketing.RulePhaseQualify, 1, `{"conditions":[{"field":"facts.USER_PROFILE.vipLevel","op":">=","value":"3"}]}`)
+
+	result := Execute(Context{Event: marketing.ActivityEvent{EventType: "DEPOSIT_SUCCESS"}}, []marketing.Rule{disabled, missingFact}, NewRegistry())
+
+	if result.Decision != marketing.RuleDecisionRejected || result.FailedStage != marketing.RuleStageQualify {
+		t.Fatalf("expected QUALIFY rejection, got %+v", result)
+	}
+	if got := result.StageResults[0].RuleResults[0]; got.Status != marketing.RuleDecisionSkipped || got.ReasonCode != ReasonRuleDisabled {
+		t.Fatalf("expected disabled skip, got %+v", got)
+	}
+	if got := result.StageResults[1].RuleResults[0]; got.ReasonCode != ReasonFactFieldMissing || got.Field != "facts.USER_PROFILE.vipLevel" {
+		t.Fatalf("expected fact missing detail, got %+v", got)
+	}
+}
+
+func TestRegistryRejectsUnregisteredEvaluator(t *testing.T) {
+	rule := marketing.Rule{
+		Code:    "formula",
+		Phase:   marketing.RulePhaseQualify,
+		Type:    marketing.RuleTypeFormula,
+		Enabled: true,
+	}
+
+	result := NewRegistry().Evaluate(Context{}, rule)
+
+	if result.Status != marketing.RuleDecisionError || result.ReasonCode != ReasonEvaluatorNotFound {
+		t.Fatalf("expected unregistered evaluator error, got %+v", result)
+	}
+}
+
+func conditionRule(code string, phase marketing.RulePhase, sort int, config string) marketing.Rule {
+	return marketing.Rule{
+		Code:    code,
+		Phase:   phase,
+		Type:    marketing.RuleTypeCondition,
+		Config:  []byte(config),
+		Sort:    sort,
+		Enabled: true,
+	}
+}

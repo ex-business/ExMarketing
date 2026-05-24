@@ -81,6 +81,8 @@ RISK
 LIMIT
 ```
 
+规则运行时按 `MATCH -> QUALIFY -> REWARD -> RISK_LIMIT_BUDGET` 四个业务阶段输出解释结果。`RISK_LIMIT_BUDGET` 会合并执行 `RISK` 和 `LIMIT` 两类存储阶段；`BUDGET` 保持为 quota 类型，不作为合法 `rule_phase`。
+
 规则类型：
 
 ```text
@@ -93,6 +95,17 @@ LIMIT
 
 ```text
 CONDITION
+```
+
+当前 `CONDITION` 字段路径：
+
+```text
+attributes.<path>
+state.activity.<field>
+state.subject.<field>
+state.quota.<quotaType>.<field>
+state.exclusive.<field>
+facts.<factCode>.<path>
 ```
 
 当前条件操作符：

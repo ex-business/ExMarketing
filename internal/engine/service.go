@@ -15,7 +15,7 @@ import (
 
 type Service struct {
 	repository       marketing.Repository
-	ruleEvaluator    rule.Evaluator
+	ruleRegistry     *rule.Registry
 	rewardCalculator reward.Calculator
 	now              func() time.Time
 }
@@ -23,7 +23,7 @@ type Service struct {
 func NewService(repository marketing.Repository) *Service {
 	return &Service{
 		repository:       repository,
-		ruleEvaluator:    rule.ConditionEvaluator{},
+		ruleRegistry:     rule.NewRegistry(),
 		rewardCalculator: reward.ConfigCalculator{},
 		now:              func() time.Time { return time.Now().UTC() },
 	}
@@ -138,7 +138,7 @@ func (s *Service) ProcessEvent(ctx context.Context, event marketing.ActivityEven
 			continue
 		}
 
-		participation, rewardOrders, outboxMessages, qualified, err := s.evaluateActivity(ctx, inbox, activity)
+		participation, rewardOrders, outboxMessages, ruleResult, qualified, err := s.evaluateActivity(ctx, inbox, activity)
 		if err != nil {
 			inbox.ProcessStatus = marketing.InboxFailed
 			inbox.ErrorMessage = err.Error()
@@ -150,6 +150,7 @@ func (s *Service) ProcessEvent(ctx context.Context, event marketing.ActivityEven
 		result.Participations = append(result.Participations, participation)
 		result.GrantOrders = append(result.GrantOrders, rewardOrders...)
 		result.OutboxMessages = append(result.OutboxMessages, outboxMessages...)
+		result.RuleResults = append(result.RuleResults, ruleResult)
 		if qualified && activity.ExclusiveGroup != "" {
 			matchedExclusive[activity.ExclusiveGroup] = true
 		}
@@ -179,10 +180,11 @@ func (s *Service) SimulateEvent(ctx context.Context, event marketing.ActivityEve
 		if !activityRunnable(activity, now) {
 			continue
 		}
-		participation, grants, outbox := s.simulateActivity(event, activity)
+		participation, grants, outbox, ruleResult := s.simulateActivity(event, activity)
 		result.Participations = append(result.Participations, participation)
 		result.GrantOrders = append(result.GrantOrders, grants...)
 		result.OutboxMessages = append(result.OutboxMessages, outbox...)
+		result.RuleResults = append(result.RuleResults, ruleResult)
 	}
 	return result, nil
 }
@@ -194,7 +196,7 @@ func (s *Service) ApplyRewardCallback(ctx context.Context, callback marketing.Re
 	return s.repository.UpdateGrantOrderByCommandID(ctx, callback.TenantID, callback.CommandID, callback.Status, callback.Message)
 }
 
-func (s *Service) evaluateActivity(ctx context.Context, inbox marketing.EventInbox, activity marketing.Activity) (marketing.Participation, []marketing.GrantOrder, []marketing.OutboxMessage, bool, error) {
+func (s *Service) evaluateActivity(ctx context.Context, inbox marketing.EventInbox, activity marketing.Activity) (marketing.Participation, []marketing.GrantOrder, []marketing.OutboxMessage, marketing.ActivityRuleResult, bool, error) {
 	now := s.now()
 	snapshot, _ := json.Marshal(activity)
 	participation := marketing.Participation{
@@ -211,27 +213,13 @@ func (s *Service) evaluateActivity(ctx context.Context, inbox marketing.EventInb
 		UpdatedAt:      now,
 	}
 
-	for _, activityRule := range activity.Rules {
-		if !activityRule.Enabled || activityRule.Type != marketing.RuleTypeCondition {
-			continue
-		}
-		if !slices.Contains([]marketing.RulePhase{
-			marketing.RulePhaseMatch,
-			marketing.RulePhaseQualify,
-			marketing.RulePhaseReward,
-			marketing.RulePhaseRisk,
-			marketing.RulePhaseLimit,
-		}, activityRule.Phase) {
-			continue
-		}
-		ruleResult := s.ruleEvaluator.Evaluate(rule.Context{Event: inbox.Event}, activityRule)
-		if !ruleResult.Passed {
-			participation.Status = marketing.ParticipationRejected
-			participation.RejectReason = activityRule.Code + ": " + ruleResult.Reason
-			participation.UpdatedAt = now
-			created, err := s.repository.CreateParticipation(ctx, participation)
-			return created, nil, nil, false, err
-		}
+	ruleResult := s.executeRules(inbox.Event, activity)
+	if ruleResult.Decision != marketing.RuleDecisionPassed {
+		participation.Status = marketing.ParticipationRejected
+		participation.RejectReason = ruleResult.ReasonCode + ": " + ruleResult.Reason
+		participation.UpdatedAt = now
+		created, err := s.repository.CreateParticipation(ctx, participation)
+		return created, nil, nil, ruleResult, false, err
 	}
 
 	var orders []marketing.GrantOrder
@@ -246,7 +234,7 @@ func (s *Service) evaluateActivity(ctx context.Context, inbox marketing.EventInb
 		}
 		rewardResult, err := s.rewardCalculator.Calculate(reward.Context{Event: inbox.Event}, configuredReward)
 		if err != nil {
-			return participation, orders, messages, true, err
+			return participation, orders, messages, ruleResult, true, err
 		}
 
 		commandID := marketingID("cmd")
@@ -295,7 +283,7 @@ func (s *Service) evaluateActivity(ctx context.Context, inbox marketing.EventInb
 		}
 		amount, err := decimal.Parse(rewardResult.Amount)
 		if err != nil {
-			return participation, orders, messages, true, err
+			return participation, orders, messages, ruleResult, true, err
 		}
 		totalRewardAmount = totalRewardAmount.Add(amount)
 		orders = append(orders, order)
@@ -310,7 +298,7 @@ func (s *Service) evaluateActivity(ctx context.Context, inbox marketing.EventInb
 
 	if len(orders) == 0 {
 		createdParticipation, err := s.repository.CreateParticipation(ctx, participation)
-		return createdParticipation, nil, nil, true, err
+		return createdParticipation, nil, nil, ruleResult, true, err
 	}
 	atomicResult, err := s.repository.CreateParticipationGrantOutboxesWithQuota(ctx, marketing.AtomicGrantCommand{
 		Participation:     participation,
@@ -340,12 +328,12 @@ func (s *Service) evaluateActivity(ctx context.Context, inbox marketing.EventInb
 			}
 			_ = s.audit(ctx, activity.TenantID, "engine", "QUOTA_EXCEEDED", "event_inbox", inbox.ID, payload)
 		}
-		return participation, orders, messages, true, err
+		return participation, orders, messages, ruleResult, true, err
 	}
-	return atomicResult.Participation, atomicResult.GrantOrders, atomicResult.OutboxMessages, true, nil
+	return atomicResult.Participation, atomicResult.GrantOrders, atomicResult.OutboxMessages, ruleResult, true, nil
 }
 
-func (s *Service) simulateActivity(event marketing.ActivityEvent, activity marketing.Activity) (marketing.Participation, []marketing.GrantOrder, []marketing.OutboxMessage) {
+func (s *Service) simulateActivity(event marketing.ActivityEvent, activity marketing.Activity) (marketing.Participation, []marketing.GrantOrder, []marketing.OutboxMessage, marketing.ActivityRuleResult) {
 	now := s.now()
 	participation := marketing.Participation{
 		ID:             marketingID("sim_part"),
@@ -359,16 +347,11 @@ func (s *Service) simulateActivity(event marketing.ActivityEvent, activity marke
 		CreatedAt:      now,
 		UpdatedAt:      now,
 	}
-	for _, activityRule := range activity.Rules {
-		if !activityRule.Enabled || activityRule.Type != marketing.RuleTypeCondition {
-			continue
-		}
-		ruleResult := s.ruleEvaluator.Evaluate(rule.Context{Event: event}, activityRule)
-		if !ruleResult.Passed {
-			participation.Status = marketing.ParticipationRejected
-			participation.RejectReason = activityRule.Code + ": " + ruleResult.Reason
-			return participation, nil, nil
-		}
+	ruleResult := s.executeRules(event, activity)
+	if ruleResult.Decision != marketing.RuleDecisionPassed {
+		participation.Status = marketing.ParticipationRejected
+		participation.RejectReason = ruleResult.ReasonCode + ": " + ruleResult.Reason
+		return participation, nil, nil, ruleResult
 	}
 
 	var orders []marketing.GrantOrder
@@ -381,7 +364,7 @@ func (s *Service) simulateActivity(event marketing.ActivityEvent, activity marke
 		if err != nil {
 			participation.Status = marketing.ParticipationFailed
 			participation.RejectReason = err.Error()
-			return participation, orders, outbox
+			return participation, orders, outbox, ruleResult
 		}
 		commandID := marketingID("sim_cmd")
 		payload, _ := json.Marshal(rewardResult.Payload)
@@ -429,7 +412,37 @@ func (s *Service) simulateActivity(event marketing.ActivityEvent, activity marke
 			UpdatedAt:     now,
 		})
 	}
-	return participation, orders, outbox
+	return participation, orders, outbox, ruleResult
+}
+
+func (s *Service) executeRules(event marketing.ActivityEvent, activity marketing.Activity) marketing.ActivityRuleResult {
+	result := rule.Execute(rule.Context{
+		Event: event,
+		State: activityState(activity, s.now()),
+	}, activity.Rules, s.ruleRegistry)
+	result.ActivityID = activity.ID
+	result.ActivityCode = activity.Code
+	result.ActivityVersion = activity.Version
+	return result
+}
+
+func activityState(activity marketing.Activity, now time.Time) map[string]any {
+	return map[string]any{
+		"activity": map[string]any{
+			"id":        activity.ID,
+			"code":      activity.Code,
+			"status":    activity.Status,
+			"startTime": activity.StartTime.Format(time.RFC3339),
+			"endTime":   activity.EndTime.Format(time.RFC3339),
+			"timezone":  activity.Timezone,
+			"active":    activityRunnable(activity, now),
+			"priority":  activity.Priority,
+		},
+		"exclusive": map[string]any{
+			"group":     activity.ExclusiveGroup,
+			"stackable": activity.Stackable,
+		},
+	}
 }
 
 func (s *Service) audit(ctx context.Context, tenantID, actor, action, resource, resourceID string, payload any) error {

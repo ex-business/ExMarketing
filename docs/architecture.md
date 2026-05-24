@@ -49,7 +49,7 @@ The first version is a single Go service with internal module boundaries that mi
 internal/httpapi      admin and openapi HTTP boundary
 internal/engine       activity match -> rule evaluation -> reward calculation -> grant order -> outbox
 internal/marketing    core domain model and repository interface
-internal/rule         configurable condition evaluator
+internal/rule         four-stage rule engine and evaluator registry
 internal/reward       fixed and ratio reward calculators
 internal/decimal      exact decimal arithmetic for money
 internal/worker       outbox sender with retry and DLQ
@@ -86,6 +86,16 @@ Outbox sender:
 Simulation:
   POST /admin/v1/simulate evaluates matching activities without writing inbox,
   participation, grant_order, quota, or outbox rows.
+
+Rule execution:
+  Rules run in the fixed business order MATCH -> QUALIFY -> REWARD ->
+  RISK_LIMIT_BUDGET. The last business stage groups stored RISK and LIMIT
+  rule phases; BUDGET remains a quota type, not a rule_phase.
+  Each rule returns status, passed, reasonCode, reason, field, expected,
+  actual and sort details. Disabled rules are reported as SKIPPED and do not
+  affect the decision. New rule types are added by registering an evaluator in
+  internal/rule.Registry; the engine service only invokes the staged rule
+  executor.
 
 Fact query:
   POST /openapi/v1/facts/query proxies a standard event payload to an HTTP provider.

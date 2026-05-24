@@ -130,6 +130,54 @@ func TestActivityEventCreatesGrantCommand(t *testing.T) {
 	}
 }
 
+func TestActivityEventRuleRejectionReturnsExplainWithoutGrant(t *testing.T) {
+	handler := newTestHandler()
+	createActivity(t, handler)
+
+	rec := postRawEvent(t, handler, depositEventJSON("evt_rule_reject", "pay_rule_reject", `"amount":"299.00","vipLevel":3,"isFirstDeposit":false`), "site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:pay_rule_reject")
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusAccepted, rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		`"status":"REJECTED"`,
+		`"rejectReason":"CONDITION_NOT_MET: attributes.isFirstDeposit != true"`,
+		`"ruleResults"`,
+		`"stage":"QUALIFY"`,
+		`"ruleCode":"FIRST_DEPOSIT_AND_AMOUNT"`,
+		`"reasonCode":"CONDITION_NOT_MET"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("expected %s in response, got: %s", want, body)
+		}
+	}
+	if strings.Contains(body, `"grantOrders":[{`) || strings.Contains(body, `"outboxMessages":[{`) {
+		t.Fatalf("expected no grant/outbox on rule rejection, got: %s", body)
+	}
+}
+
+func TestSimulateEventReturnsRuleExplainWithoutPersistence(t *testing.T) {
+	handler := newTestHandler()
+	createActivity(t, handler)
+
+	event := depositEventJSON("evt_sim_reject", "pay_sim_reject", `"amount":"50.00","vipLevel":3,"isFirstDeposit":true`)
+	req := httptest.NewRequest(http.MethodPost, "/admin/v1/simulate", strings.NewReader(event))
+	rec := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"ruleResults"`) || !strings.Contains(body, `"failedStage":"QUALIFY"`) || !strings.Contains(body, `"field":"attributes.amount"`) {
+		t.Fatalf("expected simulation rule explain, got: %s", body)
+	}
+	if strings.Contains(body, `"grantOrders":[{`) || strings.Contains(body, `"outboxMessages":[{`) {
+		t.Fatalf("expected no simulated grants after rejection, got: %s", body)
+	}
+}
+
 func TestActivityEventRequiresIdempotencyKey(t *testing.T) {
 	handler := newTestHandler()
 

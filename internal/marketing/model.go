@@ -15,7 +15,9 @@ import (
 
 type ActivityStatus string
 type RulePhase string
+type RuleStage string
 type RuleType string
+type RuleDecision string
 type RewardType string
 type CalculateType string
 type GrantMode string
@@ -40,9 +42,19 @@ const (
 	RulePhaseRisk    RulePhase = "RISK"
 	RulePhaseLimit   RulePhase = "LIMIT"
 
+	RuleStageMatch           RuleStage = "MATCH"
+	RuleStageQualify         RuleStage = "QUALIFY"
+	RuleStageReward          RuleStage = "REWARD"
+	RuleStageRiskLimitBudget RuleStage = "RISK_LIMIT_BUDGET"
+
 	RuleTypeCondition RuleType = "CONDITION"
 	RuleTypeFormula   RuleType = "FORMULA"
 	RuleTypeLimit     RuleType = "LIMIT"
+
+	RuleDecisionPassed   RuleDecision = "PASSED"
+	RuleDecisionRejected RuleDecision = "REJECTED"
+	RuleDecisionSkipped  RuleDecision = "SKIPPED"
+	RuleDecisionError    RuleDecision = "ERROR"
 
 	RewardBonus      RewardType = "BONUS"
 	RewardCash       RewardType = "CASH"
@@ -132,6 +144,45 @@ type Rule struct {
 	Version   int             `json:"version"`
 	CreatedAt time.Time       `json:"createdAt"`
 	UpdatedAt time.Time       `json:"updatedAt"`
+}
+
+type RuleExecutionResult struct {
+	RuleCode   string         `json:"ruleCode"`
+	RulePhase  RulePhase      `json:"rulePhase"`
+	RuleType   RuleType       `json:"ruleType"`
+	Status     RuleDecision   `json:"status"`
+	Passed     bool           `json:"passed"`
+	ReasonCode string         `json:"reasonCode"`
+	Reason     string         `json:"reason"`
+	Field      string         `json:"field,omitempty"`
+	Expected   any            `json:"expected,omitempty"`
+	Actual     any            `json:"actual,omitempty"`
+	Sort       int            `json:"sort"`
+	Detail     map[string]any `json:"detail,omitempty"`
+}
+
+type RuleStageResult struct {
+	Stage         RuleStage             `json:"stage"`
+	Status        RuleDecision          `json:"status"`
+	ExecutedCount int                   `json:"executedCount"`
+	SkippedCount  int                   `json:"skippedCount"`
+	FailedCount   int                   `json:"failedCount"`
+	ReasonCode    string                `json:"reasonCode,omitempty"`
+	Reason        string                `json:"reason,omitempty"`
+	RuleResults   []RuleExecutionResult `json:"ruleResults"`
+}
+
+type ActivityRuleResult struct {
+	ActivityID      string            `json:"activityId"`
+	ActivityCode    string            `json:"activityCode"`
+	ActivityVersion int               `json:"activityVersion"`
+	Decision        RuleDecision      `json:"decision"`
+	FailedStage     RuleStage         `json:"failedStage,omitempty"`
+	ReasonCode      string            `json:"reasonCode,omitempty"`
+	Reason          string            `json:"reason,omitempty"`
+	CanReward       bool              `json:"canReward"`
+	CanReserveQuota bool              `json:"canReserveQuota"`
+	StageResults    []RuleStageResult `json:"stageResults"`
 }
 
 func (r *Rule) UnmarshalJSON(data []byte) error {
@@ -404,18 +455,20 @@ type FactQueryResponse struct {
 }
 
 type SimulationResult struct {
-	Event          ActivityEvent   `json:"event"`
-	Participations []Participation `json:"participations"`
-	GrantOrders    []GrantOrder    `json:"grantOrders"`
-	OutboxMessages []OutboxMessage `json:"outboxMessages"`
+	Event          ActivityEvent        `json:"event"`
+	Participations []Participation      `json:"participations"`
+	GrantOrders    []GrantOrder         `json:"grantOrders"`
+	OutboxMessages []OutboxMessage      `json:"outboxMessages"`
+	RuleResults    []ActivityRuleResult `json:"ruleResults,omitempty"`
 }
 
 type ProcessEventResult struct {
-	Inbox          EventInbox      `json:"inbox"`
-	Participations []Participation `json:"participations"`
-	GrantOrders    []GrantOrder    `json:"grantOrders"`
-	OutboxMessages []OutboxMessage `json:"outboxMessages"`
-	Duplicate      bool            `json:"duplicate"`
+	Inbox          EventInbox           `json:"inbox"`
+	Participations []Participation      `json:"participations"`
+	GrantOrders    []GrantOrder         `json:"grantOrders"`
+	OutboxMessages []OutboxMessage      `json:"outboxMessages"`
+	RuleResults    []ActivityRuleResult `json:"ruleResults,omitempty"`
+	Duplicate      bool                 `json:"duplicate"`
 }
 
 type RewardCallback struct {
@@ -779,6 +832,12 @@ func parseOptionalTime(name, value string) (time.Time, bool, error) {
 
 func supportedRuleField(field string) bool {
 	if strings.HasPrefix(field, "attributes.") && len(field) > len("attributes.") {
+		return true
+	}
+	if strings.HasPrefix(field, "state.") && len(field) > len("state.") {
+		return true
+	}
+	if strings.HasPrefix(field, "facts.") && len(field) > len("facts.") {
 		return true
 	}
 	switch field {

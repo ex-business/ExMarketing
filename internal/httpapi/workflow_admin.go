@@ -23,6 +23,10 @@ type createWorkflowRequirementRequest struct {
 	Risk        string `json:"risk"`
 }
 
+type deleteWorkflowRequirementsRequest struct {
+	IDs []string `json:"ids"`
+}
+
 type runWorkflowAgentRequest struct {
 	Agent   string `json:"agent"`
 	Command string `json:"command"`
@@ -97,6 +101,71 @@ func (h *Handler) createWorkflowRequirement(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	writeJSON(w, http.StatusCreated, req)
+}
+
+func (h *Handler) deleteWorkflowRequirement(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimSpace(r.PathValue("id"))
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "requirement id is required")
+		return
+	}
+	deleted, err := deleteRequirementsByID([]string{id})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if len(deleted) == 0 {
+		writeError(w, http.StatusNotFound, "requirement not found")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"deleted": deleted})
+}
+
+func (h *Handler) deleteWorkflowRequirements(w http.ResponseWriter, r *http.Request) {
+	var request deleteWorkflowRequirementsRequest
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	deleted, err := deleteRequirementsByID(request.IDs)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"deleted": deleted})
+}
+
+func deleteRequirementsByID(ids []string) ([]string, error) {
+	wanted := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id != "" {
+			wanted[id] = true
+		}
+	}
+	if len(wanted) == 0 {
+		return []string{}, nil
+	}
+	backlog, err := workflow.Load(workflowBacklogPath)
+	if err != nil {
+		return nil, err
+	}
+	deleted := make([]string, 0, len(wanted))
+	kept := make([]workflow.Requirement, 0, len(backlog.Items))
+	for _, item := range backlog.Items {
+		if wanted[item.ID] {
+			deleted = append(deleted, item.ID)
+			continue
+		}
+		kept = append(kept, item)
+	}
+	backlog.Items = kept
+	if err := workflow.Save(workflowBacklogPath, backlog); err != nil {
+		return nil, err
+	}
+	return deleted, nil
 }
 
 func (h *Handler) intakeWorkflowRequirements(w http.ResponseWriter, r *http.Request) {

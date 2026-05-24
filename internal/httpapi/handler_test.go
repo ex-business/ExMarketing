@@ -276,6 +276,63 @@ func TestCreateAndIntakeWorkflowRequirement(t *testing.T) {
 	}
 }
 
+func TestDeleteWorkflowRequirement(t *testing.T) {
+	t.Chdir(t.TempDir())
+	now := time.Now().UTC()
+	backlog := workflow.Backlog{Items: []workflow.Requirement{
+		{ID: "req-a", Title: "A", Description: "delete me", Status: workflow.StatusNew, CreatedAt: now, UpdatedAt: now},
+		{ID: "req-b", Title: "B", Description: "keep me", Status: workflow.StatusNew, CreatedAt: now, UpdatedAt: now},
+	}}
+	if err := workflow.Save("requirements/backlog.json", backlog); err != nil {
+		t.Fatalf("save backlog: %v", err)
+	}
+
+	reqHTTP := httptest.NewRequest(http.MethodDelete, "/admin/v1/workflow/requirements/req-a", nil)
+	rec := httptest.NewRecorder()
+	handler := newTestHandler()
+	handler.Routes().ServeHTTP(rec, reqHTTP)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+
+	got, err := workflow.Load("requirements/backlog.json")
+	if err != nil {
+		t.Fatalf("load backlog: %v", err)
+	}
+	if len(got.Items) != 1 || got.Items[0].ID != "req-b" {
+		t.Fatalf("expected only req-b, got: %+v", got.Items)
+	}
+}
+
+func TestDeleteWorkflowRequirementsBatch(t *testing.T) {
+	t.Chdir(t.TempDir())
+	now := time.Now().UTC()
+	backlog := workflow.Backlog{Items: []workflow.Requirement{
+		{ID: "req-a", Title: "A", Description: "delete me", Status: workflow.StatusNew, CreatedAt: now, UpdatedAt: now},
+		{ID: "req-b", Title: "B", Description: "delete me", Status: workflow.StatusNew, CreatedAt: now, UpdatedAt: now},
+		{ID: "req-c", Title: "C", Description: "keep me", Status: workflow.StatusNew, CreatedAt: now, UpdatedAt: now},
+	}}
+	if err := workflow.Save("requirements/backlog.json", backlog); err != nil {
+		t.Fatalf("save backlog: %v", err)
+	}
+
+	reqHTTP := httptest.NewRequest(http.MethodDelete, "/admin/v1/workflow/requirements", strings.NewReader(`{"ids":["req-a","req-b"]}`))
+	rec := httptest.NewRecorder()
+	handler := newTestHandler()
+	handler.Routes().ServeHTTP(rec, reqHTTP)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+
+	got, err := workflow.Load("requirements/backlog.json")
+	if err != nil {
+		t.Fatalf("load backlog: %v", err)
+	}
+	if len(got.Items) != 1 || got.Items[0].ID != "req-c" {
+		t.Fatalf("expected only req-c, got: %+v", got.Items)
+	}
+}
+
 func TestRunWorkflowAgent(t *testing.T) {
 	t.Chdir(t.TempDir())
 	now := time.Now().UTC()

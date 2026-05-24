@@ -72,29 +72,29 @@ description: 提交前强制 Code Review 流程。用户出现“提交/commit/�
 
 ## 执行流程
 
-1. **拦截提交动作**  
+1. **拦截提交动作**
    不直接提交，不直接推送。
 
-2. **新开会话做 review**  
-   明确告诉用户：先开一个新的 review 会话。  
+2. **新开会话做 review**
+   明确告诉用户：先开一个新的 review 会话。
    review 会话只做审查，不做提交。
 
-3. **review 范围（默认）**  
-   - 当前分支相对基线分支（默认 `main`）的变更  
-   - 已暂存和未暂存改动  
+3. **review 范围（默认）**
+   - 当前分支相对基线分支（默认 `main`）的变更
+   - 已暂存和未暂存改动
    - 新增/修改测试的充分性
 
-4. **review 输出格式（固定）**  
-   - Findings（按严重度排序：P0/P1/P2）  
-   - Open questions / assumptions  
+4. **review 输出格式（固定）**
+   - Findings（按严重度排序：P0/P1/P2）
+   - Open questions / assumptions
    - 结论：`PASS` 或 `BLOCK`
 
-5. **提交闸门规则**  
-   - 存在 P0/P1：`BLOCK`，禁止提交，先修复  
-   - 仅 P2 或无问题：可继续提交  
+5. **提交闸门规则**
+   - 存在 P0/P1：`BLOCK`，禁止提交，先修复
+   - 仅 P2 或无问题：可继续提交
    - 用户明确接受风险时，记录“风险接受说明”后可继续
 
-6. **通过后再执行提交**  
+6. **通过后再执行提交**
    review `PASS` 后，才继续 `git commit` / `git push` / PR 操作。
 
 ## 标准审查清单
@@ -112,7 +112,7 @@ description: 提交前强制 Code Review 流程。用户出现“提交/commit/�
 
 ## 重要边界
 
-- 本 skill 对“通过 Codex 发起的提交流程”生效。  
+- 本 skill 对“通过 Codex 发起的提交流程”生效。
 - 不能自动拦截你在外部终端手动执行的 `git commit`。如需全局强制，请额外配置 git hook（`pre-commit` 或 `commit-msg`）。
 
 
@@ -909,3 +909,670 @@ exec
 2026-05-24T10:48:26.550343Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
 codex
 变更范围里包含本任务的代码、文档、任务运行记录，以及一批当前未跟踪的新文件。我会把当前工作区作为本次提交范围处理，但先不把 `tasks/2026-05-24-094535/commit.md` 放进提交，因为它需要在拿到提交 hash 后回填。
+exec
+/bin/zsh -lc 'git add -A && git restore --staged tasks/2026-05-24-094535/commit.md && git status --short' in /Users/tong/Documents/GitHub/OracleBetX-Projects/ExMarketing
+ succeeded in 0ms:
+A  CLAUDE.md
+M  README.md
+A  agent-runtime/.env.example
+A  agent-runtime/README.md
+A  agent-runtime/langgraph.json
+A  agent-runtime/pyproject.toml
+A  agent-runtime/src/exmarketing_agents/__init__.py
+A  agent-runtime/src/exmarketing_agents/graph.py
+A  cmd/workflowctl/main.go
+A  docs/api.md
+M  docs/architecture.md
+A  docs/automation.md
+A  docs/data-model.md
+A  docs/langgraph-studio.md
+A  docs/operations.md
+A  docs/roadmap.md
+A  docs/workflow.md
+M  internal/engine/service.go
+M  internal/httpapi/handler.go
+M  internal/httpapi/handler_test.go
+A  internal/httpapi/workflow_admin.go
+M  internal/marketing/memory_repository.go
+A  internal/marketing/memory_repository_test.go
+M  internal/marketing/model.go
+M  internal/marketing/repository.go
+M  internal/postgres/repository.go
+A  internal/postgres/repository_integration_test.go
+A  internal/workflow/agent.go
+A  internal/workflow/agent_status.go
+A  internal/workflow/agent_test.go
+A  internal/workflow/model.go
+A  internal/workflow/report.go
+A  internal/workflow/run_history.go
+A  internal/workflow/store.go
+A  internal/workflow/taskfiles.go
+A  requirements/backlog.json
+A  tasks/2026-05-24-094535/agent-prompts.md
+A  tasks/2026-05-24-094535/agent-report.md
+A  tasks/2026-05-24-094535/agent-status.json
+A  tasks/2026-05-24-094535/analysis.md
+A  tasks/2026-05-24-094535/implementation.md
+A  tasks/2026-05-24-094535/review.md
+A  tasks/2026-05-24-094535/runs/20260524T095233Z-analysis.log
+A  tasks/2026-05-24-094535/runs/20260524T095450Z-analysis.log
+A  tasks/2026-05-24-094535/runs/20260524T100215Z-review.log
+A  tasks/2026-05-24-094535/runs/20260524T101931Z-dev.log
+A  tasks/2026-05-24-094535/runs/20260524T101932Z-test.log
+A  tasks/2026-05-24-094535/runs/20260524T104033Z-test-plan.log
+A  tasks/2026-05-24-094535/runs/20260524T104205Z-dev.log
+A  tasks/2026-05-24-094535/runs/20260524T104541Z-test.log
+A  tasks/2026-05-24-094535/runs/20260524T104731Z-commit.log
+A  tasks/2026-05-24-094535/task.md
+A  tasks/2026-05-24-094535/test-plan.md
+A  tasks/2026-05-24-094535/test.md
+A  tasks/2026-05-24-example-automated-requirement/agent-prompts.md
+A  tasks/2026-05-24-example-automated-requirement/agent-status.json
+A  tasks/2026-05-24-example-automated-requirement/analysis.md
+A  tasks/2026-05-24-example-automated-requirement/commit.md
+A  tasks/2026-05-24-example-automated-requirement/implementation.md
+A  tasks/2026-05-24-example-automated-requirement/review.md
+A  tasks/2026-05-24-example-automated-requirement/task.md
+A  tasks/2026-05-24-example-automated-requirement/test-plan.md
+A  tasks/2026-05-24-example-automated-requirement/test.md
+A  tasks/2026-05-24-example-workflow/analysis.md
+A  tasks/2026-05-24-example-workflow/commit.md
+A  tasks/2026-05-24-example-workflow/implementation.md
+A  tasks/2026-05-24-example-workflow/review.md
+A  tasks/2026-05-24-example-workflow/task.md
+A  tasks/2026-05-24-example-workflow/test.md
+A  tasks/README.md
+A  tasks/_template/analysis.md
+A  tasks/_template/commit.md
+A  tasks/_template/implementation.md
+A  tasks/_template/review.md
+A  tasks/_template/task.md
+A  tasks/_template/test.md
+M  web/admin/index.html
+?? tasks/2026-05-24-094535/commit.md
+
+2026-05-24T10:48:39.979111Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:48:39.979119Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:48:39.979476Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:48:39.979479Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:48:39.979837Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:48:39.979841Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:48:39.980211Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:48:39.980214Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:48:39.980530Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:48:39.980532Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:48:39.981164Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:48:39.981167Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+exec
+/bin/zsh -lc 'git commit -m "feat: add task workflow and atomic quota reservations"' in /Users/tong/Documents/GitHub/OracleBetX-Projects/ExMarketing
+ succeeded in 0ms:
+[main fa932d8] feat: add task workflow and atomic quota reservations
+ 77 files changed, 71991 insertions(+), 78 deletions(-)
+ create mode 100644 CLAUDE.md
+ create mode 100644 agent-runtime/.env.example
+ create mode 100644 agent-runtime/README.md
+ create mode 100644 agent-runtime/langgraph.json
+ create mode 100644 agent-runtime/pyproject.toml
+ create mode 100644 agent-runtime/src/exmarketing_agents/__init__.py
+ create mode 100644 agent-runtime/src/exmarketing_agents/graph.py
+ create mode 100644 cmd/workflowctl/main.go
+ create mode 100644 docs/api.md
+ create mode 100644 docs/automation.md
+ create mode 100644 docs/data-model.md
+ create mode 100644 docs/langgraph-studio.md
+ create mode 100644 docs/operations.md
+ create mode 100644 docs/roadmap.md
+ create mode 100644 docs/workflow.md
+ create mode 100644 internal/httpapi/workflow_admin.go
+ create mode 100644 internal/marketing/memory_repository_test.go
+ create mode 100644 internal/postgres/repository_integration_test.go
+ create mode 100644 internal/workflow/agent.go
+ create mode 100644 internal/workflow/agent_status.go
+ create mode 100644 internal/workflow/agent_test.go
+ create mode 100644 internal/workflow/model.go
+ create mode 100644 internal/workflow/report.go
+ create mode 100644 internal/workflow/run_history.go
+ create mode 100644 internal/workflow/store.go
+ create mode 100644 internal/workflow/taskfiles.go
+ create mode 100644 requirements/backlog.json
+ create mode 100644 tasks/2026-05-24-094535/agent-prompts.md
+ create mode 100644 tasks/2026-05-24-094535/agent-report.md
+ create mode 100644 tasks/2026-05-24-094535/agent-status.json
+ create mode 100644 tasks/2026-05-24-094535/analysis.md
+ create mode 100644 tasks/2026-05-24-094535/implementation.md
+ create mode 100644 tasks/2026-05-24-094535/review.md
+ create mode 100644 tasks/2026-05-24-094535/runs/20260524T095233Z-analysis.log
+ create mode 100644 tasks/2026-05-24-094535/runs/20260524T095450Z-analysis.log
+ create mode 100644 tasks/2026-05-24-094535/runs/20260524T100215Z-review.log
+ create mode 100644 tasks/2026-05-24-094535/runs/20260524T101931Z-dev.log
+ create mode 100644 tasks/2026-05-24-094535/runs/20260524T101932Z-test.log
+ create mode 100644 tasks/2026-05-24-094535/runs/20260524T104033Z-test-plan.log
+ create mode 100644 tasks/2026-05-24-094535/runs/20260524T104205Z-dev.log
+ create mode 100644 tasks/2026-05-24-094535/runs/20260524T104541Z-test.log
+ create mode 100644 tasks/2026-05-24-094535/runs/20260524T104731Z-commit.log
+ create mode 100644 tasks/2026-05-24-094535/task.md
+ create mode 100644 tasks/2026-05-24-094535/test-plan.md
+ create mode 100644 tasks/2026-05-24-094535/test.md
+ create mode 100644 tasks/2026-05-24-example-automated-requirement/agent-prompts.md
+ create mode 100644 tasks/2026-05-24-example-automated-requirement/agent-status.json
+ create mode 100644 tasks/2026-05-24-example-automated-requirement/analysis.md
+ create mode 100644 tasks/2026-05-24-example-automated-requirement/commit.md
+ create mode 100644 tasks/2026-05-24-example-automated-requirement/implementation.md
+ create mode 100644 tasks/2026-05-24-example-automated-requirement/review.md
+ create mode 100644 tasks/2026-05-24-example-automated-requirement/task.md
+ create mode 100644 tasks/2026-05-24-example-automated-requirement/test-plan.md
+ create mode 100644 tasks/2026-05-24-example-automated-requirement/test.md
+ create mode 100644 tasks/2026-05-24-example-workflow/analysis.md
+ create mode 100644 tasks/2026-05-24-example-workflow/commit.md
+ create mode 100644 tasks/2026-05-24-example-workflow/implementation.md
+ create mode 100644 tasks/2026-05-24-example-workflow/review.md
+ create mode 100644 tasks/2026-05-24-example-workflow/task.md
+ create mode 100644 tasks/2026-05-24-example-workflow/test.md
+ create mode 100644 tasks/README.md
+ create mode 100644 tasks/_template/analysis.md
+ create mode 100644 tasks/_template/commit.md
+ create mode 100644 tasks/_template/implementation.md
+ create mode 100644 tasks/_template/review.md
+ create mode 100644 tasks/_template/task.md
+ create mode 100644 tasks/_template/test.md
+
+2026-05-24T10:48:45.629413Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:48:45.629423Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:48:45.629971Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:48:45.629979Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:48:45.630428Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:48:45.630433Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:48:45.630794Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:48:45.630798Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:48:45.631158Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:48:45.631162Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:48:45.631875Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:48:45.631878Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+codex
+提交已创建，当前 hash 是 `fa932d8`。现在我回填 `tasks/2026-05-24-094535/commit.md`，记录门禁、验证命令和提交信息。
+exec
+/bin/zsh -lc 'git rev-parse HEAD' in /Users/tong/Documents/GitHub/OracleBetX-Projects/ExMarketing
+ succeeded in 0ms:
+fa932d897471527805658b2ba0123929151cd8bc
+
+exec
+/bin/zsh -lc 'git remote -v' in /Users/tong/Documents/GitHub/OracleBetX-Projects/ExMarketing
+ succeeded in 0ms:
+origin	https://github.com/ex-business/ExMarketing.git (fetch)
+origin	https://github.com/ex-business/ExMarketing.git (push)
+
+exec
+/bin/zsh -lc 'git status -sb' in /Users/tong/Documents/GitHub/OracleBetX-Projects/ExMarketing
+ succeeded in 0ms:
+## main...origin/main [ahead 1]
+ M tasks/2026-05-24-094535/runs/20260524T104731Z-commit.log
+?? tasks/2026-05-24-094535/commit.md
+
+2026-05-24T10:48:51.594762Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:48:51.594772Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:48:51.595124Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:48:51.595130Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:48:51.595671Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:48:51.595677Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:48:51.596086Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:48:51.596089Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:48:51.596433Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:48:51.596437Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:48:51.597211Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:48:51.597214Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+apply patch
+patch: completed
+/Users/tong/Documents/GitHub/OracleBetX-Projects/ExMarketing/tasks/2026-05-24-094535/commit.md
+diff --git a/tasks/2026-05-24-094535/commit.md b/tasks/2026-05-24-094535/commit.md
+index c4056646152eedc194063a14c867488ad8aa1657..a6861c49ea37ddc1153ba45b3ea58d16dbb5bd0b
+--- a/tasks/2026-05-24-094535/commit.md
++++ b/tasks/2026-05-24-094535/commit.md
+@@ -14,26 +14,50 @@
+
+ ## Scope
+
+-待填写。
++已提交当前工作区中除本文件外的本次任务相关代码、文档、任务记录和工作流文件。
++
++主要范围：
++
++- activity 发奖路径的预算、库存、用户次数原子扣减。
++- quota 不足时的结构化 409 响应和 `QUOTA_EXCEEDED` 审计。
++- memory / PostgreSQL 仓储的 all-or-nothing 发奖事务实现。
++- HTTP、memory、PostgreSQL 回归与集成测试。
++- task workflow、agent runtime、CLI、管理接口和相关文档。
+
+ ## Review
+
+ ~~~text
+-PASS / BLOCK
++PASS
+ ~~~
+
++门禁文件：`tasks/2026-05-24-094535/review.md`
++
+ ## Test
+
+ ~~~text
+-PASS / FAIL
++PASS
++~~~
++
++门禁文件：`tasks/2026-05-24-094535/test.md`
++
++提交前复核命令：
++
++~~~bash
++git status -sb
++go test ./...
++go build ./...
+ ~~~
+
++结果：全部通过。
++
+ ## Commit
+
+ ~~~text
+-hash:
+-message:
+-remote:
++hash: fa932d897471527805658b2ba0123929151cd8bc
++message: feat: add task workflow and atomic quota reservations
++remote: origin https://github.com/ex-business/ExMarketing.git
+ ~~~
+
++状态：本地 `main` 已领先 `origin/main` 1 个提交，未执行 push。
++
+ 需求：2026-05-24-094535
+
+diff --git a/tasks/2026-05-24-094535/commit.md b/tasks/2026-05-24-094535/commit.md
+index c4056646152eedc194063a14c867488ad8aa1657..a6861c49ea37ddc1153ba45b3ea58d16dbb5bd0b
+--- a/tasks/2026-05-24-094535/commit.md
++++ b/tasks/2026-05-24-094535/commit.md
+@@ -14,26 +14,50 @@
+
+ ## Scope
+
+-待填写。
++已提交当前工作区中除本文件外的本次任务相关代码、文档、任务记录和工作流文件。
++
++主要范围：
++
++- activity 发奖路径的预算、库存、用户次数原子扣减。
++- quota 不足时的结构化 409 响应和 `QUOTA_EXCEEDED` 审计。
++- memory / PostgreSQL 仓储的 all-or-nothing 发奖事务实现。
++- HTTP、memory、PostgreSQL 回归与集成测试。
++- task workflow、agent runtime、CLI、管理接口和相关文档。
+
+ ## Review
+
+ ~~~text
+-PASS / BLOCK
++PASS
+ ~~~
+
++门禁文件：`tasks/2026-05-24-094535/review.md`
++
+ ## Test
+
+ ~~~text
+-PASS / FAIL
++PASS
++~~~
++
++门禁文件：`tasks/2026-05-24-094535/test.md`
++
++提交前复核命令：
++
++~~~bash
++git status -sb
++go test ./...
++go build ./...
+ ~~~
+
++结果：全部通过。
++
+ ## Commit
+
+ ~~~text
+-hash:
+-message:
+-remote:
++hash: fa932d897471527805658b2ba0123929151cd8bc
++message: feat: add task workflow and atomic quota reservations
++remote: origin https://github.com/ex-business/ExMarketing.git
+ ~~~
+
++状态：本地 `main` 已领先 `origin/main` 1 个提交，未执行 push。
++
+ 需求：2026-05-24-094535
+
+2026-05-24T10:49:02.530994Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:49:02.531005Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:49:02.531478Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:49:02.531485Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:49:02.531925Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:49:02.531928Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:49:02.532440Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:49:02.532444Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:49:02.532911Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:49:02.532914Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:49:02.533837Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:49:02.533840Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+exec
+/bin/zsh -lc 'git status -sb' in /Users/tong/Documents/GitHub/OracleBetX-Projects/ExMarketing
+ succeeded in 0ms:
+## main...origin/main [ahead 1]
+ M tasks/2026-05-24-094535/runs/20260524T104731Z-commit.log
+?? tasks/2026-05-24-094535/commit.md
+
+diff --git a/tasks/2026-05-24-094535/commit.md b/tasks/2026-05-24-094535/commit.md
+index c4056646152eedc194063a14c867488ad8aa1657..a6861c49ea37ddc1153ba45b3ea58d16dbb5bd0b
+--- a/tasks/2026-05-24-094535/commit.md
++++ b/tasks/2026-05-24-094535/commit.md
+@@ -14,26 +14,50 @@
+
+ ## Scope
+
+-待填写。
++已提交当前工作区中除本文件外的本次任务相关代码、文档、任务记录和工作流文件。
++
++主要范围：
++
++- activity 发奖路径的预算、库存、用户次数原子扣减。
++- quota 不足时的结构化 409 响应和 `QUOTA_EXCEEDED` 审计。
++- memory / PostgreSQL 仓储的 all-or-nothing 发奖事务实现。
++- HTTP、memory、PostgreSQL 回归与集成测试。
++- task workflow、agent runtime、CLI、管理接口和相关文档。
+
+ ## Review
+
+ ~~~text
+-PASS / BLOCK
++PASS
+ ~~~
+
++门禁文件：`tasks/2026-05-24-094535/review.md`
++
+ ## Test
+
+ ~~~text
+-PASS / FAIL
++PASS
++~~~
++
++门禁文件：`tasks/2026-05-24-094535/test.md`
++
++提交前复核命令：
++
++~~~bash
++git status -sb
++go test ./...
++go build ./...
+ ~~~
+
++结果：全部通过。
++
+ ## Commit
+
+ ~~~text
+-hash:
+-message:
+-remote:
++hash: fa932d897471527805658b2ba0123929151cd8bc
++message: feat: add task workflow and atomic quota reservations
++remote: origin https://github.com/ex-business/ExMarketing.git
+ ~~~
+
++状态：本地 `main` 已领先 `origin/main` 1 个提交，未执行 push。
++
+ 需求：2026-05-24-094535
+
+2026-05-24T10:49:05.175856Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:49:05.175866Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:49:05.176301Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:49:05.176306Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:49:05.176723Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:49:05.176731Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:49:05.177179Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:49:05.177183Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:49:05.177613Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:49:05.177618Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:49:05.178686Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:49:05.178691Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+exec
+/bin/zsh -lc "sed -n '1,220p' tasks/2026-05-24-094535/commit.md" in /Users/tong/Documents/GitHub/OracleBetX-Projects/ExMarketing
+ succeeded in 0ms:
+# Commit
+
+## Agent 指令
+
+你是 Commit Agent。只有 review.md 为 PASS 且 test.md 为 PASS 时才能提交。
+
+提交前必须检查：
+
+~~~bash
+git status -sb
+go test ./...
+go build ./...
+~~~
+
+## Scope
+
+已提交当前工作区中除本文件外的本次任务相关代码、文档、任务记录和工作流文件。
+
+主要范围：
+
+- activity 发奖路径的预算、库存、用户次数原子扣减。
+- quota 不足时的结构化 409 响应和 `QUOTA_EXCEEDED` 审计。
+- memory / PostgreSQL 仓储的 all-or-nothing 发奖事务实现。
+- HTTP、memory、PostgreSQL 回归与集成测试。
+- task workflow、agent runtime、CLI、管理接口和相关文档。
+
+## Review
+
+~~~text
+PASS
+~~~
+
+门禁文件：`tasks/2026-05-24-094535/review.md`
+
+## Test
+
+~~~text
+PASS
+~~~
+
+门禁文件：`tasks/2026-05-24-094535/test.md`
+
+提交前复核命令：
+
+~~~bash
+git status -sb
+go test ./...
+go build ./...
+~~~
+
+结果：全部通过。
+
+## Commit
+
+~~~text
+hash: fa932d897471527805658b2ba0123929151cd8bc
+message: feat: add task workflow and atomic quota reservations
+remote: origin https://github.com/ex-business/ExMarketing.git
+~~~
+
+状态：本地 `main` 已领先 `origin/main` 1 个提交，未执行 push。
+
+需求：2026-05-24-094535
+
+diff --git a/tasks/2026-05-24-094535/commit.md b/tasks/2026-05-24-094535/commit.md
+index c4056646152eedc194063a14c867488ad8aa1657..a6861c49ea37ddc1153ba45b3ea58d16dbb5bd0b
+--- a/tasks/2026-05-24-094535/commit.md
++++ b/tasks/2026-05-24-094535/commit.md
+@@ -14,26 +14,50 @@
+
+ ## Scope
+
+-待填写。
++已提交当前工作区中除本文件外的本次任务相关代码、文档、任务记录和工作流文件。
++
++主要范围：
++
++- activity 发奖路径的预算、库存、用户次数原子扣减。
++- quota 不足时的结构化 409 响应和 `QUOTA_EXCEEDED` 审计。
++- memory / PostgreSQL 仓储的 all-or-nothing 发奖事务实现。
++- HTTP、memory、PostgreSQL 回归与集成测试。
++- task workflow、agent runtime、CLI、管理接口和相关文档。
+
+ ## Review
+
+ ~~~text
+-PASS / BLOCK
++PASS
+ ~~~
+
++门禁文件：`tasks/2026-05-24-094535/review.md`
++
+ ## Test
+
+ ~~~text
+-PASS / FAIL
++PASS
++~~~
++
++门禁文件：`tasks/2026-05-24-094535/test.md`
++
++提交前复核命令：
++
++~~~bash
++git status -sb
++go test ./...
++go build ./...
+ ~~~
+
++结果：全部通过。
++
+ ## Commit
+
+ ~~~text
+-hash:
+-message:
+-remote:
++hash: fa932d897471527805658b2ba0123929151cd8bc
++message: feat: add task workflow and atomic quota reservations
++remote: origin https://github.com/ex-business/ExMarketing.git
+ ~~~
+
++状态：本地 `main` 已领先 `origin/main` 1 个提交，未执行 push。
++
+ 需求：2026-05-24-094535
+
+2026-05-24T10:49:11.425048Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:49:11.425061Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:49:11.425500Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:49:11.425504Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:49:11.425830Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:49:11.425833Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:49:11.426176Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:49:11.426181Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:49:11.426539Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:49:11.426542Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:49:11.427253Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:49:11.427256Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+codex
+已按门禁完成提交。
+
+`review.md`：PASS
+`test.md`：PASS
+提交前复核：`git status -sb`、`go test ./...`、`go build ./...` 均通过。
+
+提交信息：
+
+```text
+hash: fa932d897471527805658b2ba0123929151cd8bc
+message: feat: add task workflow and atomic quota reservations
+```
+
+已写入 [commit.md](/Users/tong/Documents/GitHub/OracleBetX-Projects/ExMarketing/tasks/2026-05-24-094535/commit.md)。当前本地 `main` 领先 `origin/main` 1 个提交，未 push。工作区还剩提交后生成/修改的 `commit.md` 和 `tasks/2026-05-24-094535/runs/20260524T104731Z-commit.log`。
+diff --git a/tasks/2026-05-24-094535/commit.md b/tasks/2026-05-24-094535/commit.md
+index c4056646152eedc194063a14c867488ad8aa1657..a6861c49ea37ddc1153ba45b3ea58d16dbb5bd0b
+--- a/tasks/2026-05-24-094535/commit.md
++++ b/tasks/2026-05-24-094535/commit.md
+@@ -14,26 +14,50 @@
+
+ ## Scope
+
+-待填写。
++已提交当前工作区中除本文件外的本次任务相关代码、文档、任务记录和工作流文件。
++
++主要范围：
++
++- activity 发奖路径的预算、库存、用户次数原子扣减。
++- quota 不足时的结构化 409 响应和 `QUOTA_EXCEEDED` 审计。
++- memory / PostgreSQL 仓储的 all-or-nothing 发奖事务实现。
++- HTTP、memory、PostgreSQL 回归与集成测试。
++- task workflow、agent runtime、CLI、管理接口和相关文档。
+
+ ## Review
+
+ ~~~text
+-PASS / BLOCK
++PASS
+ ~~~
+
++门禁文件：`tasks/2026-05-24-094535/review.md`
++
+ ## Test
+
+ ~~~text
+-PASS / FAIL
++PASS
++~~~
++
++门禁文件：`tasks/2026-05-24-094535/test.md`
++
++提交前复核命令：
++
++~~~bash
++git status -sb
++go test ./...
++go build ./...
+ ~~~
+
++结果：全部通过。
++
+ ## Commit
+
+ ~~~text
+-hash:
+-message:
+-remote:
++hash: fa932d897471527805658b2ba0123929151cd8bc
++message: feat: add task workflow and atomic quota reservations
++remote: origin https://github.com/ex-business/ExMarketing.git
+ ~~~
+
++状态：本地 `main` 已领先 `origin/main` 1 个提交，未执行 push。
++
+ 需求：2026-05-24-094535
+
+tokens used
+54,540
+已按门禁完成提交。
+
+`review.md`：PASS
+`test.md`：PASS
+提交前复核：`git status -sb`、`go test ./...`、`go build ./...` 均通过。
+
+提交信息：
+
+```text
+hash: fa932d897471527805658b2ba0123929151cd8bc
+message: feat: add task workflow and atomic quota reservations
+```
+
+已写入 [commit.md](/Users/tong/Documents/GitHub/OracleBetX-Projects/ExMarketing/tasks/2026-05-24-094535/commit.md)。当前本地 `main` 领先 `origin/main` 1 个提交，未 push。工作区还剩提交后生成/修改的 `commit.md` 和 `tasks/2026-05-24-094535/runs/20260524T104731Z-commit.log`。
+
+finishedAt=2026-05-24T10:49:17Z exitCode=0 error=<nil>

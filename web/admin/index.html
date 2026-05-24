@@ -32,6 +32,15 @@
       grid-template-columns: 244px minmax(720px, 1fr) 464px;
       background: var(--bg);
     }
+    .app-shell.sidebar-collapsed {
+      grid-template-columns: 64px minmax(720px, 1fr) 464px;
+    }
+    .app-shell.console-collapsed {
+      grid-template-columns: 244px minmax(720px, 1fr) 64px;
+    }
+    .app-shell.sidebar-collapsed.console-collapsed {
+      grid-template-columns: 64px minmax(720px, 1fr) 64px;
+    }
     .sidebar {
       position: sticky;
       top: 0;
@@ -41,6 +50,19 @@
       border-right: 1px solid var(--line);
       background: #fff;
       padding: 18px 8px 14px;
+    }
+    .sidebar-toggle, .console-toggle {
+      width: 30px;
+      height: 30px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #fff;
+      color: var(--ink);
+      cursor: pointer;
+      font-weight: 900;
+      display: inline-grid;
+      place-items: center;
+      flex: 0 0 auto;
     }
     .brand {
       display: flex;
@@ -79,6 +101,41 @@
       border-top: 1px solid #eef2f7;
       padding: 12px 10px 0;
     }
+    .app-shell.sidebar-collapsed .sidebar {
+      padding-left: 6px;
+      padding-right: 6px;
+      align-items: center;
+    }
+    .app-shell.sidebar-collapsed .brand {
+      padding-left: 0;
+      padding-right: 0;
+      flex-direction: column;
+    }
+    .app-shell.sidebar-collapsed .brand-text,
+    .app-shell.sidebar-collapsed .nav-label,
+    .app-shell.sidebar-collapsed .sidebar-footer {
+      display: none;
+    }
+    .app-shell.sidebar-collapsed .nav-group {
+      width: 100%;
+      padding-left: 0;
+      padding-right: 0;
+    }
+    .app-shell.sidebar-collapsed .tab {
+      justify-content: center;
+      padding-left: 6px;
+      padding-right: 6px;
+      font-size: 0;
+      min-height: 38px;
+    }
+    .app-shell.sidebar-collapsed .tab::first-letter {
+      font-size: 13px;
+    }
+    .app-shell.sidebar-collapsed .tab[data-short]::after {
+      content: attr(data-short);
+      font-size: 13px;
+      font-weight: 850;
+    }
     .workspace {
       min-width: 0;
       padding: 22px 24px 36px;
@@ -97,6 +154,18 @@
       gap: 8px;
       flex-wrap: wrap;
       justify-content: flex-end;
+      align-items: center;
+    }
+    .refresh-countdown {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 750;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #fff;
+      padding: 8px 10px;
+      min-width: 104px;
+      text-align: center;
     }
     .agent-console {
       position: sticky;
@@ -107,6 +176,21 @@
       border-left: 1px solid var(--line);
       background: #f3f7fc;
       min-width: 0;
+    }
+    .app-shell.console-collapsed .agent-console {
+      align-items: center;
+    }
+    .app-shell.console-collapsed .console-head {
+      width: 100%;
+      padding: 12px 8px;
+      height: auto;
+      flex-direction: column;
+      justify-content: flex-start;
+    }
+    .app-shell.console-collapsed .console-title-text,
+    .app-shell.console-collapsed .console-body,
+    .app-shell.console-collapsed .console-head .button {
+      display: none;
     }
     .console-head {
       height: 56px;
@@ -176,6 +260,25 @@
       display: flex;
       flex-wrap: wrap;
       gap: 6px;
+    }
+    .console-mode {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 6px;
+    }
+    .mode-button {
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--muted);
+      border-radius: 7px;
+      cursor: pointer;
+      padding: 8px 10px;
+      font-weight: 800;
+    }
+    .mode-button.active {
+      color: var(--blue);
+      border-color: #bfdbfe;
+      background: #eff6ff;
     }
     .run-history {
       display: flex;
@@ -340,6 +443,54 @@
       background: #eef6ff;
       box-shadow: inset 3px 0 0 var(--blue);
     }
+    .req-card {
+      position: relative;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
+    }
+    .req-card .req-row {
+      border-bottom: 0;
+      padding-left: 16px;
+      padding-right: 52px;
+    }
+    .batch-mode .req-card .req-row {
+      padding-left: 42px;
+    }
+    .req-check {
+      position: absolute;
+      left: 14px;
+      top: 17px;
+      width: 16px;
+      height: 16px;
+      z-index: 2;
+      display: none;
+    }
+    .batch-mode .req-check {
+      display: block;
+    }
+    .req-delete {
+      position: absolute;
+      right: 12px;
+      top: 12px;
+      width: 28px;
+      height: 28px;
+      border: 1px solid #fecaca;
+      background: #fef2f2;
+      color: var(--red);
+      border-radius: 7px;
+      cursor: pointer;
+      font-weight: 900;
+      z-index: 2;
+    }
+    .batch-delete {
+      display: none;
+    }
+    .batch-delete.visible {
+      display: inline-flex;
+    }
+    .batch-toggle.hidden {
+      display: none;
+    }
     .req-title {
       display: flex;
       justify-content: space-between;
@@ -408,55 +559,165 @@
       font-weight: 800;
       overflow-wrap: anywhere;
     }
-    .timeline {
-      display: grid;
-      grid-template-columns: repeat(6, minmax(142px, 1fr));
-      gap: 8px;
-      margin: 14px 0 16px;
-      overflow-x: auto;
-      padding-bottom: 2px;
+    .flow-toolbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      margin: 14px 0 10px;
     }
-    .stage {
+    .flow-add {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .flow-controls {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .flow-add input {
+      width: 180px;
+    }
+    .flow-canvas {
       position: relative;
+      min-height: 390px;
+      overflow: auto;
       border: 1px solid var(--line);
       border-radius: 8px;
-      padding: 10px;
-      background: #fff;
-      min-height: 124px;
-      min-width: 0;
+      background:
+        linear-gradient(#eef2f7 1px, transparent 1px),
+        linear-gradient(90deg, #eef2f7 1px, transparent 1px),
+        #fbfcfe;
+      background-size: 24px 24px;
+      margin-bottom: 16px;
     }
-    .stage.green {
-      border-color: #bbf7d0;
-      background: #f0fdf4;
+    .flow-inner {
+      position: relative;
+      min-width: 1160px;
+      min-height: 360px;
+      padding: 22px;
+      transform-origin: 0 0;
     }
-    .stage.blue {
-      border-color: #bfdbfe;
-      background: #eff6ff;
-    }
-    .stage.amber {
-      border-color: #fde68a;
-      background: #fffbeb;
-    }
-    .stage.red {
-      border-color: #fecaca;
-      background: #fef2f2;
-    }
-    .stage::after {
-      content: "";
+    .flow-lines {
       position: absolute;
-      right: -9px;
-      top: 31px;
-      width: 9px;
-      height: 2px;
-      background: var(--line);
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
     }
-    .stage:last-child::after { display: none; }
-    .stage-name {
+    .flow-line {
+      fill: none;
+      stroke: #cbd5e1;
+      stroke-width: 2;
+    }
+    .flow-line.active {
+      stroke: var(--blue);
+    }
+    .flow-node {
+      position: relative;
+      position: absolute;
+      width: 176px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 0 10px 10px;
+      background: #fff;
+      min-height: 180px;
+      overflow: hidden;
+      box-shadow: 0 8px 20px rgba(15, 23, 42, 0.06);
+      user-select: none;
+    }
+    .flow-node.collapsed {
+      min-height: 0;
+      padding-bottom: 0;
+    }
+    .flow-node.collapsed .node-body {
+      display: none;
+    }
+    .flow-node.dragging {
+      opacity: 0.86;
+      cursor: grabbing;
+      z-index: 5;
+    }
+    .flow-node.green {
+      border-color: #bbf7d0;
+    }
+    .flow-node.blue {
+      border-color: #bfdbfe;
+    }
+    .flow-node.amber {
+      border-color: #fde68a;
+    }
+    .flow-node.red {
+      border-color: #fecaca;
+    }
+    .flow-node.custom {
+      border-style: dashed;
+    }
+    .node-delete {
+      border: 0;
+      background: transparent;
+      color: inherit;
+      cursor: pointer;
+      font-size: 16px;
+      font-weight: 900;
+      line-height: 1;
+      padding: 0 2px;
+    }
+    .node-actions {
+      display: inline-flex;
+      gap: 4px;
+      align-items: center;
+    }
+    .node-toggle {
+      border: 0;
+      background: transparent;
+      color: inherit;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 900;
+      line-height: 1;
+      padding: 0 2px;
+    }
+    .node-port {
+      position: absolute;
+      top: 44px;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      border: 2px solid #bfdbfe;
+      background: #fff;
+      z-index: 2;
+    }
+    .node-port.in { left: -6px; }
+    .node-port.out { right: -6px; }
+    .node-name {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin: 0 -10px 8px;
+      padding: 9px 10px;
       font-size: 13px;
       font-weight: 800;
-      margin-bottom: 8px;
+      cursor: grab;
     }
-    .stage-meta {
+    .flow-node.green .node-name { background: #f0fdf4; color: var(--green); }
+    .flow-node.blue .node-name { background: #eff6ff; color: var(--blue); }
+    .flow-node.amber .node-name { background: #fffbeb; color: var(--amber); }
+    .flow-node.red .node-name { background: #fef2f2; color: var(--red); }
+    .running-icon {
+      width: 15px;
+      height: 15px;
+      flex: 0 0 auto;
+      animation: spin 0.9s linear infinite;
+    }
+    @keyframes spin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+    .node-meta {
       color: var(--muted);
       font-size: 11px;
       margin-top: 7px;
@@ -543,9 +804,53 @@
       color: var(--muted);
       text-align: center;
     }
+    .confirm-backdrop {
+      position: fixed;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      background: rgba(15, 23, 42, 0.32);
+      padding: 18px;
+      z-index: 20;
+    }
+    .confirm-backdrop.visible {
+      display: flex;
+    }
+    .confirm-dialog {
+      width: min(440px, 100%);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      box-shadow: 0 24px 70px rgba(15, 23, 42, 0.24);
+      overflow: hidden;
+    }
+    .confirm-head {
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--line);
+      font-weight: 850;
+    }
+    .confirm-body {
+      padding: 14px 16px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.55;
+      white-space: pre-wrap;
+    }
+    .confirm-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      padding: 12px 16px 16px;
+    }
     @media (max-width: 1280px) {
       .app-shell {
         grid-template-columns: 220px minmax(0, 1fr);
+      }
+      .app-shell.sidebar-collapsed,
+      .app-shell.console-collapsed,
+      .app-shell.sidebar-collapsed.console-collapsed {
+        grid-template-columns: 64px minmax(0, 1fr);
       }
       .agent-console {
         position: static;
@@ -556,6 +861,9 @@
       }
       .workspace {
         max-height: none;
+      }
+      .app-shell.console-collapsed .agent-console {
+        height: 56px;
       }
     }
     @media (max-width: 980px) {
@@ -576,7 +884,12 @@
       .workflow-grid, .forms, .hero-cards {
         grid-template-columns: 1fr;
       }
-      .stage::after { display: none; }
+      .flow-add {
+        width: 100%;
+      }
+      .flow-add input {
+        width: 100%;
+      }
       .summary {
         grid-template-columns: repeat(2, minmax(0, 1fr));
       }
@@ -591,25 +904,26 @@
   </style>
 </head>
 <body>
-<div class="app-shell">
+<div class="app-shell" id="appShell">
   <aside class="sidebar">
     <div class="brand">
-      <div>
+      <div class="brand-text">
         <div class="brand-name">ExMarketing</div>
         <div class="subtitle">Agent Ops</div>
       </div>
+      <button class="sidebar-toggle" type="button" onclick="toggleSidebar()" title="折叠/展开左侧导航">‹</button>
       <div class="brand-mark">EX</div>
     </div>
     <div class="nav-group">
       <div class="nav-label">Application</div>
-      <button class="tab active" data-tab="workflow" onclick="switchTab('workflow')">Agent 工作台</button>
-      <button class="tab" data-tab="activity" onclick="switchTab('activity')">活动配置</button>
-      <button class="tab" data-tab="simulate" onclick="switchTab('simulate')">模拟运行</button>
+      <button class="tab active" data-tab="workflow" data-short="工" onclick="switchTab('workflow')">Agent 工作台</button>
+      <button class="tab" data-tab="activity" data-short="活" onclick="switchTab('activity')">活动配置</button>
+      <button class="tab" data-tab="simulate" data-short="模" onclick="switchTab('simulate')">模拟运行</button>
     </div>
     <div class="nav-group">
       <div class="nav-label">Workflow</div>
-      <button class="tab" type="button" onclick="showGitDiff()">Git Diff</button>
-      <a class="tab" href="https://smith.langchain.com/studio/?baseUrl=http://127.0.0.1:2024" target="_blank" rel="noreferrer">LangGraph Studio</a>
+      <button class="tab" data-short="D" type="button" onclick="showGitDiff()">Git Diff</button>
+      <a class="tab" data-short="S" href="https://smith.langchain.com/studio/?baseUrl=http://127.0.0.1:2024" target="_blank" rel="noreferrer">LangGraph Studio</a>
     </div>
     <div class="sidebar-footer">
       <div class="nav-label">Project</div>
@@ -687,6 +1001,7 @@
         <button class="button secondary" onclick="switchTab('create')">新增需求</button>
         <button class="button secondary" onclick="intakeRequirements()">接收 NEW 需求</button>
         <button class="button secondary" onclick="showGitDiff()">查看 Git Diff</button>
+        <span class="refresh-countdown" id="refreshCountdown">10s 后刷新</span>
         <button class="button" onclick="loadWorkflow()">刷新</button>
       </div>
     </div>
@@ -694,7 +1009,12 @@
       <div class="panel">
         <div class="panel-head">
           <h3 class="panel-title">需求列表</h3>
-          <span class="badge" id="requirementCount">0</span>
+          <div class="ops" style="margin:0">
+            <button class="button secondary batch-toggle" id="batchModeButton" onclick="toggleBatchMode(true)">批量管理</button>
+            <button class="button secondary batch-delete" id="batchCancelButton" onclick="toggleBatchMode(false)">取消批量</button>
+            <button class="button secondary batch-delete" id="batchDeleteButton" onclick="deleteSelectedRequirements()">批量删除</button>
+            <span class="badge" id="requirementCount">0</span>
+          </div>
         </div>
         <div class="list" id="requirements"></div>
       </div>
@@ -749,6 +1069,7 @@
   <aside class="agent-console">
     <div class="console-head">
       <div class="console-title"><span class="console-dot">A</span><span class="console-title-text" id="consoleTitle">选择一个需求</span></div>
+      <button class="console-toggle" type="button" onclick="toggleConsole()" title="折叠/展开右侧控制台">›</button>
       <button class="button secondary" onclick="loadWorkflow()">刷新</button>
     </div>
     <div class="console-body">
@@ -773,6 +1094,16 @@
       </div>
       <div class="console-card">
         <div class="console-status-head">
+          <div class="console-card-title">查看内容</div>
+          <span class="badge" id="consoleModeLabel">输出文档</span>
+        </div>
+        <div class="console-mode">
+          <button class="mode-button active" id="artifactModeButton" type="button" onclick="setConsoleMode('artifact')">输出文档</button>
+          <button class="mode-button" id="logModeButton" type="button" onclick="setConsoleMode('log')">执行日志</button>
+        </div>
+      </div>
+      <div class="console-card">
+        <div class="console-status-head">
           <div class="console-card-title">运行历史</div>
           <span class="badge" id="runCount">0</span>
         </div>
@@ -783,6 +1114,17 @@
       <pre class="console" id="workflowConsole">等待 Agent 输出...</pre>
     </div>
   </aside>
+</div>
+
+<div class="confirm-backdrop" id="confirmBackdrop" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+  <div class="confirm-dialog">
+    <div class="confirm-head" id="confirmTitle">确认操作</div>
+    <div class="confirm-body" id="confirmMessage"></div>
+    <div class="confirm-actions">
+      <button class="button secondary" onclick="closeConfirm(false)">取消</button>
+      <button class="button" id="confirmOkButton" onclick="closeConfirm(true)">确认删除</button>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -801,6 +1143,24 @@ const statusNames = {
   DONE: '已完成',
   FAILED: '失败'
 };
+const requirementStatusNames = {
+  NEW: '新需求',
+  ANALYSIS_READY: '待分析',
+  ANALYSIS_DONE: '分析完成',
+  REVIEW_READY: '待审核',
+  REVIEW_PASS: '审核通过',
+  REVIEW_BLOCK: '审核阻塞',
+  TEST_PLAN_READY: '待写测试用例',
+  TEST_PLAN_DONE: '测试用例完成',
+  DEV_READY: '待开发',
+  DEV_DONE: '开发完成',
+  TEST_EXEC_READY: '待实际测试',
+  TEST_READY: '待测试',
+  TEST_PASS: '测试通过',
+  TEST_FAIL: '测试失败',
+  COMMIT_READY: '待提交',
+  COMMITTED: '已提交'
+};
 const artifactFiles = ['task.md', 'analysis.md', 'review.md', 'test-plan.md', 'implementation.md', 'test.md', 'commit.md', 'agent-report.md', 'agent-status.json', 'agent-prompts.md'];
 const agentArtifacts = {
   analysis: 'analysis.md',
@@ -815,9 +1175,32 @@ let currentArtifacts = {};
 let currentArtifact = 'task.md';
 let currentRuns = [];
 let currentRunId = '';
+let selectedAgent = 'analysis';
+let consoleMode = 'artifact';
+let customNodes = loadCustomNodes();
+let nodePositions = loadNodePositions();
+let collapsedNodes = loadCollapsedNodes();
+let flowZoom = loadFlowZoom();
+let draggingNode = null;
 let refreshTimer = 0;
+let refreshTickTimer = 0;
+let refreshRemaining = 10;
 let logTimer = 0;
 let liveLog = { requirementId: '', agent: '' };
+let confirmResolver = null;
+let batchMode = false;
+
+function toggleSidebar() {
+  const shell = document.getElementById('appShell');
+  shell.classList.toggle('sidebar-collapsed');
+  document.querySelector('.sidebar-toggle').textContent = shell.classList.contains('sidebar-collapsed') ? '›' : '‹';
+}
+
+function toggleConsole() {
+  const shell = document.getElementById('appShell');
+  shell.classList.toggle('console-collapsed');
+  document.querySelector('.console-toggle').textContent = shell.classList.contains('console-collapsed') ? '‹' : '›';
+}
 
 function switchTab(name) {
   for (const tab of document.querySelectorAll('.tab')) tab.classList.toggle('active', tab.dataset.tab === name);
@@ -827,6 +1210,7 @@ function switchTab(name) {
   document.getElementById('simulateView').classList.toggle('hidden', name !== 'simulate');
   if (name === 'create') loadConfig();
   if (name === 'workflow') loadWorkflow();
+  if (name !== 'workflow') stopRefreshCountdown();
   if (name === 'activity') loadActivities();
 }
 
@@ -839,10 +1223,25 @@ async function loadWorkflow() {
   document.getElementById('requirementCount').textContent = String(items.length);
   const list = document.getElementById('requirements');
   if (!items.length) {
+    selectedId = '';
+    currentArtifacts = {};
+    currentRuns = [];
+    currentRunId = '';
+    currentArtifact = 'task.md';
+    selectedAgent = 'analysis';
+    batchMode = false;
     list.innerHTML = '<div class="empty">还没有需求。先用 workflowctl add 和 intake 创建一个任务。</div>';
+    document.getElementById('detailTitle').textContent = '选择一个需求';
+    document.getElementById('consoleTitle').textContent = '选择一个需求';
+    document.getElementById('detailRefresh').disabled = true;
+    document.getElementById('detail').innerHTML = '<div class="empty">从左侧选择需求查看 Agent 流程。</div>';
+    renderArtifact();
+    renderRunHistory();
+    updateBatchDeleteVisibility();
     return;
   }
   list.innerHTML = items.map(item => renderRequirementRow(item)).join('');
+  updateBatchDeleteVisibility();
   if (!selectedId || !items.some(item => item.id === selectedId)) selectedId = items[0].id;
   markSelected();
   await loadDetail(selectedId);
@@ -893,19 +1292,23 @@ async function intakeRequirements() {
 function renderRequirementRow(item) {
   const agentCounts = countAgents(item.agents || {});
   return `
-    <button class="req-row" data-id="${escapeHtml(item.id)}" onclick="selectRequirement('${escapeJs(item.id)}')">
-      <div class="req-title">
-        <span>${escapeHtml(item.title || item.id)}</span>
-        ${badge(item.status, statusTone(item.status))}
-      </div>
-      <div class="req-desc">${escapeHtml(item.description || '')}</div>
-      <div class="badges">
-        ${badge('risk ' + (item.risk || '-'), riskTone(item.risk))}
-        ${badge('score ' + Number(item.score || 0), 'blue')}
-        ${badge('done ' + agentCounts.done + '/6', agentCounts.done === 6 ? 'green' : 'amber')}
-        ${badge('failed ' + agentCounts.failed, agentCounts.failed ? 'red' : '')}
-      </div>
-    </button>`;
+    <div class="req-card${batchMode ? ' batch-mode' : ''}" data-id="${escapeHtml(item.id)}">
+      <input class="req-check" type="checkbox" value="${escapeHtml(item.id)}" onclick="event.stopPropagation(); updateBatchDeleteVisibility()" aria-label="选择需求 ${escapeHtml(item.title || item.id)}">
+      <button class="req-delete" type="button" onclick="deleteRequirement('${escapeJs(item.id)}', event)" title="删除需求">×</button>
+      <button class="req-row" data-id="${escapeHtml(item.id)}" onclick="selectRequirement('${escapeJs(item.id)}')">
+        <div class="req-title">
+          <span>${escapeHtml(item.title || item.id)}</span>
+          ${badge(localRequirementStatus(item.status), statusTone(item.status))}
+        </div>
+        <div class="req-desc">${escapeHtml(item.description || '')}</div>
+        <div class="badges">
+          ${badge('risk ' + (item.risk || '-'), riskTone(item.risk))}
+          ${badge('score ' + Number(item.score || 0), 'blue')}
+          ${badge('done ' + agentCounts.done + '/6', agentCounts.done === 6 ? 'green' : 'amber')}
+          ${badge('failed ' + agentCounts.failed, agentCounts.failed ? 'red' : '')}
+        </div>
+      </button>
+    </div>`;
 }
 
 function selectRequirement(id) {
@@ -916,6 +1319,79 @@ function selectRequirement(id) {
 
 function markSelected() {
   for (const row of document.querySelectorAll('.req-row')) row.classList.toggle('active', row.dataset.id === selectedId);
+}
+
+function toggleBatchMode(enabled) {
+  batchMode = Boolean(enabled);
+  if (!batchMode) {
+    for (const input of document.querySelectorAll('.req-check')) input.checked = false;
+  }
+  document.getElementById('requirements')?.classList.toggle('batch-mode', batchMode);
+  for (const card of document.querySelectorAll('.req-card')) card.classList.toggle('batch-mode', batchMode);
+  updateBatchDeleteVisibility();
+}
+
+async function deleteRequirement(id, event) {
+  event?.stopPropagation();
+  const ok = await showConfirm('删除需求', '确认删除这个需求吗？\n\n' + id);
+  if (!ok) return;
+  const data = await requestJson('/admin/v1/workflow/requirements/' + encodeURIComponent(id), { method: 'DELETE' });
+  if (!data.ok) {
+    writeConsole(JSON.stringify(data.body, null, 2));
+    return;
+  }
+  if (selectedId === id) selectedId = '';
+  writeConsole('已删除需求：' + id);
+  await loadWorkflow();
+}
+
+async function deleteSelectedRequirements() {
+  const ids = [...document.querySelectorAll('.req-check:checked')].map(input => input.value);
+  if (!ids.length) {
+    writeConsole('请先勾选要删除的需求');
+    return;
+  }
+  const ok = await showConfirm('批量删除需求', '确认批量删除 ' + ids.length + ' 个需求吗？\n\n' + ids.join('\n'));
+  if (!ok) return;
+  const data = await requestJson('/admin/v1/workflow/requirements', {
+    method: 'DELETE',
+    body: JSON.stringify({ ids })
+  });
+  if (!data.ok) {
+    writeConsole(JSON.stringify(data.body, null, 2));
+    return;
+  }
+  if (ids.includes(selectedId)) selectedId = '';
+  batchMode = false;
+  writeConsole('已删除需求：\n' + (data.body.deleted || []).join('\n'));
+  await loadWorkflow();
+}
+
+function updateBatchDeleteVisibility() {
+  const count = document.querySelectorAll('.req-check:checked').length;
+  const deleteButton = document.getElementById('batchDeleteButton');
+  const cancelButton = document.getElementById('batchCancelButton');
+  const modeButton = document.getElementById('batchModeButton');
+  if (modeButton) modeButton.classList.toggle('hidden', batchMode);
+  if (cancelButton) cancelButton.classList.toggle('visible', batchMode);
+  if (!deleteButton) return;
+  deleteButton.classList.toggle('visible', batchMode && count > 0);
+  deleteButton.textContent = count > 0 ? '批量删除 ' + count : '批量删除';
+}
+
+function showConfirm(title, message) {
+  document.getElementById('confirmTitle').textContent = title;
+  document.getElementById('confirmMessage').textContent = message;
+  document.getElementById('confirmBackdrop').classList.add('visible');
+  return new Promise(resolve => {
+    confirmResolver = resolve;
+  });
+}
+
+function closeConfirm(ok) {
+  document.getElementById('confirmBackdrop').classList.remove('visible');
+  if (confirmResolver) confirmResolver(Boolean(ok));
+  confirmResolver = null;
 }
 
 async function loadDetail(id) {
@@ -943,13 +1419,24 @@ function renderDetail(req, agents) {
   return `
     <div class="summary">
       ${metric('需求 ID', req.id || '-')}
-      ${metric('流程状态', req.status || '-')}
+      ${metric('流程状态', localRequirementStatus(req.status))}
       ${metric('风险', req.risk || '-')}
       ${metric('评分', String(req.score || 0))}
     </div>
-    <div class="timeline">
-      ${agentOrder.map(agent => renderStage(agent, agents[agent] || {})).join('')}
+    <div class="flow-toolbar">
+      <div class="subtitle">工作流节点</div>
+      <div class="flow-controls">
+        <button class="button secondary" onclick="zoomFlow(-0.1)">缩小</button>
+        <span class="badge" id="flowZoomLabel">${Math.round(flowZoom * 100)}%</span>
+        <button class="button secondary" onclick="zoomFlow(0.1)">放大</button>
+        <button class="button secondary" onclick="resetFlowView()">重置视图</button>
+        <div class="flow-add">
+          <input id="newFlowNodeName" placeholder="添加节点名称">
+          <button class="button secondary" onclick="addFlowNode()">添加节点</button>
+        </div>
+      </div>
     </div>
+    ${renderFlowCanvas(agents)}
     <div class="ops">
       <select id="agentSelect">
         <option value="auto">自动选择下一个 Agent</option>
@@ -972,20 +1459,259 @@ function renderDetail(req, agents) {
   `;
 }
 
-function renderStage(agent, state) {
-  const status = state.status || 'WAITING';
-  const tone = agentTone(status);
+function renderFlowCanvas(agents) {
+  const nodes = flowNodes();
+  const width = Math.max(1160, 120 + nodes.length * 188);
+  const height = 360;
   return `
-    <div class="stage ${tone}" title="${escapeHtml(localStatus(status))}">
-      <div class="stage-name">${agentNames[agent]}</div>
-      <div class="stage-meta">output: ${escapeHtml(state.output || '-')}</div>
-      <div class="stage-meta">log: ${escapeHtml(state.log || '-')}</div>
-      <div class="stage-meta">start: ${formatTime(state.startedAt)}</div>
-      <div class="stage-meta">elapsed: ${escapeHtml(durationSince(state.startedAt, state.finishedAt))}</div>
-      <div class="stage-meta">finish: ${formatTime(state.finishedAt)}</div>
-      ${state.error ? `<div class="stage-meta" style="color:var(--red)">error: ${escapeHtml(state.error)}</div>` : ''}
+    <div class="flow-canvas">
+      <div class="flow-inner" style="width:${width}px;height:${height}px;transform:scale(${flowZoom})">
+        <svg class="flow-lines" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none">
+          ${nodes.slice(0, -1).map((node, index) => renderFlowLine(node, nodes[index + 1])).join('')}
+        </svg>
+        ${nodes.map(node => node.agent ? renderStageNode(node, agents[node.agent] || {}) : renderCustomNode(node)).join('')}
+      </div>
     </div>
   `;
+}
+
+function flowNodes() {
+  const base = agentOrder.map((agent, index) => ({
+    id: agent,
+    agent,
+    name: agentNames[agent],
+    x: 32 + index * 188,
+    y: index % 2 === 0 ? 42 : 138
+  })).map(applyNodePosition);
+  const custom = customNodes.map((node, index) => ({
+    id: node.id,
+    name: node.name,
+    x: 32 + (base.length + index) * 188,
+    y: (base.length + index) % 2 === 0 ? 42 : 138,
+    custom: true
+  })).map(applyNodePosition);
+  return [...base, ...custom];
+}
+
+function applyNodePosition(node) {
+  const saved = nodePositions[node.id];
+  if (!saved) return node;
+  return {...node, x: Number(saved.x) || node.x, y: Number(saved.y) || node.y};
+}
+
+function renderFlowLine(from, to) {
+  const active = from.agent && agentOrder.indexOf(from.agent) < agentOrder.indexOf(selectedAgent) ? ' active' : '';
+  return `<path class="flow-line${active}" d="${flowLinePath(from, to)}"></path>`;
+}
+
+function flowLinePath(from, to) {
+  const startX = from.x + 176;
+  const startY = from.y + 44;
+  const endX = to.x;
+  const endY = to.y + 44;
+  const mid = Math.max(32, (endX - startX) / 2);
+  return `M ${startX} ${startY} C ${startX + mid} ${startY}, ${endX - mid} ${endY}, ${endX} ${endY}`;
+}
+
+function renderStageNode(node, state) {
+  const agent = node.agent;
+  const status = state.status || 'WAITING';
+  const tone = agentTone(status);
+  const collapsed = Boolean(collapsedNodes[node.id]);
+  return `
+    <div class="flow-node ${tone}${collapsed ? ' collapsed' : ''}" data-node-id="${escapeHtml(node.id)}" style="left:${node.x}px;top:${node.y}px" title="${escapeHtml(localStatus(status))}" onpointerdown="startNodeDrag(event, '${escapeJs(node.id)}')">
+      <span class="node-port in"></span>
+      <span class="node-port out"></span>
+      <div class="node-name">
+        <span>${agentNames[agent]}</span>
+        <span class="node-actions">${status === 'RUNNING' ? runningIcon() : ''}<button class="node-toggle" type="button" title="展开/折叠节点" onclick="toggleFlowNode('${escapeJs(node.id)}', event)">${collapsed ? '▾' : '▴'}</button></span>
+      </div>
+      <div class="node-body">
+        <div class="node-meta">output: ${escapeHtml(state.output || '-')}</div>
+        <div class="node-meta">log: ${escapeHtml(state.log || '-')}</div>
+        <div class="node-meta">start: ${formatTime(state.startedAt)}</div>
+        <div class="node-meta">elapsed: ${escapeHtml(durationSince(state.startedAt, state.finishedAt))}</div>
+        <div class="node-meta">finish: ${formatTime(state.finishedAt)}</div>
+        ${state.error ? `<div class="node-meta" style="color:var(--red)">error: ${escapeHtml(state.error)}</div>` : ''}
+      </div>
+    </div>
+  `;
+}
+
+function renderCustomNode(node) {
+  const collapsed = Boolean(collapsedNodes[node.id]);
+  return `
+    <div class="flow-node custom amber${collapsed ? ' collapsed' : ''}" data-node-id="${escapeHtml(node.id)}" style="left:${node.x}px;top:${node.y}px" title="自定义节点" onpointerdown="startNodeDrag(event, '${escapeJs(node.id)}')">
+      <span class="node-port in"></span>
+      <span class="node-port out"></span>
+      <div class="node-name"><span>${escapeHtml(node.name)}</span><span class="node-actions"><button class="node-toggle" type="button" title="展开/折叠节点" onclick="toggleFlowNode('${escapeJs(node.id)}', event)">${collapsed ? '▾' : '▴'}</button><button class="node-delete" type="button" title="删除节点" onclick="deleteFlowNode('${escapeJs(node.id)}')">×</button></span></div>
+      <div class="node-body">
+        <div class="node-meta">类型: 自定义</div>
+        <div class="node-meta">状态: 仅可视化</div>
+        <div class="node-meta">说明: 暂不参与后端 Agent 执行</div>
+      </div>
+    </div>
+  `;
+}
+
+function toggleFlowNode(id, event) {
+  event?.stopPropagation();
+  if (collapsedNodes[id]) {
+    delete collapsedNodes[id];
+  } else {
+    collapsedNodes[id] = true;
+  }
+  saveCollapsedNodes();
+  if (selectedId) loadDetail(selectedId);
+}
+
+function addFlowNode() {
+  const input = document.getElementById('newFlowNodeName');
+  const name = input.value.trim();
+  if (!name) return;
+  customNodes.push({ id: 'custom-' + Date.now(), name });
+  saveCustomNodes();
+  input.value = '';
+  if (selectedId) loadDetail(selectedId);
+}
+
+function deleteFlowNode(id) {
+  customNodes = customNodes.filter(node => node.id !== id);
+  delete nodePositions[id];
+  delete collapsedNodes[id];
+  saveCustomNodes();
+  saveNodePositions();
+  saveCollapsedNodes();
+  if (selectedId) loadDetail(selectedId);
+}
+
+function startNodeDrag(event, id) {
+  if (event.target.closest('button')) return;
+  const node = event.currentTarget;
+  const canvas = node.closest('.flow-canvas');
+  if (!canvas) return;
+  event.preventDefault();
+  node.setPointerCapture(event.pointerId);
+  node.classList.add('dragging');
+  draggingNode = {
+    id,
+    node,
+    startX: event.clientX,
+    startY: event.clientY,
+    originalX: parseFloat(node.style.left) || 0,
+    originalY: parseFloat(node.style.top) || 0
+  };
+  node.addEventListener('pointermove', dragNode);
+  node.addEventListener('pointerup', endNodeDrag, { once: true });
+  node.addEventListener('pointercancel', endNodeDrag, { once: true });
+}
+
+function dragNode(event) {
+  if (!draggingNode) return;
+  const dx = (event.clientX - draggingNode.startX) / flowZoom;
+  const dy = (event.clientY - draggingNode.startY) / flowZoom;
+  const x = Math.max(12, Math.round(draggingNode.originalX + dx));
+  const y = Math.max(12, Math.round(draggingNode.originalY + dy));
+  draggingNode.node.style.left = x + 'px';
+  draggingNode.node.style.top = y + 'px';
+  updateFlowLinePaths(draggingNode.id, x, y);
+}
+
+function endNodeDrag(event) {
+  if (!draggingNode) return;
+  const x = parseFloat(draggingNode.node.style.left) || 0;
+  const y = parseFloat(draggingNode.node.style.top) || 0;
+  nodePositions[draggingNode.id] = { x, y };
+  saveNodePositions();
+  draggingNode.node.classList.remove('dragging');
+  draggingNode.node.removeEventListener('pointermove', dragNode);
+  draggingNode = null;
+  if (selectedId) loadDetail(selectedId);
+}
+
+function updateFlowLinePaths(id, x, y) {
+  const nodes = flowNodes().map(node => node.id === id ? {...node, x, y} : node);
+  const lines = document.querySelectorAll('.flow-line');
+  nodes.slice(0, -1).forEach((node, index) => {
+    const line = lines[index];
+    if (!line) return;
+    line.setAttribute('d', flowLinePath(node, nodes[index + 1]));
+  });
+}
+
+function zoomFlow(delta) {
+  flowZoom = Math.min(1.6, Math.max(0.6, Math.round((flowZoom + delta) * 10) / 10));
+  saveFlowZoom();
+  updateFlowZoomLabel();
+  if (selectedId) loadDetail(selectedId);
+}
+
+function resetFlowView() {
+  flowZoom = 1;
+  nodePositions = {};
+  collapsedNodes = {};
+  saveFlowZoom();
+  saveNodePositions();
+  saveCollapsedNodes();
+  if (selectedId) loadDetail(selectedId);
+}
+
+function updateFlowZoomLabel() {
+  const label = document.getElementById('flowZoomLabel');
+  if (label) label.textContent = Math.round(flowZoom * 100) + '%';
+}
+
+function loadCustomNodes() {
+  try {
+    const value = localStorage.getItem('exmarketing.flow.customNodes');
+    return value ? JSON.parse(value) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveCustomNodes() {
+  localStorage.setItem('exmarketing.flow.customNodes', JSON.stringify(customNodes));
+}
+
+function loadNodePositions() {
+  try {
+    const value = localStorage.getItem('exmarketing.flow.nodePositions');
+    return value ? JSON.parse(value) : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveNodePositions() {
+  localStorage.setItem('exmarketing.flow.nodePositions', JSON.stringify(nodePositions));
+}
+
+function loadCollapsedNodes() {
+  try {
+    const value = localStorage.getItem('exmarketing.flow.collapsedNodes');
+    return value ? JSON.parse(value) : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveCollapsedNodes() {
+  localStorage.setItem('exmarketing.flow.collapsedNodes', JSON.stringify(collapsedNodes));
+}
+
+function loadFlowZoom() {
+  const value = Number(localStorage.getItem('exmarketing.flow.zoom'));
+  if (!Number.isFinite(value) || value < 0.6 || value > 1.6) return 1;
+  return value;
+}
+
+function saveFlowZoom() {
+  localStorage.setItem('exmarketing.flow.zoom', String(flowZoom));
+}
+
+function runningIcon() {
+  return '<svg class="running-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="3" opacity="0.22"></circle><path d="M21 12a9 9 0 0 0-9-9" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"></path></svg>';
 }
 
 function renderConsoleStages(agents) {
@@ -993,17 +1719,38 @@ function renderConsoleStages(agents) {
   if (!target) return;
   target.innerHTML = agentOrder.map(agent => {
     const state = agents[agent] || {};
-    const file = agentArtifacts[agent];
     const tone = agentTone(state.status || 'WAITING');
-    const active = currentArtifact === file || currentArtifact === 'log:' + agent ? ' active' : '';
+    const active = selectedAgent === agent ? ' active' : '';
     return `<button class="badge ${tone} console-stage${active}" type="button" title="${escapeHtml(localStatus(state.status || 'WAITING'))}" onclick="selectAgentOutput('${agent}')">${escapeHtml(agentNames[agent])}</button>`;
   }).join('');
 }
 
-function selectAgentOutput(agent) {
+async function selectAgentOutput(agent) {
+  selectedAgent = agent;
+  if (consoleMode === 'artifact') {
+    currentRunId = '';
+    currentArtifact = agentArtifacts[agent] || 'task.md';
+    renderArtifact();
+    return;
+  }
+  const run = latestRunForAgent(agent);
+  if (run) {
+    await loadRunLog(run.id);
+    return;
+  }
   currentRunId = '';
-  currentArtifact = agentArtifacts[agent] || 'task.md';
+  currentArtifact = 'log:' + agent;
+  currentArtifacts[currentArtifact] = '暂无执行日志。';
   renderArtifact();
+}
+
+async function setConsoleMode(mode) {
+  consoleMode = mode === 'log' ? 'log' : 'artifact';
+  const label = document.getElementById('consoleModeLabel');
+  if (label) label.textContent = consoleMode === 'log' ? '执行日志' : '输出文档';
+  document.getElementById('artifactModeButton')?.classList.toggle('active', consoleMode === 'artifact');
+  document.getElementById('logModeButton')?.classList.toggle('active', consoleMode === 'log');
+  await selectAgentOutput(selectedAgent);
 }
 
 function renderRunHistory() {
@@ -1032,10 +1779,17 @@ async function loadRunLog(runId) {
     return;
   }
   currentRunId = runId;
+  const run = currentRuns.find(item => item.id === runId);
+  if (run?.agent) selectedAgent = run.agent;
+  consoleMode = 'log';
   currentArtifact = 'run:' + runId;
   currentArtifacts[currentArtifact] = data.body.content || '(empty)';
   renderRunHistory();
   renderArtifact();
+}
+
+function latestRunForAgent(agent) {
+  return currentRuns.find(run => run.agent === agent);
 }
 
 function scheduleRefresh(items) {
@@ -1047,10 +1801,39 @@ function scheduleRefresh(items) {
   } else {
     stopLiveLog();
   }
-  const hasRunning = Boolean(runningItem);
-  if (hasRunning) {
-    refreshTimer = setTimeout(loadWorkflow, 2000);
-  }
+  startRefreshCountdown();
+}
+
+function startRefreshCountdown() {
+  stopRefreshCountdown();
+  refreshRemaining = 10;
+  renderRefreshCountdown();
+  refreshTickTimer = setInterval(() => {
+    refreshRemaining -= 1;
+    if (refreshRemaining <= 0) {
+      stopRefreshCountdown();
+      loadWorkflow();
+      return;
+    }
+    renderRefreshCountdown();
+  }, 1000);
+  refreshTimer = setTimeout(() => {
+    stopRefreshCountdown();
+    loadWorkflow();
+  }, 10000);
+}
+
+function stopRefreshCountdown() {
+  if (refreshTimer) clearTimeout(refreshTimer);
+  if (refreshTickTimer) clearInterval(refreshTickTimer);
+  refreshTimer = 0;
+  refreshTickTimer = 0;
+}
+
+function renderRefreshCountdown() {
+  const target = document.getElementById('refreshCountdown');
+  if (!target) return;
+  target.textContent = refreshRemaining + 's 后刷新';
 }
 
 function startLiveLog(requirementId, agent) {
@@ -1159,6 +1942,7 @@ function inferAgentFromStatus() {
 
 function selectArtifact(file) {
   currentRunId = '';
+  consoleMode = 'artifact';
   currentArtifact = file;
   renderArtifact();
 }
@@ -1169,10 +1953,14 @@ function renderArtifact(autoScroll = false) {
   if (!target) return;
   target.textContent = '## ' + currentArtifact + '\n\n' + content;
   if (autoScroll) target.scrollTop = target.scrollHeight;
+  document.getElementById('artifactModeButton')?.classList.toggle('active', consoleMode === 'artifact');
+  document.getElementById('logModeButton')?.classList.toggle('active', consoleMode === 'log');
+  const label = document.getElementById('consoleModeLabel');
+  if (label) label.textContent = consoleMode === 'log' ? '执行日志' : '输出文档';
   for (const chip of document.querySelectorAll('.console-stage')) {
     const text = chip.textContent || '';
     const agent = agentOrder.find(name => text.startsWith(agentNames[name]));
-    chip.classList.toggle('active', Boolean(agent && (agentArtifacts[agent] === currentArtifact || currentArtifact === 'log:' + agent)));
+    chip.classList.toggle('active', Boolean(agent && agent === selectedAgent));
   }
   renderRunHistory();
 }
@@ -1226,6 +2014,10 @@ function agentTone(status) {
 
 function localStatus(status) {
   return statusNames[status] || status || '-';
+}
+
+function localRequirementStatus(status) {
+  return requirementStatusNames[status] || status || '-';
 }
 
 function statusTone(status) {

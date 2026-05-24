@@ -51,7 +51,7 @@ func ListRunHistory(req Requirement) ([]RunHistoryItem, error) {
 		}
 		id := strings.TrimSuffix(entry.Name(), ".log")
 		agent := ""
-		if idx := strings.LastIndex(id, "-"); idx >= 0 && idx+1 < len(id) {
+		if idx := strings.Index(id, "-"); idx >= 0 && idx+1 < len(id) {
 			agent = id[idx+1:]
 		}
 		path := filepath.Join(runDir, entry.Name())

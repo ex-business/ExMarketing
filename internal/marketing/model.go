@@ -64,8 +64,12 @@ const (
 	RewardDrawChance RewardType = "DRAW_CHANCE"
 	RewardMembership RewardType = "MEMBERSHIP"
 
-	CalculateFixed CalculateType = "FIXED"
-	CalculateRatio CalculateType = "RATIO"
+	CalculateFixed       CalculateType = "FIXED"
+	CalculateRatio       CalculateType = "RATIO"
+	CalculateLadder      CalculateType = "LADDER"
+	CalculateRandom      CalculateType = "RANDOM"
+	CalculateProbability CalculateType = "PROBABILITY"
+	CalculatePoolSplit   CalculateType = "POOL_SPLIT"
 
 	GrantAuto   GrantMode = "AUTO"
 	GrantManual GrantMode = "MANUAL"
@@ -252,15 +256,41 @@ func (r *Reward) UnmarshalJSON(data []byte) error {
 }
 
 type RewardConfig struct {
-	Amount        string `json:"amount,omitempty"`
-	BaseField     string `json:"baseField,omitempty"`
-	Rate          string `json:"rate,omitempty"`
-	MaxAmount     string `json:"maxAmount,omitempty"`
-	Currency      string `json:"currency,omitempty"`
-	ExpireAt      string `json:"expireAt,omitempty"`
-	FlowMultiple  string `json:"flowMultiple,omitempty"`
-	TargetRef     string `json:"targetRef,omitempty"`
-	RewardPayload any    `json:"rewardPayload,omitempty"`
+	Amount                string            `json:"amount,omitempty"`
+	BaseField             string            `json:"baseField,omitempty"`
+	Rate                  string            `json:"rate,omitempty"`
+	MaxAmount             string            `json:"maxAmount,omitempty"`
+	Field                 string            `json:"field,omitempty"`
+	Ladders               []RewardLadder    `json:"ladders,omitempty"`
+	MinAmount             string            `json:"minAmount,omitempty"`
+	Step                  string            `json:"step,omitempty"`
+	SeedSalt              string            `json:"seedSalt,omitempty"`
+	Items                 []ProbabilityItem `json:"items,omitempty"`
+	PoolAmount            string            `json:"poolAmount,omitempty"`
+	SplitBy               string            `json:"splitBy,omitempty"`
+	ParticipantCountField string            `json:"participantCountField,omitempty"`
+	WeightField           string            `json:"weightField,omitempty"`
+	TotalWeightField      string            `json:"totalWeightField,omitempty"`
+	Currency              string            `json:"currency,omitempty"`
+	ExpireAt              string            `json:"expireAt,omitempty"`
+	FlowMultiple          string            `json:"flowMultiple,omitempty"`
+	TargetRef             string            `json:"targetRef,omitempty"`
+	RewardPayload         any               `json:"rewardPayload,omitempty"`
+}
+
+type RewardLadder struct {
+	Min    string `json:"min"`
+	Max    string `json:"max"`
+	Amount string `json:"amount"`
+}
+
+type ProbabilityItem struct {
+	ItemCode   string     `json:"itemCode"`
+	Weight     string     `json:"weight"`
+	RewardType RewardType `json:"rewardType,omitempty"`
+	Amount     string     `json:"amount"`
+	Currency   string     `json:"currency,omitempty"`
+	Label      string     `json:"label,omitempty"`
 }
 
 type ActivityEvent struct {
@@ -728,7 +758,7 @@ func validateReward(index int, reward Reward) error {
 	default:
 		return invalidActivityf("rewards[%d].rewardType is unsupported", index)
 	}
-	if reward.CalculateType != CalculateFixed && reward.CalculateType != CalculateRatio {
+	if !validRewardCalculateType(reward.CalculateType) {
 		return invalidActivityf("rewards[%d].calculateType is unsupported", index)
 	}
 	if reward.GrantMode != GrantAuto {
@@ -747,6 +777,9 @@ func validateReward(index int, reward Reward) error {
 	if err := validateHTTPURL(fmt.Sprintf("rewards[%d].rewardConfig.targetRef", index), cfg.TargetRef, true); err != nil {
 		return err
 	}
+	if (reward.Type == RewardBonus || reward.Type == RewardCash) && strings.TrimSpace(cfg.Currency) == "" {
+		return invalidActivityf("rewards[%d].rewardConfig.currency is required", index)
+	}
 	if reward.FlowMultiple != "" && cfg.FlowMultiple != "" && reward.FlowMultiple != cfg.FlowMultiple {
 		return invalidActivityf("rewards[%d].flowMultiple conflicts with rewardConfig.flowMultiple", index)
 	}
@@ -760,22 +793,186 @@ func validateReward(index int, reward Reward) error {
 			return invalidActivityf("rewards[%d].rewardConfig.flowMultiple must be decimal", index)
 		}
 	}
-	if reward.CalculateType == CalculateFixed {
-		return validatePositiveDecimal(fmt.Sprintf("rewards[%d].rewardConfig.amount", index), cfg.Amount)
+	return validateRewardConfigByCalculateType(index, reward, cfg)
+}
+
+func validRewardCalculateType(calculateType CalculateType) bool {
+	switch calculateType {
+	case CalculateFixed, CalculateRatio, CalculateLadder, CalculateRandom, CalculateProbability, CalculatePoolSplit:
+		return true
+	default:
+		return false
 	}
+}
+
+func validateRewardConfigByCalculateType(index int, reward Reward, cfg RewardConfig) error {
+	switch reward.CalculateType {
+	case CalculateFixed:
+		return validateNonNegativeDecimal(fmt.Sprintf("rewards[%d].rewardConfig.amount", index), cfg.Amount)
+	case CalculateRatio:
+		return validateRatioRewardConfig(index, cfg)
+	case CalculateLadder:
+		return validateLadderRewardConfig(index, cfg)
+	case CalculateRandom:
+		return validateRandomRewardConfig(index, cfg)
+	case CalculateProbability:
+		return validateProbabilityRewardConfig(index, reward, cfg)
+	case CalculatePoolSplit:
+		return validatePoolSplitRewardConfig(index, cfg)
+	default:
+		return invalidActivityf("rewards[%d].calculateType is unsupported", index)
+	}
+}
+
+func validateRatioRewardConfig(index int, cfg RewardConfig) error {
 	if strings.TrimSpace(cfg.BaseField) == "" {
 		return invalidActivityf("rewards[%d].rewardConfig.baseField is required", index)
 	}
-	if !strings.HasPrefix(cfg.BaseField, "attributes.") {
+	if !supportedRuleField(cfg.BaseField) {
 		return invalidActivityf("rewards[%d].rewardConfig.baseField is unsupported", index)
 	}
-	if err := validatePositiveDecimal(fmt.Sprintf("rewards[%d].rewardConfig.rate", index), cfg.Rate); err != nil {
+	if err := validateNonNegativeDecimal(fmt.Sprintf("rewards[%d].rewardConfig.rate", index), cfg.Rate); err != nil {
 		return err
 	}
 	if cfg.MaxAmount != "" {
-		if err := validatePositiveDecimal(fmt.Sprintf("rewards[%d].rewardConfig.maxAmount", index), cfg.MaxAmount); err != nil {
+		if err := validateNonNegativeDecimal(fmt.Sprintf("rewards[%d].rewardConfig.maxAmount", index), cfg.MaxAmount); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+func validateLadderRewardConfig(index int, cfg RewardConfig) error {
+	if strings.TrimSpace(cfg.Field) == "" {
+		return invalidActivityf("rewards[%d].rewardConfig.field is required", index)
+	}
+	if !supportedRuleField(cfg.Field) {
+		return invalidActivityf("rewards[%d].rewardConfig.field is unsupported", index)
+	}
+	if len(cfg.Ladders) == 0 {
+		return invalidActivityf("rewards[%d].rewardConfig.ladders is required", index)
+	}
+	type interval struct {
+		min decimal.Decimal
+		max decimal.Decimal
+	}
+	var intervals []interval
+	for i, ladder := range cfg.Ladders {
+		min, err := parseNonNegativeConfigDecimal(fmt.Sprintf("rewards[%d].rewardConfig.ladders[%d].min", index, i), ladder.Min)
+		if err != nil {
+			return err
+		}
+		max, err := parseNonNegativeConfigDecimal(fmt.Sprintf("rewards[%d].rewardConfig.ladders[%d].max", index, i), ladder.Max)
+		if err != nil {
+			return err
+		}
+		if min.Cmp(max) > 0 {
+			return invalidActivityf("rewards[%d].rewardConfig.ladders[%d].min must be <= max", index, i)
+		}
+		if err := validateNonNegativeDecimal(fmt.Sprintf("rewards[%d].rewardConfig.ladders[%d].amount", index, i), ladder.Amount); err != nil {
+			return err
+		}
+		intervals = append(intervals, interval{min: min, max: max})
+	}
+	for i := range intervals {
+		for j := i + 1; j < len(intervals); j++ {
+			if intervals[i].min.Cmp(intervals[j].max) <= 0 && intervals[j].min.Cmp(intervals[i].max) <= 0 {
+				return invalidActivityf("rewards[%d].rewardConfig.ladders overlap", index)
+			}
+		}
+	}
+	return nil
+}
+
+func validateRandomRewardConfig(index int, cfg RewardConfig) error {
+	min, err := parseNonNegativeConfigDecimal(fmt.Sprintf("rewards[%d].rewardConfig.minAmount", index), cfg.MinAmount)
+	if err != nil {
+		return err
+	}
+	max, err := parseNonNegativeConfigDecimal(fmt.Sprintf("rewards[%d].rewardConfig.maxAmount", index), cfg.MaxAmount)
+	if err != nil {
+		return err
+	}
+	if min.Cmp(max) > 0 {
+		return invalidActivityf("rewards[%d].rewardConfig.minAmount must be <= maxAmount", index)
+	}
+	stepText := strings.TrimSpace(cfg.Step)
+	if stepText == "" {
+		stepText = "0.01"
+	}
+	step, err := decimal.Parse(stepText)
+	if err != nil || !step.IsPositive() {
+		return invalidActivityf("rewards[%d].rewardConfig.step must be positive decimal", index)
+	}
+	if min.Cmp(max) < 0 && step.Cmp(max.Sub(min)) > 0 {
+		return invalidActivityf("rewards[%d].rewardConfig.step must not exceed range", index)
+	}
+	return nil
+}
+
+func validateProbabilityRewardConfig(index int, reward Reward, cfg RewardConfig) error {
+	if len(cfg.Items) == 0 {
+		return invalidActivityf("rewards[%d].rewardConfig.items is required", index)
+	}
+	seen := map[string]struct{}{}
+	total := decimal.Zero()
+	for i, item := range cfg.Items {
+		if strings.TrimSpace(item.ItemCode) == "" {
+			return invalidActivityf("rewards[%d].rewardConfig.items[%d].itemCode is required", index, i)
+		}
+		if _, ok := seen[item.ItemCode]; ok {
+			return invalidActivityf("rewards[%d].rewardConfig.items[%d].itemCode is duplicated", index, i)
+		}
+		seen[item.ItemCode] = struct{}{}
+		weight, err := decimal.Parse(item.Weight)
+		if err != nil || !weight.IsPositive() {
+			return invalidActivityf("rewards[%d].rewardConfig.items[%d].weight must be positive decimal", index, i)
+		}
+		total = total.Add(weight)
+		if err := validateNonNegativeDecimal(fmt.Sprintf("rewards[%d].rewardConfig.items[%d].amount", index, i), item.Amount); err != nil {
+			return err
+		}
+		if item.RewardType != "" {
+			switch item.RewardType {
+			case RewardBonus, RewardCash, RewardPoint:
+			default:
+				return invalidActivityf("rewards[%d].rewardConfig.items[%d].rewardType is unsupported", index, i)
+			}
+		}
+		if item.Currency != "" && cfg.Currency != "" && item.Currency != cfg.Currency {
+			return invalidActivityf("rewards[%d].rewardConfig.items[%d].currency conflicts with rewardConfig.currency", index, i)
+		}
+		if (item.RewardType == RewardBonus || item.RewardType == RewardCash || item.RewardType == "" && (reward.Type == RewardBonus || reward.Type == RewardCash)) && cfg.Currency == "" {
+			return invalidActivityf("rewards[%d].rewardConfig.currency is required", index)
+		}
+	}
+	if !total.IsPositive() {
+		return invalidActivityf("rewards[%d].rewardConfig.items total weight must be positive", index)
+	}
+	return nil
+}
+
+func validatePoolSplitRewardConfig(index int, cfg RewardConfig) error {
+	if err := validateNonNegativeDecimal(fmt.Sprintf("rewards[%d].rewardConfig.poolAmount", index), cfg.PoolAmount); err != nil {
+		return err
+	}
+	switch strings.ToUpper(strings.TrimSpace(cfg.SplitBy)) {
+	case "COUNT":
+		if strings.TrimSpace(cfg.ParticipantCountField) == "" {
+			return invalidActivityf("rewards[%d].rewardConfig.participantCountField is required", index)
+		}
+		if !supportedRuleField(cfg.ParticipantCountField) {
+			return invalidActivityf("rewards[%d].rewardConfig.participantCountField is unsupported", index)
+		}
+	case "WEIGHT":
+		if strings.TrimSpace(cfg.WeightField) == "" || strings.TrimSpace(cfg.TotalWeightField) == "" {
+			return invalidActivityf("rewards[%d].rewardConfig.weightField and totalWeightField are required", index)
+		}
+		if !supportedRuleField(cfg.WeightField) || !supportedRuleField(cfg.TotalWeightField) {
+			return invalidActivityf("rewards[%d].rewardConfig weight fields are unsupported", index)
+		}
+	default:
+		return invalidActivityf("rewards[%d].rewardConfig.splitBy is unsupported", index)
 	}
 	return nil
 }
@@ -866,6 +1063,22 @@ func validatePositiveDecimal(name, value string) error {
 		return invalidActivityf("%s must be positive decimal", name)
 	}
 	return nil
+}
+
+func validateNonNegativeDecimal(name, value string) error {
+	_, err := parseNonNegativeConfigDecimal(name, value)
+	return err
+}
+
+func parseNonNegativeConfigDecimal(name, value string) (decimal.Decimal, error) {
+	parsed, err := decimal.Parse(value)
+	if err != nil {
+		return decimal.Decimal{}, invalidActivityf("%s must be decimal", name)
+	}
+	if parsed.IsNegative() {
+		return decimal.Decimal{}, invalidActivityf("%s must be non-negative decimal", name)
+	}
+	return parsed, nil
 }
 
 func (event *ActivityEvent) Validate() error {

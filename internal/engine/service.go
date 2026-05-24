@@ -232,9 +232,18 @@ func (s *Service) evaluateActivity(ctx context.Context, inbox marketing.EventInb
 		if !configuredReward.Enabled {
 			continue
 		}
-		rewardResult, err := s.rewardCalculator.Calculate(reward.Context{Event: inbox.Event}, configuredReward)
+		rewardResult, err := s.rewardCalculator.Calculate(reward.Context{
+			Event:          inbox.Event,
+			TenantID:       activity.TenantID,
+			ActivityID:     activity.ID,
+			IdempotencyKey: inbox.IdempotencyKey,
+			State:          activityState(activity, now),
+		}, configuredReward)
 		if err != nil {
 			return participation, orders, messages, ruleResult, true, err
+		}
+		if rewardResult.Skipped {
+			continue
 		}
 
 		commandID := marketingID("cmd")
@@ -297,6 +306,8 @@ func (s *Service) evaluateActivity(ctx context.Context, inbox marketing.EventInb
 	}
 
 	if len(orders) == 0 {
+		participation.Status = marketing.ParticipationQualified
+		participation.RejectReason = reward.ReasonZeroRewardSkipped + ": no payable reward"
 		createdParticipation, err := s.repository.CreateParticipation(ctx, participation)
 		return createdParticipation, nil, nil, ruleResult, true, err
 	}
@@ -360,11 +371,19 @@ func (s *Service) simulateActivity(event marketing.ActivityEvent, activity marke
 		if !configuredReward.Enabled {
 			continue
 		}
-		rewardResult, err := s.rewardCalculator.Calculate(reward.Context{Event: event}, configuredReward)
+		rewardResult, err := s.rewardCalculator.Calculate(reward.Context{
+			Event:      event,
+			TenantID:   activity.TenantID,
+			ActivityID: activity.ID,
+			State:      activityState(activity, now),
+		}, configuredReward)
 		if err != nil {
 			participation.Status = marketing.ParticipationFailed
 			participation.RejectReason = err.Error()
 			return participation, orders, outbox, ruleResult
+		}
+		if rewardResult.Skipped {
+			continue
 		}
 		commandID := marketingID("sim_cmd")
 		payload, _ := json.Marshal(rewardResult.Payload)
@@ -411,6 +430,10 @@ func (s *Service) simulateActivity(event marketing.ActivityEvent, activity marke
 			CreatedAt:     now,
 			UpdatedAt:     now,
 		})
+	}
+	if len(orders) == 0 {
+		participation.Status = marketing.ParticipationQualified
+		participation.RejectReason = reward.ReasonZeroRewardSkipped + ": no payable reward"
 	}
 	return participation, orders, outbox, ruleResult
 }

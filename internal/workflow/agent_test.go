@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestPromptForAgent(t *testing.T) {
@@ -28,6 +29,17 @@ func TestPromptForAgent(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "只负责需求分析和需求细化") || !strings.Contains(prompt, "不写代码") {
 		t.Fatalf("analysis prompt should forbid coding, got: %s", prompt)
+	}
+}
+
+func TestTailForPromptKeepsValidUTF8(t *testing.T) {
+	content := strings.Repeat("说明", 7000)
+	got := tailForPrompt(content, 12001)
+	if !utf8.ValidString(got) {
+		t.Fatalf("tailForPrompt returned invalid UTF-8")
+	}
+	if len(got) > 12001 {
+		t.Fatalf("tail length = %d, want <= 12001", len(got))
 	}
 }
 

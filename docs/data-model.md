@@ -156,15 +156,15 @@ POINT
 ```text
 FIXED
 RATIO
+LADDER
+RANDOM
+PROBABILITY
+POOL_SPLIT
 ```
 
 设计目标中的待实现计算方式：
 
 ```text
-LADDER
-RANDOM
-PROBABILITY
-POOL_SPLIT
 DRAW_CHANCE
 GIFT
 ```
@@ -178,6 +178,10 @@ targetRef     reward_config_json 内必填，且必须是 http(s) URL
 ```
 
 `MQ`、`MANUAL_EXPORT` 和 `MANUAL` 发奖模式尚无完整 sender、导出或人工状态机，创建活动时会被拒绝。
+
+奖励计算统一使用 Decimal 语义，输出金额保留 4 位小数。`FIXED` 使用 `amount`；`RATIO` 使用 `baseField * rate` 并支持 `maxAmount` 封顶；`LADDER` 使用 `field` 和闭区间 `ladders`；`RANDOM` 使用 `minAmount/maxAmount/step` 和稳定 seed；`PROBABILITY` 使用 `items[].weight` 抽取奖项；`POOL_SPLIT` 支持 `COUNT` 和 `WEIGHT` 两种即时分摊。金额类 `BONUS` / `CASH` 必须配置 `currency`，`AUTO + HTTP/WEBHOOK` 必须配置 http(s) `targetRef`。
+
+计算结果为 `0.0000` 时按无实际奖励处理，不生成 grant_order/outbox，不扣 BUDGET/STOCK/USER_LIMIT；`POOL_SPLIT` 是事件即时分摊模型，不表示活动结束后整池只扣一次。
 
 ## marketing_event_inbox
 

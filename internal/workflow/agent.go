@@ -97,7 +97,7 @@ func PromptForAgent(taskDir string, agent Agent) (string, error) {
 	} else if agent == AgentDev {
 		prompt += renderDevFeedbackContext(taskDir)
 	}
-	return prompt, nil
+	return strings.ToValidUTF8(prompt, ""), nil
 }
 
 func renderAnalysisFeedbackContext(taskDir string) string {
@@ -179,10 +179,22 @@ func appendAgentFailureFeedback(b *strings.Builder, label, artifactName, artifac
 }
 
 func tailForPrompt(content string, maxBytes int) string {
+	content = strings.ToValidUTF8(content, "")
 	if len(content) <= maxBytes {
 		return content
 	}
-	return content[len(content)-maxBytes:]
+	runes := []rune(content)
+	totalBytes := 0
+	start := len(runes)
+	for start > 0 {
+		nextBytes := len(string(runes[start-1]))
+		if totalBytes+nextBytes > maxBytes {
+			break
+		}
+		totalBytes += nextBytes
+		start--
+	}
+	return string(runes[start:])
 }
 
 func RunAgent(req Requirement, agent Agent, command string) (AgentRun, error) {

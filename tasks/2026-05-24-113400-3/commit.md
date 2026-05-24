@@ -14,26 +14,37 @@ go build ./...
 
 ## Scope
 
-待填写。
+- Implemented four-stage rule engine execution for `MATCH -> QUALIFY -> REWARD -> RISK_LIMIT_BUDGET`.
+- Added rule/phase explanation output and evaluator registry support.
+- Updated HTTP flow, tests, API/data/architecture docs, backlog, and task records for requirement `2026-05-24-113400-3`.
+- Excluded `tasks/*/runs/` execution logs from staging and commit.
 
 ## Review
 
 ~~~text
-PASS / BLOCK
+PASS
 ~~~
 
 ## Test
 
 ~~~text
-PASS / FAIL
+PASS
+
+Pre-commit checks executed:
+- git status -sb
+- git diff --check
+- go test ./...
+- go build ./...
+
+All checks passed.
 ~~~
 
 ## Commit
 
 ~~~text
-hash:
-message:
-remote:
+hash: d199ea0fbb82222b58d85cbc9394933764847439
+message: Implement staged rule engine execution
+remote: origin https://github.com/ex-business/ExMarketing.git (not pushed)
 ~~~
 
 需求：2026-05-24-113400-3

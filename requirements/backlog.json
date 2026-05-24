@@ -1,0 +1,26 @@
+{
+  "items": [
+    {
+      "id": "2026-05-24-example-automated-requirement",
+      "title": "example automated requirement",
+      "description": "验证需求列表接收后自动生成任务目录和 Agent 提示词",
+      "status": "ANALYSIS_READY",
+      "risk": "低",
+      "score": 0,
+      "taskDir": "tasks/2026-05-24-example-automated-requirement",
+      "createdAt": "2026-05-24T09:05:05.754371Z",
+      "updatedAt": "2026-05-24T09:05:05.960669Z"
+    },
+    {
+      "id": "2026-05-24-094535",
+      "title": "预算库存次数原子扣减",
+      "description": "根据 22-独立活动营销中台设计，活动发奖前需要对活动预算、奖励库存、用户参与次数做同一事务内的原子校验和扣减。要求：额度不足时不能生成 grant order；同一幂等事件重复请求不能重复扣减；多奖励活动要保证同一事件下所有奖励扣减和 grant/outbox 写入保持一致；失败时写审计记录并返回明确错误。",
+      "status": "COMMIT_READY",
+      "risk": "高",
+      "score": 82,
+      "taskDir": "tasks/2026-05-24-094535",
+      "createdAt": "2026-05-24T09:45:35.970782Z",
+      "updatedAt": "2026-05-24T10:47:31.257933Z"
+    }
+  ]
+}

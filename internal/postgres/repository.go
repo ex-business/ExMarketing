@@ -260,25 +260,31 @@ func (r *Repository) UpdateGrantOrderByCommandID(ctx context.Context, tenantID s
 	return nil
 }
 
-func (r *Repository) CreateGrantOutboxesWithQuota(ctx context.Context, activityID string, subjectID string, totalRewardAmount string, reserveUserLimit bool, orders []marketing.GrantOrder, messages []marketing.OutboxMessage) ([]marketing.GrantOrder, []marketing.OutboxMessage, bool, error) {
+func (r *Repository) CreateParticipationGrantOutboxesWithQuota(ctx context.Context, cmd marketing.AtomicGrantCommand) (marketing.AtomicGrantResult, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, nil, false, err
+		return marketing.AtomicGrantResult{}, err
 	}
 	defer rollback(tx)
 
-	ok, err := reserveQuotaTx(ctx, tx, activityID, marketing.QuotaBudget, marketing.QuotaScopeActivity, "TOTAL", totalRewardAmount)
-	if err != nil || !ok {
-		return nil, nil, ok, err
+	if err := insertParticipationTx(ctx, tx, cmd.Participation); err != nil {
+		return marketing.AtomicGrantResult{}, err
 	}
-	if reserveUserLimit {
-		ok, err = reserveQuotaTx(ctx, tx, activityID, marketing.QuotaUserLimit, marketing.QuotaScopeUser, subjectID, "1")
-		if err != nil || !ok {
-			return nil, nil, ok, err
+	if err := reserveQuotaOrExceeded(ctx, tx, cmd.Participation.ActivityID, marketing.QuotaBudget, marketing.QuotaScopeActivity, "TOTAL", cmd.BudgetAmount); err != nil {
+		return marketing.AtomicGrantResult{}, err
+	}
+	if cmd.ReserveUserLimit {
+		if err := reserveQuotaOrExceeded(ctx, tx, cmd.Participation.ActivityID, marketing.QuotaUserLimit, marketing.QuotaScopeUser, cmd.UserScopeKey, "1"); err != nil {
+			return marketing.AtomicGrantResult{}, err
+		}
+	}
+	for _, reservation := range cmd.StockReservations {
+		if err := reserveQuotaOrExceeded(ctx, tx, cmd.Participation.ActivityID, reservation.Type, reservation.Scope, reservation.ScopeKey, reservation.Amount); err != nil {
+			return marketing.AtomicGrantResult{}, err
 		}
 	}
 
-	for _, order := range orders {
+	for _, order := range cmd.GrantOrders {
 		_, err = tx.ExecContext(ctx, `
 			INSERT INTO marketing_grant_order (
 				id, tenant_id, activity_id, participation_id, subject_type, subject_id,
@@ -289,10 +295,10 @@ func (r *Repository) CreateGrantOutboxesWithQuota(ctx context.Context, activityI
 			order.RewardType, emptyDecimal(order.RewardAmount), order.RewardPayload, order.BillNo, order.GrantStatus,
 			order.GrantChannel, order.RetryCount, nullString(order.ErrorMessage), order.IdempotencyKey, order.CreatedAt, order.UpdatedAt)
 		if err != nil {
-			return nil, nil, false, err
+			return marketing.AtomicGrantResult{}, err
 		}
 	}
-	for _, message := range messages {
+	for _, message := range cmd.OutboxMessages {
 		_, err = tx.ExecContext(ctx, `
 			INSERT INTO marketing_outbox (
 				id, tenant_id, message_type, target_channel, target_ref, payload_json,
@@ -302,13 +308,17 @@ func (r *Repository) CreateGrantOutboxesWithQuota(ctx context.Context, activityI
 			message.Payload, message.SendStatus, message.RetryCount, message.NextRetryAt,
 			nullString(message.ErrorMessage), message.CreatedAt, message.UpdatedAt)
 		if err != nil {
-			return nil, nil, false, err
+			return marketing.AtomicGrantResult{}, err
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		return nil, nil, false, err
+		return marketing.AtomicGrantResult{}, err
 	}
-	return orders, messages, true, nil
+	return marketing.AtomicGrantResult{
+		Participation:  cmd.Participation,
+		GrantOrders:    cmd.GrantOrders,
+		OutboxMessages: cmd.OutboxMessages,
+	}, nil
 }
 
 func (r *Repository) CreateOutbox(ctx context.Context, message marketing.OutboxMessage) (marketing.OutboxMessage, error) {
@@ -659,6 +669,31 @@ func reserveQuotaTx(ctx context.Context, tx *sql.Tx, activityID string, quotaTyp
 		return true, nil
 	}
 	return false, nil
+}
+
+func reserveQuotaOrExceeded(ctx context.Context, tx *sql.Tx, activityID string, quotaType marketing.QuotaType, scope marketing.QuotaScope, scopeKey string, amount string) error {
+	ok, err := reserveQuotaTx(ctx, tx, activityID, quotaType, scope, scopeKey, amount)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return marketing.QuotaExceededError{Type: quotaType, Scope: scope, ScopeKey: scopeKey, Amount: amount}
+	}
+	return nil
+}
+
+func insertParticipationTx(ctx context.Context, tx *sql.Tx, participation marketing.Participation) error {
+	_, err := tx.ExecContext(ctx, `
+		INSERT INTO marketing_participation (
+			id, tenant_id, activity_id, event_inbox_id, subject_type, subject_id,
+			biz_type, biz_id, status, reject_reason, snapshot_json, idempotency_key,
+			created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+	`, participation.ID, participation.TenantID, participation.ActivityID, participation.EventInboxID,
+		participation.Subject.Type, participation.Subject.ID, participation.Biz.BizType, participation.Biz.BizID,
+		participation.Status, nullString(participation.RejectReason), participation.Snapshot,
+		participation.IdempotencyKey, participation.CreatedAt, participation.UpdatedAt)
+	return err
 }
 
 var _ marketing.Repository = (*Repository)(nil)

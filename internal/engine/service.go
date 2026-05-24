@@ -233,23 +233,19 @@ func (s *Service) evaluateActivity(ctx context.Context, inbox marketing.EventInb
 		}
 	}
 
-	participation.Status = marketing.ParticipationRewardable
-	participation.UpdatedAt = now
-	createdParticipation, err := s.repository.CreateParticipation(ctx, participation)
-	if err != nil {
-		return participation, nil, nil, false, err
-	}
-
 	var orders []marketing.GrantOrder
 	var messages []marketing.OutboxMessage
+	var stockReservations []marketing.QuotaReservation
 	totalRewardAmount := decimal.Zero()
+	participation.Status = marketing.ParticipationRewardable
+	participation.UpdatedAt = now
 	for _, configuredReward := range activity.Rewards {
 		if !configuredReward.Enabled {
 			continue
 		}
 		rewardResult, err := s.rewardCalculator.Calculate(reward.Context{Event: inbox.Event}, configuredReward)
 		if err != nil {
-			return createdParticipation, orders, messages, true, err
+			return participation, orders, messages, true, err
 		}
 
 		commandID := marketingID("cmd")
@@ -258,7 +254,7 @@ func (s *Service) evaluateActivity(ctx context.Context, inbox marketing.EventInb
 			ID:              marketingID("grant"),
 			TenantID:        activity.TenantID,
 			ActivityID:      activity.ID,
-			ParticipationID: createdParticipation.ID,
+			ParticipationID: participation.ID,
 			Subject:         inbox.Event.Subject,
 			RewardType:      rewardResult.Type,
 			RewardAmount:    rewardResult.Amount,
@@ -266,7 +262,7 @@ func (s *Service) evaluateActivity(ctx context.Context, inbox marketing.EventInb
 			BillNo:          commandID,
 			GrantStatus:     marketing.GrantPending,
 			GrantChannel:    configuredReward.GrantChannel,
-			IdempotencyKey:  createdParticipation.IdempotencyKey + ":" + configuredReward.Code,
+			IdempotencyKey:  participation.IdempotencyKey + ":" + configuredReward.Code,
 			CreatedAt:       now,
 			UpdatedAt:       now,
 		}
@@ -274,7 +270,7 @@ func (s *Service) evaluateActivity(ctx context.Context, inbox marketing.EventInb
 			CommandID:       commandID,
 			TenantID:        activity.TenantID,
 			ActivityID:      activity.ID,
-			ParticipationID: createdParticipation.ID,
+			ParticipationID: participation.ID,
 			Subject:         inbox.Event.Subject,
 			Reward:          rewardResult.Payload,
 			Reason: map[string]any{
@@ -298,24 +294,54 @@ func (s *Service) evaluateActivity(ctx context.Context, inbox marketing.EventInb
 		}
 		amount, err := decimal.Parse(rewardResult.Amount)
 		if err != nil {
-			return createdParticipation, orders, messages, true, err
+			return participation, orders, messages, true, err
 		}
 		totalRewardAmount = totalRewardAmount.Add(amount)
 		orders = append(orders, order)
 		messages = append(messages, message)
+		stockReservations = append(stockReservations, marketing.QuotaReservation{
+			Type:     marketing.QuotaStock,
+			Scope:    marketing.QuotaScopeActivity,
+			ScopeKey: configuredReward.Code,
+			Amount:   "1",
+		})
 	}
 
 	if len(orders) == 0 {
-		return createdParticipation, nil, nil, true, nil
+		createdParticipation, err := s.repository.CreateParticipation(ctx, participation)
+		return createdParticipation, nil, nil, true, err
 	}
-	orders, messages, ok, err := s.repository.CreateGrantOutboxesWithQuota(ctx, activity.ID, inbox.Event.Subject.ID, totalRewardAmount.String(), true, orders, messages)
+	atomicResult, err := s.repository.CreateParticipationGrantOutboxesWithQuota(ctx, marketing.AtomicGrantCommand{
+		Participation:     participation,
+		BudgetAmount:      totalRewardAmount.String(),
+		ReserveUserLimit:  true,
+		UserScopeKey:      inbox.Event.Subject.ID,
+		StockReservations: stockReservations,
+		GrantOrders:       orders,
+		OutboxMessages:    messages,
+	})
 	if err != nil {
-		return createdParticipation, orders, messages, true, err
+		if errors.Is(err, marketing.ErrQuotaExceeded) {
+			payload := map[string]any{
+				"activityId":   activity.ID,
+				"eventInboxId": inbox.ID,
+				"subject":      inbox.Event.Subject,
+				"biz":          inbox.Event.Biz,
+				"error":        err.Error(),
+				"reason":       "QUOTA_EXCEEDED",
+			}
+			var quotaErr marketing.QuotaExceededError
+			if errors.As(err, &quotaErr) {
+				payload["quotaType"] = quotaErr.Type
+				payload["scope"] = quotaErr.Scope
+				payload["scopeKey"] = quotaErr.ScopeKey
+				payload["amount"] = quotaErr.Amount
+			}
+			_ = s.audit(ctx, activity.TenantID, "engine", "QUOTA_EXCEEDED", "event_inbox", inbox.ID, payload)
+		}
+		return participation, orders, messages, true, err
 	}
-	if !ok {
-		return createdParticipation, orders, messages, true, marketing.ErrQuotaExceeded
-	}
-	return createdParticipation, orders, messages, true, nil
+	return atomicResult.Participation, atomicResult.GrantOrders, atomicResult.OutboxMessages, true, nil
 }
 
 func (s *Service) simulateActivity(event marketing.ActivityEvent, activity marketing.Activity) (marketing.Participation, []marketing.GrantOrder, []marketing.OutboxMessage) {

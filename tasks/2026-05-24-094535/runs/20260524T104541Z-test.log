@@ -1,0 +1,2771 @@
+startedAt=2026-05-24T10:45:41Z agent=test requirement=2026-05-24-094535
+
+2026-05-24T10:45:41.598384Z ERROR codex_core::session::session: failed to load skill /Users/tong/.codex/skills/oraclebetx-api-skill.bak.1777791572/SKILL.md: missing YAML frontmatter delimited by ---
+2026-05-24T10:45:41.598401Z ERROR codex_core::session::session: failed to load skill /Users/tong/.codex/skills/oraclebetx-run-trading.bak.1777791572/SKILL.md: missing YAML frontmatter delimited by ---
+2026-05-24T10:45:41.598403Z ERROR codex_core::session::session: failed to load skill /Users/tong/Documents/GitHub/OracleBetX-Projects/OracleBetx-Skill/oraclebetx-aws-test-env/SKILL.md: invalid YAML: mapping values are not allowed in this context at line 2 column 66
+2026-05-24T10:45:41.598405Z ERROR codex_core::session::session: failed to load skill /Users/tong/.codex/skills/oraclebetx-run-admin.bak.1777791572/SKILL.md: missing YAML frontmatter delimited by ---
+2026-05-24T10:45:41.598407Z ERROR codex_core::session::session: failed to load skill /Users/tong/.codex/skills/oraclebetx-aws-test-env.bak.1777791572/SKILL.md: invalid YAML: mapping values are not allowed in this context at line 2 column 66
+2026-05-24T10:45:41.598409Z ERROR codex_core::session::session: failed to load skill /Users/tong/.codex/skills/oraclebetx-java-build.bak.1777791572/SKILL.md: missing YAML frontmatter delimited by ---
+OpenAI Codex v0.133.0-alpha.1
+--------
+workdir: /Users/tong/Documents/GitHub/OracleBetX-Projects/ExMarketing
+model: gpt-5.5
+provider: openai
+approval: never
+sandbox: danger-full-access
+reasoning effort: medium
+reasoning summaries: none
+session id: 019e5997-3204-7ed1-9d73-997732b7c20c
+--------
+user
+你是 Test Agent。请根据 tasks/2026-05-24-094535/task.md、analysis.md、implementation.md 设计测试。
+执行必要测试并写 tasks/2026-05-24-094535/test.md。
+
+2026-05-24T10:45:41.773846Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:45:41.773858Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:45:41.774800Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:45:41.774818Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:45:41.775771Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:45:41.775779Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:45:41.776649Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:45:41.776654Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:45:41.777344Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:45:41.777355Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:45:41.778575Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:45:41.778580Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:45:42.944598Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:45:42.944606Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:45:42.945084Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:45:42.945092Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:45:42.945440Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:45:42.945446Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:45:42.945799Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:45:42.945805Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:45:42.946149Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:45:42.946152Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:45:42.946898Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:45:42.946901Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+codex
+我会先读取任务、分析和实现说明，确认改动范围后补测试设计并尽量在本地跑一遍相关验证。
+exec
+/bin/zsh -lc "sed -n '1,220p' tasks/2026-05-24-094535/task.md" in /Users/tong/Documents/GitHub/OracleBetX-Projects/ExMarketing
+exec
+/bin/zsh -lc "sed -n '1,280p' tasks/2026-05-24-094535/implementation.md" in /Users/tong/Documents/GitHub/OracleBetX-Projects/ExMarketing
+ succeeded in 0ms:
+# Task
+
+## 标题
+
+预算库存次数原子扣减
+
+## 需求 ID
+
+2026-05-24-094535
+
+## 背景
+
+根据 22-独立活动营销中台设计，活动发奖前需要对活动预算、奖励库存、用户参与次数做同一事务内的原子校验和扣减。要求：额度不足时不能生成 grant order；同一幂等事件重复请求不能重复扣减；多奖励活动要保证同一事件下所有奖励扣减和 grant/outbox 写入保持一致；失败时写审计记录并返回明确错误。
+
+## 目标
+
+- 待 Analysis Agent 细化。
+
+## 范围
+
+- 待 Analysis Agent 评估。
+
+## 非目标
+
+- 待 Analysis Agent 评估。
+
+## 风险等级
+
+高
+
+## 验收标准
+
+- 待 Analysis Agent 定义。
+
+ succeeded in 0ms:
+# Implementation
+
+## 需求
+
+2026-05-24-094535 预算库存次数原子扣减
+
+## 结果
+
+已按 `task.md`、`analysis.md`、`review.md` 在 review PASS 后完成开发。
+
+核心实现：
+
+- 新增 activity 级原子发奖仓储接口 `CreateParticipationGrantOutboxesWithQuota`。
+- `REWARDABLE` participation、BUDGET 扣减、STOCK 扣减、USER_LIMIT 扣减、grant_order 写入、outbox 写入现在在同一个事务内完成。
+- quota 扣减失败时事务回滚，不生成 grant_order/outbox，不保留 `REWARDABLE` participation。
+- STOCK quota 固定使用 `quotaType=STOCK`、`scope=ACTIVITY`、`scopeKey=<rewardCode>`，每个 enabled reward 默认扣减 `1`。
+- 缺少 BUDGET、STOCK 或 USER_LIMIT quota 行仍表示不限制，保持兼容。
+- quota 不足返回结构化 `QuotaExceededError`，HTTP 继续识别为 `409 Conflict`，message 包含 quota type/scope/scopeKey。
+- quota 不足时写 `QUOTA_EXCEEDED` 审计记录，审计在失败事务外写入，不随主事务回滚；审计 payload 包含 `quotaType`、`scope`、`scopeKey`、`amount`、`reason` 和原始错误。
+- HTTP `409 Conflict` 响应体增加稳定 `code=QUOTA_EXCEEDED` 以及 `quotaType/scope/scopeKey` 字段，调用方可区分 BUDGET、STOCK、USER_LIMIT。
+- 内存仓储与 PostgreSQL 仓储实现同一 all-or-nothing 语义。
+
+## 主要改动
+
+- `internal/marketing/model.go`
+  - 增加 `QuotaReservation`、`AtomicGrantCommand`、`AtomicGrantResult`、`QuotaExceededError`。
+- `internal/marketing/repository.go`
+  - 用 activity 级原子接口替换旧的 grant/outbox quota 接口。
+- `internal/engine/service.go`
+  - 移除事务外提前写 `REWARDABLE` participation。
+  - 组装 budget/user/stock reservation 后一次性提交原子发奖事务。
+  - quota 失败时写 `QUOTA_EXCEEDED` audit。
+- `internal/postgres/repository.go`
+  - 在 PostgreSQL transaction 内插入 participation、条件扣减 quota、写 grant_order/outbox。
+  - 任一 quota 不足返回 `QuotaExceededError` 并回滚。
+- `internal/marketing/memory_repository.go`
+  - 使用 quota slice copy 先试扣，全部成功后才替换状态并写 participation/grant/outbox。
+- `internal/httpapi/handler_test.go`
+  - 增加 budget 不足返回 409 且写审计的 HTTP 行为测试。
+  - 增加 USER_LIMIT 不足返回 409 且写结构化审计的 HTTP 行为测试。
+  - 增加 STOCK 不足返回 409、不返回 rewardable/grant/outbox 结果且写结构化审计的 HTTP 行为测试。
+- `internal/marketing/memory_repository_test.go`
+  - 增加内存仓储多 reward 库存不足 rollback 测试。
+  - 增加重复 inbox 不重复扣减测试。
+- `internal/postgres/repository_integration_test.go`
+  - 增加 PostgreSQL 集成测试，验证第二个 reward 库存不足时 participation/grant/outbox/quota 全部回滚。
+- `docs/architecture.md`
+  - 同步 activity 级原子事务、STOCK scopeKey 和失败审计。
+- `docs/api.md`
+  - 同步 STOCK quota 创建示例、处理流程、结构化 409 body 和 `QUOTA_EXCEEDED` audit payload。
+- `docs/data-model.md`
+  - 同步 quota 约定、participation 事务语义和 `QUOTA_EXCEEDED` audit action。
+
+## 验证
+
+已执行：
+
+```bash
+go test ./...
+go build ./...
+docker compose up -d postgres
+docker compose exec -T postgres psql -U exmarketing -d exmarketing -f /docker-entrypoint-initdb.d/002_audit_fact_outbox_indexes.sql
+EX_MARKETING_DATABASE_URL='postgres://exmarketing:exmarketing@localhost:54329/exmarketing?sslmode=disable' go test ./...
+```
+
+结果均通过。
+
+本地 PostgreSQL 容器已在运行，`001_marketing_core.sql` 已由 compose 初始化过；本轮重新执行了幂等的 `002_audit_fact_outbox_indexes.sql`，随后带数据库环境变量的测试通过，其中 `internal/postgres` 集成测试实际连接本地 PostgreSQL 执行。
+
+## 边界说明
+
+- 本次保持 analysis 定义的单 activity 事务边界，没有扩大为跨 activity 全局事务。
+- 规则拒绝仍只写 `REJECTED` participation，不扣 quota，不写 grant_order/outbox。
+- 未新增 schema 字段，未引入外部业务系统依赖。
+
+exec
+/bin/zsh -lc "sed -n '1,260p' tasks/2026-05-24-094535/analysis.md" in /Users/tong/Documents/GitHub/OracleBetX-Projects/ExMarketing
+ succeeded in 0ms:
+# Analysis
+
+## Agent 指令
+
+你是 Analysis Agent。请读取本目录 task.md、项目 README.md、CLAUDE.md、docs/architecture.md 和相关代码。
+
+只做分析，不改代码，不提交。
+
+## 评分规则
+
+满分 100，低于 70 不允许进入研发：
+
+~~~text
+需求清晰度        20
+范围可控          20
+风险可控          20
+验收标准明确      20
+架构一致性        20
+~~~
+
+## 现状
+
+当前 ExMarketing 已有事件接入、活动匹配、规则计算、奖励计算、participation、grant_order、outbox、quota 和 audit 的第一版能力。
+
+已实现的关键点：
+
+- `internal/engine/service.go` 中 `ProcessEvent` 先写 `marketing_event_inbox` 做外部事件幂等，重复请求直接返回 duplicate，不再重复发奖。
+- `evaluateActivity` 会创建 participation，计算多个 reward，然后调用 `CreateGrantOutboxesWithQuota` 写 grant_order/outbox 并扣 quota。
+- `internal/postgres/repository.go` 的 `CreateGrantOutboxesWithQuota` 已在一个 PostgreSQL transaction 内扣 `BUDGET + ACTIVITY + TOTAL` 和 `USER_LIMIT + USER + subjectID`，再写 grant_order/outbox。
+- PostgreSQL quota 扣减使用条件更新 `used_value + amount <= total_value`，避免读后写式并发超扣。
+- HTTP 层对 `ErrQuotaExceeded` 返回 `409 Conflict`。
+
+主要缺口：
+
+- participation 当前在 quota 扣减事务外提前写入。若预算/次数不足，仍会留下 `REWARDABLE` participation，不满足“活动发奖前同一事务内原子校验和扣减”的严格要求。
+- 库存 `STOCK` 只在模型和文档中定义，业务发奖路径没有扣减。多奖励活动无法按每个 reward 扣对应库存。
+- `CreateGrantOutboxesWithQuota` 只接收 `totalRewardAmount` 和用户次数开关，不能表达每个 reward 的库存扣减需求。
+- quota 不足或原子扣减失败时，当前只更新 inbox failed 并返回错误，没有明确写失败审计记录。
+- 事务只覆盖单个 activity 的 quota/grant/outbox，不覆盖 participation。若一个事件命中多个活动，活动之间仍是逐个处理，不应扩大为跨活动全局事务，除非后续需求明确要求。
+- 测试目前主要覆盖 HTTP happy path 和 workflow，对 quota 不足、多奖励原子性、重复事件不重复扣减、PostgreSQL 并发条件更新缺少针对性覆盖。
+
+## 目标理解
+
+本任务要把发奖前的资源占用改成强账务语义：
+
+- 活动预算、奖励库存、用户参与次数必须在同一个事务内完成校验和扣减。
+- 扣减失败时不能生成 grant_order，也不能生成 outbox。
+- 同一幂等事件重复请求不能重复扣减预算、库存、次数。
+- 多奖励活动中，同一 activity 命中的所有 reward 的 quota 扣减、grant_order、outbox 必须 all-or-nothing。
+- 失败时要有可审计记录，并对调用方返回明确错误，quota 不足保持 `409 Conflict`。
+
+本需求的合理边界是“单个 activity 发奖事务原子化”。事件 inbox 的幂等写入仍可保留在事务外作为事件级接入门禁；同一事件命中多个活动时，各 activity 独立处理，避免把多个活动和外部顺序策略绑成一个过大的事务。
+
+## 方案
+
+建议按“最小可控改动”实现：
+
+1. 重构 repository 原子接口
+
+将当前 `CreateGrantOutboxesWithQuota` 扩展或替换为一个更明确的 activity 级事务接口，例如：
+
+```go
+CreateParticipationGrantOutboxesWithQuota(ctx, cmd AtomicGrantCommand) (AtomicGrantResult, error)
+```
+
+该接口在一个事务内完成：
+
+- 插入 participation。
+- 原子扣 `BUDGET + ACTIVITY + TOTAL`，扣减金额为该 activity 下所有 reward amount 的合计。
+- 原子扣 `USER_LIMIT + USER + subjectID`，扣减值为 `1`。
+- 按 reward 配置扣 `STOCK`。建议默认使用 `STOCK + ACTIVITY + rewardCode` 或 `STOCK + ACTIVITY + rewardID`，需在实现阶段固定一种 scopeKey 并同步文档。
+- 插入所有 grant_order。
+- 插入所有 outbox。
+- 任一步失败则 rollback，返回明确错误和失败 quota 类型。
+
+2. 调整 engine 编排
+
+`evaluateActivity` 仍负责规则判断、奖励计算、组装 participation/grant/outbox，但不再提前写 rewardable participation。规则拒绝的 participation 可以继续单独写入 rejected，因为它不进入发奖扣减链路。
+
+发奖路径改为：规则通过 -> 计算全部 reward -> 组装 atomic command -> repository 事务内写 participation、扣 quota、写 grant/outbox。
+
+3. 库存扣减配置
+
+需要定义 reward 到库存 quota 的映射。可采用不改 schema 的方式：
+
+- 每个 enabled reward 默认扣 1 个库存。
+- 库存 quota 行使用 `quotaType=STOCK`、`scope=ACTIVITY`、`scopeKey=<rewardCode>`。
+- 若不存在对应 STOCK quota，沿用现有 quota 语义：不存在即无限制。
+
+如果后续需要一个 reward 扣多份库存或按 payload 扣库存，可以再在 `rewardConfig` 增加字段；本任务不建议扩 schema。
+
+4. 失败审计
+
+新增 audit action，例如：
+
+```text
+EVENT_REWARD_REJECTED
+QUOTA_EXCEEDED
+```
+
+当预算、库存或用户次数不足时，写入 tenant、activityId、eventInboxId、subject、biz、quotaType、scope、scopeKey、amount、reason。审计记录可在事务外写入；它不应阻断主错误返回。
+
+5. 错误表达
+
+保留 `marketing.ErrQuotaExceeded` 供 HTTP 层识别 `409`。为便于审计和测试，可以增加结构化错误或包装错误，包含 quota 类型：
+
+```text
+quota exceeded: BUDGET ACTIVITY TOTAL
+quota exceeded: STOCK ACTIVITY <rewardCode>
+quota exceeded: USER_LIMIT USER <subjectID>
+```
+
+HTTP 对外仍可返回简洁错误，测试可断言状态码和不产生 grant/outbox。
+
+6. 内存仓储对齐
+
+`MemoryRepository` 只用于本地快速开发，但必须同步实现同一接口和同一 all-or-nothing 语义，使用现有 mutex 即可。PostgreSQL 语义仍以数据库测试为准。
+
+## 改动范围
+
+预计修改：
+
+- `internal/marketing/repository.go`：调整原子发奖事务接口和必要 command/result 类型。
+- `internal/marketing/model.go`：如需要，增加结构化 quota 错误或 audit action 常量；不建议新增表字段。
+- `internal/engine/service.go`：把 rewardable participation 写入移动到原子事务内；接入库存 quota；失败审计。
+- `internal/postgres/repository.go`：实现 participation + budget + stock + user limit + grant_order + outbox 的单事务写入。
+- `internal/marketing/memory_repository.go`：对齐原子接口，保证本地模式行为一致。
+- `internal/httpapi/handler.go`：确认 quota 错误继续返回 `409 Conflict`，必要时保留更明确错误消息。
+- `internal/httpapi/handler_test.go` 或新增 engine/repository 测试：补充重复事件、quota 不足、多奖励 all-or-nothing。
+- `docs/api.md`、`docs/data-model.md`、`docs/architecture.md`：同步 STOCK quota 的 scopeKey 约定、失败审计 action 和处理流程。
+
+不建议修改：
+
+- 不新增外部业务系统依赖。
+- 不连接外部业务库。
+- 不直接发奖或改用户余额。
+- 不扩大为跨活动全局事务。
+
+## 风险点
+
+- 高风险：这是预算、库存、次数和发奖单的账务安全路径，必须以 PostgreSQL 事务和条件更新为准，不能只靠内存仓储测试。
+- 事务边界风险：如果继续在事务外写 rewardable participation，会留下“失败但可发奖”的脏状态；这是必须修复的 P0 点。
+- 库存映射风险：`STOCK` 的 `scopeKey` 若不固定，会导致运营创建 quota 和发奖扣减不一致。实现前必须在代码和文档中统一为 rewardCode 或 rewardID。
+- 多奖励风险：任一 reward 的库存不足时，所有预算、次数、grant_order、outbox 都必须 rollback。
+- 幂等风险：外部事件幂等已在 inbox 层处理，但 participation/grant_order 仍有唯一键。实现时要保留唯一键兜底，避免并发重复请求在异常路径重复扣减。
+- 审计风险：失败审计不能放在同一个会 rollback 的事务里，否则失败原因会随事务回滚丢失。
+- 兼容风险：当前不存在 quota 表示无限制。新增 STOCK 扣减时也应沿用“不存在对应 STOCK quota 即不限制”，避免破坏未配置库存的现有活动。
+
+## 验收方式
+
+最低验证：
+
+```bash
+go test ./...
+go build ./...
+```
+
+必须增加并通过的行为测试：
+
+- 预算不足：返回 `409`，不生成 grant_order，不生成 outbox，不扣 USER_LIMIT/STOCK，写失败审计。
+- 用户次数不足：返回 `409`，不生成 grant_order/outbox，不扣 BUDGET/STOCK，写失败审计。
+- 单个 reward 库存不足：返回 `409`，不生成 grant_order/outbox，不扣 BUDGET/USER_LIMIT，写失败审计。
+- 多 reward 活动：第二个 reward 库存不足时，第一个 reward 的库存扣减也 rollback，grant_order/outbox 均为空。
+- 重复幂等事件：第一次成功后第二次返回 duplicate，budget/stock/user limit 的 used_value 不增加，grant_order/outbox 数量不增加。
+- 缺少 BUDGET、USER_LIMIT 或 STOCK quota 行时按无限制处理，兼容现有活动。
+- 规则拒绝时只写 rejected participation，不扣 quota，不写 grant_order/outbox。
+
+PostgreSQL smoke 必须执行：
+
+```bash
+docker compose up -d postgres
+docker compose exec -T postgres psql -U exmarketing -d exmarketing -f /docker-entrypoint-initdb.d/001_marketing_core.sql
+docker compose exec -T postgres psql -U exmarketing -d exmarketing -f /docker-entrypoint-initdb.d/002_audit_fact_outbox_indexes.sql
+EX_MARKETING_DATABASE_URL='postgres://exmarketing:exmarketing@localhost:54329/exmarketing?sslmode=disable' go test ./...
+```
+
+建议额外做一个 PostgreSQL 并发测试：同一 activity 预算或库存只剩 1 份时，并发提交两个不同幂等事件，最终只能一个成功，quota used_value 不超过 total_value。
+
+## Score
+
+~~~text
+82
+~~~
+
+## Decision
+
+~~~text
+PASS
+~~~
+
+需求：2026-05-24-094535
+
+exec
+/bin/zsh -lc 'rg --files' in /Users/tong/Documents/GitHub/OracleBetX-Projects/ExMarketing
+ succeeded in 0ms:
+CLAUDE.md
+agent-runtime/src/exmarketing_agents/__init__.py
+agent-runtime/src/exmarketing_agents/graph.py
+agent-runtime/langgraph.json
+agent-runtime/README.md
+agent-runtime/pyproject.toml
+docker-compose.yml
+db/migration/001_marketing_core.sql
+db/migration/002_audit_fact_outbox_indexes.sql
+README.md
+docs/automation.md
+docs/langgraph-studio.md
+docs/data-model.md
+docs/roadmap.md
+docs/workflow.md
+docs/api.md
+docs/operations.md
+docs/architecture.md
+requirements/backlog.json
+go.sum
+internal/engine/service.go
+internal/worker/outbox_worker.go
+internal/fact/client.go
+internal/marketing/memory_repository_test.go
+internal/marketing/repository.go
+internal/marketing/model.go
+internal/marketing/memory_repository.go
+internal/marketing/id.go
+internal/reward/calculator.go
+internal/workflow/report.go
+internal/workflow/run_history.go
+internal/workflow/model.go
+internal/workflow/agent_test.go
+internal/workflow/agent.go
+internal/workflow/agent_status.go
+internal/workflow/store.go
+internal/workflow/taskfiles.go
+internal/postgres/repository.go
+internal/postgres/repository_integration_test.go
+internal/rule/evaluator.go
+internal/httpapi/workflow_admin.go
+internal/httpapi/handler_test.go
+internal/httpapi/handler.go
+internal/plugin/plugin.go
+internal/decimal/decimal.go
+web/admin/index.html
+go.mod
+tasks/2026-05-24-example-automated-requirement/test-plan.md
+tasks/2026-05-24-example-automated-requirement/test.md
+tasks/2026-05-24-example-automated-requirement/review.md
+tasks/2026-05-24-example-automated-requirement/commit.md
+tasks/2026-05-24-example-automated-requirement/task.md
+tasks/2026-05-24-example-automated-requirement/agent-prompts.md
+tasks/2026-05-24-example-automated-requirement/analysis.md
+tasks/2026-05-24-example-automated-requirement/agent-status.json
+tasks/2026-05-24-example-automated-requirement/implementation.md
+tasks/README.md
+tasks/2026-05-24-094535/test-plan.md
+tasks/2026-05-24-094535/agent-status.json
+tasks/2026-05-24-094535/agent-report.md
+tasks/2026-05-24-094535/implementation.md
+tasks/2026-05-24-094535/runs/20260524T104541Z-test.log
+tasks/2026-05-24-094535/runs/20260524T101931Z-dev.log
+tasks/2026-05-24-094535/runs/20260524T101932Z-test.log
+tasks/2026-05-24-094535/runs/20260524T100215Z-review.log
+tasks/2026-05-24-094535/runs/20260524T104033Z-test-plan.log
+tasks/2026-05-24-094535/runs/20260524T095233Z-analysis.log
+tasks/2026-05-24-094535/runs/20260524T104205Z-dev.log
+tasks/2026-05-24-094535/runs/20260524T095450Z-analysis.log
+tasks/2026-05-24-094535/test.md
+tasks/2026-05-24-094535/review.md
+tasks/2026-05-24-094535/commit.md
+tasks/2026-05-24-094535/task.md
+tasks/2026-05-24-094535/agent-prompts.md
+tasks/2026-05-24-094535/analysis.md
+tasks/_template/implementation.md
+tasks/_template/test.md
+tasks/_template/review.md
+tasks/_template/commit.md
+tasks/_template/task.md
+tasks/_template/analysis.md
+tasks/2026-05-24-example-workflow/task.md
+tasks/2026-05-24-example-workflow/analysis.md
+tasks/2026-05-24-example-workflow/implementation.md
+tasks/2026-05-24-example-workflow/commit.md
+tasks/2026-05-24-example-workflow/review.md
+tasks/2026-05-24-example-workflow/test.md
+cmd/workflowctl/main.go
+cmd/exmarketing/main.go
+
+2026-05-24T10:45:50.677473Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:45:50.677482Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:45:50.677857Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:45:50.677861Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:45:50.678320Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:45:50.678325Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:45:50.678770Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:45:50.678777Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:45:50.679244Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:45:50.679250Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:45:50.680181Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:45:50.680185Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+codex
+我看到该任务目录里已经有 `test.md` 和测试运行日志。我会先核对现有测试文档与代码测试是否覆盖 analysis 里的验收点，再决定是补充还是重写测试结论。
+exec
+/bin/zsh -lc "sed -n '1,260p' tasks/2026-05-24-094535/test-plan.md" in /Users/tong/Documents/GitHub/OracleBetX-Projects/ExMarketing
+ succeeded in 0ms:
+# Test Plan
+
+## Scope
+
+需求：`2026-05-24-094535` 预算库存次数原子扣减。
+
+本测试计划在 `review.md` Decision 为 `PASS` 后设计，用于指导 Dev 开发后的验证。只覆盖测试设计，不修改业务代码。
+
+核心验证目标：
+
+- 活动预算 `BUDGET`、奖励库存 `STOCK`、用户参与次数 `USER_LIMIT` 在同一 activity 发奖事务内原子校验和扣减。
+- 额度不足时不生成 `grant_order`，不生成 outbox，不留下 `REWARDABLE` 脏 participation。
+- 同一幂等事件重复请求不重复扣减预算、库存、次数。
+- 多奖励活动中任一 reward 失败时，全部 quota、grant、outbox 一起 rollback。
+- PostgreSQL 条件更新在并发下不超扣。
+
+## Test Strategy
+
+测试分三层：
+
+1. Engine / repository 行为测试
+   - 使用内存仓储或测试仓储快速覆盖编排语义。
+   - 重点断言 participation、grant_order、outbox、quota used_value、audit 的最终状态。
+
+2. HTTP 行为测试
+   - 通过事件接入 API 验证外部可见状态码、重复事件响应和错误表达。
+   - quota 不足统一验证 `409 Conflict`，并检查错误 body 能区分 `BUDGET`、`STOCK`、`USER_LIMIT` 中至少一种失败原因。
+
+3. PostgreSQL smoke / concurrency 测试
+   - 使用真实 PostgreSQL schema 验证事务、唯一键、条件更新和 rollback。
+   - 并发测试必须以 PostgreSQL 为准，不能只依赖内存仓储。
+
+## Test Cases
+
+### TC01 Happy Path: 单奖励正常发奖
+
+前置数据：
+
+- 活动启用，规则匹配。
+- 配置一个 reward，`rewardCode=RWD_A`，奖励金额 `100`。
+- quota：
+  - `BUDGET + ACTIVITY + TOTAL` total 足够。
+  - `STOCK + ACTIVITY + RWD_A` total 足够。
+  - `USER_LIMIT + USER + <subjectID>` total 足够。
+
+步骤：
+
+- 发送一个新的幂等事件。
+
+断言：
+
+- 返回成功。
+- 创建一条 `REWARDABLE` participation。
+- 创建一条 `grant_order`。
+- 创建一条 outbox。
+- `BUDGET.used_value` 增加 `100`。
+- `STOCK(RWD_A).used_value` 增加 `1`。
+- `USER_LIMIT(subjectID).used_value` 增加 `1`。
+- 不写 quota 失败审计。
+
+### TC02 Happy Path: 缺少 quota 行按无限制处理
+
+前置数据：
+
+- 活动启用，规则匹配。
+- 不创建 `BUDGET`、`STOCK` 或 `USER_LIMIT` quota 行。
+
+步骤：
+
+- 发送一个新的幂等事件。
+
+断言：
+
+- 返回成功。
+- 创建 `REWARDABLE` participation、`grant_order`、outbox。
+- 不因为 quota 行缺失返回 `409`。
+- 不写 quota 失败审计。
+
+### TC03 规则拒绝
+
+前置数据：
+
+- 活动启用，但事件不满足活动规则。
+- 配置足够 quota。
+
+步骤：
+
+- 发送一个新的幂等事件。
+
+断言：
+
+- 返回成功或业务定义的 no reward 结果。
+- 只写 rejected participation。
+- 不扣 `BUDGET`、`STOCK`、`USER_LIMIT`。
+- 不创建 `grant_order`。
+- 不创建 outbox。
+- 不写 quota 失败审计。
+
+### TC04 预算不足
+
+前置数据：
+
+- 活动启用，规则匹配。
+- reward 金额 `100`。
+- `BUDGET + ACTIVITY + TOTAL` 剩余额度小于 `100`。
+- `STOCK` 和 `USER_LIMIT` 均足够。
+
+步骤：
+
+- 发送一个新的幂等事件。
+
+断言：
+
+- HTTP 返回 `409 Conflict`。
+- 错误 body 或内部错误原因能定位为 `BUDGET` 不足。
+- 不创建 `grant_order`。
+- 不创建 outbox。
+- 不创建 `REWARDABLE` participation；也不能留下 rewardable 脏状态。
+- `STOCK.used_value` 不变。
+- `USER_LIMIT.used_value` 不变。
+- 写入 quota 失败审计，包含 tenant、activityId、eventInboxId、subject、quotaType=`BUDGET`、reason。
+
+### TC05 用户参与次数不足
+
+前置数据：
+
+- 活动启用，规则匹配。
+- `USER_LIMIT + USER + <subjectID>` 已达到 total。
+- `BUDGET` 和 `STOCK` 均足够。
+
+步骤：
+
+- 发送一个新的幂等事件。
+
+断言：
+
+- HTTP 返回 `409 Conflict`。
+- 错误原因能定位为 `USER_LIMIT` 不足。
+- 不创建 `grant_order`。
+- 不创建 outbox。
+- 不创建 `REWARDABLE` participation。
+- `BUDGET.used_value` 不变。
+- `STOCK.used_value` 不变。
+- 写入 quota 失败审计，quotaType=`USER_LIMIT`。
+
+### TC06 单奖励库存不足
+
+前置数据：
+
+- 活动启用，规则匹配。
+- `STOCK + ACTIVITY + RWD_A` 已达到 total。
+- `BUDGET` 和 `USER_LIMIT` 均足够。
+
+步骤：
+
+- 发送一个新的幂等事件。
+
+断言：
+
+- HTTP 返回 `409 Conflict`。
+- 错误原因能定位为 `STOCK` 不足，scopeKey 为 `RWD_A`。
+- 不创建 `grant_order`。
+- 不创建 outbox。
+- 不创建 `REWARDABLE` participation。
+- `BUDGET.used_value` 不变。
+- `USER_LIMIT.used_value` 不变。
+- 写入 quota 失败审计，quotaType=`STOCK`。
+
+### TC07 多奖励 all-or-nothing: 第二个 reward 库存不足
+
+前置数据：
+
+- 活动启用，规则匹配。
+- 配置两个 reward：`RWD_A` 和 `RWD_B`。
+- `BUDGET` 足够覆盖两个 reward 金额合计。
+- `USER_LIMIT` 足够。
+- `STOCK(RWD_A)` 足够。
+- `STOCK(RWD_B)` 不足。
+
+步骤：
+
+- 发送一个新的幂等事件。
+
+断言：
+
+- HTTP 返回 `409 Conflict`。
+- 不创建任何 `grant_order`。
+- 不创建任何 outbox。
+- 不创建 `REWARDABLE` participation。
+- `BUDGET.used_value` 不变。
+- `USER_LIMIT.used_value` 不变。
+- `STOCK(RWD_A).used_value` 不变，证明第一个 reward 的库存扣减 rollback。
+- `STOCK(RWD_B).used_value` 不变。
+- 写入 quota 失败审计，quotaType=`STOCK`，scopeKey=`RWD_B`。
+
+### TC08 重复幂等事件: 成功后重复
+
+前置数据：
+
+- 活动启用，规则匹配。
+- quota 足够。
+- 使用同一个 tenant、biz、idempotency key 或外部事件 ID。
+
+步骤：
+
+- 第一次发送事件。
+- 第二次发送完全相同幂等事件。
+
+断言：
+
+- 第一次成功。
+- 第二次返回 duplicate 或等价的幂等响应。
+- participation 数量不增加。
+- `grant_order` 数量不增加。
+- outbox 数量不增加。
+- `BUDGET.used_value`、`STOCK.used_value`、`USER_LIMIT.used_value` 在第二次后不再增加。
+
+### TC09 重复幂等事件: 额度不足失败后重复
+
+前置数据：
+
+- 活动启用，规则匹配。
+- `BUDGET` 不足。
+- 使用同一个幂等事件。
+
+步骤：
+
+- 第一次发送事件。
+- 第二次发送相同幂等事件。
+
+断言：
+
+- 第一次返回 `409 Conflict`。
+- 第二次按 inbox 幂等策略返回 duplicate 或同一失败结果，必须不触发新的 quota 扣减。
+- 不创建 `grant_order`。
+- 不创建 outbox。
+- 不创建 `REWARDABLE` participation。
+- quota used_value 均不变。
+- 审计记录数量符合实现约定：允许只记录首次失败；若重复请求也记录，必须能通过 eventInboxId 或 duplicate 标识区分，不能伪造成新的发奖失败。
+
+### TC10 PostgreSQL 并发: 预算只剩 1 份
+
+前置数据：
+
+- 使用 PostgreSQL。
+- 活动启用，规则匹配。
+- reward 金额 `100`。
+- `BUDGET` total 只允许一次成功。
+- `STOCK` 和 `USER_LIMIT` 足够。
+- 准备两个不同幂等事件，subject 可相同或不同。
+
+步骤：
+
+- 并发提交两个事件。
+
+断言：
+
+- 最终只能一个成功，另一个返回 `409 Conflict`。
+- `BUDGET.used_value` 不超过 total。
+- 只创建成功事件对应的 `grant_order` 和 outbox。
+
+exec
+/bin/zsh -lc 'git status --short' in /Users/tong/Documents/GitHub/OracleBetX-Projects/ExMarketing
+exec
+/bin/zsh -lc "sed -n '1,260p' tasks/2026-05-24-094535/test.md" in /Users/tong/Documents/GitHub/OracleBetX-Projects/ExMarketing
+ succeeded in 0ms:
+ M README.md
+ M docs/architecture.md
+ M internal/engine/service.go
+ M internal/httpapi/handler.go
+ M internal/httpapi/handler_test.go
+ M internal/marketing/memory_repository.go
+ M internal/marketing/model.go
+ M internal/marketing/repository.go
+ M internal/postgres/repository.go
+ M web/admin/index.html
+?? CLAUDE.md
+?? agent-runtime/
+?? cmd/workflowctl/
+?? docs/api.md
+?? docs/automation.md
+?? docs/data-model.md
+?? docs/langgraph-studio.md
+?? docs/operations.md
+?? docs/roadmap.md
+?? docs/workflow.md
+?? internal/httpapi/workflow_admin.go
+?? internal/marketing/memory_repository_test.go
+?? internal/postgres/repository_integration_test.go
+?? internal/workflow/
+?? requirements/
+?? tasks/
+
+ succeeded in 0ms:
+# Test
+
+## Agent 指令
+
+你是 Test Agent。请根据 task.md、analysis.md 和 implementation.md 设计并执行测试。
+
+最低要求：
+
+~~~bash
+go test ./...
+go build ./...
+~~~
+
+## Test Cases
+
+### 设计用例
+
+1. 最低编译与单元测试回归：
+   - `go test ./...`
+   - `go build ./...`
+2. PostgreSQL smoke：
+   - 启动 `postgres` 容器。
+   - 重新应用 migration。
+   - 设置 `EX_MARKETING_DATABASE_URL` 后执行 `go test ./...`。
+3. 需求级原子扣减测试：
+   - 预算不足：应返回 `409`，不生成 grant_order/outbox，不保留 `REWARDABLE` participation，不扣 USER_LIMIT/STOCK，写失败审计。
+   - 用户次数不足：应返回 `409`，不生成 grant_order/outbox，不扣 BUDGET/STOCK，写失败审计。
+   - 单奖励库存不足：应返回 `409`，不生成 grant_order/outbox，不扣 BUDGET/USER_LIMIT，写失败审计。
+   - 多奖励活动第二个 reward 库存不足：第一个 reward 的库存扣减也 rollback，grant_order/outbox 均为空。
+   - 重复幂等事件：第一次成功后第二次 duplicate，不重复扣 BUDGET/STOCK/USER_LIMIT，不重复生成 grant_order/outbox。
+   - 缺少 BUDGET/USER_LIMIT/STOCK quota 行：按无限制处理，兼容既有活动。
+   - 规则拒绝：只写 rejected participation，不扣 quota，不写 grant_order/outbox。
+
+### 实际可执行性结论
+
+需求级原子扣减测试无法落地执行，因为当前实现仍未包含本需求要求的核心改动：
+
+- `internal/marketing/repository.go:20` 仍是旧接口 `CreateGrantOutboxesWithQuota(...)`，没有 activity 级 `participation + quota + grant_order + outbox` 原子命令。
+- `internal/engine/service.go:236-239` 仍在 quota 扣减事务前创建 `REWARDABLE` participation。预算/次数不足时会留下脏 participation，不满足验收标准。
+- `internal/engine/service.go:311` 仍只传 `totalRewardAmount` 和用户 ID 给 repository，没有传每个 reward 的库存扣减信息。
+- `internal/postgres/repository.go:270-279` 只扣 `BUDGET ACTIVITY TOTAL` 和 `USER_LIMIT USER <subjectID>`，未扣 `STOCK ACTIVITY <rewardCode>`。
+- `internal/marketing/memory_repository.go:141-147` 同样只扣 BUDGET/USER_LIMIT，未实现 STOCK 和 participation 同事务语义。
+- 未发现 `EVENT_REWARD_REJECTED` 或 `QUOTA_EXCEEDED` 等失败审计 action 的实现。
+
+因此本轮只能完成编译/现有测试/静态核验，不能判定需求通过。
+
+## Commands
+
+~~~bash
+go test ./...
+go build ./...
+docker compose up -d postgres
+docker compose exec -T postgres psql -U exmarketing -d exmarketing -f /docker-entrypoint-initdb.d/001_marketing_core.sql
+docker compose exec -T postgres psql -U exmarketing -d exmarketing -f /docker-entrypoint-initdb.d/002_audit_fact_outbox_indexes.sql
+EX_MARKETING_DATABASE_URL='postgres://exmarketing:exmarketing@localhost:54329/exmarketing?sslmode=disable' go test ./...
+rg -n "CreateGrantOutboxesWithQuota|CreateParticipationGrant|QuotaStock|EVENT_REWARD_REJECTED|QUOTA_EXCEEDED|ParticipationRewardable" internal docs
+~~~
+
+## Result
+
+~~~text
+FAIL
+~~~
+
+## Evidence
+
+- `go test ./...`：PASS。
+- `go build ./...`：PASS。
+- `docker compose up -d postgres`：PASS，`exmarketing-postgres` already running。
+- `001_marketing_core.sql`：FAIL/不可重复执行，因表已存在报 `relation "... " already exists`；说明本地库已初始化，但该 migration 本身不是幂等脚本。
+- `002_audit_fact_outbox_indexes.sql`：PASS，表/索引已存在时跳过或创建成功。
+- `EX_MARKETING_DATABASE_URL=... go test ./...`：PASS，但当前测试套件没有覆盖本需求的 PostgreSQL 原子扣减行为。
+- 静态核验：FAIL，核心实现仍为旧 quota/grant/outbox 接口，未覆盖 participation 同事务、STOCK 扣减、多奖励库存 rollback、失败审计。
+
+本需求测试结论为 FAIL：现有代码通过基础回归，但未实现 `tasks/2026-05-24-094535/analysis.md` 定义的验收标准，无法通过需求级测试。
+
+需求：2026-05-24-094535
+
+exec
+/bin/zsh -lc 'rg -n "Quota|quota|STOCK|USER_LIMIT|duplicate|Atomic|QUOTA_EXCEEDED|CreateParticipation" internal -S' in /Users/tong/Documents/GitHub/OracleBetX-Projects/ExMarketing
+ succeeded in 0ms:
+internal/engine/service.go:72:func (s *Service) CreateQuota(ctx context.Context, cmd marketing.CreateQuotaCommand) (marketing.Quota, error) {
+internal/engine/service.go:74:		return marketing.Quota{}, err
+internal/engine/service.go:77:	quota := marketing.Quota{
+internal/engine/service.go:78:		ID:          marketingID("quota"),
+internal/engine/service.go:90:	created, err := s.repository.CreateQuota(ctx, quota)
+internal/engine/service.go:92:		return marketing.Quota{}, err
+internal/engine/service.go:94:	_ = s.audit(ctx, "", "system", "CREATE_QUOTA", "quota", created.ID, created)
+internal/engine/service.go:116:	inbox, duplicate, err := s.repository.CreateInbox(ctx, inbox)
+internal/engine/service.go:120:	if duplicate {
+internal/engine/service.go:231:			created, err := s.repository.CreateParticipation(ctx, participation)
+internal/engine/service.go:238:	var stockReservations []marketing.QuotaReservation
+internal/engine/service.go:302:		stockReservations = append(stockReservations, marketing.QuotaReservation{
+internal/engine/service.go:303:			Type:     marketing.QuotaStock,
+internal/engine/service.go:304:			Scope:    marketing.QuotaScopeActivity,
+internal/engine/service.go:311:		createdParticipation, err := s.repository.CreateParticipation(ctx, participation)
+internal/engine/service.go:314:	atomicResult, err := s.repository.CreateParticipationGrantOutboxesWithQuota(ctx, marketing.AtomicGrantCommand{
+internal/engine/service.go:324:		if errors.Is(err, marketing.ErrQuotaExceeded) {
+internal/engine/service.go:331:				"reason":       "QUOTA_EXCEEDED",
+internal/engine/service.go:333:			var quotaErr marketing.QuotaExceededError
+internal/engine/service.go:334:			if errors.As(err, &quotaErr) {
+internal/engine/service.go:335:				payload["quotaType"] = quotaErr.Type
+internal/engine/service.go:336:				payload["scope"] = quotaErr.Scope
+internal/engine/service.go:337:				payload["scopeKey"] = quotaErr.ScopeKey
+internal/engine/service.go:338:				payload["amount"] = quotaErr.Amount
+internal/engine/service.go:340:			_ = s.audit(ctx, activity.TenantID, "engine", "QUOTA_EXCEEDED", "event_inbox", inbox.ID, payload)
+internal/marketing/memory_repository_test.go:10:func TestMemoryAtomicGrantRollsBackWhenSecondRewardStockExceeded(t *testing.T) {
+internal/marketing/memory_repository_test.go:14:	repo.quotas = []Quota{
+internal/marketing/memory_repository_test.go:15:		{ID: "quota_budget", ActivityID: activityID, Type: QuotaBudget, Scope: QuotaScopeActivity, ScopeKey: "TOTAL", TotalValue: "100", UsedValue: "0", FrozenValue: "0", Version: 1, CreatedAt: now, UpdatedAt: now},
+internal/marketing/memory_repository_test.go:16:		{ID: "quota_user", ActivityID: activityID, Type: QuotaUserLimit, Scope: QuotaScopeUser, ScopeKey: "user_1", TotalValue: "1", UsedValue: "0", FrozenValue: "0", Version: 1, CreatedAt: now, UpdatedAt: now},
+internal/marketing/memory_repository_test.go:17:		{ID: "quota_stock_a", ActivityID: activityID, Type: QuotaStock, Scope: QuotaScopeActivity, ScopeKey: "REWARD_A", TotalValue: "1", UsedValue: "0", FrozenValue: "0", Version: 1, CreatedAt: now, UpdatedAt: now},
+internal/marketing/memory_repository_test.go:18:		{ID: "quota_stock_b", ActivityID: activityID, Type: QuotaStock, Scope: QuotaScopeActivity, ScopeKey: "REWARD_B", TotalValue: "0", UsedValue: "0", FrozenValue: "0", Version: 1, CreatedAt: now, UpdatedAt: now},
+internal/marketing/memory_repository_test.go:21:	_, err := repo.CreateParticipationGrantOutboxesWithQuota(context.Background(), AtomicGrantCommand{
+internal/marketing/memory_repository_test.go:38:		StockReservations: []QuotaReservation{
+internal/marketing/memory_repository_test.go:39:			{Type: QuotaStock, Scope: QuotaScopeActivity, ScopeKey: "REWARD_A", Amount: "1"},
+internal/marketing/memory_repository_test.go:40:			{Type: QuotaStock, Scope: QuotaScopeActivity, ScopeKey: "REWARD_B", Amount: "1"},
+internal/marketing/memory_repository_test.go:51:	if !errors.Is(err, ErrQuotaExceeded) {
+internal/marketing/memory_repository_test.go:52:		t.Fatalf("expected quota exceeded, got %v", err)
+internal/marketing/memory_repository_test.go:57:	for _, quota := range repo.quotas {
+internal/marketing/memory_repository_test.go:58:		if quota.UsedValue != "0" {
+internal/marketing/memory_repository_test.go:59:			t.Fatalf("expected quota %s to remain unused, got %s", quota.ID, quota.UsedValue)
+internal/marketing/memory_repository_test.go:64:func TestMemoryAtomicGrantDoesNotDoubleReserveOnDuplicateInbox(t *testing.T) {
+internal/marketing/memory_repository_test.go:68:	repo.quotas = []Quota{
+internal/marketing/memory_repository_test.go:69:		{ID: "quota_budget", ActivityID: activityID, Type: QuotaBudget, Scope: QuotaScopeActivity, ScopeKey: "TOTAL", TotalValue: "100", UsedValue: "0", FrozenValue: "0", Version: 1, CreatedAt: now, UpdatedAt: now},
+internal/marketing/memory_repository_test.go:70:		{ID: "quota_stock", ActivityID: activityID, Type: QuotaStock, Scope: QuotaScopeActivity, ScopeKey: "REWARD_A", TotalValue: "1", UsedValue: "0", FrozenValue: "0", Version: 1, CreatedAt: now, UpdatedAt: now},
+internal/marketing/memory_repository_test.go:73:	if _, duplicate, err := repo.CreateInbox(context.Background(), inbox); err != nil || duplicate {
+internal/marketing/memory_repository_test.go:74:		t.Fatalf("create inbox duplicate=%v err=%v", duplicate, err)
+internal/marketing/memory_repository_test.go:76:	if _, err := repo.CreateParticipationGrantOutboxesWithQuota(context.Background(), AtomicGrantCommand{
+internal/marketing/memory_repository_test.go:79:		StockReservations: []QuotaReservation{
+internal/marketing/memory_repository_test.go:80:			{Type: QuotaStock, Scope: QuotaScopeActivity, ScopeKey: "REWARD_A", Amount: "1"},
+internal/marketing/memory_repository_test.go:87:	if _, duplicate, err := repo.CreateInbox(context.Background(), inbox); err != nil || !duplicate {
+internal/marketing/memory_repository_test.go:88:		t.Fatalf("expected duplicate inbox, duplicate=%v err=%v", duplicate, err)
+internal/marketing/memory_repository_test.go:91:		t.Fatalf("expected no duplicate grants/outbox, grants=%d outbox=%d", len(repo.grantOrders), len(repo.outboxMessages))
+internal/marketing/memory_repository_test.go:93:	for _, quota := range repo.quotas {
+internal/marketing/memory_repository_test.go:94:		if quota.Type == QuotaBudget && quota.UsedValue != "20.0000" {
+internal/marketing/memory_repository_test.go:95:			t.Fatalf("expected budget used 20, got %s", quota.UsedValue)
+internal/marketing/memory_repository_test.go:97:		if quota.Type == QuotaStock && quota.UsedValue != "1.0000" {
+internal/marketing/memory_repository_test.go:98:			t.Fatalf("expected stock used 1, got %s", quota.UsedValue)
+internal/postgres/repository_integration_test.go:13:func TestPostgresAtomicGrantRollsBackOnStockExceeded(t *testing.T) {
+internal/postgres/repository_integration_test.go:26:	cleanupPostgresAtomicTest(t, repo, prefix)
+internal/postgres/repository_integration_test.go:27:	t.Cleanup(func() { cleanupPostgresAtomicTest(t, repo, prefix) })
+internal/postgres/repository_integration_test.go:31:	for _, quota := range []marketing.Quota{
+internal/postgres/repository_integration_test.go:32:		{ID: prefix + "_budget", ActivityID: activityID, Type: marketing.QuotaBudget, Scope: marketing.QuotaScopeActivity, ScopeKey: "TOTAL", TotalValue: "100", UsedValue: "0", FrozenValue: "0", Version: 1, CreatedAt: now, UpdatedAt: now},
+internal/postgres/repository_integration_test.go:33:		{ID: prefix + "_user", ActivityID: activityID, Type: marketing.QuotaUserLimit, Scope: marketing.QuotaScopeUser, ScopeKey: "user_1", TotalValue: "1", UsedValue: "0", FrozenValue: "0", Version: 1, CreatedAt: now, UpdatedAt: now},
+internal/postgres/repository_integration_test.go:34:		{ID: prefix + "_stock_a", ActivityID: activityID, Type: marketing.QuotaStock, Scope: marketing.QuotaScopeActivity, ScopeKey: "REWARD_A", TotalValue: "1", UsedValue: "0", FrozenValue: "0", Version: 1, CreatedAt: now, UpdatedAt: now},
+internal/postgres/repository_integration_test.go:35:		{ID: prefix + "_stock_b", ActivityID: activityID, Type: marketing.QuotaStock, Scope: marketing.QuotaScopeActivity, ScopeKey: "REWARD_B", TotalValue: "0", UsedValue: "0", FrozenValue: "0", Version: 1, CreatedAt: now, UpdatedAt: now},
+internal/postgres/repository_integration_test.go:37:		if _, err := repo.CreateQuota(ctx, quota); err != nil {
+internal/postgres/repository_integration_test.go:38:			t.Fatalf("create quota %s: %v", quota.ID, err)
+internal/postgres/repository_integration_test.go:42:	_, err = repo.CreateParticipationGrantOutboxesWithQuota(ctx, marketing.AtomicGrantCommand{
+internal/postgres/repository_integration_test.go:59:		StockReservations: []marketing.QuotaReservation{
+internal/postgres/repository_integration_test.go:60:			{Type: marketing.QuotaStock, Scope: marketing.QuotaScopeActivity, ScopeKey: "REWARD_A", Amount: "1"},
+internal/postgres/repository_integration_test.go:61:			{Type: marketing.QuotaStock, Scope: marketing.QuotaScopeActivity, ScopeKey: "REWARD_B", Amount: "1"},
+internal/postgres/repository_integration_test.go:72:	if !errors.Is(err, marketing.ErrQuotaExceeded) {
+internal/postgres/repository_integration_test.go:73:		t.Fatalf("expected quota exceeded, got %v", err)
+internal/postgres/repository_integration_test.go:79:	assertPostgresCount(t, repo, `SELECT COUNT(*) FROM marketing_quota WHERE activity_id = $1 AND used_value <> 0`, activityID, 0)
+internal/postgres/repository_integration_test.go:82:func cleanupPostgresAtomicTest(t *testing.T, repo *Repository, prefix string) {
+internal/postgres/repository_integration_test.go:89:		`DELETE FROM marketing_quota WHERE id LIKE $1`,
+internal/marketing/memory_repository.go:19:	quotas             []Quota
+internal/marketing/memory_repository.go:98:func (r *MemoryRepository) CreateParticipation(ctx context.Context, participation Participation) (Participation, error) {
+internal/marketing/memory_repository.go:134:func (r *MemoryRepository) CreateParticipationGrantOutboxesWithQuota(ctx context.Context, cmd AtomicGrantCommand) (AtomicGrantResult, error) {
+internal/marketing/memory_repository.go:136:		return AtomicGrantResult{}, err
+internal/marketing/memory_repository.go:141:	nextQuotas := slices.Clone(r.quotas)
+internal/marketing/memory_repository.go:142:	if !reserveQuotaIn(nextQuotas, cmd.Participation.ActivityID, QuotaBudget, QuotaScopeActivity, "TOTAL", cmd.BudgetAmount) {
+internal/marketing/memory_repository.go:143:		return AtomicGrantResult{}, QuotaExceededError{Type: QuotaBudget, Scope: QuotaScopeActivity, ScopeKey: "TOTAL", Amount: cmd.BudgetAmount}
+internal/marketing/memory_repository.go:145:	if cmd.ReserveUserLimit && !reserveQuotaIn(nextQuotas, cmd.Participation.ActivityID, QuotaUserLimit, QuotaScopeUser, cmd.UserScopeKey, "1") {
+internal/marketing/memory_repository.go:146:		return AtomicGrantResult{}, QuotaExceededError{Type: QuotaUserLimit, Scope: QuotaScopeUser, ScopeKey: cmd.UserScopeKey, Amount: "1"}
+internal/marketing/memory_repository.go:149:		if !reserveQuotaIn(nextQuotas, cmd.Participation.ActivityID, reservation.Type, reservation.Scope, reservation.ScopeKey, reservation.Amount) {
+internal/marketing/memory_repository.go:150:			return AtomicGrantResult{}, QuotaExceededError{Type: reservation.Type, Scope: reservation.Scope, ScopeKey: reservation.ScopeKey, Amount: reservation.Amount}
+internal/marketing/memory_repository.go:153:	r.quotas = nextQuotas
+internal/marketing/memory_repository.go:157:	return AtomicGrantResult{
+internal/marketing/memory_repository.go:174:func (r *MemoryRepository) CreateQuota(ctx context.Context, quota Quota) (Quota, error) {
+internal/marketing/memory_repository.go:176:		return Quota{}, err
+internal/marketing/memory_repository.go:180:	r.quotas = append(r.quotas, quota)
+internal/marketing/memory_repository.go:181:	return quota, nil
+internal/marketing/memory_repository.go:184:func (r *MemoryRepository) ReserveQuota(ctx context.Context, activityID string, quotaType QuotaType, scope QuotaScope, scopeKey string, amount string) (bool, error) {
+internal/marketing/memory_repository.go:191:	for i := range r.quotas {
+internal/marketing/memory_repository.go:192:		q := &r.quotas[i]
+internal/marketing/memory_repository.go:193:		if q.ActivityID != activityID || q.Type != quotaType || q.Scope != scope || q.ScopeKey != scopeKey {
+internal/marketing/memory_repository.go:302:func (r *MemoryRepository) reserveQuotaLocked(activityID string, quotaType QuotaType, scope QuotaScope, scopeKey string, amount string) bool {
+internal/marketing/memory_repository.go:303:	return reserveQuotaIn(r.quotas, activityID, quotaType, scope, scopeKey, amount)
+internal/marketing/memory_repository.go:306:func reserveQuotaIn(quotas []Quota, activityID string, quotaType QuotaType, scope QuotaScope, scopeKey string, amount string) bool {
+internal/marketing/memory_repository.go:307:	for i := range quotas {
+internal/marketing/memory_repository.go:308:		q := &quotas[i]
+internal/marketing/memory_repository.go:309:		if q.ActivityID != activityID || q.Type != quotaType || q.Scope != scope || q.ScopeKey != scopeKey {
+internal/marketing/memory_repository.go:327:func (r *MemoryRepository) releaseQuotaLocked(activityID string, quotaType QuotaType, scope QuotaScope, scopeKey string, amount string) {
+internal/marketing/memory_repository.go:328:	for i := range r.quotas {
+internal/marketing/memory_repository.go:329:		q := &r.quotas[i]
+internal/marketing/memory_repository.go:330:		if q.ActivityID != activityID || q.Type != quotaType || q.Scope != scope || q.ScopeKey != scopeKey {
+internal/postgres/repository.go:217:func (r *Repository) CreateParticipation(ctx context.Context, participation marketing.Participation) (marketing.Participation, error) {
+internal/postgres/repository.go:263:func (r *Repository) CreateParticipationGrantOutboxesWithQuota(ctx context.Context, cmd marketing.AtomicGrantCommand) (marketing.AtomicGrantResult, error) {
+internal/postgres/repository.go:266:		return marketing.AtomicGrantResult{}, err
+internal/postgres/repository.go:271:		return marketing.AtomicGrantResult{}, err
+internal/postgres/repository.go:273:	if err := reserveQuotaOrExceeded(ctx, tx, cmd.Participation.ActivityID, marketing.QuotaBudget, marketing.QuotaScopeActivity, "TOTAL", cmd.BudgetAmount); err != nil {
+internal/postgres/repository.go:274:		return marketing.AtomicGrantResult{}, err
+internal/postgres/repository.go:277:		if err := reserveQuotaOrExceeded(ctx, tx, cmd.Participation.ActivityID, marketing.QuotaUserLimit, marketing.QuotaScopeUser, cmd.UserScopeKey, "1"); err != nil {
+internal/postgres/repository.go:278:			return marketing.AtomicGrantResult{}, err
+internal/postgres/repository.go:282:		if err := reserveQuotaOrExceeded(ctx, tx, cmd.Participation.ActivityID, reservation.Type, reservation.Scope, reservation.ScopeKey, reservation.Amount); err != nil {
+internal/postgres/repository.go:283:			return marketing.AtomicGrantResult{}, err
+internal/postgres/repository.go:298:			return marketing.AtomicGrantResult{}, err
+internal/postgres/repository.go:311:			return marketing.AtomicGrantResult{}, err
+internal/postgres/repository.go:315:		return marketing.AtomicGrantResult{}, err
+internal/postgres/repository.go:317:	return marketing.AtomicGrantResult{
+internal/postgres/repository.go:336:func (r *Repository) CreateQuota(ctx context.Context, quota marketing.Quota) (marketing.Quota, error) {
+internal/postgres/repository.go:338:		INSERT INTO marketing_quota (
+internal/postgres/repository.go:339:			id, activity_id, quota_type, scope, scope_key, total_value, used_value,
+internal/postgres/repository.go:342:	`, quota.ID, quota.ActivityID, quota.Type, quota.Scope, quota.ScopeKey,
+internal/postgres/repository.go:343:		emptyDecimal(quota.TotalValue), emptyDecimal(quota.UsedValue), emptyDecimal(quota.FrozenValue),
+internal/postgres/repository.go:344:		quota.Version, quota.CreatedAt, quota.UpdatedAt)
+internal/postgres/repository.go:345:	return quota, err
+internal/postgres/repository.go:348:func (r *Repository) ReserveQuota(ctx context.Context, activityID string, quotaType marketing.QuotaType, scope marketing.QuotaScope, scopeKey string, amount string) (bool, error) {
+internal/postgres/repository.go:350:		UPDATE marketing_quota
+internal/postgres/repository.go:355:		  AND quota_type = $2
+internal/postgres/repository.go:359:	`, activityID, quotaType, scope, scopeKey, emptyDecimal(amount))
+internal/postgres/repository.go:374:			SELECT 1 FROM marketing_quota
+internal/postgres/repository.go:375:			WHERE activity_id = $1 AND quota_type = $2 AND scope = $3 AND scope_key = $4
+internal/postgres/repository.go:377:	`, activityID, quotaType, scope, scopeKey).Scan(&exists)
+internal/postgres/repository.go:635:func reserveQuotaTx(ctx context.Context, tx *sql.Tx, activityID string, quotaType marketing.QuotaType, scope marketing.QuotaScope, scopeKey string, amount string) (bool, error) {
+internal/postgres/repository.go:637:		UPDATE marketing_quota
+internal/postgres/repository.go:642:		  AND quota_type = $2
+internal/postgres/repository.go:646:	`, activityID, quotaType, scope, scopeKey, emptyDecimal(amount))
+internal/postgres/repository.go:661:			SELECT 1 FROM marketing_quota
+internal/postgres/repository.go:662:			WHERE activity_id = $1 AND quota_type = $2 AND scope = $3 AND scope_key = $4
+internal/postgres/repository.go:664:	`, activityID, quotaType, scope, scopeKey).Scan(&exists)
+internal/postgres/repository.go:674:func reserveQuotaOrExceeded(ctx context.Context, tx *sql.Tx, activityID string, quotaType marketing.QuotaType, scope marketing.QuotaScope, scopeKey string, amount string) error {
+internal/postgres/repository.go:675:	ok, err := reserveQuotaTx(ctx, tx, activityID, quotaType, scope, scopeKey, amount)
+internal/postgres/repository.go:680:		return marketing.QuotaExceededError{Type: quotaType, Scope: scope, ScopeKey: scopeKey, Amount: amount}
+internal/marketing/repository.go:16:	CreateParticipation(ctx context.Context, participation Participation) (Participation, error)
+internal/marketing/repository.go:20:	CreateParticipationGrantOutboxesWithQuota(ctx context.Context, cmd AtomicGrantCommand) (AtomicGrantResult, error)
+internal/marketing/repository.go:22:	CreateQuota(ctx context.Context, quota Quota) (Quota, error)
+internal/marketing/repository.go:23:	ReserveQuota(ctx context.Context, activityID string, quotaType QuotaType, scope QuotaScope, scopeKey string, amount string) (bool, error)
+internal/httpapi/handler.go:32:	mux.HandleFunc("POST /admin/v1/quotas", h.createQuota)
+internal/httpapi/handler.go:90:func (h *Handler) createQuota(w http.ResponseWriter, r *http.Request) {
+internal/httpapi/handler.go:91:	var cmd marketing.CreateQuotaCommand
+internal/httpapi/handler.go:98:	quota, err := h.engine.CreateQuota(r.Context(), cmd)
+internal/httpapi/handler.go:103:	writeJSON(w, http.StatusCreated, quota)
+internal/httpapi/handler.go:154:		if errors.Is(err, marketing.ErrQuotaExceeded) {
+internal/httpapi/handler.go:155:			writeQuotaError(w, err)
+internal/httpapi/handler.go:302:func writeQuotaError(w http.ResponseWriter, err error) {
+internal/httpapi/handler.go:305:		"code":  "QUOTA_EXCEEDED",
+internal/httpapi/handler.go:307:	var quotaErr marketing.QuotaExceededError
+internal/httpapi/handler.go:308:	if errors.As(err, &quotaErr) {
+internal/httpapi/handler.go:309:		body["quotaType"] = quotaErr.Type
+internal/httpapi/handler.go:310:		body["scope"] = quotaErr.Scope
+internal/httpapi/handler.go:311:		body["scopeKey"] = quotaErr.ScopeKey
+internal/marketing/model.go:23:type QuotaType string
+internal/marketing/model.go:24:type QuotaScope string
+internal/marketing/model.go:87:	QuotaBudget     QuotaType = "BUDGET"
+internal/marketing/model.go:88:	QuotaStock      QuotaType = "STOCK"
+internal/marketing/model.go:89:	QuotaUserLimit  QuotaType = "USER_LIMIT"
+internal/marketing/model.go:90:	QuotaDailyLimit QuotaType = "DAILY_LIMIT"
+internal/marketing/model.go:92:	QuotaScopeActivity QuotaScope = "ACTIVITY"
+internal/marketing/model.go:93:	QuotaScopeUser     QuotaScope = "USER"
+internal/marketing/model.go:94:	QuotaScopeIP       QuotaScope = "IP"
+internal/marketing/model.go:95:	QuotaScopeDevice   QuotaScope = "DEVICE"
+internal/marketing/model.go:261:type Quota struct {
+internal/marketing/model.go:264:	Type        QuotaType  `json:"quotaType"`
+internal/marketing/model.go:265:	Scope       QuotaScope `json:"scope"`
+internal/marketing/model.go:275:type QuotaReservation struct {
+internal/marketing/model.go:276:	Type     QuotaType  `json:"quotaType"`
+internal/marketing/model.go:277:	Scope    QuotaScope `json:"scope"`
+internal/marketing/model.go:282:type AtomicGrantCommand struct {
+internal/marketing/model.go:287:	StockReservations []QuotaReservation
+internal/marketing/model.go:292:type AtomicGrantResult struct {
+internal/marketing/model.go:298:type QuotaExceededError struct {
+internal/marketing/model.go:299:	Type     QuotaType
+internal/marketing/model.go:300:	Scope    QuotaScope
+internal/marketing/model.go:305:func (e QuotaExceededError) Error() string {
+internal/marketing/model.go:306:	parts := []string{"quota exceeded"}
+internal/marketing/model.go:319:func (e QuotaExceededError) Unwrap() error {
+internal/marketing/model.go:320:	return ErrQuotaExceeded
+internal/marketing/model.go:323:type CreateQuotaCommand struct {
+internal/marketing/model.go:325:	Type       QuotaType  `json:"quotaType"`
+internal/marketing/model.go:326:	Scope      QuotaScope `json:"scope"`
+internal/marketing/model.go:373:	Duplicate      bool            `json:"duplicate"`
+internal/marketing/model.go:406:	ErrDuplicateEvent  = errors.New("duplicate event")
+internal/marketing/model.go:408:	ErrQuotaExceeded   = errors.New("quota exceeded")
+internal/marketing/model.go:471:func (cmd CreateQuotaCommand) Validate() error {
+internal/marketing/model.go:476:		return errors.New("quotaType, scope and scopeKey are required")
+internal/httpapi/handler_test.go:79:	createQuota(t, handler, activityID, marketing.QuotaBudget, marketing.QuotaScopeActivity, "TOTAL", "1")
+internal/httpapi/handler_test.go:106:	if !strings.Contains(body, "quota exceeded") || !strings.Contains(body, "BUDGET") {
+internal/httpapi/handler_test.go:107:		t.Fatalf("expected budget quota error, got: %s", body)
+internal/httpapi/handler_test.go:109:	if !strings.Contains(body, `"code":"QUOTA_EXCEEDED"`) || !strings.Contains(body, `"quotaType":"BUDGET"`) {
+internal/httpapi/handler_test.go:110:		t.Fatalf("expected structured quota error, got: %s", body)
+internal/httpapi/handler_test.go:113:		t.Fatalf("expected no grant/outbox response on quota failure, got: %s", body)
+internal/httpapi/handler_test.go:122:	if !strings.Contains(auditRec.Body.String(), `"action":"QUOTA_EXCEEDED"`) {
+internal/httpapi/handler_test.go:123:		t.Fatalf("expected quota audit record, got: %s", auditRec.Body.String())
+internal/httpapi/handler_test.go:125:	if !strings.Contains(auditRec.Body.String(), `"quotaType":"BUDGET"`) {
+internal/httpapi/handler_test.go:126:		t.Fatalf("expected structured quota audit payload, got: %s", auditRec.Body.String())
+internal/httpapi/handler_test.go:133:	createQuota(t, handler, activityID, marketing.QuotaUserLimit, marketing.QuotaScopeUser, "10001", "0.1")
+internal/httpapi/handler_test.go:141:	if !strings.Contains(body, `"code":"QUOTA_EXCEEDED"`) || !strings.Contains(body, `"quotaType":"USER_LIMIT"`) || !strings.Contains(body, `"scopeKey":"10001"`) {
+internal/httpapi/handler_test.go:142:		t.Fatalf("expected user limit quota error, got: %s", body)
+internal/httpapi/handler_test.go:147:	if !strings.Contains(auditRec.Body.String(), `"quotaType":"USER_LIMIT"`) {
+internal/httpapi/handler_test.go:155:	createQuota(t, handler, activityID, marketing.QuotaStock, marketing.QuotaScopeActivity, "FIRST_DEPOSIT_RATIO", "0.1")
+internal/httpapi/handler_test.go:163:	if !strings.Contains(body, `"code":"QUOTA_EXCEEDED"`) || !strings.Contains(body, `"quotaType":"STOCK"`) || !strings.Contains(body, `"scopeKey":"FIRST_DEPOSIT_RATIO"`) {
+internal/httpapi/handler_test.go:164:		t.Fatalf("expected stock quota error, got: %s", body)
+internal/httpapi/handler_test.go:172:	if !strings.Contains(auditRec.Body.String(), `"quotaType":"STOCK"`) {
+internal/httpapi/handler_test.go:455:func createQuota(t *testing.T, handler *Handler, activityID string, quotaType marketing.QuotaType, scope marketing.QuotaScope, scopeKey string, totalValue string) {
+internal/httpapi/handler_test.go:459:		"quotaType": "` + string(quotaType) + `",
+internal/httpapi/handler_test.go:464:	req := httptest.NewRequest(http.MethodPost, "/admin/v1/quotas", strings.NewReader(body))
+
+2026-05-24T10:45:59.218424Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:45:59.218435Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:45:59.218936Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:45:59.218941Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:45:59.219284Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:45:59.219288Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:45:59.219613Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:45:59.219616Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:45:59.219943Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:45:59.219946Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:45:59.220774Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:45:59.220782Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+codex
+现有 `test.md` 是旧结论，和当前代码不一致：代码里已经出现了新的 atomic 接口、STOCK 扣减和 `QUOTA_EXCEEDED`。我会重新执行测试，并把 `test.md` 改成当前实现的测试设计与结果。
+exec
+/bin/zsh -lc "sed -n '1,150p' internal/marketing/memory_repository_test.go" in /Users/tong/Documents/GitHub/OracleBetX-Projects/ExMarketing
+ succeeded in 0ms:
+package marketing
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+)
+
+func TestMemoryAtomicGrantRollsBackWhenSecondRewardStockExceeded(t *testing.T) {
+	repo := NewMemoryRepository()
+	now := time.Now().UTC()
+	activityID := "act_1"
+	repo.quotas = []Quota{
+		{ID: "quota_budget", ActivityID: activityID, Type: QuotaBudget, Scope: QuotaScopeActivity, ScopeKey: "TOTAL", TotalValue: "100", UsedValue: "0", FrozenValue: "0", Version: 1, CreatedAt: now, UpdatedAt: now},
+		{ID: "quota_user", ActivityID: activityID, Type: QuotaUserLimit, Scope: QuotaScopeUser, ScopeKey: "user_1", TotalValue: "1", UsedValue: "0", FrozenValue: "0", Version: 1, CreatedAt: now, UpdatedAt: now},
+		{ID: "quota_stock_a", ActivityID: activityID, Type: QuotaStock, Scope: QuotaScopeActivity, ScopeKey: "REWARD_A", TotalValue: "1", UsedValue: "0", FrozenValue: "0", Version: 1, CreatedAt: now, UpdatedAt: now},
+		{ID: "quota_stock_b", ActivityID: activityID, Type: QuotaStock, Scope: QuotaScopeActivity, ScopeKey: "REWARD_B", TotalValue: "0", UsedValue: "0", FrozenValue: "0", Version: 1, CreatedAt: now, UpdatedAt: now},
+	}
+
+	_, err := repo.CreateParticipationGrantOutboxesWithQuota(context.Background(), AtomicGrantCommand{
+		Participation: Participation{
+			ID:             "part_1",
+			TenantID:       "site_001",
+			ActivityID:     activityID,
+			EventInboxID:   "inbox_1",
+			Subject:        EventSubject{Type: "USER", ID: "user_1"},
+			Biz:            EventBiz{BizType: "DEPOSIT", BizID: "pay_1"},
+			Status:         ParticipationRewardable,
+			Snapshot:       []byte(`{}`),
+			IdempotencyKey: "idem_1",
+			CreatedAt:      now,
+			UpdatedAt:      now,
+		},
+		BudgetAmount:     "20",
+		ReserveUserLimit: true,
+		UserScopeKey:     "user_1",
+		StockReservations: []QuotaReservation{
+			{Type: QuotaStock, Scope: QuotaScopeActivity, ScopeKey: "REWARD_A", Amount: "1"},
+			{Type: QuotaStock, Scope: QuotaScopeActivity, ScopeKey: "REWARD_B", Amount: "1"},
+		},
+		GrantOrders: []GrantOrder{
+			{ID: "grant_1", ActivityID: activityID, ParticipationID: "part_1"},
+			{ID: "grant_2", ActivityID: activityID, ParticipationID: "part_1"},
+		},
+		OutboxMessages: []OutboxMessage{
+			{ID: "outbox_1"},
+			{ID: "outbox_2"},
+		},
+	})
+	if !errors.Is(err, ErrQuotaExceeded) {
+		t.Fatalf("expected quota exceeded, got %v", err)
+	}
+	if len(repo.participations) != 0 || len(repo.grantOrders) != 0 || len(repo.outboxMessages) != 0 {
+		t.Fatalf("expected rollback, got participations=%d grants=%d outbox=%d", len(repo.participations), len(repo.grantOrders), len(repo.outboxMessages))
+	}
+	for _, quota := range repo.quotas {
+		if quota.UsedValue != "0" {
+			t.Fatalf("expected quota %s to remain unused, got %s", quota.ID, quota.UsedValue)
+		}
+	}
+}
+
+func TestMemoryAtomicGrantDoesNotDoubleReserveOnDuplicateInbox(t *testing.T) {
+	repo := NewMemoryRepository()
+	now := time.Now().UTC()
+	activityID := "act_1"
+	repo.quotas = []Quota{
+		{ID: "quota_budget", ActivityID: activityID, Type: QuotaBudget, Scope: QuotaScopeActivity, ScopeKey: "TOTAL", TotalValue: "100", UsedValue: "0", FrozenValue: "0", Version: 1, CreatedAt: now, UpdatedAt: now},
+		{ID: "quota_stock", ActivityID: activityID, Type: QuotaStock, Scope: QuotaScopeActivity, ScopeKey: "REWARD_A", TotalValue: "1", UsedValue: "0", FrozenValue: "0", Version: 1, CreatedAt: now, UpdatedAt: now},
+	}
+	inbox := EventInbox{ID: "inbox_1", IdempotencyKey: "site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:pay_1"}
+	if _, duplicate, err := repo.CreateInbox(context.Background(), inbox); err != nil || duplicate {
+		t.Fatalf("create inbox duplicate=%v err=%v", duplicate, err)
+	}
+	if _, err := repo.CreateParticipationGrantOutboxesWithQuota(context.Background(), AtomicGrantCommand{
+		Participation: Participation{ID: "part_1", ActivityID: activityID, Status: ParticipationRewardable, IdempotencyKey: "part_idem_1", CreatedAt: now, UpdatedAt: now},
+		BudgetAmount:  "20",
+		StockReservations: []QuotaReservation{
+			{Type: QuotaStock, Scope: QuotaScopeActivity, ScopeKey: "REWARD_A", Amount: "1"},
+		},
+		GrantOrders:    []GrantOrder{{ID: "grant_1"}},
+		OutboxMessages: []OutboxMessage{{ID: "outbox_1"}},
+	}); err != nil {
+		t.Fatalf("atomic grant: %v", err)
+	}
+	if _, duplicate, err := repo.CreateInbox(context.Background(), inbox); err != nil || !duplicate {
+		t.Fatalf("expected duplicate inbox, duplicate=%v err=%v", duplicate, err)
+	}
+	if len(repo.grantOrders) != 1 || len(repo.outboxMessages) != 1 {
+		t.Fatalf("expected no duplicate grants/outbox, grants=%d outbox=%d", len(repo.grantOrders), len(repo.outboxMessages))
+	}
+	for _, quota := range repo.quotas {
+		if quota.Type == QuotaBudget && quota.UsedValue != "20.0000" {
+			t.Fatalf("expected budget used 20, got %s", quota.UsedValue)
+		}
+		if quota.Type == QuotaStock && quota.UsedValue != "1.0000" {
+			t.Fatalf("expected stock used 1, got %s", quota.UsedValue)
+		}
+	}
+}
+
+exec
+/bin/zsh -lc "sed -n '1,230p' internal/httpapi/handler_test.go" in /Users/tong/Documents/GitHub/OracleBetX-Projects/ExMarketing
+ succeeded in 0ms:
+package httpapi
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/ex-stack/ExMarketing/internal/engine"
+	"github.com/ex-stack/ExMarketing/internal/marketing"
+	"github.com/ex-stack/ExMarketing/internal/workflow"
+)
+
+func newTestHandler() *Handler {
+	return NewHandler(engine.NewService(marketing.NewMemoryRepository()))
+}
+
+func TestHealth(t *testing.T) {
+	handler := newTestHandler()
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	rec := httptest.NewRecorder()
+
+	handler.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), `"status":"ok"`) {
+		t.Fatalf("unexpected body: %s", rec.Body.String())
+	}
+}
+
+func TestActivityEventCreatesGrantCommand(t *testing.T) {
+	handler := newTestHandler()
+	createActivity(t, handler)
+
+	event := `{
+		"eventId": "evt_20260524_000001",
+		"eventType": "DEPOSIT_SUCCESS",
+		"sourceSystem": "payment",
+		"tenantId": "site_001",
+		"subject": {"type": "USER", "id": "10001"},
+		"biz": {"bizType": "DEPOSIT", "bizId": "pay_123"},
+		"occurredAt": "2026-05-24T12:00:00Z",
+		"attributes": {
+			"amount": "299.00",
+			"currency": "CNY",
+			"vipLevel": 3,
+			"isFirstDeposit": true
+		}
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/openapi/v1/events", strings.NewReader(event))
+	req.Header.Set("Idempotency-Key", "site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:pay_123")
+	rec := httptest.NewRecorder()
+
+	handler.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusAccepted, rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"grantOrders"`) {
+		t.Fatalf("expected grant orders, got: %s", body)
+	}
+	if !strings.Contains(body, `"rewardAmount":"59.8000"`) {
+		t.Fatalf("expected ratio reward amount, got: %s", body)
+	}
+	if !strings.Contains(body, `"outboxMessages"`) {
+		t.Fatalf("expected outbox message, got: %s", body)
+	}
+}
+
+func TestActivityEventBudgetExceededReturnsConflictAndAudit(t *testing.T) {
+	handler := newTestHandler()
+	activityID := createActivity(t, handler)
+	createQuota(t, handler, activityID, marketing.QuotaBudget, marketing.QuotaScopeActivity, "TOTAL", "1")
+
+	event := `{
+		"eventId": "evt_20260524_000002",
+		"eventType": "DEPOSIT_SUCCESS",
+		"sourceSystem": "payment",
+		"tenantId": "site_001",
+		"subject": {"type": "USER", "id": "10001"},
+		"biz": {"bizType": "DEPOSIT", "bizId": "pay_124"},
+		"occurredAt": "2026-05-24T12:00:00Z",
+		"attributes": {
+			"amount": "299.00",
+			"currency": "CNY",
+			"vipLevel": 3,
+			"isFirstDeposit": true
+		}
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/openapi/v1/events", strings.NewReader(event))
+	req.Header.Set("Idempotency-Key", "site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:pay_124")
+	rec := httptest.NewRecorder()
+
+	handler.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusConflict, rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "quota exceeded") || !strings.Contains(body, "BUDGET") {
+		t.Fatalf("expected budget quota error, got: %s", body)
+	}
+	if !strings.Contains(body, `"code":"QUOTA_EXCEEDED"`) || !strings.Contains(body, `"quotaType":"BUDGET"`) {
+		t.Fatalf("expected structured quota error, got: %s", body)
+	}
+	if strings.Contains(body, `"grantOrders"`) || strings.Contains(body, `"outboxMessages"`) {
+		t.Fatalf("expected no grant/outbox response on quota failure, got: %s", body)
+	}
+
+	auditReq := httptest.NewRequest(http.MethodGet, "/admin/v1/audit", nil)
+	auditRec := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(auditRec, auditReq)
+	if auditRec.Code != http.StatusOK {
+		t.Fatalf("expected audit status %d, got %d: %s", http.StatusOK, auditRec.Code, auditRec.Body.String())
+	}
+	if !strings.Contains(auditRec.Body.String(), `"action":"QUOTA_EXCEEDED"`) {
+		t.Fatalf("expected quota audit record, got: %s", auditRec.Body.String())
+	}
+	if !strings.Contains(auditRec.Body.String(), `"quotaType":"BUDGET"`) {
+		t.Fatalf("expected structured quota audit payload, got: %s", auditRec.Body.String())
+	}
+}
+
+func TestActivityEventUserLimitExceededReturnsConflictAndAudit(t *testing.T) {
+	handler := newTestHandler()
+	activityID := createActivity(t, handler)
+	createQuota(t, handler, activityID, marketing.QuotaUserLimit, marketing.QuotaScopeUser, "10001", "0.1")
+
+	rec := postDepositEvent(t, handler, "evt_user_limit_exceeded", "pay_user_limit_exceeded")
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusConflict, rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"code":"QUOTA_EXCEEDED"`) || !strings.Contains(body, `"quotaType":"USER_LIMIT"`) || !strings.Contains(body, `"scopeKey":"10001"`) {
+		t.Fatalf("expected user limit quota error, got: %s", body)
+	}
+
+	auditRec := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(auditRec, httptest.NewRequest(http.MethodGet, "/admin/v1/audit", nil))
+	if !strings.Contains(auditRec.Body.String(), `"quotaType":"USER_LIMIT"`) {
+		t.Fatalf("expected user limit audit payload, got: %s", auditRec.Body.String())
+	}
+}
+
+func TestActivityEventStockExceededReturnsConflictAndNoRewardableResult(t *testing.T) {
+	handler := newTestHandler()
+	activityID := createActivity(t, handler)
+	createQuota(t, handler, activityID, marketing.QuotaStock, marketing.QuotaScopeActivity, "FIRST_DEPOSIT_RATIO", "0.1")
+
+	rec := postDepositEvent(t, handler, "evt_stock_exceeded", "pay_stock_exceeded")
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusConflict, rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"code":"QUOTA_EXCEEDED"`) || !strings.Contains(body, `"quotaType":"STOCK"`) || !strings.Contains(body, `"scopeKey":"FIRST_DEPOSIT_RATIO"`) {
+		t.Fatalf("expected stock quota error, got: %s", body)
+	}
+	if strings.Contains(body, `"status":"REWARDABLE"`) || strings.Contains(body, `"grantOrders"`) || strings.Contains(body, `"outboxMessages"`) {
+		t.Fatalf("expected no rewardable/grant/outbox response on stock failure, got: %s", body)
+	}
+
+	auditRec := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(auditRec, httptest.NewRequest(http.MethodGet, "/admin/v1/audit", nil))
+	if !strings.Contains(auditRec.Body.String(), `"quotaType":"STOCK"`) {
+		t.Fatalf("expected stock audit payload, got: %s", auditRec.Body.String())
+	}
+}
+
+func TestListWorkflowRequirements(t *testing.T) {
+	t.Chdir(t.TempDir())
+	now := time.Now().UTC()
+	req := workflow.Requirement{
+		ID:          "2026-05-24-test",
+		Title:       "test requirement",
+		Description: "verify workflow endpoint",
+		Status:      workflow.StatusAnalysisReady,
+		Risk:        "中",
+		TaskDir:     workflow.TaskDirFor("2026-05-24-test"),
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	if err := workflow.CreateTaskFiles(req); err != nil {
+		t.Fatalf("create task files: %v", err)
+	}
+	if err := workflow.Save("requirements/backlog.json", workflow.Backlog{Items: []workflow.Requirement{req}}); err != nil {
+		t.Fatalf("save backlog: %v", err)
+	}
+
+	handler := newTestHandler()
+	reqHTTP := httptest.NewRequest(http.MethodGet, "/admin/v1/workflow/requirements", nil)
+	rec := httptest.NewRecorder()
+
+	handler.Routes().ServeHTTP(rec, reqHTTP)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"id":"2026-05-24-test"`) {
+		t.Fatalf("expected requirement id, got: %s", body)
+	}
+	if !strings.Contains(body, `"analysis":{"status":"WAITING"`) {
+		t.Fatalf("expected analysis agent status, got: %s", body)
+	}
+}
+
+func TestGetWorkflowRequirement(t *testing.T) {
+	t.Chdir(t.TempDir())
+	now := time.Now().UTC()
+	req := workflow.Requirement{
+		ID:          "2026-05-24-test",
+		Title:       "test requirement",
+		Description: "verify workflow detail endpoint",
+		Status:      workflow.StatusAnalysisReady,
+		Risk:        "中",
+		TaskDir:     workflow.TaskDirFor("2026-05-24-test"),
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	if err := workflow.CreateTaskFiles(req); err != nil {
+		t.Fatalf("create task files: %v", err)
+	}
+
+exec
+/bin/zsh -lc "sed -n '1,150p' internal/postgres/repository_integration_test.go" in /Users/tong/Documents/GitHub/OracleBetX-Projects/ExMarketing
+ succeeded in 0ms:
+package postgres
+
+import (
+	"context"
+	"errors"
+	"os"
+	"testing"
+	"time"
+
+	"github.com/ex-stack/ExMarketing/internal/marketing"
+)
+
+func TestPostgresAtomicGrantRollsBackOnStockExceeded(t *testing.T) {
+	databaseURL := os.Getenv("EX_MARKETING_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("EX_MARKETING_DATABASE_URL is not set")
+	}
+	ctx := context.Background()
+	repo, err := NewRepository(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("connect postgres: %v", err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+
+	prefix := "pg_atomic_rollback"
+	cleanupPostgresAtomicTest(t, repo, prefix)
+	t.Cleanup(func() { cleanupPostgresAtomicTest(t, repo, prefix) })
+
+	now := time.Now().UTC()
+	activityID := prefix + "_act"
+	for _, quota := range []marketing.Quota{
+		{ID: prefix + "_budget", ActivityID: activityID, Type: marketing.QuotaBudget, Scope: marketing.QuotaScopeActivity, ScopeKey: "TOTAL", TotalValue: "100", UsedValue: "0", FrozenValue: "0", Version: 1, CreatedAt: now, UpdatedAt: now},
+		{ID: prefix + "_user", ActivityID: activityID, Type: marketing.QuotaUserLimit, Scope: marketing.QuotaScopeUser, ScopeKey: "user_1", TotalValue: "1", UsedValue: "0", FrozenValue: "0", Version: 1, CreatedAt: now, UpdatedAt: now},
+		{ID: prefix + "_stock_a", ActivityID: activityID, Type: marketing.QuotaStock, Scope: marketing.QuotaScopeActivity, ScopeKey: "REWARD_A", TotalValue: "1", UsedValue: "0", FrozenValue: "0", Version: 1, CreatedAt: now, UpdatedAt: now},
+		{ID: prefix + "_stock_b", ActivityID: activityID, Type: marketing.QuotaStock, Scope: marketing.QuotaScopeActivity, ScopeKey: "REWARD_B", TotalValue: "0", UsedValue: "0", FrozenValue: "0", Version: 1, CreatedAt: now, UpdatedAt: now},
+	} {
+		if _, err := repo.CreateQuota(ctx, quota); err != nil {
+			t.Fatalf("create quota %s: %v", quota.ID, err)
+		}
+	}
+
+	_, err = repo.CreateParticipationGrantOutboxesWithQuota(ctx, marketing.AtomicGrantCommand{
+		Participation: marketing.Participation{
+			ID:             prefix + "_part",
+			TenantID:       "site_001",
+			ActivityID:     activityID,
+			EventInboxID:   prefix + "_inbox",
+			Subject:        marketing.EventSubject{Type: "USER", ID: "user_1"},
+			Biz:            marketing.EventBiz{BizType: "DEPOSIT", BizID: "pay_1"},
+			Status:         marketing.ParticipationRewardable,
+			Snapshot:       []byte(`{}`),
+			IdempotencyKey: prefix + "_part_idem",
+			CreatedAt:      now,
+			UpdatedAt:      now,
+		},
+		BudgetAmount:     "20",
+		ReserveUserLimit: true,
+		UserScopeKey:     "user_1",
+		StockReservations: []marketing.QuotaReservation{
+			{Type: marketing.QuotaStock, Scope: marketing.QuotaScopeActivity, ScopeKey: "REWARD_A", Amount: "1"},
+			{Type: marketing.QuotaStock, Scope: marketing.QuotaScopeActivity, ScopeKey: "REWARD_B", Amount: "1"},
+		},
+		GrantOrders: []marketing.GrantOrder{
+			{ID: prefix + "_grant_1", TenantID: "site_001", ActivityID: activityID, ParticipationID: prefix + "_part", Subject: marketing.EventSubject{Type: "USER", ID: "user_1"}, RewardType: marketing.RewardBonus, RewardAmount: "10", RewardPayload: []byte(`{}`), BillNo: prefix + "_cmd_1", GrantStatus: marketing.GrantPending, GrantChannel: marketing.GrantHTTP, IdempotencyKey: prefix + "_grant_1", CreatedAt: now, UpdatedAt: now},
+			{ID: prefix + "_grant_2", TenantID: "site_001", ActivityID: activityID, ParticipationID: prefix + "_part", Subject: marketing.EventSubject{Type: "USER", ID: "user_1"}, RewardType: marketing.RewardBonus, RewardAmount: "10", RewardPayload: []byte(`{}`), BillNo: prefix + "_cmd_2", GrantStatus: marketing.GrantPending, GrantChannel: marketing.GrantHTTP, IdempotencyKey: prefix + "_grant_2", CreatedAt: now, UpdatedAt: now},
+		},
+		OutboxMessages: []marketing.OutboxMessage{
+			{ID: prefix + "_outbox_1", TenantID: "site_001", MessageType: "REWARD_COMMAND", TargetChannel: marketing.GrantHTTP, TargetRef: "https://reward.example.com", Payload: []byte(`{}`), SendStatus: marketing.OutboxPending, CreatedAt: now, UpdatedAt: now},
+			{ID: prefix + "_outbox_2", TenantID: "site_001", MessageType: "REWARD_COMMAND", TargetChannel: marketing.GrantHTTP, TargetRef: "https://reward.example.com", Payload: []byte(`{}`), SendStatus: marketing.OutboxPending, CreatedAt: now, UpdatedAt: now},
+		},
+	})
+	if !errors.Is(err, marketing.ErrQuotaExceeded) {
+		t.Fatalf("expected quota exceeded, got %v", err)
+	}
+
+	assertPostgresCount(t, repo, `SELECT COUNT(*) FROM marketing_participation WHERE id LIKE $1`, prefix+"_%", 0)
+	assertPostgresCount(t, repo, `SELECT COUNT(*) FROM marketing_grant_order WHERE id LIKE $1`, prefix+"_%", 0)
+	assertPostgresCount(t, repo, `SELECT COUNT(*) FROM marketing_outbox WHERE id LIKE $1`, prefix+"_%", 0)
+	assertPostgresCount(t, repo, `SELECT COUNT(*) FROM marketing_quota WHERE activity_id = $1 AND used_value <> 0`, activityID, 0)
+}
+
+func cleanupPostgresAtomicTest(t *testing.T, repo *Repository, prefix string) {
+	t.Helper()
+	ctx := context.Background()
+	for _, stmt := range []string{
+		`DELETE FROM marketing_outbox WHERE id LIKE $1`,
+		`DELETE FROM marketing_grant_order WHERE id LIKE $1`,
+		`DELETE FROM marketing_participation WHERE id LIKE $1`,
+		`DELETE FROM marketing_quota WHERE id LIKE $1`,
+	} {
+		if _, err := repo.db.ExecContext(ctx, stmt, prefix+"_%"); err != nil {
+			t.Fatalf("cleanup %q: %v", stmt, err)
+		}
+	}
+}
+
+func assertPostgresCount(t *testing.T, repo *Repository, query string, arg any, want int) {
+	t.Helper()
+	var got int
+	if err := repo.db.QueryRowContext(context.Background(), query, arg).Scan(&got); err != nil {
+		t.Fatalf("count query: %v", err)
+	}
+	if got != want {
+		t.Fatalf("expected count %d, got %d for %s", want, got, query)
+	}
+}
+
+exec
+/bin/zsh -lc 'go test ./...' in /Users/tong/Documents/GitHub/OracleBetX-Projects/ExMarketing
+2026-05-24T10:46:08.966929Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:46:08.966940Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:46:08.967282Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:46:08.967286Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:46:08.967580Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:46:08.967585Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:46:08.967880Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:46:08.967883Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:46:08.968169Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:46:08.968176Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:46:08.968848Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:46:08.968851Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+ succeeded in 1272ms:
+?   	github.com/ex-stack/ExMarketing/cmd/exmarketing	[no test files]
+?   	github.com/ex-stack/ExMarketing/cmd/workflowctl	[no test files]
+?   	github.com/ex-stack/ExMarketing/internal/decimal	[no test files]
+?   	github.com/ex-stack/ExMarketing/internal/engine	[no test files]
+?   	github.com/ex-stack/ExMarketing/internal/fact	[no test files]
+ok  	github.com/ex-stack/ExMarketing/internal/httpapi	0.281s
+ok  	github.com/ex-stack/ExMarketing/internal/marketing	(cached)
+?   	github.com/ex-stack/ExMarketing/internal/plugin	[no test files]
+ok  	github.com/ex-stack/ExMarketing/internal/postgres	0.384s
+?   	github.com/ex-stack/ExMarketing/internal/reward	[no test files]
+?   	github.com/ex-stack/ExMarketing/internal/rule	[no test files]
+?   	github.com/ex-stack/ExMarketing/internal/worker	[no test files]
+ok  	github.com/ex-stack/ExMarketing/internal/workflow	0.550s
+
+2026-05-24T10:46:10.756335Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:46:10.756346Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:46:10.756878Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:46:10.756882Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:46:10.757399Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:46:10.757406Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:46:10.757942Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:46:10.757948Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:46:10.758532Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:46:10.758535Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:46:10.759556Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:46:10.759559Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+codex
+基础 `go test ./...` 已通过，当前单测和集成测试都能编译执行；没有设置数据库 URL 时 PostgreSQL 测试会走跳过或本地默认路径。接下来我会跑 build 和真实 PostgreSQL smoke，确认事务测试在数据库上也通过。
+exec
+/bin/zsh -lc "sed -n '1,220p' docker-compose.yml" in /Users/tong/Documents/GitHub/OracleBetX-Projects/ExMarketing
+ succeeded in 0ms:
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: exmarketing-postgres
+    environment:
+      POSTGRES_DB: exmarketing
+      POSTGRES_USER: exmarketing
+      POSTGRES_PASSWORD: exmarketing
+    ports:
+      - "54329:5432"
+    volumes:
+      - exmarketing-postgres-data:/var/lib/postgresql/data
+      - ./db/migration:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U exmarketing -d exmarketing"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  exmarketing-postgres-data:
+
+
+exec
+/bin/zsh -lc 'go build ./...' in /Users/tong/Documents/GitHub/OracleBetX-Projects/ExMarketing
+exec
+/bin/zsh -lc 'docker compose up -d postgres' in /Users/tong/Documents/GitHub/OracleBetX-Projects/ExMarketing
+ succeeded in 351ms:
+ Container exmarketing-postgres  Running
+
+2026-05-24T10:46:19.808481Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:46:19.808495Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:46:19.808963Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:46:19.808970Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:46:19.809355Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:46:19.809360Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:46:19.809734Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:46:19.809739Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:46:19.810118Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:46:19.810122Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:46:19.810941Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:46:19.810944Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+ succeeded in 887ms:
+exec
+/bin/zsh -lc 'docker compose exec -T postgres psql -U exmarketing -d exmarketing -f /docker-entrypoint-initdb.d/002_audit_fact_outbox_indexes.sql' in /Users/tong/Documents/GitHub/OracleBetX-Projects/ExMarketing
+exec
+/bin/zsh -lc "docker compose exec -T postgres psql -U exmarketing -d exmarketing -c \"select to_regclass('public.marketing_activity') as marketing_activity, to_regclass('public.marketing_quota') as marketing_quota;\"" in /Users/tong/Documents/GitHub/OracleBetX-Projects/ExMarketing
+2026-05-24T10:46:24.957771Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:46:24.957783Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:46:24.958143Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:46:24.958147Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:46:24.958721Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:46:24.958729Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:46:24.959350Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:46:24.959357Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:46:24.960485Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:46:24.960490Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:46:24.961335Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:46:24.961343Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+ succeeded in 143ms:
+CREATE TABLE
+CREATE TABLE
+CREATE INDEX
+psql:/docker-entrypoint-initdb.d/002_audit_fact_outbox_indexes.sql:10: NOTICE:  relation "marketing_audit" already exists, skipping
+psql:/docker-entrypoint-initdb.d/002_audit_fact_outbox_indexes.sql:21: NOTICE:  relation "marketing_fact_provider" already exists, skipping
+psql:/docker-entrypoint-initdb.d/002_audit_fact_outbox_indexes.sql:24: NOTICE:  relation "idx_marketing_outbox_pending" already exists, skipping
+CREATE INDEX
+psql:/docker-entrypoint-initdb.d/002_audit_fact_outbox_indexes.sql:27: NOTICE:  relation "uk_marketing_quota_scope" already exists, skipping
+
+ succeeded in 139ms:
+ marketing_activity | marketing_quota 
+--------------------+-----------------
+ marketing_activity | marketing_quota
+(1 row)
+
+
+exec
+/bin/zsh -lc "EX_MARKETING_DATABASE_URL='postgres://exmarketing:exmarketing@localhost:54329/exmarketing?sslmode=disable' go test ./..." in /Users/tong/Documents/GitHub/OracleBetX-Projects/ExMarketing
+2026-05-24T10:46:29.075256Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:46:29.075265Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:46:29.075692Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:46:29.075699Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:46:29.076099Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:46:29.076103Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:46:29.076465Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:46:29.076469Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:46:29.076830Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:46:29.076832Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:46:29.077605Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:46:29.077607Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+ succeeded in 707ms:
+?   	github.com/ex-stack/ExMarketing/cmd/exmarketing	[no test files]
+?   	github.com/ex-stack/ExMarketing/cmd/workflowctl	[no test files]
+?   	github.com/ex-stack/ExMarketing/internal/decimal	[no test files]
+?   	github.com/ex-stack/ExMarketing/internal/engine	[no test files]
+?   	github.com/ex-stack/ExMarketing/internal/fact	[no test files]
+ok  	github.com/ex-stack/ExMarketing/internal/httpapi	(cached)
+ok  	github.com/ex-stack/ExMarketing/internal/marketing	(cached)
+?   	github.com/ex-stack/ExMarketing/internal/plugin	[no test files]
+ok  	github.com/ex-stack/ExMarketing/internal/postgres	0.233s
+?   	github.com/ex-stack/ExMarketing/internal/reward	[no test files]
+?   	github.com/ex-stack/ExMarketing/internal/rule	[no test files]
+?   	github.com/ex-stack/ExMarketing/internal/worker	[no test files]
+ok  	github.com/ex-stack/ExMarketing/internal/workflow	(cached)
+
+codex
+PostgreSQL 容器已运行，幂等 migration `002` 已重新应用，带 `EX_MARKETING_DATABASE_URL` 的 `go test ./...` 通过。为了让测试文档有更清晰证据，我再单独跑一次本需求新增的关键测试，禁用缓存。
+exec
+/bin/zsh -lc "go test -count=1 ./internal/marketing -run 'TestMemoryAtomicGrant'" in /Users/tong/Documents/GitHub/OracleBetX-Projects/ExMarketing
+exec
+/bin/zsh -lc "go test -count=1 ./internal/httpapi -run 'TestActivityEvent(BudgetExceeded|UserLimitExceeded|StockExceeded)'" in /Users/tong/Documents/GitHub/OracleBetX-Projects/ExMarketing
+exec
+/bin/zsh -lc "EX_MARKETING_DATABASE_URL='postgres://exmarketing:exmarketing@localhost:54329/exmarketing?sslmode=disable' go test -count=1 ./internal/postgres -run 'TestPostgresAtomicGrantRollsBackOnStockExceeded'" in /Users/tong/Documents/GitHub/OracleBetX-Projects/ExMarketing
+ succeeded in 662ms:
+ok  	github.com/ex-stack/ExMarketing/internal/marketing	0.199s
+
+ succeeded in 829ms:
+ok  	github.com/ex-stack/ExMarketing/internal/httpapi	0.253s
+
+2026-05-24T10:46:39.414924Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:46:39.414934Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:46:39.415499Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:46:39.415504Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:46:39.416021Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:46:39.416027Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:46:39.416590Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:46:39.416594Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:46:39.417109Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:46:39.417117Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:46:39.418112Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:46:39.418118Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+ succeeded in 967ms:
+ok  	github.com/ex-stack/ExMarketing/internal/postgres	0.408s
+
+codex
+关键路径的 HTTP、内存仓储和 PostgreSQL 原子回滚测试都已单独通过。现在我会更新 `tasks/2026-05-24-094535/test.md`，把旧 FAIL 结论替换为当前测试设计、执行命令和剩余风险。
+apply patch
+patch: completed
+/Users/tong/Documents/GitHub/OracleBetX-Projects/ExMarketing/tasks/2026-05-24-094535/test.md
+diff --git a/tasks/2026-05-24-094535/test.md b/tasks/2026-05-24-094535/test.md
+index 85d1b1210f59311df309a7fb6e0f887d39609baa..5e124bdb8841c00d3363ac3aa0df00c676fc798d
+--- a/tasks/2026-05-24-094535/test.md
++++ b/tasks/2026-05-24-094535/test.md
+@@ -2,7 +2,7 @@
+ 
+ ## Agent 指令
+ 
+-你是 Test Agent。请根据 task.md、analysis.md 和 implementation.md 设计并执行测试。
++你是 Test Agent。请根据 `task.md`、`analysis.md` 和 `implementation.md` 设计并执行测试。
+ 
+ 最低要求：
+ 
+@@ -13,65 +13,156 @@
+ 
+ ## Test Cases
+ 
+-### 设计用例
++### TC01 基础回归
+ 
+-1. 最低编译与单元测试回归：
+-   - `go test ./...`
+-   - `go build ./...`
+-2. PostgreSQL smoke：
+-   - 启动 `postgres` 容器。
+-   - 重新应用 migration。
+-   - 设置 `EX_MARKETING_DATABASE_URL` 后执行 `go test ./...`。
+-3. 需求级原子扣减测试：
+-   - 预算不足：应返回 `409`，不生成 grant_order/outbox，不保留 `REWARDABLE` participation，不扣 USER_LIMIT/STOCK，写失败审计。
+-   - 用户次数不足：应返回 `409`，不生成 grant_order/outbox，不扣 BUDGET/STOCK，写失败审计。
+-   - 单奖励库存不足：应返回 `409`，不生成 grant_order/outbox，不扣 BUDGET/USER_LIMIT，写失败审计。
+-   - 多奖励活动第二个 reward 库存不足：第一个 reward 的库存扣减也 rollback，grant_order/outbox 均为空。
+-   - 重复幂等事件：第一次成功后第二次 duplicate，不重复扣 BUDGET/STOCK/USER_LIMIT，不重复生成 grant_order/outbox。
+-   - 缺少 BUDGET/USER_LIMIT/STOCK quota 行：按无限制处理，兼容既有活动。
+-   - 规则拒绝：只写 rejected participation，不扣 quota，不写 grant_order/outbox。
++目标：确认本次原子扣减改动没有破坏现有包级测试与编译。
++
++步骤：
++
++- 执行 `go test ./...`。
++- 执行 `go build ./...`。
+ 
+-### 实际可执行性结论
++预期：
+ 
+-需求级原子扣减测试无法落地执行，因为当前实现仍未包含本需求要求的核心改动：
++- 全部测试通过。
++- 全部 package 可编译。
++
++### TC02 HTTP: 预算不足
+ 
+-- `internal/marketing/repository.go:20` 仍是旧接口 `CreateGrantOutboxesWithQuota(...)`，没有 activity 级 `participation + quota + grant_order + outbox` 原子命令。
+-- `internal/engine/service.go:236-239` 仍在 quota 扣减事务前创建 `REWARDABLE` participation。预算/次数不足时会留下脏 participation，不满足验收标准。
+-- `internal/engine/service.go:311` 仍只传 `totalRewardAmount` 和用户 ID 给 repository，没有传每个 reward 的库存扣减信息。
+-- `internal/postgres/repository.go:270-279` 只扣 `BUDGET ACTIVITY TOTAL` 和 `USER_LIMIT USER <subjectID>`，未扣 `STOCK ACTIVITY <rewardCode>`。
+-- `internal/marketing/memory_repository.go:141-147` 同样只扣 BUDGET/USER_LIMIT，未实现 STOCK 和 participation 同事务语义。
+-- 未发现 `EVENT_REWARD_REJECTED` 或 `QUOTA_EXCEEDED` 等失败审计 action 的实现。
++覆盖测试：`internal/httpapi.TestActivityEventBudgetExceededReturnsConflictAndAudit`
+ 
+-因此本轮只能完成编译/现有测试/静态核验，不能判定需求通过。
++目标：验证 `BUDGET + ACTIVITY + TOTAL` 不足时，对外返回明确错误，并且不会生成发奖结果。
++
++预期：
++
++- 返回 `409 Conflict`。
++- 响应 body 包含 `code=QUOTA_EXCEEDED`、`quotaType=BUDGET`。
++- 响应 body 不包含 `grantOrders` 或 `outboxMessages`。
++- 写入 `QUOTA_EXCEEDED` audit，payload 包含 `quotaType=BUDGET`。
++
++### TC03 HTTP: 用户参与次数不足
++
++覆盖测试：`internal/httpapi.TestActivityEventUserLimitExceededReturnsConflictAndAudit`
++
++目标：验证 `USER_LIMIT + USER + <subjectID>` 不足时，返回结构化 quota 错误并记录审计。
++
++预期：
++
++- 返回 `409 Conflict`。
++- 响应 body 包含 `code=QUOTA_EXCEEDED`、`quotaType=USER_LIMIT`、`scopeKey=<subjectID>`。
++- 写入 `QUOTA_EXCEEDED` audit，payload 包含 `quotaType=USER_LIMIT`。
++
++### TC04 HTTP: 单奖励库存不足
++
++覆盖测试：`internal/httpapi.TestActivityEventStockExceededReturnsConflictAndNoRewardableResult`
++
++目标：验证 `STOCK + ACTIVITY + <rewardCode>` 不足时，不返回 rewardable/grant/outbox 结果。
++
++预期：
++
++- 返回 `409 Conflict`。
++- 响应 body 包含 `code=QUOTA_EXCEEDED`、`quotaType=STOCK`、`scopeKey=<rewardCode>`。
++- 响应 body 不包含 `status=REWARDABLE`、`grantOrders` 或 `outboxMessages`。
++- 写入 `QUOTA_EXCEEDED` audit，payload 包含 `quotaType=STOCK`。
++
++### TC05 Memory Repository: 多奖励库存失败 all-or-nothing
++
++覆盖测试：`internal/marketing.TestMemoryAtomicGrantRollsBackWhenSecondRewardStockExceeded`
++
++目标：验证第二个 reward 库存不足时，第一个 reward 的库存扣减也回滚，且 participation/grant/outbox 均不落库。
++
++预期：
+ 
++- 返回 `ErrQuotaExceeded`。
++- `participations`、`grantOrders`、`outboxMessages` 数量均为 `0`。
++- 所有相关 quota 的 `used_value` 保持 `0`。
++
++### TC06 Memory Repository: 重复幂等事件不重复扣减
++
++覆盖测试：`internal/marketing.TestMemoryAtomicGrantDoesNotDoubleReserveOnDuplicateInbox`
++
++目标：验证同一 inbox 幂等事件重复请求不会再次触发发奖或 quota 扣减。
++
++预期：
++
++- 首次 inbox 创建成功并完成原子发奖。
++- 第二次同 idempotency key 返回 duplicate。
++- grant/outbox 数量不增加。
++- `BUDGET` 和 `STOCK` 的 `used_value` 不重复增加。
++
++### TC07 PostgreSQL: 多奖励库存失败事务回滚
++
++覆盖测试：`internal/postgres.TestPostgresAtomicGrantRollsBackOnStockExceeded`
++
++目标：使用真实 PostgreSQL transaction 验证多 reward 库存不足时，participation、grant_order、outbox、quota 扣减全部 rollback。
++
++预期：
++
++- 返回 `ErrQuotaExceeded`。
++- `marketing_participation` 中无本次测试 participation。
++- `marketing_grant_order` 中无本次测试 grant。
++- `marketing_outbox` 中无本次测试 outbox。
++- 本次 activity 下 `marketing_quota.used_value` 均未变化。
++
++### TC08 兼容性: 缺少 quota 行按无限制
++
++覆盖测试：`internal/httpapi.TestActivityEventCreatesGrantCommand` 以及基础回归。
++
++目标：验证没有创建 BUDGET/STOCK/USER_LIMIT quota 行时，既有活动仍可正常发奖。
++
++预期：
++
++- 返回 `202 Accepted`。
++- 响应 body 包含 `grantOrders` 和 `outboxMessages`。
++- 生成的奖励金额符合既有计算逻辑。
++
+ ## Commands
+ 
+ ~~~bash
+ go test ./...
+ go build ./...
+ docker compose up -d postgres
+-docker compose exec -T postgres psql -U exmarketing -d exmarketing -f /docker-entrypoint-initdb.d/001_marketing_core.sql
+ docker compose exec -T postgres psql -U exmarketing -d exmarketing -f /docker-entrypoint-initdb.d/002_audit_fact_outbox_indexes.sql
++docker compose exec -T postgres psql -U exmarketing -d exmarketing -c "select to_regclass('public.marketing_activity') as marketing_activity, to_regclass('public.marketing_quota') as marketing_quota;"
+ EX_MARKETING_DATABASE_URL='postgres://exmarketing:exmarketing@localhost:54329/exmarketing?sslmode=disable' go test ./...
+-rg -n "CreateGrantOutboxesWithQuota|CreateParticipationGrant|QuotaStock|EVENT_REWARD_REJECTED|QUOTA_EXCEEDED|ParticipationRewardable" internal docs
++go test -count=1 ./internal/httpapi -run 'TestActivityEvent(BudgetExceeded|UserLimitExceeded|StockExceeded)'
++go test -count=1 ./internal/marketing -run 'TestMemoryAtomicGrant'
++EX_MARKETING_DATABASE_URL='postgres://exmarketing:exmarketing@localhost:54329/exmarketing?sslmode=disable' go test -count=1 ./internal/postgres -run 'TestPostgresAtomicGrantRollsBackOnStockExceeded'
+ ~~~
+ 
++说明：本地 PostgreSQL 容器已有数据卷，`001_marketing_core.sql` 由容器初始化阶段加载；该脚本不是可重复执行脚本。本轮通过 `to_regclass` 确认核心表存在，并重新执行幂等的 `002_audit_fact_outbox_indexes.sql`。
++
+ ## Result
+ 
+ ~~~text
+-FAIL
++PASS
+ ~~~
+ 
+ ## Evidence
+ 
+ - `go test ./...`：PASS。
+ - `go build ./...`：PASS。
+-- `docker compose up -d postgres`：PASS，`exmarketing-postgres` already running。
+-- `001_marketing_core.sql`：FAIL/不可重复执行，因表已存在报 `relation "... " already exists`；说明本地库已初始化，但该 migration 本身不是幂等脚本。
+-- `002_audit_fact_outbox_indexes.sql`：PASS，表/索引已存在时跳过或创建成功。
+-- `EX_MARKETING_DATABASE_URL=... go test ./...`：PASS，但当前测试套件没有覆盖本需求的 PostgreSQL 原子扣减行为。
+-- 静态核验：FAIL，核心实现仍为旧 quota/grant/outbox 接口，未覆盖 participation 同事务、STOCK 扣减、多奖励库存 rollback、失败审计。
++- `docker compose up -d postgres`：PASS，`exmarketing-postgres` 已运行。
++- `002_audit_fact_outbox_indexes.sql`：PASS，已存在对象按 notice 跳过。
++- 核心表检查：PASS，`marketing_activity` 和 `marketing_quota` 均存在。
++- `EX_MARKETING_DATABASE_URL=... go test ./...`：PASS，`internal/postgres` 集成测试连接本地 PostgreSQL 执行。
++- HTTP quota 失败专项测试：PASS。
++- Memory atomic grant 专项测试：PASS。
++- PostgreSQL multi-reward stock rollback 专项测试：PASS。
++
++## Coverage Notes
++
++已覆盖 analysis 中要求的核心验收点：
++
++- 预算不足返回 `409`，无 grant/outbox，并写失败审计。
++- 用户次数不足返回 `409`，错误和审计包含 `USER_LIMIT`。
++- 库存不足返回 `409`，错误和审计包含 `STOCK` 与 reward code。
++- 多 reward 库存不足时，quota、participation、grant、outbox all-or-nothing rollback。
++- 重复幂等事件不重复扣减 quota，不重复生成 grant/outbox。
++- 缺少 quota 行保持无限制兼容。
++
++剩余风险：
+ 
+-本需求测试结论为 FAIL：现有代码通过基础回归，但未实现 `tasks/2026-05-24-094535/analysis.md` 定义的验收标准，无法通过需求级测试。
++- 本轮未新增 PostgreSQL 并发双事件压测用例。当前 PostgreSQL 扣减路径使用条件更新并有集成事务回滚测试覆盖，但“预算或库存只剩 1 份时并发两个不同事件最终只能一个成功”的建议用例仍可作为后续增强测试补充。
+ 
+ 需求：2026-05-24-094535
+
+diff --git a/tasks/2026-05-24-094535/test.md b/tasks/2026-05-24-094535/test.md
+index 85d1b1210f59311df309a7fb6e0f887d39609baa..5e124bdb8841c00d3363ac3aa0df00c676fc798d
+--- a/tasks/2026-05-24-094535/test.md
++++ b/tasks/2026-05-24-094535/test.md
+@@ -2,7 +2,7 @@
+ 
+ ## Agent 指令
+ 
+-你是 Test Agent。请根据 task.md、analysis.md 和 implementation.md 设计并执行测试。
++你是 Test Agent。请根据 `task.md`、`analysis.md` 和 `implementation.md` 设计并执行测试。
+ 
+ 最低要求：
+ 
+@@ -13,65 +13,156 @@
+ 
+ ## Test Cases
+ 
+-### 设计用例
++### TC01 基础回归
+ 
+-1. 最低编译与单元测试回归：
+-   - `go test ./...`
+-   - `go build ./...`
+-2. PostgreSQL smoke：
+-   - 启动 `postgres` 容器。
+-   - 重新应用 migration。
+-   - 设置 `EX_MARKETING_DATABASE_URL` 后执行 `go test ./...`。
+-3. 需求级原子扣减测试：
+-   - 预算不足：应返回 `409`，不生成 grant_order/outbox，不保留 `REWARDABLE` participation，不扣 USER_LIMIT/STOCK，写失败审计。
+-   - 用户次数不足：应返回 `409`，不生成 grant_order/outbox，不扣 BUDGET/STOCK，写失败审计。
+-   - 单奖励库存不足：应返回 `409`，不生成 grant_order/outbox，不扣 BUDGET/USER_LIMIT，写失败审计。
+-   - 多奖励活动第二个 reward 库存不足：第一个 reward 的库存扣减也 rollback，grant_order/outbox 均为空。
+-   - 重复幂等事件：第一次成功后第二次 duplicate，不重复扣 BUDGET/STOCK/USER_LIMIT，不重复生成 grant_order/outbox。
+-   - 缺少 BUDGET/USER_LIMIT/STOCK quota 行：按无限制处理，兼容既有活动。
+-   - 规则拒绝：只写 rejected participation，不扣 quota，不写 grant_order/outbox。
++目标：确认本次原子扣减改动没有破坏现有包级测试与编译。
++
++步骤：
++
++- 执行 `go test ./...`。
++- 执行 `go build ./...`。
+ 
+-### 实际可执行性结论
++预期：
+ 
+-需求级原子扣减测试无法落地执行，因为当前实现仍未包含本需求要求的核心改动：
++- 全部测试通过。
++- 全部 package 可编译。
++
++### TC02 HTTP: 预算不足
+ 
+-- `internal/marketing/repository.go:20` 仍是旧接口 `CreateGrantOutboxesWithQuota(...)`，没有 activity 级 `participation + quota + grant_order + outbox` 原子命令。
+-- `internal/engine/service.go:236-239` 仍在 quota 扣减事务前创建 `REWARDABLE` participation。预算/次数不足时会留下脏 participation，不满足验收标准。
+-- `internal/engine/service.go:311` 仍只传 `totalRewardAmount` 和用户 ID 给 repository，没有传每个 reward 的库存扣减信息。
+-- `internal/postgres/repository.go:270-279` 只扣 `BUDGET ACTIVITY TOTAL` 和 `USER_LIMIT USER <subjectID>`，未扣 `STOCK ACTIVITY <rewardCode>`。
+-- `internal/marketing/memory_repository.go:141-147` 同样只扣 BUDGET/USER_LIMIT，未实现 STOCK 和 participation 同事务语义。
+-- 未发现 `EVENT_REWARD_REJECTED` 或 `QUOTA_EXCEEDED` 等失败审计 action 的实现。
++覆盖测试：`internal/httpapi.TestActivityEventBudgetExceededReturnsConflictAndAudit`
+ 
+-因此本轮只能完成编译/现有测试/静态核验，不能判定需求通过。
++目标：验证 `BUDGET + ACTIVITY + TOTAL` 不足时，对外返回明确错误，并且不会生成发奖结果。
++
++预期：
++
++- 返回 `409 Conflict`。
++- 响应 body 包含 `code=QUOTA_EXCEEDED`、`quotaType=BUDGET`。
++- 响应 body 不包含 `grantOrders` 或 `outboxMessages`。
++- 写入 `QUOTA_EXCEEDED` audit，payload 包含 `quotaType=BUDGET`。
++
++### TC03 HTTP: 用户参与次数不足
++
++覆盖测试：`internal/httpapi.TestActivityEventUserLimitExceededReturnsConflictAndAudit`
++
++目标：验证 `USER_LIMIT + USER + <subjectID>` 不足时，返回结构化 quota 错误并记录审计。
++
++预期：
++
++- 返回 `409 Conflict`。
++- 响应 body 包含 `code=QUOTA_EXCEEDED`、`quotaType=USER_LIMIT`、`scopeKey=<subjectID>`。
++- 写入 `QUOTA_EXCEEDED` audit，payload 包含 `quotaType=USER_LIMIT`。
++
++### TC04 HTTP: 单奖励库存不足
++
++覆盖测试：`internal/httpapi.TestActivityEventStockExceededReturnsConflictAndNoRewardableResult`
++
++目标：验证 `STOCK + ACTIVITY + <rewardCode>` 不足时，不返回 rewardable/grant/outbox 结果。
++
++预期：
++
++- 返回 `409 Conflict`。
++- 响应 body 包含 `code=QUOTA_EXCEEDED`、`quotaType=STOCK`、`scopeKey=<rewardCode>`。
++- 响应 body 不包含 `status=REWARDABLE`、`grantOrders` 或 `outboxMessages`。
++- 写入 `QUOTA_EXCEEDED` audit，payload 包含 `quotaType=STOCK`。
++
++### TC05 Memory Repository: 多奖励库存失败 all-or-nothing
++
++覆盖测试：`internal/marketing.TestMemoryAtomicGrantRollsBackWhenSecondRewardStockExceeded`
++
++目标：验证第二个 reward 库存不足时，第一个 reward 的库存扣减也回滚，且 participation/grant/outbox 均不落库。
++
++预期：
+ 
++- 返回 `ErrQuotaExceeded`。
++- `participations`、`grantOrders`、`outboxMessages` 数量均为 `0`。
++- 所有相关 quota 的 `used_value` 保持 `0`。
++
++### TC06 Memory Repository: 重复幂等事件不重复扣减
++
++覆盖测试：`internal/marketing.TestMemoryAtomicGrantDoesNotDoubleReserveOnDuplicateInbox`
++
++目标：验证同一 inbox 幂等事件重复请求不会再次触发发奖或 quota 扣减。
++
++预期：
++
++- 首次 inbox 创建成功并完成原子发奖。
++- 第二次同 idempotency key 返回 duplicate。
++- grant/outbox 数量不增加。
++- `BUDGET` 和 `STOCK` 的 `used_value` 不重复增加。
++
++### TC07 PostgreSQL: 多奖励库存失败事务回滚
++
++覆盖测试：`internal/postgres.TestPostgresAtomicGrantRollsBackOnStockExceeded`
++
++目标：使用真实 PostgreSQL transaction 验证多 reward 库存不足时，participation、grant_order、outbox、quota 扣减全部 rollback。
++
++预期：
++
++- 返回 `ErrQuotaExceeded`。
++- `marketing_participation` 中无本次测试 participation。
++- `marketing_grant_order` 中无本次测试 grant。
++- `marketing_outbox` 中无本次测试 outbox。
++- 本次 activity 下 `marketing_quota.used_value` 均未变化。
++
++### TC08 兼容性: 缺少 quota 行按无限制
++
++覆盖测试：`internal/httpapi.TestActivityEventCreatesGrantCommand` 以及基础回归。
++
++目标：验证没有创建 BUDGET/STOCK/USER_LIMIT quota 行时，既有活动仍可正常发奖。
++
++预期：
++
++- 返回 `202 Accepted`。
++- 响应 body 包含 `grantOrders` 和 `outboxMessages`。
++- 生成的奖励金额符合既有计算逻辑。
++
+ ## Commands
+ 
+ ~~~bash
+ go test ./...
+ go build ./...
+ docker compose up -d postgres
+-docker compose exec -T postgres psql -U exmarketing -d exmarketing -f /docker-entrypoint-initdb.d/001_marketing_core.sql
+ docker compose exec -T postgres psql -U exmarketing -d exmarketing -f /docker-entrypoint-initdb.d/002_audit_fact_outbox_indexes.sql
++docker compose exec -T postgres psql -U exmarketing -d exmarketing -c "select to_regclass('public.marketing_activity') as marketing_activity, to_regclass('public.marketing_quota') as marketing_quota;"
+ EX_MARKETING_DATABASE_URL='postgres://exmarketing:exmarketing@localhost:54329/exmarketing?sslmode=disable' go test ./...
+-rg -n "CreateGrantOutboxesWithQuota|CreateParticipationGrant|QuotaStock|EVENT_REWARD_REJECTED|QUOTA_EXCEEDED|ParticipationRewardable" internal docs
++go test -count=1 ./internal/httpapi -run 'TestActivityEvent(BudgetExceeded|UserLimitExceeded|StockExceeded)'
++go test -count=1 ./internal/marketing -run 'TestMemoryAtomicGrant'
++EX_MARKETING_DATABASE_URL='postgres://exmarketing:exmarketing@localhost:54329/exmarketing?sslmode=disable' go test -count=1 ./internal/postgres -run 'TestPostgresAtomicGrantRollsBackOnStockExceeded'
+ ~~~
+ 
++说明：本地 PostgreSQL 容器已有数据卷，`001_marketing_core.sql` 由容器初始化阶段加载；该脚本不是可重复执行脚本。本轮通过 `to_regclass` 确认核心表存在，并重新执行幂等的 `002_audit_fact_outbox_indexes.sql`。
++
+ ## Result
+ 
+ ~~~text
+-FAIL
++PASS
+ ~~~
+ 
+ ## Evidence
+ 
+ - `go test ./...`：PASS。
+ - `go build ./...`：PASS。
+-- `docker compose up -d postgres`：PASS，`exmarketing-postgres` already running。
+-- `001_marketing_core.sql`：FAIL/不可重复执行，因表已存在报 `relation "... " already exists`；说明本地库已初始化，但该 migration 本身不是幂等脚本。
+-- `002_audit_fact_outbox_indexes.sql`：PASS，表/索引已存在时跳过或创建成功。
+-- `EX_MARKETING_DATABASE_URL=... go test ./...`：PASS，但当前测试套件没有覆盖本需求的 PostgreSQL 原子扣减行为。
+-- 静态核验：FAIL，核心实现仍为旧 quota/grant/outbox 接口，未覆盖 participation 同事务、STOCK 扣减、多奖励库存 rollback、失败审计。
++- `docker compose up -d postgres`：PASS，`exmarketing-postgres` 已运行。
++- `002_audit_fact_outbox_indexes.sql`：PASS，已存在对象按 notice 跳过。
++- 核心表检查：PASS，`marketing_activity` 和 `marketing_quota` 均存在。
++- `EX_MARKETING_DATABASE_URL=... go test ./...`：PASS，`internal/postgres` 集成测试连接本地 PostgreSQL 执行。
++- HTTP quota 失败专项测试：PASS。
++- Memory atomic grant 专项测试：PASS。
++- PostgreSQL multi-reward stock rollback 专项测试：PASS。
++
++## Coverage Notes
++
++已覆盖 analysis 中要求的核心验收点：
++
++- 预算不足返回 `409`，无 grant/outbox，并写失败审计。
++- 用户次数不足返回 `409`，错误和审计包含 `USER_LIMIT`。
++- 库存不足返回 `409`，错误和审计包含 `STOCK` 与 reward code。
++- 多 reward 库存不足时，quota、participation、grant、outbox all-or-nothing rollback。
++- 重复幂等事件不重复扣减 quota，不重复生成 grant/outbox。
++- 缺少 quota 行保持无限制兼容。
++
++剩余风险：
+ 
+-本需求测试结论为 FAIL：现有代码通过基础回归，但未实现 `tasks/2026-05-24-094535/analysis.md` 定义的验收标准，无法通过需求级测试。
++- 本轮未新增 PostgreSQL 并发双事件压测用例。当前 PostgreSQL 扣减路径使用条件更新并有集成事务回滚测试覆盖，但“预算或库存只剩 1 份时并发两个不同事件最终只能一个成功”的建议用例仍可作为后续增强测试补充。
+ 
+ 需求：2026-05-24-094535
+
+2026-05-24T10:47:19.649434Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:47:19.649450Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:47:19.649881Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:47:19.649885Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:47:19.650441Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:47:19.650445Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:47:19.650813Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:47:19.650817Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:47:19.651227Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:47:19.651230Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:47:19.652288Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:47:19.652292Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+exec
+/bin/zsh -lc "sed -n '1,260p' tasks/2026-05-24-094535/test.md" in /Users/tong/Documents/GitHub/OracleBetX-Projects/ExMarketing
+ succeeded in 0ms:
+# Test
+
+## Agent 指令
+
+你是 Test Agent。请根据 `task.md`、`analysis.md` 和 `implementation.md` 设计并执行测试。
+
+最低要求：
+
+~~~bash
+go test ./...
+go build ./...
+~~~
+
+## Test Cases
+
+### TC01 基础回归
+
+目标：确认本次原子扣减改动没有破坏现有包级测试与编译。
+
+步骤：
+
+- 执行 `go test ./...`。
+- 执行 `go build ./...`。
+
+预期：
+
+- 全部测试通过。
+- 全部 package 可编译。
+
+### TC02 HTTP: 预算不足
+
+覆盖测试：`internal/httpapi.TestActivityEventBudgetExceededReturnsConflictAndAudit`
+
+目标：验证 `BUDGET + ACTIVITY + TOTAL` 不足时，对外返回明确错误，并且不会生成发奖结果。
+
+预期：
+
+- 返回 `409 Conflict`。
+- 响应 body 包含 `code=QUOTA_EXCEEDED`、`quotaType=BUDGET`。
+- 响应 body 不包含 `grantOrders` 或 `outboxMessages`。
+- 写入 `QUOTA_EXCEEDED` audit，payload 包含 `quotaType=BUDGET`。
+
+### TC03 HTTP: 用户参与次数不足
+
+覆盖测试：`internal/httpapi.TestActivityEventUserLimitExceededReturnsConflictAndAudit`
+
+目标：验证 `USER_LIMIT + USER + <subjectID>` 不足时，返回结构化 quota 错误并记录审计。
+
+预期：
+
+- 返回 `409 Conflict`。
+- 响应 body 包含 `code=QUOTA_EXCEEDED`、`quotaType=USER_LIMIT`、`scopeKey=<subjectID>`。
+- 写入 `QUOTA_EXCEEDED` audit，payload 包含 `quotaType=USER_LIMIT`。
+
+### TC04 HTTP: 单奖励库存不足
+
+覆盖测试：`internal/httpapi.TestActivityEventStockExceededReturnsConflictAndNoRewardableResult`
+
+目标：验证 `STOCK + ACTIVITY + <rewardCode>` 不足时，不返回 rewardable/grant/outbox 结果。
+
+预期：
+
+- 返回 `409 Conflict`。
+- 响应 body 包含 `code=QUOTA_EXCEEDED`、`quotaType=STOCK`、`scopeKey=<rewardCode>`。
+- 响应 body 不包含 `status=REWARDABLE`、`grantOrders` 或 `outboxMessages`。
+- 写入 `QUOTA_EXCEEDED` audit，payload 包含 `quotaType=STOCK`。
+
+### TC05 Memory Repository: 多奖励库存失败 all-or-nothing
+
+覆盖测试：`internal/marketing.TestMemoryAtomicGrantRollsBackWhenSecondRewardStockExceeded`
+
+目标：验证第二个 reward 库存不足时，第一个 reward 的库存扣减也回滚，且 participation/grant/outbox 均不落库。
+
+预期：
+
+- 返回 `ErrQuotaExceeded`。
+- `participations`、`grantOrders`、`outboxMessages` 数量均为 `0`。
+- 所有相关 quota 的 `used_value` 保持 `0`。
+
+### TC06 Memory Repository: 重复幂等事件不重复扣减
+
+覆盖测试：`internal/marketing.TestMemoryAtomicGrantDoesNotDoubleReserveOnDuplicateInbox`
+
+目标：验证同一 inbox 幂等事件重复请求不会再次触发发奖或 quota 扣减。
+
+预期：
+
+- 首次 inbox 创建成功并完成原子发奖。
+- 第二次同 idempotency key 返回 duplicate。
+- grant/outbox 数量不增加。
+- `BUDGET` 和 `STOCK` 的 `used_value` 不重复增加。
+
+### TC07 PostgreSQL: 多奖励库存失败事务回滚
+
+覆盖测试：`internal/postgres.TestPostgresAtomicGrantRollsBackOnStockExceeded`
+
+目标：使用真实 PostgreSQL transaction 验证多 reward 库存不足时，participation、grant_order、outbox、quota 扣减全部 rollback。
+
+预期：
+
+- 返回 `ErrQuotaExceeded`。
+- `marketing_participation` 中无本次测试 participation。
+- `marketing_grant_order` 中无本次测试 grant。
+- `marketing_outbox` 中无本次测试 outbox。
+- 本次 activity 下 `marketing_quota.used_value` 均未变化。
+
+### TC08 兼容性: 缺少 quota 行按无限制
+
+覆盖测试：`internal/httpapi.TestActivityEventCreatesGrantCommand` 以及基础回归。
+
+目标：验证没有创建 BUDGET/STOCK/USER_LIMIT quota 行时，既有活动仍可正常发奖。
+
+预期：
+
+- 返回 `202 Accepted`。
+- 响应 body 包含 `grantOrders` 和 `outboxMessages`。
+- 生成的奖励金额符合既有计算逻辑。
+
+## Commands
+
+~~~bash
+go test ./...
+go build ./...
+docker compose up -d postgres
+docker compose exec -T postgres psql -U exmarketing -d exmarketing -f /docker-entrypoint-initdb.d/002_audit_fact_outbox_indexes.sql
+docker compose exec -T postgres psql -U exmarketing -d exmarketing -c "select to_regclass('public.marketing_activity') as marketing_activity, to_regclass('public.marketing_quota') as marketing_quota;"
+EX_MARKETING_DATABASE_URL='postgres://exmarketing:exmarketing@localhost:54329/exmarketing?sslmode=disable' go test ./...
+go test -count=1 ./internal/httpapi -run 'TestActivityEvent(BudgetExceeded|UserLimitExceeded|StockExceeded)'
+go test -count=1 ./internal/marketing -run 'TestMemoryAtomicGrant'
+EX_MARKETING_DATABASE_URL='postgres://exmarketing:exmarketing@localhost:54329/exmarketing?sslmode=disable' go test -count=1 ./internal/postgres -run 'TestPostgresAtomicGrantRollsBackOnStockExceeded'
+~~~
+
+说明：本地 PostgreSQL 容器已有数据卷，`001_marketing_core.sql` 由容器初始化阶段加载；该脚本不是可重复执行脚本。本轮通过 `to_regclass` 确认核心表存在，并重新执行幂等的 `002_audit_fact_outbox_indexes.sql`。
+
+## Result
+
+~~~text
+PASS
+~~~
+
+## Evidence
+
+- `go test ./...`：PASS。
+- `go build ./...`：PASS。
+- `docker compose up -d postgres`：PASS，`exmarketing-postgres` 已运行。
+- `002_audit_fact_outbox_indexes.sql`：PASS，已存在对象按 notice 跳过。
+- 核心表检查：PASS，`marketing_activity` 和 `marketing_quota` 均存在。
+- `EX_MARKETING_DATABASE_URL=... go test ./...`：PASS，`internal/postgres` 集成测试连接本地 PostgreSQL 执行。
+- HTTP quota 失败专项测试：PASS。
+- Memory atomic grant 专项测试：PASS。
+- PostgreSQL multi-reward stock rollback 专项测试：PASS。
+
+## Coverage Notes
+
+已覆盖 analysis 中要求的核心验收点：
+
+- 预算不足返回 `409`，无 grant/outbox，并写失败审计。
+- 用户次数不足返回 `409`，错误和审计包含 `USER_LIMIT`。
+- 库存不足返回 `409`，错误和审计包含 `STOCK` 与 reward code。
+- 多 reward 库存不足时，quota、participation、grant、outbox all-or-nothing rollback。
+- 重复幂等事件不重复扣减 quota，不重复生成 grant/outbox。
+- 缺少 quota 行保持无限制兼容。
+
+剩余风险：
+
+- 本轮未新增 PostgreSQL 并发双事件压测用例。当前 PostgreSQL 扣减路径使用条件更新并有集成事务回滚测试覆盖，但“预算或库存只剩 1 份时并发两个不同事件最终只能一个成功”的建议用例仍可作为后续增强测试补充。
+
+需求：2026-05-24-094535
+
+exec
+/bin/zsh -lc 'git diff -- tasks/2026-05-24-094535/test.md' in /Users/tong/Documents/GitHub/OracleBetX-Projects/ExMarketing
+ succeeded in 0ms:
+diff --git a/tasks/2026-05-24-094535/test.md b/tasks/2026-05-24-094535/test.md
+index 85d1b1210f59311df309a7fb6e0f887d39609baa..5e124bdb8841c00d3363ac3aa0df00c676fc798d
+--- a/tasks/2026-05-24-094535/test.md
++++ b/tasks/2026-05-24-094535/test.md
+@@ -2,7 +2,7 @@
+ 
+ ## Agent 指令
+ 
+-你是 Test Agent。请根据 task.md、analysis.md 和 implementation.md 设计并执行测试。
++你是 Test Agent。请根据 `task.md`、`analysis.md` 和 `implementation.md` 设计并执行测试。
+ 
+ 最低要求：
+ 
+@@ -13,65 +13,156 @@
+ 
+ ## Test Cases
+ 
+-### 设计用例
++### TC01 基础回归
+ 
+-1. 最低编译与单元测试回归：
+-   - `go test ./...`
+-   - `go build ./...`
+-2. PostgreSQL smoke：
+-   - 启动 `postgres` 容器。
+-   - 重新应用 migration。
+-   - 设置 `EX_MARKETING_DATABASE_URL` 后执行 `go test ./...`。
+-3. 需求级原子扣减测试：
+-   - 预算不足：应返回 `409`，不生成 grant_order/outbox，不保留 `REWARDABLE` participation，不扣 USER_LIMIT/STOCK，写失败审计。
+-   - 用户次数不足：应返回 `409`，不生成 grant_order/outbox，不扣 BUDGET/STOCK，写失败审计。
+-   - 单奖励库存不足：应返回 `409`，不生成 grant_order/outbox，不扣 BUDGET/USER_LIMIT，写失败审计。
+-   - 多奖励活动第二个 reward 库存不足：第一个 reward 的库存扣减也 rollback，grant_order/outbox 均为空。
+-   - 重复幂等事件：第一次成功后第二次 duplicate，不重复扣 BUDGET/STOCK/USER_LIMIT，不重复生成 grant_order/outbox。
+-   - 缺少 BUDGET/USER_LIMIT/STOCK quota 行：按无限制处理，兼容既有活动。
+-   - 规则拒绝：只写 rejected participation，不扣 quota，不写 grant_order/outbox。
++目标：确认本次原子扣减改动没有破坏现有包级测试与编译。
++
++步骤：
++
++- 执行 `go test ./...`。
++- 执行 `go build ./...`。
+ 
+-### 实际可执行性结论
++预期：
+ 
+-需求级原子扣减测试无法落地执行，因为当前实现仍未包含本需求要求的核心改动：
++- 全部测试通过。
++- 全部 package 可编译。
++
++### TC02 HTTP: 预算不足
+ 
+-- `internal/marketing/repository.go:20` 仍是旧接口 `CreateGrantOutboxesWithQuota(...)`，没有 activity 级 `participation + quota + grant_order + outbox` 原子命令。
+-- `internal/engine/service.go:236-239` 仍在 quota 扣减事务前创建 `REWARDABLE` participation。预算/次数不足时会留下脏 participation，不满足验收标准。
+-- `internal/engine/service.go:311` 仍只传 `totalRewardAmount` 和用户 ID 给 repository，没有传每个 reward 的库存扣减信息。
+-- `internal/postgres/repository.go:270-279` 只扣 `BUDGET ACTIVITY TOTAL` 和 `USER_LIMIT USER <subjectID>`，未扣 `STOCK ACTIVITY <rewardCode>`。
+-- `internal/marketing/memory_repository.go:141-147` 同样只扣 BUDGET/USER_LIMIT，未实现 STOCK 和 participation 同事务语义。
+-- 未发现 `EVENT_REWARD_REJECTED` 或 `QUOTA_EXCEEDED` 等失败审计 action 的实现。
++覆盖测试：`internal/httpapi.TestActivityEventBudgetExceededReturnsConflictAndAudit`
+ 
+-因此本轮只能完成编译/现有测试/静态核验，不能判定需求通过。
++目标：验证 `BUDGET + ACTIVITY + TOTAL` 不足时，对外返回明确错误，并且不会生成发奖结果。
++
++预期：
++
++- 返回 `409 Conflict`。
++- 响应 body 包含 `code=QUOTA_EXCEEDED`、`quotaType=BUDGET`。
++- 响应 body 不包含 `grantOrders` 或 `outboxMessages`。
++- 写入 `QUOTA_EXCEEDED` audit，payload 包含 `quotaType=BUDGET`。
++
++### TC03 HTTP: 用户参与次数不足
++
++覆盖测试：`internal/httpapi.TestActivityEventUserLimitExceededReturnsConflictAndAudit`
++
++目标：验证 `USER_LIMIT + USER + <subjectID>` 不足时，返回结构化 quota 错误并记录审计。
++
++预期：
++
++- 返回 `409 Conflict`。
++- 响应 body 包含 `code=QUOTA_EXCEEDED`、`quotaType=USER_LIMIT`、`scopeKey=<subjectID>`。
++- 写入 `QUOTA_EXCEEDED` audit，payload 包含 `quotaType=USER_LIMIT`。
++
++### TC04 HTTP: 单奖励库存不足
++
++覆盖测试：`internal/httpapi.TestActivityEventStockExceededReturnsConflictAndNoRewardableResult`
++
++目标：验证 `STOCK + ACTIVITY + <rewardCode>` 不足时，不返回 rewardable/grant/outbox 结果。
++
++预期：
++
++- 返回 `409 Conflict`。
++- 响应 body 包含 `code=QUOTA_EXCEEDED`、`quotaType=STOCK`、`scopeKey=<rewardCode>`。
++- 响应 body 不包含 `status=REWARDABLE`、`grantOrders` 或 `outboxMessages`。
++- 写入 `QUOTA_EXCEEDED` audit，payload 包含 `quotaType=STOCK`。
++
++### TC05 Memory Repository: 多奖励库存失败 all-or-nothing
++
++覆盖测试：`internal/marketing.TestMemoryAtomicGrantRollsBackWhenSecondRewardStockExceeded`
++
++目标：验证第二个 reward 库存不足时，第一个 reward 的库存扣减也回滚，且 participation/grant/outbox 均不落库。
++
++预期：
+ 
++- 返回 `ErrQuotaExceeded`。
++- `participations`、`grantOrders`、`outboxMessages` 数量均为 `0`。
++- 所有相关 quota 的 `used_value` 保持 `0`。
++
++### TC06 Memory Repository: 重复幂等事件不重复扣减
++
++覆盖测试：`internal/marketing.TestMemoryAtomicGrantDoesNotDoubleReserveOnDuplicateInbox`
++
++目标：验证同一 inbox 幂等事件重复请求不会再次触发发奖或 quota 扣减。
++
++预期：
++
++- 首次 inbox 创建成功并完成原子发奖。
++- 第二次同 idempotency key 返回 duplicate。
++- grant/outbox 数量不增加。
++- `BUDGET` 和 `STOCK` 的 `used_value` 不重复增加。
++
++### TC07 PostgreSQL: 多奖励库存失败事务回滚
++
++覆盖测试：`internal/postgres.TestPostgresAtomicGrantRollsBackOnStockExceeded`
++
++目标：使用真实 PostgreSQL transaction 验证多 reward 库存不足时，participation、grant_order、outbox、quota 扣减全部 rollback。
++
++预期：
++
++- 返回 `ErrQuotaExceeded`。
++- `marketing_participation` 中无本次测试 participation。
++- `marketing_grant_order` 中无本次测试 grant。
++- `marketing_outbox` 中无本次测试 outbox。
++- 本次 activity 下 `marketing_quota.used_value` 均未变化。
++
++### TC08 兼容性: 缺少 quota 行按无限制
++
++覆盖测试：`internal/httpapi.TestActivityEventCreatesGrantCommand` 以及基础回归。
++
++目标：验证没有创建 BUDGET/STOCK/USER_LIMIT quota 行时，既有活动仍可正常发奖。
++
++预期：
++
++- 返回 `202 Accepted`。
++- 响应 body 包含 `grantOrders` 和 `outboxMessages`。
++- 生成的奖励金额符合既有计算逻辑。
++
+ ## Commands
+ 
+ ~~~bash
+ go test ./...
+ go build ./...
+ docker compose up -d postgres
+-docker compose exec -T postgres psql -U exmarketing -d exmarketing -f /docker-entrypoint-initdb.d/001_marketing_core.sql
+ docker compose exec -T postgres psql -U exmarketing -d exmarketing -f /docker-entrypoint-initdb.d/002_audit_fact_outbox_indexes.sql
++docker compose exec -T postgres psql -U exmarketing -d exmarketing -c "select to_regclass('public.marketing_activity') as marketing_activity, to_regclass('public.marketing_quota') as marketing_quota;"
+ EX_MARKETING_DATABASE_URL='postgres://exmarketing:exmarketing@localhost:54329/exmarketing?sslmode=disable' go test ./...
+-rg -n "CreateGrantOutboxesWithQuota|CreateParticipationGrant|QuotaStock|EVENT_REWARD_REJECTED|QUOTA_EXCEEDED|ParticipationRewardable" internal docs
++go test -count=1 ./internal/httpapi -run 'TestActivityEvent(BudgetExceeded|UserLimitExceeded|StockExceeded)'
++go test -count=1 ./internal/marketing -run 'TestMemoryAtomicGrant'
++EX_MARKETING_DATABASE_URL='postgres://exmarketing:exmarketing@localhost:54329/exmarketing?sslmode=disable' go test -count=1 ./internal/postgres -run 'TestPostgresAtomicGrantRollsBackOnStockExceeded'
+ ~~~
+ 
++说明：本地 PostgreSQL 容器已有数据卷，`001_marketing_core.sql` 由容器初始化阶段加载；该脚本不是可重复执行脚本。本轮通过 `to_regclass` 确认核心表存在，并重新执行幂等的 `002_audit_fact_outbox_indexes.sql`。
++
+ ## Result
+ 
+ ~~~text
+-FAIL
++PASS
+ ~~~
+ 
+ ## Evidence
+ 
+ - `go test ./...`：PASS。
+ - `go build ./...`：PASS。
+-- `docker compose up -d postgres`：PASS，`exmarketing-postgres` already running。
+-- `001_marketing_core.sql`：FAIL/不可重复执行，因表已存在报 `relation "... " already exists`；说明本地库已初始化，但该 migration 本身不是幂等脚本。
+-- `002_audit_fact_outbox_indexes.sql`：PASS，表/索引已存在时跳过或创建成功。
+-- `EX_MARKETING_DATABASE_URL=... go test ./...`：PASS，但当前测试套件没有覆盖本需求的 PostgreSQL 原子扣减行为。
+-- 静态核验：FAIL，核心实现仍为旧 quota/grant/outbox 接口，未覆盖 participation 同事务、STOCK 扣减、多奖励库存 rollback、失败审计。
++- `docker compose up -d postgres`：PASS，`exmarketing-postgres` 已运行。
++- `002_audit_fact_outbox_indexes.sql`：PASS，已存在对象按 notice 跳过。
++- 核心表检查：PASS，`marketing_activity` 和 `marketing_quota` 均存在。
++- `EX_MARKETING_DATABASE_URL=... go test ./...`：PASS，`internal/postgres` 集成测试连接本地 PostgreSQL 执行。
++- HTTP quota 失败专项测试：PASS。
++- Memory atomic grant 专项测试：PASS。
++- PostgreSQL multi-reward stock rollback 专项测试：PASS。
++
++## Coverage Notes
++
++已覆盖 analysis 中要求的核心验收点：
++
++- 预算不足返回 `409`，无 grant/outbox，并写失败审计。
++- 用户次数不足返回 `409`，错误和审计包含 `USER_LIMIT`。
++- 库存不足返回 `409`，错误和审计包含 `STOCK` 与 reward code。
++- 多 reward 库存不足时，quota、participation、grant、outbox all-or-nothing rollback。
++- 重复幂等事件不重复扣减 quota，不重复生成 grant/outbox。
++- 缺少 quota 行保持无限制兼容。
++
++剩余风险：
+ 
+-本需求测试结论为 FAIL：现有代码通过基础回归，但未实现 `tasks/2026-05-24-094535/analysis.md` 定义的验收标准，无法通过需求级测试。
++- 本轮未新增 PostgreSQL 并发双事件压测用例。当前 PostgreSQL 扣减路径使用条件更新并有集成事务回滚测试覆盖，但“预算或库存只剩 1 份时并发两个不同事件最终只能一个成功”的建议用例仍可作为后续增强测试补充。
+ 
+ 需求：2026-05-24-094535
+
+2026-05-24T10:47:24.195290Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:47:24.195299Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:47:24.195800Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:47:24.195805Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:47:24.196292Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:47:24.196295Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:47:24.196870Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:47:24.196877Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:47:24.197399Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:47:24.197404Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:47:24.198485Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:47:24.198498Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+codex
+已完成 Test Agent 工作，更新了 [test.md](/Users/tong/Documents/GitHub/OracleBetX-Projects/ExMarketing/tasks/2026-05-24-094535/test.md)。
+
+执行结果：`PASS`
+
+已跑验证：
+
+```bash
+go test ./...
+go build ./...
+docker compose up -d postgres
+docker compose exec -T postgres psql -U exmarketing -d exmarketing -f /docker-entrypoint-initdb.d/002_audit_fact_outbox_indexes.sql
+EX_MARKETING_DATABASE_URL='postgres://exmarketing:exmarketing@localhost:54329/exmarketing?sslmode=disable' go test ./...
+go test -count=1 ./internal/httpapi -run 'TestActivityEvent(BudgetExceeded|UserLimitExceeded|StockExceeded)'
+go test -count=1 ./internal/marketing -run 'TestMemoryAtomicGrant'
+EX_MARKETING_DATABASE_URL='postgres://exmarketing:exmarketing@localhost:54329/exmarketing?sslmode=disable' go test -count=1 ./internal/postgres -run 'TestPostgresAtomicGrantRollsBackOnStockExceeded'
+```
+
+文档里也记录了一个剩余风险：本轮未新增 PostgreSQL 并发双事件压测用例。当前事务回滚和条件扣减路径已通过集成测试，但并发只剩 1 份预算/库存的场景建议后续补自动化覆盖。
+diff --git a/tasks/2026-05-24-094535/test.md b/tasks/2026-05-24-094535/test.md
+index 85d1b1210f59311df309a7fb6e0f887d39609baa..5e124bdb8841c00d3363ac3aa0df00c676fc798d
+--- a/tasks/2026-05-24-094535/test.md
++++ b/tasks/2026-05-24-094535/test.md
+@@ -2,7 +2,7 @@
+ 
+ ## Agent 指令
+ 
+-你是 Test Agent。请根据 task.md、analysis.md 和 implementation.md 设计并执行测试。
++你是 Test Agent。请根据 `task.md`、`analysis.md` 和 `implementation.md` 设计并执行测试。
+ 
+ 最低要求：
+ 
+@@ -13,65 +13,156 @@
+ 
+ ## Test Cases
+ 
+-### 设计用例
++### TC01 基础回归
+ 
+-1. 最低编译与单元测试回归：
+-   - `go test ./...`
+-   - `go build ./...`
+-2. PostgreSQL smoke：
+-   - 启动 `postgres` 容器。
+-   - 重新应用 migration。
+-   - 设置 `EX_MARKETING_DATABASE_URL` 后执行 `go test ./...`。
+-3. 需求级原子扣减测试：
+-   - 预算不足：应返回 `409`，不生成 grant_order/outbox，不保留 `REWARDABLE` participation，不扣 USER_LIMIT/STOCK，写失败审计。
+-   - 用户次数不足：应返回 `409`，不生成 grant_order/outbox，不扣 BUDGET/STOCK，写失败审计。
+-   - 单奖励库存不足：应返回 `409`，不生成 grant_order/outbox，不扣 BUDGET/USER_LIMIT，写失败审计。
+-   - 多奖励活动第二个 reward 库存不足：第一个 reward 的库存扣减也 rollback，grant_order/outbox 均为空。
+-   - 重复幂等事件：第一次成功后第二次 duplicate，不重复扣 BUDGET/STOCK/USER_LIMIT，不重复生成 grant_order/outbox。
+-   - 缺少 BUDGET/USER_LIMIT/STOCK quota 行：按无限制处理，兼容既有活动。
+-   - 规则拒绝：只写 rejected participation，不扣 quota，不写 grant_order/outbox。
++目标：确认本次原子扣减改动没有破坏现有包级测试与编译。
++
++步骤：
++
++- 执行 `go test ./...`。
++- 执行 `go build ./...`。
+ 
+-### 实际可执行性结论
++预期：
+ 
+-需求级原子扣减测试无法落地执行，因为当前实现仍未包含本需求要求的核心改动：
++- 全部测试通过。
++- 全部 package 可编译。
++
++### TC02 HTTP: 预算不足
+ 
+-- `internal/marketing/repository.go:20` 仍是旧接口 `CreateGrantOutboxesWithQuota(...)`，没有 activity 级 `participation + quota + grant_order + outbox` 原子命令。
+-- `internal/engine/service.go:236-239` 仍在 quota 扣减事务前创建 `REWARDABLE` participation。预算/次数不足时会留下脏 participation，不满足验收标准。
+-- `internal/engine/service.go:311` 仍只传 `totalRewardAmount` 和用户 ID 给 repository，没有传每个 reward 的库存扣减信息。
+-- `internal/postgres/repository.go:270-279` 只扣 `BUDGET ACTIVITY TOTAL` 和 `USER_LIMIT USER <subjectID>`，未扣 `STOCK ACTIVITY <rewardCode>`。
+-- `internal/marketing/memory_repository.go:141-147` 同样只扣 BUDGET/USER_LIMIT，未实现 STOCK 和 participation 同事务语义。
+-- 未发现 `EVENT_REWARD_REJECTED` 或 `QUOTA_EXCEEDED` 等失败审计 action 的实现。
++覆盖测试：`internal/httpapi.TestActivityEventBudgetExceededReturnsConflictAndAudit`
+ 
+-因此本轮只能完成编译/现有测试/静态核验，不能判定需求通过。
++目标：验证 `BUDGET + ACTIVITY + TOTAL` 不足时，对外返回明确错误，并且不会生成发奖结果。
++
++预期：
++
++- 返回 `409 Conflict`。
++- 响应 body 包含 `code=QUOTA_EXCEEDED`、`quotaType=BUDGET`。
++- 响应 body 不包含 `grantOrders` 或 `outboxMessages`。
++- 写入 `QUOTA_EXCEEDED` audit，payload 包含 `quotaType=BUDGET`。
++
++### TC03 HTTP: 用户参与次数不足
++
++覆盖测试：`internal/httpapi.TestActivityEventUserLimitExceededReturnsConflictAndAudit`
++
++目标：验证 `USER_LIMIT + USER + <subjectID>` 不足时，返回结构化 quota 错误并记录审计。
++
++预期：
++
++- 返回 `409 Conflict`。
++- 响应 body 包含 `code=QUOTA_EXCEEDED`、`quotaType=USER_LIMIT`、`scopeKey=<subjectID>`。
++- 写入 `QUOTA_EXCEEDED` audit，payload 包含 `quotaType=USER_LIMIT`。
++
++### TC04 HTTP: 单奖励库存不足
++
++覆盖测试：`internal/httpapi.TestActivityEventStockExceededReturnsConflictAndNoRewardableResult`
++
++目标：验证 `STOCK + ACTIVITY + <rewardCode>` 不足时，不返回 rewardable/grant/outbox 结果。
++
++预期：
++
++- 返回 `409 Conflict`。
++- 响应 body 包含 `code=QUOTA_EXCEEDED`、`quotaType=STOCK`、`scopeKey=<rewardCode>`。
++- 响应 body 不包含 `status=REWARDABLE`、`grantOrders` 或 `outboxMessages`。
++- 写入 `QUOTA_EXCEEDED` audit，payload 包含 `quotaType=STOCK`。
++
++### TC05 Memory Repository: 多奖励库存失败 all-or-nothing
++
++覆盖测试：`internal/marketing.TestMemoryAtomicGrantRollsBackWhenSecondRewardStockExceeded`
++
++目标：验证第二个 reward 库存不足时，第一个 reward 的库存扣减也回滚，且 participation/grant/outbox 均不落库。
++
++预期：
+ 
++- 返回 `ErrQuotaExceeded`。
++- `participations`、`grantOrders`、`outboxMessages` 数量均为 `0`。
++- 所有相关 quota 的 `used_value` 保持 `0`。
++
++### TC06 Memory Repository: 重复幂等事件不重复扣减
++
++覆盖测试：`internal/marketing.TestMemoryAtomicGrantDoesNotDoubleReserveOnDuplicateInbox`
++
++目标：验证同一 inbox 幂等事件重复请求不会再次触发发奖或 quota 扣减。
++
++预期：
++
++- 首次 inbox 创建成功并完成原子发奖。
++- 第二次同 idempotency key 返回 duplicate。
++- grant/outbox 数量不增加。
++- `BUDGET` 和 `STOCK` 的 `used_value` 不重复增加。
++
++### TC07 PostgreSQL: 多奖励库存失败事务回滚
++
++覆盖测试：`internal/postgres.TestPostgresAtomicGrantRollsBackOnStockExceeded`
++
++目标：使用真实 PostgreSQL transaction 验证多 reward 库存不足时，participation、grant_order、outbox、quota 扣减全部 rollback。
++
++预期：
++
++- 返回 `ErrQuotaExceeded`。
++- `marketing_participation` 中无本次测试 participation。
++- `marketing_grant_order` 中无本次测试 grant。
++- `marketing_outbox` 中无本次测试 outbox。
++- 本次 activity 下 `marketing_quota.used_value` 均未变化。
++
++### TC08 兼容性: 缺少 quota 行按无限制
++
++覆盖测试：`internal/httpapi.TestActivityEventCreatesGrantCommand` 以及基础回归。
++
++目标：验证没有创建 BUDGET/STOCK/USER_LIMIT quota 行时，既有活动仍可正常发奖。
++
++预期：
++
++- 返回 `202 Accepted`。
++- 响应 body 包含 `grantOrders` 和 `outboxMessages`。
++- 生成的奖励金额符合既有计算逻辑。
++
+ ## Commands
+ 
+ ~~~bash
+ go test ./...
+ go build ./...
+ docker compose up -d postgres
+-docker compose exec -T postgres psql -U exmarketing -d exmarketing -f /docker-entrypoint-initdb.d/001_marketing_core.sql
+ docker compose exec -T postgres psql -U exmarketing -d exmarketing -f /docker-entrypoint-initdb.d/002_audit_fact_outbox_indexes.sql
++docker compose exec -T postgres psql -U exmarketing -d exmarketing -c "select to_regclass('public.marketing_activity') as marketing_activity, to_regclass('public.marketing_quota') as marketing_quota;"
+ EX_MARKETING_DATABASE_URL='postgres://exmarketing:exmarketing@localhost:54329/exmarketing?sslmode=disable' go test ./...
+-rg -n "CreateGrantOutboxesWithQuota|CreateParticipationGrant|QuotaStock|EVENT_REWARD_REJECTED|QUOTA_EXCEEDED|ParticipationRewardable" internal docs
++go test -count=1 ./internal/httpapi -run 'TestActivityEvent(BudgetExceeded|UserLimitExceeded|StockExceeded)'
++go test -count=1 ./internal/marketing -run 'TestMemoryAtomicGrant'
++EX_MARKETING_DATABASE_URL='postgres://exmarketing:exmarketing@localhost:54329/exmarketing?sslmode=disable' go test -count=1 ./internal/postgres -run 'TestPostgresAtomicGrantRollsBackOnStockExceeded'
+ ~~~
+ 
++说明：本地 PostgreSQL 容器已有数据卷，`001_marketing_core.sql` 由容器初始化阶段加载；该脚本不是可重复执行脚本。本轮通过 `to_regclass` 确认核心表存在，并重新执行幂等的 `002_audit_fact_outbox_indexes.sql`。
++
+ ## Result
+ 
+ ~~~text
+-FAIL
++PASS
+ ~~~
+ 
+ ## Evidence
+ 
+ - `go test ./...`：PASS。
+ - `go build ./...`：PASS。
+-- `docker compose up -d postgres`：PASS，`exmarketing-postgres` already running。
+-- `001_marketing_core.sql`：FAIL/不可重复执行，因表已存在报 `relation "... " already exists`；说明本地库已初始化，但该 migration 本身不是幂等脚本。
+-- `002_audit_fact_outbox_indexes.sql`：PASS，表/索引已存在时跳过或创建成功。
+-- `EX_MARKETING_DATABASE_URL=... go test ./...`：PASS，但当前测试套件没有覆盖本需求的 PostgreSQL 原子扣减行为。
+-- 静态核验：FAIL，核心实现仍为旧 quota/grant/outbox 接口，未覆盖 participation 同事务、STOCK 扣减、多奖励库存 rollback、失败审计。
++- `docker compose up -d postgres`：PASS，`exmarketing-postgres` 已运行。
++- `002_audit_fact_outbox_indexes.sql`：PASS，已存在对象按 notice 跳过。
++- 核心表检查：PASS，`marketing_activity` 和 `marketing_quota` 均存在。
++- `EX_MARKETING_DATABASE_URL=... go test ./...`：PASS，`internal/postgres` 集成测试连接本地 PostgreSQL 执行。
++- HTTP quota 失败专项测试：PASS。
++- Memory atomic grant 专项测试：PASS。
++- PostgreSQL multi-reward stock rollback 专项测试：PASS。
++
++## Coverage Notes
++
++已覆盖 analysis 中要求的核心验收点：
++
++- 预算不足返回 `409`，无 grant/outbox，并写失败审计。
++- 用户次数不足返回 `409`，错误和审计包含 `USER_LIMIT`。
++- 库存不足返回 `409`，错误和审计包含 `STOCK` 与 reward code。
++- 多 reward 库存不足时，quota、participation、grant、outbox all-or-nothing rollback。
++- 重复幂等事件不重复扣减 quota，不重复生成 grant/outbox。
++- 缺少 quota 行保持无限制兼容。
++
++剩余风险：
+ 
+-本需求测试结论为 FAIL：现有代码通过基础回归，但未实现 `tasks/2026-05-24-094535/analysis.md` 定义的验收标准，无法通过需求级测试。
++- 本轮未新增 PostgreSQL 并发双事件压测用例。当前 PostgreSQL 扣减路径使用条件更新并有集成事务回滚测试覆盖，但“预算或库存只剩 1 份时并发两个不同事件最终只能一个成功”的建议用例仍可作为后续增强测试补充。
+ 
+ 需求：2026-05-24-094535
+
+tokens used
+55,184
+已完成 Test Agent 工作，更新了 [test.md](/Users/tong/Documents/GitHub/OracleBetX-Projects/ExMarketing/tasks/2026-05-24-094535/test.md)。
+
+执行结果：`PASS`
+
+已跑验证：
+
+```bash
+go test ./...
+go build ./...
+docker compose up -d postgres
+docker compose exec -T postgres psql -U exmarketing -d exmarketing -f /docker-entrypoint-initdb.d/002_audit_fact_outbox_indexes.sql
+EX_MARKETING_DATABASE_URL='postgres://exmarketing:exmarketing@localhost:54329/exmarketing?sslmode=disable' go test ./...
+go test -count=1 ./internal/httpapi -run 'TestActivityEvent(BudgetExceeded|UserLimitExceeded|StockExceeded)'
+go test -count=1 ./internal/marketing -run 'TestMemoryAtomicGrant'
+EX_MARKETING_DATABASE_URL='postgres://exmarketing:exmarketing@localhost:54329/exmarketing?sslmode=disable' go test -count=1 ./internal/postgres -run 'TestPostgresAtomicGrantRollsBackOnStockExceeded'
+```
+
+文档里也记录了一个剩余风险：本轮未新增 PostgreSQL 并发双事件压测用例。当前事务回滚和条件扣减路径已通过集成测试，但并发只剩 1 份预算/库存的场景建议后续补自动化覆盖。
+
+finishedAt=2026-05-24T10:47:31Z exitCode=0 error=<nil>

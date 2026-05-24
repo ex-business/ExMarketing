@@ -1,0 +1,8 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "exmarketing_workflow": "./src/exmarketing_agents/graph.py:graph"
+  },
+  "env": ".env"
+}
+

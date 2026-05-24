@@ -72,8 +72,12 @@ Local PostgreSQL is provided by `docker-compose.yml` and initializes the first-p
 
 ```text
 Quota reservation:
-  marketing_quota supports BUDGET and USER_LIMIT reservations.
-  PostgreSQL uses one conditional UPDATE to avoid read-after-write races.
+  marketing_quota supports BUDGET, STOCK and USER_LIMIT reservations.
+  For rewardable events, participation creation, quota reservation, grant_order
+  creation and outbox creation are committed in one activity-level transaction.
+  PostgreSQL uses conditional UPDATE statements to avoid read-after-write races.
+  STOCK uses ACTIVITY scope with rewardCode as scopeKey; missing quota rows mean
+  unlimited quota for backward compatibility.
 
 Outbox sender:
   EX_MARKETING_OUTBOX_WORKER=true enables HTTP/WEBHOOK delivery.
@@ -87,7 +91,8 @@ Fact query:
   POST /openapi/v1/facts/query proxies a standard event payload to an HTTP provider.
 
 Audit:
-  activity creation, quota creation and event intake are recorded in marketing_audit.
+  activity creation, quota creation, event intake and quota rejection are recorded
+  in marketing_audit.
 
 Admin page:
   GET /admin/ serves a minimal local admin page for activity list/create and simulation.

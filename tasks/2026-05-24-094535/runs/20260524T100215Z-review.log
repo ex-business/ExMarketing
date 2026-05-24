@@ -1,0 +1,2493 @@
+startedAt=2026-05-24T10:02:15Z agent=review requirement=2026-05-24-094535
+
+2026-05-24T10:02:15.242233Z ERROR codex_core::session::session: failed to load skill /Users/tong/.codex/skills/oraclebetx-api-skill.bak.1777791572/SKILL.md: missing YAML frontmatter delimited by ---
+2026-05-24T10:02:15.242251Z ERROR codex_core::session::session: failed to load skill /Users/tong/.codex/skills/oraclebetx-run-trading.bak.1777791572/SKILL.md: missing YAML frontmatter delimited by ---
+2026-05-24T10:02:15.242252Z ERROR codex_core::session::session: failed to load skill /Users/tong/Documents/GitHub/OracleBetX-Projects/OracleBetx-Skill/oraclebetx-aws-test-env/SKILL.md: invalid YAML: mapping values are not allowed in this context at line 2 column 66
+2026-05-24T10:02:15.242254Z ERROR codex_core::session::session: failed to load skill /Users/tong/.codex/skills/oraclebetx-run-admin.bak.1777791572/SKILL.md: missing YAML frontmatter delimited by ---
+2026-05-24T10:02:15.242255Z ERROR codex_core::session::session: failed to load skill /Users/tong/.codex/skills/oraclebetx-aws-test-env.bak.1777791572/SKILL.md: invalid YAML: mapping values are not allowed in this context at line 2 column 66
+2026-05-24T10:02:15.242257Z ERROR codex_core::session::session: failed to load skill /Users/tong/.codex/skills/oraclebetx-java-build.bak.1777791572/SKILL.md: missing YAML frontmatter delimited by ---
+OpenAI Codex v0.133.0-alpha.1
+--------
+workdir: /Users/tong/Documents/GitHub/OracleBetX-Projects/ExMarketing
+model: gpt-5.5
+provider: openai
+approval: never
+sandbox: danger-full-access
+reasoning effort: medium
+reasoning summaries: none
+session id: 019e596f-6ce0-7732-8f9b-3842d6c98631
+--------
+user
+你是 Review Agent。请审核 tasks/2026-05-24-094535/analysis.md。
+只写 tasks/2026-05-24-094535/review.md，不改代码。
+存在 P0/P1 或 Score < 70 必须 BLOCK。
+
+2026-05-24T10:02:15.459730Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:02:15.459746Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:02:15.460826Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:02:15.460832Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:02:15.462450Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:02:15.462457Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:02:15.464605Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:02:15.464609Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:02:15.465768Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:02:15.465772Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:02:15.471233Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:02:15.471240Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:02:16.637852Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:02:16.637861Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:02:16.638192Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:02:16.638196Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:02:16.638556Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:02:16.638559Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:02:16.638933Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:02:16.638936Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:02:16.639301Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:02:16.639305Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:02:16.640035Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:02:16.640039Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+codex
+我会按 review 口径先读目标分析文件和相关任务目录，只产出 `review.md`，不触碰代码。
+exec
+/bin/zsh -lc 'find tasks/2026-05-24-094535 -maxdepth 2 -type f -print' in /Users/tong/Documents/GitHub/OracleBetX-Projects/ExMarketing
+exec
+/bin/zsh -lc "sed -n '1,240p' tasks/2026-05-24-094535/analysis.md" in /Users/tong/Documents/GitHub/OracleBetX-Projects/ExMarketing
+ succeeded in 0ms:
+tasks/2026-05-24-094535/implementation.md
+tasks/2026-05-24-094535/agent-report.md
+tasks/2026-05-24-094535/agent-status.json
+tasks/2026-05-24-094535/analysis.md
+tasks/2026-05-24-094535/agent-prompts.md
+tasks/2026-05-24-094535/task.md
+tasks/2026-05-24-094535/commit.md
+tasks/2026-05-24-094535/review.md
+tasks/2026-05-24-094535/test.md
+tasks/2026-05-24-094535/runs/20260524T095450Z-analysis.log
+tasks/2026-05-24-094535/runs/20260524T095233Z-analysis.log
+tasks/2026-05-24-094535/runs/20260524T100215Z-review.log
+
+ succeeded in 0ms:
+# Analysis
+
+## Agent 指令
+
+你是 Analysis Agent。请读取本目录 task.md、项目 README.md、CLAUDE.md、docs/architecture.md 和相关代码。
+
+只做分析，不改代码，不提交。
+
+## 评分规则
+
+满分 100，低于 70 不允许进入研发：
+
+~~~text
+需求清晰度        20
+范围可控          20
+风险可控          20
+验收标准明确      20
+架构一致性        20
+~~~
+
+## 现状
+
+当前 ExMarketing 已有事件接入、活动匹配、规则计算、奖励计算、participation、grant_order、outbox、quota 和 audit 的第一版能力。
+
+已实现的关键点：
+
+- `internal/engine/service.go` 中 `ProcessEvent` 先写 `marketing_event_inbox` 做外部事件幂等，重复请求直接返回 duplicate，不再重复发奖。
+- `evaluateActivity` 会创建 participation，计算多个 reward，然后调用 `CreateGrantOutboxesWithQuota` 写 grant_order/outbox 并扣 quota。
+- `internal/postgres/repository.go` 的 `CreateGrantOutboxesWithQuota` 已在一个 PostgreSQL transaction 内扣 `BUDGET + ACTIVITY + TOTAL` 和 `USER_LIMIT + USER + subjectID`，再写 grant_order/outbox。
+- PostgreSQL quota 扣减使用条件更新 `used_value + amount <= total_value`，避免读后写式并发超扣。
+- HTTP 层对 `ErrQuotaExceeded` 返回 `409 Conflict`。
+
+主要缺口：
+
+- participation 当前在 quota 扣减事务外提前写入。若预算/次数不足，仍会留下 `REWARDABLE` participation，不满足“活动发奖前同一事务内原子校验和扣减”的严格要求。
+- 库存 `STOCK` 只在模型和文档中定义，业务发奖路径没有扣减。多奖励活动无法按每个 reward 扣对应库存。
+- `CreateGrantOutboxesWithQuota` 只接收 `totalRewardAmount` 和用户次数开关，不能表达每个 reward 的库存扣减需求。
+- quota 不足或原子扣减失败时，当前只更新 inbox failed 并返回错误，没有明确写失败审计记录。
+- 事务只覆盖单个 activity 的 quota/grant/outbox，不覆盖 participation。若一个事件命中多个活动，活动之间仍是逐个处理，不应扩大为跨活动全局事务，除非后续需求明确要求。
+- 测试目前主要覆盖 HTTP happy path 和 workflow，对 quota 不足、多奖励原子性、重复事件不重复扣减、PostgreSQL 并发条件更新缺少针对性覆盖。
+
+## 目标理解
+
+本任务要把发奖前的资源占用改成强账务语义：
+
+- 活动预算、奖励库存、用户参与次数必须在同一个事务内完成校验和扣减。
+- 扣减失败时不能生成 grant_order，也不能生成 outbox。
+- 同一幂等事件重复请求不能重复扣减预算、库存、次数。
+- 多奖励活动中，同一 activity 命中的所有 reward 的 quota 扣减、grant_order、outbox 必须 all-or-nothing。
+- 失败时要有可审计记录，并对调用方返回明确错误，quota 不足保持 `409 Conflict`。
+
+本需求的合理边界是“单个 activity 发奖事务原子化”。事件 inbox 的幂等写入仍可保留在事务外作为事件级接入门禁；同一事件命中多个活动时，各 activity 独立处理，避免把多个活动和外部顺序策略绑成一个过大的事务。
+
+## 方案
+
+建议按“最小可控改动”实现：
+
+1. 重构 repository 原子接口
+
+将当前 `CreateGrantOutboxesWithQuota` 扩展或替换为一个更明确的 activity 级事务接口，例如：
+
+```go
+CreateParticipationGrantOutboxesWithQuota(ctx, cmd AtomicGrantCommand) (AtomicGrantResult, error)
+```
+
+该接口在一个事务内完成：
+
+- 插入 participation。
+- 原子扣 `BUDGET + ACTIVITY + TOTAL`，扣减金额为该 activity 下所有 reward amount 的合计。
+- 原子扣 `USER_LIMIT + USER + subjectID`，扣减值为 `1`。
+- 按 reward 配置扣 `STOCK`。建议默认使用 `STOCK + ACTIVITY + rewardCode` 或 `STOCK + ACTIVITY + rewardID`，需在实现阶段固定一种 scopeKey 并同步文档。
+- 插入所有 grant_order。
+- 插入所有 outbox。
+- 任一步失败则 rollback，返回明确错误和失败 quota 类型。
+
+2. 调整 engine 编排
+
+`evaluateActivity` 仍负责规则判断、奖励计算、组装 participation/grant/outbox，但不再提前写 rewardable participation。规则拒绝的 participation 可以继续单独写入 rejected，因为它不进入发奖扣减链路。
+
+发奖路径改为：规则通过 -> 计算全部 reward -> 组装 atomic command -> repository 事务内写 participation、扣 quota、写 grant/outbox。
+
+3. 库存扣减配置
+
+需要定义 reward 到库存 quota 的映射。可采用不改 schema 的方式：
+
+- 每个 enabled reward 默认扣 1 个库存。
+- 库存 quota 行使用 `quotaType=STOCK`、`scope=ACTIVITY`、`scopeKey=<rewardCode>`。
+- 若不存在对应 STOCK quota，沿用现有 quota 语义：不存在即无限制。
+
+如果后续需要一个 reward 扣多份库存或按 payload 扣库存，可以再在 `rewardConfig` 增加字段；本任务不建议扩 schema。
+
+4. 失败审计
+
+新增 audit action，例如：
+
+```text
+EVENT_REWARD_REJECTED
+QUOTA_EXCEEDED
+```
+
+当预算、库存或用户次数不足时，写入 tenant、activityId、eventInboxId、subject、biz、quotaType、scope、scopeKey、amount、reason。审计记录可在事务外写入；它不应阻断主错误返回。
+
+5. 错误表达
+
+保留 `marketing.ErrQuotaExceeded` 供 HTTP 层识别 `409`。为便于审计和测试，可以增加结构化错误或包装错误，包含 quota 类型：
+
+```text
+quota exceeded: BUDGET ACTIVITY TOTAL
+quota exceeded: STOCK ACTIVITY <rewardCode>
+quota exceeded: USER_LIMIT USER <subjectID>
+```
+
+HTTP 对外仍可返回简洁错误，测试可断言状态码和不产生 grant/outbox。
+
+6. 内存仓储对齐
+
+`MemoryRepository` 只用于本地快速开发，但必须同步实现同一接口和同一 all-or-nothing 语义，使用现有 mutex 即可。PostgreSQL 语义仍以数据库测试为准。
+
+## 改动范围
+
+预计修改：
+
+- `internal/marketing/repository.go`：调整原子发奖事务接口和必要 command/result 类型。
+- `internal/marketing/model.go`：如需要，增加结构化 quota 错误或 audit action 常量；不建议新增表字段。
+- `internal/engine/service.go`：把 rewardable participation 写入移动到原子事务内；接入库存 quota；失败审计。
+- `internal/postgres/repository.go`：实现 participation + budget + stock + user limit + grant_order + outbox 的单事务写入。
+- `internal/marketing/memory_repository.go`：对齐原子接口，保证本地模式行为一致。
+- `internal/httpapi/handler.go`：确认 quota 错误继续返回 `409 Conflict`，必要时保留更明确错误消息。
+- `internal/httpapi/handler_test.go` 或新增 engine/repository 测试：补充重复事件、quota 不足、多奖励 all-or-nothing。
+- `docs/api.md`、`docs/data-model.md`、`docs/architecture.md`：同步 STOCK quota 的 scopeKey 约定、失败审计 action 和处理流程。
+
+不建议修改：
+
+- 不新增外部业务系统依赖。
+- 不连接外部业务库。
+- 不直接发奖或改用户余额。
+- 不扩大为跨活动全局事务。
+
+## 风险点
+
+- 高风险：这是预算、库存、次数和发奖单的账务安全路径，必须以 PostgreSQL 事务和条件更新为准，不能只靠内存仓储测试。
+- 事务边界风险：如果继续在事务外写 rewardable participation，会留下“失败但可发奖”的脏状态；这是必须修复的 P0 点。
+- 库存映射风险：`STOCK` 的 `scopeKey` 若不固定，会导致运营创建 quota 和发奖扣减不一致。实现前必须在代码和文档中统一为 rewardCode 或 rewardID。
+- 多奖励风险：任一 reward 的库存不足时，所有预算、次数、grant_order、outbox 都必须 rollback。
+- 幂等风险：外部事件幂等已在 inbox 层处理，但 participation/grant_order 仍有唯一键。实现时要保留唯一键兜底，避免并发重复请求在异常路径重复扣减。
+- 审计风险：失败审计不能放在同一个会 rollback 的事务里，否则失败原因会随事务回滚丢失。
+- 兼容风险：当前不存在 quota 表示无限制。新增 STOCK 扣减时也应沿用“不存在对应 STOCK quota 即不限制”，避免破坏未配置库存的现有活动。
+
+## 验收方式
+
+最低验证：
+
+```bash
+go test ./...
+go build ./...
+```
+
+必须增加并通过的行为测试：
+
+- 预算不足：返回 `409`，不生成 grant_order，不生成 outbox，不扣 USER_LIMIT/STOCK，写失败审计。
+- 用户次数不足：返回 `409`，不生成 grant_order/outbox，不扣 BUDGET/STOCK，写失败审计。
+- 单个 reward 库存不足：返回 `409`，不生成 grant_order/outbox，不扣 BUDGET/USER_LIMIT，写失败审计。
+- 多 reward 活动：第二个 reward 库存不足时，第一个 reward 的库存扣减也 rollback，grant_order/outbox 均为空。
+- 重复幂等事件：第一次成功后第二次返回 duplicate，budget/stock/user limit 的 used_value 不增加，grant_order/outbox 数量不增加。
+- 缺少 BUDGET、USER_LIMIT 或 STOCK quota 行时按无限制处理，兼容现有活动。
+- 规则拒绝时只写 rejected participation，不扣 quota，不写 grant_order/outbox。
+
+PostgreSQL smoke 必须执行：
+
+```bash
+docker compose up -d postgres
+docker compose exec -T postgres psql -U exmarketing -d exmarketing -f /docker-entrypoint-initdb.d/001_marketing_core.sql
+docker compose exec -T postgres psql -U exmarketing -d exmarketing -f /docker-entrypoint-initdb.d/002_audit_fact_outbox_indexes.sql
+EX_MARKETING_DATABASE_URL='postgres://exmarketing:exmarketing@localhost:54329/exmarketing?sslmode=disable' go test ./...
+```
+
+建议额外做一个 PostgreSQL 并发测试：同一 activity 预算或库存只剩 1 份时，并发提交两个不同幂等事件，最终只能一个成功，quota used_value 不超过 total_value。
+
+## Score
+
+~~~text
+82
+~~~
+
+## Decision
+
+~~~text
+PASS
+~~~
+
+需求：2026-05-24-094535
+
+exec
+/bin/zsh -lc 'git status --short' in /Users/tong/Documents/GitHub/OracleBetX-Projects/ExMarketing
+ succeeded in 0ms:
+ M README.md
+ M internal/httpapi/handler.go
+ M internal/httpapi/handler_test.go
+ M web/admin/index.html
+?? CLAUDE.md
+?? agent-runtime/
+?? cmd/workflowctl/
+?? docs/api.md
+?? docs/automation.md
+?? docs/data-model.md
+?? docs/langgraph-studio.md
+?? docs/operations.md
+?? docs/roadmap.md
+?? docs/workflow.md
+?? internal/httpapi/workflow_admin.go
+?? internal/workflow/
+?? requirements/
+?? tasks/
+
+2026-05-24T10:02:23.185078Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:02:23.185088Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:02:23.185649Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:02:23.185654Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:02:23.186170Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:02:23.186181Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:02:23.186733Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:02:23.186738Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:02:23.187298Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:02:23.187302Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:02:23.188372Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:02:23.188376Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+codex
+我已经读到 analysis 的结论是 PASS/82。接下来会对照原始 task 和架构文档检查是否有遗漏、风险低估或验收标准不足。
+exec
+/bin/zsh -lc "sed -n '1,220p' tasks/2026-05-24-094535/task.md" in /Users/tong/Documents/GitHub/OracleBetX-Projects/ExMarketing
+exec
+/bin/zsh -lc "sed -n '1,220p' README.md" in /Users/tong/Documents/GitHub/OracleBetX-Projects/ExMarketing
+ succeeded in 0ms:
+# Task
+
+## 标题
+
+预算库存次数原子扣减
+
+## 需求 ID
+
+2026-05-24-094535
+
+## 背景
+
+根据 22-独立活动营销中台设计，活动发奖前需要对活动预算、奖励库存、用户参与次数做同一事务内的原子校验和扣减。要求：额度不足时不能生成 grant order；同一幂等事件重复请求不能重复扣减；多奖励活动要保证同一事件下所有奖励扣减和 grant/outbox 写入保持一致；失败时写审计记录并返回明确错误。
+
+## 目标
+
+- 待 Analysis Agent 细化。
+
+## 范围
+
+- 待 Analysis Agent 评估。
+
+## 非目标
+
+- 待 Analysis Agent 评估。
+
+## 风险等级
+
+高
+
+## 验收标准
+
+- 待 Analysis Agent 定义。
+
+ succeeded in 0ms:
+# ExMarketing
+
+`ExMarketing` is a standalone marketing system under `ex-stack`.
+
+It is designed to hold reusable marketing capabilities:
+
+- activity lifecycle
+- rule evaluation
+- reward definition
+- event intake
+- grant order generation
+- idempotency, quota, budget, inventory, audit, outbox and DLQ
+
+## Run
+
+Start local PostgreSQL:
+
+```bash
+docker compose up -d postgres
+```
+
+Use the Docker PostgreSQL database:
+
+```bash
+export EX_MARKETING_DATABASE_URL='postgres://exmarketing:exmarketing@localhost:54329/exmarketing?sslmode=disable'
+go run ./cmd/exmarketing
+```
+
+Default address:
+
+```text
+:8080
+```
+
+Without `EX_MARKETING_DATABASE_URL`, the service uses the in-memory repository.
+
+Enable the Outbox sender:
+
+```bash
+export EX_MARKETING_OUTBOX_WORKER=true
+```
+
+The worker sends `HTTP` and `WEBHOOK` reward commands to `rewardConfig.targetRef`, retries failures, then marks exhausted messages as `DLQ`.
+
+Stop local PostgreSQL:
+
+```bash
+docker compose down
+```
+
+## APIs
+
+```text
+GET  /healthz
+GET  /admin/
+GET  /admin/v1/activities
+POST /admin/v1/activities
+POST /admin/v1/quotas
+GET  /admin/v1/audit
+POST /admin/v1/simulate
+GET  /admin/v1/workflow/requirements
+GET  /admin/v1/workflow/requirements/{id}
+POST /openapi/v1/events
+POST /openapi/v1/facts/query
+POST /openapi/v1/reward/callback
+```
+
+Create activity example:
+
+```bash
+curl -X POST http://localhost:8080/admin/v1/activities \
+  -H 'content-type: application/json' \
+  -d '{
+    "tenantId": "site_001",
+    "activityCode": "FIRST_DEPOSIT_BONUS",
+    "activityName": "First Deposit Bonus",
+    "activityType": "FIRST_DEPOSIT",
+    "status": "ACTIVE",
+    "triggerEvents": ["DEPOSIT_SUCCESS"],
+    "startTime": "2026-05-01T00:00:00Z",
+    "endTime": "2026-06-01T00:00:00Z",
+    "timezone": "UTC",
+    "rules": [
+      {
+        "ruleCode": "FIRST_DEPOSIT_AND_AMOUNT",
+        "rulePhase": "QUALIFY",
+        "ruleType": "CONDITION",
+        "ruleConfig": {
+          "logic": "AND",
+          "conditions": [
+            {"field": "attributes.isFirstDeposit", "op": "=", "value": true},
+            {"field": "attributes.amount", "op": ">=", "value": "100.00"}
+          ]
+        }
+      }
+    ],
+    "rewards": [
+      {
+        "rewardCode": "FIRST_DEPOSIT_RATIO",
+        "rewardType": "BONUS",
+        "calculateType": "RATIO",
+        "rewardConfig": {
+          "baseField": "attributes.amount",
+          "rate": "0.20",
+          "maxAmount": "500.00",
+          "currency": "CNY",
+          "flowMultiple": "3"
+        },
+        "grantMode": "AUTO",
+        "grantChannel": "HTTP"
+      }
+    ]
+  }'
+```
+
+Submit event example:
+
+```bash
+curl -X POST http://localhost:8080/openapi/v1/events \
+  -H 'content-type: application/json' \
+  -H 'Idempotency-Key: site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:pay_123' \
+  -d '{
+    "eventId": "evt_20260524_000001",
+    "eventType": "DEPOSIT_SUCCESS",
+    "sourceSystem": "payment",
+    "tenantId": "site_001",
+    "subject": {"type": "USER", "id": "10001"},
+    "biz": {"bizType": "DEPOSIT", "bizId": "pay_123"},
+    "occurredAt": "2026-05-24T12:00:00Z",
+    "attributes": {
+      "amount": "299.00",
+      "currency": "CNY",
+      "isFirstDeposit": true
+    }
+  }'
+```
+
+## Layout
+
+```text
+cmd/exmarketing       service entrypoint
+internal/httpapi      HTTP handlers and routing
+internal/engine       event processing pipeline
+internal/marketing    domain model and repository contracts
+internal/rule         condition rule evaluator
+internal/reward       fixed and ratio reward calculator
+internal/decimal      decimal money helper, no float64 for amount math
+internal/worker       outbox HTTP/Webhook sender with retry and DLQ
+internal/fact         HTTP fact provider client
+internal/plugin       activity plugin registry contract
+db/migration          first-phase schema
+docs                  design notes
+```
+
+## Agent Workflow
+
+```bash
+go run ./cmd/workflowctl add --title "example" --description "需求描述"
+go run ./cmd/workflowctl intake
+go run ./cmd/workflowctl list
+EX_MARKETING_AGENT_CMD='/Applications/Codex.app/Contents/Resources/codex exec --cd . --sandbox danger-full-access --ask-for-approval never -' \
+  go run ./cmd/workflowctl run-agent --id <requirement-id>
+go run ./cmd/workflowctl agent-status --id <requirement-id>
+```
+
+本地服务启动后可以打开工作流看板：
+
+```text
+http://localhost:8080/admin/
+```
+
+## Documents
+
+```text
+docs/architecture.md  架构说明
+docs/api.md           API 接入示例
+docs/data-model.md    数据模型和状态枚举
+docs/operations.md    本地运维、排障和生产前检查
+docs/roadmap.md       分阶段路线图
+docs/workflow.md      任务流水线 Agent 协作流程
+docs/automation.md    需求列表驱动的自动化流程
+docs/langgraph-studio.md LangGraph + LangSmith Studio 集成
+CLAUDE.md             开发流程和硬性规则
+tasks/                任务级分析、审核、开发、测试、提交产物
+```
+
+exec
+/bin/zsh -lc "sed -n '1,220p' CLAUDE.md" in /Users/tong/Documents/GitHub/OracleBetX-Projects/ExMarketing
+ succeeded in 0ms:
+# ExMarketing 开发指南
+
+## 项目定位
+
+`ExMarketing` 是独立活动营销中台的 Go 实现，设计依据：
+
+```text
+/Users/tong/Documents/GitHub/OracleBetX-Projects/act-analysis/22-独立活动营销中台设计.md
+```
+
+系统必须保持与具体业务系统解耦：
+
+- 禁止连接外部业务数据库。
+- 禁止引用外部业务代码包。
+- 禁止直接修改用户余额。
+- 只接收标准事件，只判断活动配置，只生成参与记录、发奖单和发奖指令。
+- 外部业务字段只能通过 `attributes`、`facts`、`mapping`、`adapter` 进入规则引擎。
+
+## 标准开发流程
+
+修改行为前必须先读：
+
+1. `README.md`
+2. `docs/architecture.md`
+3. `docs/workflow.md`
+4. 本次要改的 package
+5. 涉及业务语义时，读取 `act-analysis/22-独立活动营销中台设计.md`
+
+开发原则：
+
+- 优先沿用现有分层，不要随意新增包边界。
+- 行为变更必须同步更新测试和文档。
+- 涉及金额、预算、库存、发奖的改动必须按账务安全规则处理。
+
+完成任何代码改动前必须执行：
+
+```bash
+go test ./...
+go build ./...
+```
+
+涉及数据库 schema 变更时：
+
+```bash
+docker compose up -d postgres
+docker compose exec -T postgres psql -U exmarketing -d exmarketing -f /docker-entrypoint-initdb.d/<migration>.sql
+```
+
+然后必须用 PostgreSQL 仓储验证对应 API，不允许只用内存仓储验证。
+
+## 本地运行
+
+启动本地 PostgreSQL：
+
+```bash
+docker compose up -d postgres
+```
+
+使用 PostgreSQL 运行服务：
+
+```bash
+export EX_MARKETING_DATABASE_URL='postgres://exmarketing:exmarketing@localhost:54329/exmarketing?sslmode=disable'
+go run ./cmd/exmarketing
+```
+
+开启 Outbox 投递：
+
+```bash
+export EX_MARKETING_OUTBOX_WORKER=true
+```
+
+Fact Query 必须显式配置 allowlist：
+
+```bash
+export EX_MARKETING_FACT_ALLOWLIST='example.com,api.partner.com'
+```
+
+未设置 `EX_MARKETING_DATABASE_URL` 时，服务使用内存仓储。内存仓储只用于本地快速开发；生产语义验证必须使用 PostgreSQL。
+
+## 包边界
+
+```text
+cmd/exmarketing       服务入口和运行时组装
+internal/httpapi      HTTP API 边界
+internal/engine       活动匹配、规则判断、奖励计算、额度/发奖/Outbox 编排
+internal/marketing    领域模型和仓储接口
+internal/postgres     PostgreSQL 仓储实现
+internal/rule         配置化条件规则执行器
+internal/reward       奖励计算器
+internal/decimal      金额 Decimal 计算
+internal/worker       Outbox 投递、重试、DLQ
+internal/fact         HTTP Fact Provider 客户端
+internal/plugin       活动插件接口
+web/admin             最小本地后台页面
+db/migration          PostgreSQL schema migration
+```
+
+边界规则：
+
+- `internal/httpapi` 不写业务决策。
+- `internal/engine` 负责流程顺序和账务安全。
+- `internal/postgres` 负责事务边界和行级并发控制。
+- `internal/decimal` 必须用于金额计算。
+- 禁止用 `float64` 计算金额、预算、库存、奖励。
+
+## 账务安全规则
+
+以下规则是硬性要求：
+
+- 必须先创建 participation，再创建 grant_order。
+- 禁止绕过 `grant_order` 和 `outbox` 直接发奖。
+- Quota 扣减、grant_order 创建、outbox 创建必须在活动级别保持原子性。
+- PostgreSQL Outbox worker 必须先 claim 行，再投递，避免多 worker 重复发送。
+- 发奖回调必须同时按 `tenantId` 和 `commandId` 限定更新范围。
+- 外部事件幂等键必须使用：
+
+```text
+tenantId + sourceSystem + eventType + bizType + bizId
+```
+
+禁止引入读后写式额度扣减。必须使用 PostgreSQL 条件更新、行锁，或 Redis Lua 等原子方案。
+
+## 安全规则
+
+不得削弱 Admin 和 OpenAPI 的安全边界：
+
+- Fact Query 必须要求 allowlist host。
+- Fact Query 必须拒绝 private/local IP。
+- Fact Query 禁止跟随 redirect。
+- Fact Query HTTP client 禁止使用代理。
+- 禁止记录 secret、token、完整 Authorization header。
+- 未设计鉴权前，禁止新增面向生产的无鉴权管理操作。
+
+如果某个接口只允许本地开发使用，必须在 `README.md` 中写清楚，并在生产环境禁用或加保护。
+
+## 数据库迁移规则
+
+所有 schema 变更都放在 `db/migration`。
+
+迁移要求：
+
+- 本地迭代优先使用 `CREATE TABLE IF NOT EXISTS` 和 `CREATE INDEX IF NOT EXISTS`。
+- 核心表名必须与设计文档保持一致：
+  - `marketing_activity`
+  - `marketing_rule`
+  - `marketing_reward`
+  - `marketing_event_inbox`
+  - `marketing_participation`
+  - `marketing_grant_order`
+  - `marketing_quota`
+  - `marketing_outbox`
+  - `marketing_audit`
+  - `marketing_fact_provider`
+- Go model 字段变化时，必须同步更新 migration、Postgres insert/scan、测试和文档。
+
+## API 开发规则
+
+当前 API：
+
+```text
+GET  /healthz
+GET  /admin/
+GET  /admin/v1/activities
+POST /admin/v1/activities
+POST /admin/v1/quotas
+GET  /admin/v1/audit
+POST /admin/v1/simulate
+POST /openapi/v1/events
+POST /openapi/v1/facts/query
+POST /openapi/v1/reward/callback
+```
+
+新增 API 时：
+
+- JSON decode 默认使用 `DisallowUnknownFields`。
+- 事件和 Fact payload 需要使用 `UseNumber`。
+- Quota 不足返回 `409 Conflict`，不要返回通用 `500`。
+- 模拟运行必须无副作用。
+- OpenAPI 事件接入必须保持幂等。
+
+## 测试要求
+
+每次改动最低要求：
+
+```bash
+go test ./...
+go build ./...
+```
+
+以下模块变更必须加或跑针对性测试：
+
+- 规则引擎：条件操作符、字段缺失、数值比较。
+- 奖励计算：固定金额、比例金额、封顶金额。
+- Quota 和发奖：额度不足、多奖励原子性、重复事件。
+- Outbox worker：claim、retry、sent、DLQ。
+- Fact Query：allowlist 拒绝、private IP 拒绝、redirect 拒绝。
+- Callback：tenant 维度隔离更新。
+
+涉及 PostgreSQL 行为时，必须用 Docker PostgreSQL 验证，因为内存仓储不能代表事务和锁语义。
+
+## 任务流水线
+
+复杂任务必须建立任务目录：
+
+```text
+tasks/YYYY-MM-DD-short-topic/
+```
+
+并按以下顺序产出：
+
+```text
+task.md
+analysis.md
+review.md
+implementation.md
+test.md
+commit.md
+```
+
+模板位于：
+
+exec
+/bin/zsh -lc "sed -n '1,260p' docs/architecture.md" in /Users/tong/Documents/GitHub/OracleBetX-Projects/ExMarketing
+ succeeded in 0ms:
+# ExMarketing Architecture
+
+## Goal
+
+`ExMarketing` is a standalone marketing platform that can connect to any business system through events, fact queries and reward commands.
+
+## Core Modules
+
+```text
+Event Intake
+  -> Idempotency
+  -> Campaign Match
+  -> Rule Evaluation
+  -> Quota / Budget / Inventory
+  -> Grant Order
+  -> Outbox
+  -> External Reward System
+```
+
+## First Milestone
+
+```text
+marketing_activity
+marketing_rule
+marketing_reward
+marketing_event_inbox
+marketing_participation
+marketing_grant_order
+marketing_quota
+marketing_outbox
+```
+
+## API Boundary
+
+External business systems should only integrate through:
+
+```text
+Event In        report user/business events
+Fact Query      optional external facts
+Command Out     reward commands generated by ExMarketing
+Callback In     reward delivery result
+```
+
+## Current Implementation
+
+The first version is a single Go service with internal module boundaries that mirror the future service split:
+
+```text
+internal/httpapi      admin and openapi HTTP boundary
+internal/engine       activity match -> rule evaluation -> reward calculation -> grant order -> outbox
+internal/marketing    core domain model and repository interface
+internal/rule         configurable condition evaluator
+internal/reward       fixed and ratio reward calculators
+internal/decimal      exact decimal arithmetic for money
+internal/worker       outbox sender with retry and DLQ
+internal/fact         HTTP fact provider client
+internal/plugin       activity plugin registry contract
+```
+
+The service supports two repository modes:
+
+```text
+default                         in-memory repository
+EX_MARKETING_DATABASE_URL set    PostgreSQL repository
+```
+
+Local PostgreSQL is provided by `docker-compose.yml` and initializes the first-phase schema from `db/migration/001_marketing_core.sql`.
+
+`db/migration/002_audit_fact_outbox_indexes.sql` adds audit records, fact provider metadata and indexes for quota/outbox processing.
+
+## Implemented Next-Step Capabilities
+
+```text
+Quota reservation:
+  marketing_quota supports BUDGET and USER_LIMIT reservations.
+  PostgreSQL uses one conditional UPDATE to avoid read-after-write races.
+
+Outbox sender:
+  EX_MARKETING_OUTBOX_WORKER=true enables HTTP/WEBHOOK delivery.
+  Failed messages retry with backoff and then move to DLQ.
+
+Simulation:
+  POST /admin/v1/simulate evaluates matching activities without writing inbox,
+  participation, grant_order, quota, or outbox rows.
+
+Fact query:
+  POST /openapi/v1/facts/query proxies a standard event payload to an HTTP provider.
+
+Audit:
+  activity creation, quota creation and event intake are recorded in marketing_audit.
+
+Admin page:
+  GET /admin/ serves a minimal local admin page for activity list/create and simulation.
+```
+
+2026-05-24T10:02:30.538851Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:02:30.538861Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:02:30.539242Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:02:30.539247Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:02:30.539601Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:02:30.539605Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:02:30.539944Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:02:30.539948Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:02:30.540276Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:02:30.540280Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:02:30.541018Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:02:30.541021Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+exec
+/bin/zsh -lc "sed -n '1,260p' internal/marketing/repository.go" in /Users/tong/Documents/GitHub/OracleBetX-Projects/ExMarketing
+ succeeded in 0ms:
+package marketing
+
+import (
+	"context"
+	"time"
+)
+
+type Repository interface {
+	CreateActivity(ctx context.Context, activity Activity) (Activity, error)
+	ListActivities(ctx context.Context) ([]Activity, error)
+	FindMatchingActivities(ctx context.Context, tenantID string, eventType string) ([]Activity, error)
+
+	CreateInbox(ctx context.Context, inbox EventInbox) (EventInbox, bool, error)
+	UpdateInbox(ctx context.Context, inbox EventInbox) error
+
+	CreateParticipation(ctx context.Context, participation Participation) (Participation, error)
+	CreateGrantOrder(ctx context.Context, order GrantOrder) (GrantOrder, error)
+	UpdateGrantOrderByCommandID(ctx context.Context, tenantID string, commandID string, status GrantStatus, message string) error
+	CreateOutbox(ctx context.Context, message OutboxMessage) (OutboxMessage, error)
+	CreateGrantOutboxesWithQuota(ctx context.Context, activityID string, subjectID string, totalRewardAmount string, reserveUserLimit bool, orders []GrantOrder, messages []OutboxMessage) ([]GrantOrder, []OutboxMessage, bool, error)
+
+	CreateQuota(ctx context.Context, quota Quota) (Quota, error)
+	ReserveQuota(ctx context.Context, activityID string, quotaType QuotaType, scope QuotaScope, scopeKey string, amount string) (bool, error)
+
+	ListPendingOutbox(ctx context.Context, limit int) ([]OutboxMessage, error)
+	MarkOutboxSent(ctx context.Context, id string) error
+	MarkOutboxFailed(ctx context.Context, id string, retryCount int, nextRetryAt time.Time, message string) error
+	MarkOutboxDLQ(ctx context.Context, id string, message string) error
+
+	CreateAudit(ctx context.Context, record AuditRecord) error
+	ListAudit(ctx context.Context, limit int) ([]AuditRecord, error)
+}
+
+exec
+/bin/zsh -lc 'rg -n "CreateGrantOutboxesWithQuota|ProcessEvent|evaluateActivity|ErrQuotaExceeded|QuotaType|STOCK|Audit" internal docs db -S' in /Users/tong/Documents/GitHub/OracleBetX-Projects/ExMarketing
+ succeeded in 0ms:
+internal/marketing/repository.go:20:	CreateGrantOutboxesWithQuota(ctx context.Context, activityID string, subjectID string, totalRewardAmount string, reserveUserLimit bool, orders []GrantOrder, messages []OutboxMessage) ([]GrantOrder, []OutboxMessage, bool, error)
+internal/marketing/repository.go:23:	ReserveQuota(ctx context.Context, activityID string, quotaType QuotaType, scope QuotaScope, scopeKey string, amount string) (bool, error)
+internal/marketing/repository.go:30:	CreateAudit(ctx context.Context, record AuditRecord) error
+internal/marketing/repository.go:31:	ListAudit(ctx context.Context, limit int) ([]AuditRecord, error)
+internal/engine/service.go:98:func (s *Service) ListAudit(ctx context.Context, limit int) ([]marketing.AuditRecord, error) {
+internal/engine/service.go:99:	return s.repository.ListAudit(ctx, limit)
+internal/engine/service.go:102:func (s *Service) ProcessEvent(ctx context.Context, event marketing.ActivityEvent) (marketing.ProcessEventResult, error) {
+internal/engine/service.go:104:		return marketing.ProcessEventResult{}, err
+internal/engine/service.go:118:		return marketing.ProcessEventResult{}, err
+internal/engine/service.go:121:		return marketing.ProcessEventResult{Inbox: inbox, Duplicate: true}, nil
+internal/engine/service.go:127:		return marketing.ProcessEventResult{}, err
+internal/engine/service.go:130:	result := marketing.ProcessEventResult{Inbox: inbox}
+internal/engine/service.go:140:		participation, rewardOrders, outboxMessages, qualified, err := s.evaluateActivity(ctx, inbox, activity)
+internal/engine/service.go:196:func (s *Service) evaluateActivity(ctx context.Context, inbox marketing.EventInbox, activity marketing.Activity) (marketing.Participation, []marketing.GrantOrder, []marketing.OutboxMessage, bool, error) {
+internal/engine/service.go:311:	orders, messages, ok, err := s.repository.CreateGrantOutboxesWithQuota(ctx, activity.ID, inbox.Event.Subject.ID, totalRewardAmount.String(), true, orders, messages)
+internal/engine/service.go:316:		return createdParticipation, orders, messages, true, marketing.ErrQuotaExceeded
+internal/engine/service.go:411:	return s.repository.CreateAudit(ctx, marketing.AuditRecord{
+internal/marketing/model.go:23:type QuotaType string
+internal/marketing/model.go:87:	QuotaBudget     QuotaType = "BUDGET"
+internal/marketing/model.go:88:	QuotaStock      QuotaType = "STOCK"
+internal/marketing/model.go:89:	QuotaUserLimit  QuotaType = "USER_LIMIT"
+internal/marketing/model.go:90:	QuotaDailyLimit QuotaType = "DAILY_LIMIT"
+internal/marketing/model.go:264:	Type        QuotaType  `json:"quotaType"`
+internal/marketing/model.go:277:	Type       QuotaType  `json:"quotaType"`
+internal/marketing/model.go:283:type AuditRecord struct {
+internal/marketing/model.go:320:type ProcessEventResult struct {
+internal/marketing/model.go:360:	ErrQuotaExceeded   = errors.New("quota exceeded")
+docs/api.md:291:STOCK        奖品库存，模型已定义，业务流程待扩展
+internal/postgres/repository.go:263:func (r *Repository) CreateGrantOutboxesWithQuota(ctx context.Context, activityID string, subjectID string, totalRewardAmount string, reserveUserLimit bool, orders []marketing.GrantOrder, messages []marketing.OutboxMessage) ([]marketing.GrantOrder, []marketing.OutboxMessage, bool, error) {
+internal/postgres/repository.go:338:func (r *Repository) ReserveQuota(ctx context.Context, activityID string, quotaType marketing.QuotaType, scope marketing.QuotaScope, scopeKey string, amount string) (bool, error) {
+internal/postgres/repository.go:453:func (r *Repository) CreateAudit(ctx context.Context, record marketing.AuditRecord) error {
+internal/postgres/repository.go:463:func (r *Repository) ListAudit(ctx context.Context, limit int) ([]marketing.AuditRecord, error) {
+internal/postgres/repository.go:478:	var records []marketing.AuditRecord
+internal/postgres/repository.go:480:		var record marketing.AuditRecord
+internal/postgres/repository.go:625:func reserveQuotaTx(ctx context.Context, tx *sql.Tx, activityID string, quotaType marketing.QuotaType, scope marketing.QuotaScope, scopeKey string, amount string) (bool, error) {
+docs/data-model.md:283:STOCK
+internal/httpapi/handler.go:33:	mux.HandleFunc("GET /admin/v1/audit", h.listAudit)
+internal/httpapi/handler.go:105:func (h *Handler) listAudit(w http.ResponseWriter, r *http.Request) {
+internal/httpapi/handler.go:107:	records, err := h.engine.ListAudit(r.Context(), limit)
+internal/httpapi/handler.go:147:	result, err := h.engine.ProcessEvent(r.Context(), event)
+internal/httpapi/handler.go:153:		if errors.Is(err, marketing.ErrQuotaExceeded) {
+internal/marketing/memory_repository.go:20:	auditRecords       []AuditRecord
+internal/marketing/memory_repository.go:134:func (r *MemoryRepository) CreateGrantOutboxesWithQuota(ctx context.Context, activityID string, subjectID string, totalRewardAmount string, reserveUserLimit bool, orders []GrantOrder, messages []OutboxMessage) ([]GrantOrder, []OutboxMessage, bool, error) {
+internal/marketing/memory_repository.go:173:func (r *MemoryRepository) ReserveQuota(ctx context.Context, activityID string, quotaType QuotaType, scope QuotaScope, scopeKey string, amount string) (bool, error) {
+internal/marketing/memory_repository.go:253:func (r *MemoryRepository) CreateAudit(ctx context.Context, record AuditRecord) error {
+internal/marketing/memory_repository.go:263:func (r *MemoryRepository) ListAudit(ctx context.Context, limit int) ([]AuditRecord, error) {
+internal/marketing/memory_repository.go:291:func (r *MemoryRepository) reserveQuotaLocked(activityID string, quotaType QuotaType, scope QuotaScope, scopeKey string, amount string) bool {
+internal/marketing/memory_repository.go:312:func (r *MemoryRepository) releaseQuotaLocked(activityID string, quotaType QuotaType, scope QuotaScope, scopeKey string, amount string) {
+docs/architecture.md:89:Audit:
+
+exec
+/bin/zsh -lc "sed -n '1,320p' internal/engine/service.go" in /Users/tong/Documents/GitHub/OracleBetX-Projects/ExMarketing
+ succeeded in 0ms:
+package engine
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"slices"
+	"time"
+
+	"github.com/ex-stack/ExMarketing/internal/decimal"
+	"github.com/ex-stack/ExMarketing/internal/marketing"
+	"github.com/ex-stack/ExMarketing/internal/reward"
+	"github.com/ex-stack/ExMarketing/internal/rule"
+)
+
+type Service struct {
+	repository       marketing.Repository
+	ruleEvaluator    rule.Evaluator
+	rewardCalculator reward.Calculator
+	now              func() time.Time
+}
+
+func NewService(repository marketing.Repository) *Service {
+	return &Service{
+		repository:       repository,
+		ruleEvaluator:    rule.ConditionEvaluator{},
+		rewardCalculator: reward.ConfigCalculator{},
+		now:              func() time.Time { return time.Now().UTC() },
+	}
+}
+
+func (s *Service) CreateActivity(ctx context.Context, cmd marketing.CreateActivityCommand) (marketing.Activity, error) {
+	now := s.now()
+	if err := cmd.Validate(now); err != nil {
+		return marketing.Activity{}, err
+	}
+
+	activity := marketing.Activity{
+		ID:             marketingID("act"),
+		TenantID:       cmd.TenantID,
+		Code:           cmd.Code,
+		Name:           cmd.Name,
+		Type:           cmd.Type,
+		Status:         normalizeActivityStatus(cmd.Status, now, cmd.StartTime, cmd.EndTime),
+		TriggerEvents:  cmd.TriggerEvents,
+		StartTime:      cmd.StartTime,
+		EndTime:        cmd.EndTime,
+		Timezone:       cmd.Timezone,
+		Priority:       cmd.Priority,
+		ExclusiveGroup: cmd.ExclusiveGroup,
+		Stackable:      cmd.Stackable,
+		Version:        1,
+		Config:         cmd.Config,
+		Rules:          normalizeRules(cmd.Rules, now),
+		Rewards:        normalizeRewards(cmd.Rewards, now),
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+
+	created, err := s.repository.CreateActivity(ctx, activity)
+	if err != nil {
+		return marketing.Activity{}, err
+	}
+	_ = s.audit(ctx, created.TenantID, "system", "CREATE_ACTIVITY", "activity", created.ID, created)
+	return created, nil
+}
+
+func (s *Service) ListActivities(ctx context.Context) ([]marketing.Activity, error) {
+	return s.repository.ListActivities(ctx)
+}
+
+func (s *Service) CreateQuota(ctx context.Context, cmd marketing.CreateQuotaCommand) (marketing.Quota, error) {
+	if err := cmd.Validate(); err != nil {
+		return marketing.Quota{}, err
+	}
+	now := s.now()
+	quota := marketing.Quota{
+		ID:          marketingID("quota"),
+		ActivityID:  cmd.ActivityID,
+		Type:        cmd.Type,
+		Scope:       cmd.Scope,
+		ScopeKey:    cmd.ScopeKey,
+		TotalValue:  cmd.TotalValue,
+		UsedValue:   "0",
+		FrozenValue: "0",
+		Version:     1,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	created, err := s.repository.CreateQuota(ctx, quota)
+	if err != nil {
+		return marketing.Quota{}, err
+	}
+	_ = s.audit(ctx, "", "system", "CREATE_QUOTA", "quota", created.ID, created)
+	return created, nil
+}
+
+func (s *Service) ListAudit(ctx context.Context, limit int) ([]marketing.AuditRecord, error) {
+	return s.repository.ListAudit(ctx, limit)
+}
+
+func (s *Service) ProcessEvent(ctx context.Context, event marketing.ActivityEvent) (marketing.ProcessEventResult, error) {
+	if err := event.Validate(); err != nil {
+		return marketing.ProcessEventResult{}, err
+	}
+
+	now := s.now()
+	inbox := marketing.EventInbox{
+		ID:             marketingID("inbox"),
+		Event:          event,
+		IdempotencyKey: event.IdempotencyKey(),
+		ProcessStatus:  marketing.InboxReceived,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	inbox, duplicate, err := s.repository.CreateInbox(ctx, inbox)
+	if err != nil {
+		return marketing.ProcessEventResult{}, err
+	}
+	if duplicate {
+		return marketing.ProcessEventResult{Inbox: inbox, Duplicate: true}, nil
+	}
+	_ = s.audit(ctx, event.TenantID, "openapi", "EVENT_IN", "event_inbox", inbox.ID, event)
+
+	activities, err := s.repository.FindMatchingActivities(ctx, event.TenantID, event.EventType)
+	if err != nil {
+		return marketing.ProcessEventResult{}, err
+	}
+
+	result := marketing.ProcessEventResult{Inbox: inbox}
+	matchedExclusive := map[string]bool{}
+	for _, activity := range activities {
+		if !activityRunnable(activity, now) {
+			continue
+		}
+		if activity.ExclusiveGroup != "" && matchedExclusive[activity.ExclusiveGroup] && !activity.Stackable {
+			continue
+		}
+
+		participation, rewardOrders, outboxMessages, qualified, err := s.evaluateActivity(ctx, inbox, activity)
+		if err != nil {
+			inbox.ProcessStatus = marketing.InboxFailed
+			inbox.ErrorMessage = err.Error()
+			inbox.UpdatedAt = now
+			_ = s.repository.UpdateInbox(ctx, inbox)
+			return result, err
+		}
+
+		result.Participations = append(result.Participations, participation)
+		result.GrantOrders = append(result.GrantOrders, rewardOrders...)
+		result.OutboxMessages = append(result.OutboxMessages, outboxMessages...)
+		if qualified && activity.ExclusiveGroup != "" {
+			matchedExclusive[activity.ExclusiveGroup] = true
+		}
+	}
+
+	inbox.ProcessStatus = marketing.InboxProcessed
+	inbox.UpdatedAt = now
+	if err := s.repository.UpdateInbox(ctx, inbox); err != nil {
+		return result, err
+	}
+	result.Inbox = inbox
+	return result, nil
+}
+
+func (s *Service) SimulateEvent(ctx context.Context, event marketing.ActivityEvent) (marketing.SimulationResult, error) {
+	if err := event.Validate(); err != nil {
+		return marketing.SimulationResult{}, err
+	}
+	activities, err := s.repository.FindMatchingActivities(ctx, event.TenantID, event.EventType)
+	if err != nil {
+		return marketing.SimulationResult{}, err
+	}
+
+	now := s.now()
+	result := marketing.SimulationResult{Event: event}
+	for _, activity := range activities {
+		if !activityRunnable(activity, now) {
+			continue
+		}
+		participation, grants, outbox := s.simulateActivity(event, activity)
+		result.Participations = append(result.Participations, participation)
+		result.GrantOrders = append(result.GrantOrders, grants...)
+		result.OutboxMessages = append(result.OutboxMessages, outbox...)
+	}
+	return result, nil
+}
+
+func (s *Service) ApplyRewardCallback(ctx context.Context, callback marketing.RewardCallback) error {
+	if callback.CommandID == "" || callback.TenantID == "" {
+		return errors.New("commandId and tenantId are required")
+	}
+	return s.repository.UpdateGrantOrderByCommandID(ctx, callback.TenantID, callback.CommandID, callback.Status, callback.Message)
+}
+
+func (s *Service) evaluateActivity(ctx context.Context, inbox marketing.EventInbox, activity marketing.Activity) (marketing.Participation, []marketing.GrantOrder, []marketing.OutboxMessage, bool, error) {
+	now := s.now()
+	snapshot, _ := json.Marshal(activity)
+	participation := marketing.Participation{
+		ID:             marketingID("part"),
+		TenantID:       activity.TenantID,
+		ActivityID:     activity.ID,
+		EventInboxID:   inbox.ID,
+		Subject:        inbox.Event.Subject,
+		Biz:            inbox.Event.Biz,
+		Status:         marketing.ParticipationInit,
+		Snapshot:       snapshot,
+		IdempotencyKey: activity.TenantID + ":" + activity.ID + ":" + inbox.Event.Subject.Type + ":" + inbox.Event.Subject.ID + ":" + inbox.Event.Biz.BizID,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+
+	for _, activityRule := range activity.Rules {
+		if !activityRule.Enabled || activityRule.Type != marketing.RuleTypeCondition {
+			continue
+		}
+		if !slices.Contains([]marketing.RulePhase{
+			marketing.RulePhaseMatch,
+			marketing.RulePhaseQualify,
+			marketing.RulePhaseReward,
+			marketing.RulePhaseRisk,
+			marketing.RulePhaseLimit,
+		}, activityRule.Phase) {
+			continue
+		}
+		ruleResult := s.ruleEvaluator.Evaluate(rule.Context{Event: inbox.Event}, activityRule)
+		if !ruleResult.Passed {
+			participation.Status = marketing.ParticipationRejected
+			participation.RejectReason = activityRule.Code + ": " + ruleResult.Reason
+			participation.UpdatedAt = now
+			created, err := s.repository.CreateParticipation(ctx, participation)
+			return created, nil, nil, false, err
+		}
+	}
+
+	participation.Status = marketing.ParticipationRewardable
+	participation.UpdatedAt = now
+	createdParticipation, err := s.repository.CreateParticipation(ctx, participation)
+	if err != nil {
+		return participation, nil, nil, false, err
+	}
+
+	var orders []marketing.GrantOrder
+	var messages []marketing.OutboxMessage
+	totalRewardAmount := decimal.Zero()
+	for _, configuredReward := range activity.Rewards {
+		if !configuredReward.Enabled {
+			continue
+		}
+		rewardResult, err := s.rewardCalculator.Calculate(reward.Context{Event: inbox.Event}, configuredReward)
+		if err != nil {
+			return createdParticipation, orders, messages, true, err
+		}
+
+		commandID := marketingID("cmd")
+		payload, _ := json.Marshal(rewardResult.Payload)
+		order := marketing.GrantOrder{
+			ID:              marketingID("grant"),
+			TenantID:        activity.TenantID,
+			ActivityID:      activity.ID,
+			ParticipationID: createdParticipation.ID,
+			Subject:         inbox.Event.Subject,
+			RewardType:      rewardResult.Type,
+			RewardAmount:    rewardResult.Amount,
+			RewardPayload:   payload,
+			BillNo:          commandID,
+			GrantStatus:     marketing.GrantPending,
+			GrantChannel:    configuredReward.GrantChannel,
+			IdempotencyKey:  createdParticipation.IdempotencyKey + ":" + configuredReward.Code,
+			CreatedAt:       now,
+			UpdatedAt:       now,
+		}
+		command := marketing.RewardCommand{
+			CommandID:       commandID,
+			TenantID:        activity.TenantID,
+			ActivityID:      activity.ID,
+			ParticipationID: createdParticipation.ID,
+			Subject:         inbox.Event.Subject,
+			Reward:          rewardResult.Payload,
+			Reason: map[string]any{
+				"eventId":   inbox.Event.EventID,
+				"eventType": inbox.Event.EventType,
+				"bizId":     inbox.Event.Biz.BizID,
+			},
+			IdempotencyKey: order.IdempotencyKey,
+		}
+		messagePayload, _ := json.Marshal(command)
+		message := marketing.OutboxMessage{
+			ID:            marketingID("outbox"),
+			TenantID:      activity.TenantID,
+			MessageType:   "REWARD_COMMAND",
+			TargetChannel: configuredReward.GrantChannel,
+			TargetRef:     targetRefFromReward(configuredReward),
+			Payload:       messagePayload,
+			SendStatus:    marketing.OutboxPending,
+			CreatedAt:     now,
+			UpdatedAt:     now,
+		}
+		amount, err := decimal.Parse(rewardResult.Amount)
+		if err != nil {
+			return createdParticipation, orders, messages, true, err
+		}
+		totalRewardAmount = totalRewardAmount.Add(amount)
+		orders = append(orders, order)
+		messages = append(messages, message)
+	}
+
+	if len(orders) == 0 {
+		return createdParticipation, nil, nil, true, nil
+	}
+	orders, messages, ok, err := s.repository.CreateGrantOutboxesWithQuota(ctx, activity.ID, inbox.Event.Subject.ID, totalRewardAmount.String(), true, orders, messages)
+	if err != nil {
+		return createdParticipation, orders, messages, true, err
+	}
+	if !ok {
+		return createdParticipation, orders, messages, true, marketing.ErrQuotaExceeded
+	}
+	return createdParticipation, orders, messages, true, nil
+}
+
+
+exec
+/bin/zsh -lc "sed -n '1,260p' internal/marketing/model.go" in /Users/tong/Documents/GitHub/OracleBetX-Projects/ExMarketing
+ succeeded in 0ms:
+package marketing
+
+import (
+	"encoding/json"
+	"errors"
+	"strings"
+	"time"
+
+	"github.com/ex-stack/ExMarketing/internal/decimal"
+)
+
+type ActivityStatus string
+type RulePhase string
+type RuleType string
+type RewardType string
+type CalculateType string
+type GrantMode string
+type GrantChannel string
+type InboxStatus string
+type ParticipationStatus string
+type GrantStatus string
+type OutboxStatus string
+type QuotaType string
+type QuotaScope string
+
+const (
+	ActivityDraft     ActivityStatus = "DRAFT"
+	ActivityScheduled ActivityStatus = "SCHEDULED"
+	ActivityActive    ActivityStatus = "ACTIVE"
+	ActivityPaused    ActivityStatus = "PAUSED"
+	ActivityEnded     ActivityStatus = "ENDED"
+
+	RulePhaseMatch   RulePhase = "MATCH"
+	RulePhaseQualify RulePhase = "QUALIFY"
+	RulePhaseReward  RulePhase = "REWARD"
+	RulePhaseRisk    RulePhase = "RISK"
+	RulePhaseLimit   RulePhase = "LIMIT"
+
+	RuleTypeCondition RuleType = "CONDITION"
+	RuleTypeFormula   RuleType = "FORMULA"
+	RuleTypeLimit     RuleType = "LIMIT"
+
+	RewardBonus      RewardType = "BONUS"
+	RewardCash       RewardType = "CASH"
+	RewardCoupon     RewardType = "COUPON"
+	RewardPoint      RewardType = "POINT"
+	RewardGift       RewardType = "GIFT"
+	RewardDrawChance RewardType = "DRAW_CHANCE"
+	RewardMembership RewardType = "MEMBERSHIP"
+
+	CalculateFixed CalculateType = "FIXED"
+	CalculateRatio CalculateType = "RATIO"
+
+	GrantAuto   GrantMode = "AUTO"
+	GrantManual GrantMode = "MANUAL"
+
+	GrantHTTP         GrantChannel = "HTTP"
+	GrantMQ           GrantChannel = "MQ"
+	GrantWebhook      GrantChannel = "WEBHOOK"
+	GrantManualExport GrantChannel = "MANUAL_EXPORT"
+
+	InboxReceived  InboxStatus = "RECEIVED"
+	InboxProcessed InboxStatus = "PROCESSED"
+	InboxDuplicate InboxStatus = "DUPLICATE"
+	InboxFailed    InboxStatus = "FAILED"
+
+	ParticipationInit       ParticipationStatus = "INIT"
+	ParticipationQualified  ParticipationStatus = "QUALIFIED"
+	ParticipationRejected   ParticipationStatus = "REJECTED"
+	ParticipationRewardable ParticipationStatus = "REWARDABLE"
+	ParticipationGranted    ParticipationStatus = "GRANTED"
+	ParticipationFailed     ParticipationStatus = "FAILED"
+
+	GrantPending GrantStatus = "PENDING"
+	GrantSending GrantStatus = "SENDING"
+	GrantSuccess GrantStatus = "SUCCESS"
+	GrantFailed  GrantStatus = "FAILED"
+	GrantRetry   GrantStatus = "RETRY"
+	GrantClosed  GrantStatus = "CLOSED"
+
+	OutboxPending OutboxStatus = "PENDING"
+	OutboxSending OutboxStatus = "SENDING"
+	OutboxSent    OutboxStatus = "SENT"
+	OutboxFailed  OutboxStatus = "FAILED"
+	OutboxDLQ     OutboxStatus = "DLQ"
+
+	QuotaBudget     QuotaType = "BUDGET"
+	QuotaStock      QuotaType = "STOCK"
+	QuotaUserLimit  QuotaType = "USER_LIMIT"
+	QuotaDailyLimit QuotaType = "DAILY_LIMIT"
+
+	QuotaScopeActivity QuotaScope = "ACTIVITY"
+	QuotaScopeUser     QuotaScope = "USER"
+	QuotaScopeIP       QuotaScope = "IP"
+	QuotaScopeDevice   QuotaScope = "DEVICE"
+)
+
+type Activity struct {
+	ID             string          `json:"id"`
+	TenantID       string          `json:"tenantId"`
+	Code           string          `json:"activityCode"`
+	Name           string          `json:"activityName"`
+	Type           string          `json:"activityType"`
+	Status         ActivityStatus  `json:"status"`
+	TriggerEvents  []string        `json:"triggerEvents"`
+	StartTime      time.Time       `json:"startTime"`
+	EndTime        time.Time       `json:"endTime"`
+	Timezone       string          `json:"timezone"`
+	Priority       int             `json:"priority"`
+	ExclusiveGroup string          `json:"exclusiveGroup"`
+	Stackable      bool            `json:"stackable"`
+	Version        int             `json:"version"`
+	Config         json.RawMessage `json:"config,omitempty"`
+	Rules          []Rule          `json:"rules"`
+	Rewards        []Reward        `json:"rewards"`
+	CreatedAt      time.Time       `json:"createdAt"`
+	UpdatedAt      time.Time       `json:"updatedAt"`
+}
+
+type Rule struct {
+	ID        string          `json:"id"`
+	Code      string          `json:"ruleCode"`
+	Phase     RulePhase       `json:"rulePhase"`
+	Type      RuleType        `json:"ruleType"`
+	Config    json.RawMessage `json:"ruleConfig"`
+	Sort      int             `json:"sort"`
+	Enabled   bool            `json:"enabled"`
+	Version   int             `json:"version"`
+	CreatedAt time.Time       `json:"createdAt"`
+	UpdatedAt time.Time       `json:"updatedAt"`
+}
+
+type ConditionRuleConfig struct {
+	Logic      string      `json:"logic"`
+	Conditions []Condition `json:"conditions"`
+}
+
+type Condition struct {
+	Field string `json:"field"`
+	Op    string `json:"op"`
+	Value any    `json:"value"`
+}
+
+type Reward struct {
+	ID            string          `json:"id"`
+	Code          string          `json:"rewardCode"`
+	Type          RewardType      `json:"rewardType"`
+	CalculateType CalculateType   `json:"calculateType"`
+	Config        json.RawMessage `json:"rewardConfig"`
+	GrantMode     GrantMode       `json:"grantMode"`
+	GrantChannel  GrantChannel    `json:"grantChannel"`
+	FlowMultiple  string          `json:"flowMultiple"`
+	Enabled       bool            `json:"enabled"`
+	CreatedAt     time.Time       `json:"createdAt"`
+	UpdatedAt     time.Time       `json:"updatedAt"`
+}
+
+type RewardConfig struct {
+	Amount        string `json:"amount,omitempty"`
+	BaseField     string `json:"baseField,omitempty"`
+	Rate          string `json:"rate,omitempty"`
+	MaxAmount     string `json:"maxAmount,omitempty"`
+	Currency      string `json:"currency,omitempty"`
+	ExpireAt      string `json:"expireAt,omitempty"`
+	FlowMultiple  string `json:"flowMultiple,omitempty"`
+	TargetRef     string `json:"targetRef,omitempty"`
+	RewardPayload any    `json:"rewardPayload,omitempty"`
+}
+
+type ActivityEvent struct {
+	EventID      string         `json:"eventId"`
+	EventType    string         `json:"eventType"`
+	SourceSystem string         `json:"sourceSystem"`
+	TenantID     string         `json:"tenantId"`
+	Subject      EventSubject   `json:"subject"`
+	Biz          EventBiz       `json:"biz"`
+	OccurredAt   time.Time      `json:"occurredAt"`
+	Attributes   map[string]any `json:"attributes"`
+}
+
+type EventSubject struct {
+	Type string `json:"type"`
+	ID   string `json:"id"`
+}
+
+type EventBiz struct {
+	BizID   string `json:"bizId"`
+	BizType string `json:"bizType"`
+}
+
+type EventInbox struct {
+	ID             string        `json:"id"`
+	Event          ActivityEvent `json:"event"`
+	IdempotencyKey string        `json:"idempotencyKey"`
+	ProcessStatus  InboxStatus   `json:"processStatus"`
+	ErrorMessage   string        `json:"errorMessage,omitempty"`
+	CreatedAt      time.Time     `json:"createdAt"`
+	UpdatedAt      time.Time     `json:"updatedAt"`
+}
+
+type Participation struct {
+	ID             string              `json:"id"`
+	TenantID       string              `json:"tenantId"`
+	ActivityID     string              `json:"activityId"`
+	EventInboxID   string              `json:"eventInboxId"`
+	Subject        EventSubject        `json:"subject"`
+	Biz            EventBiz            `json:"biz"`
+	Status         ParticipationStatus `json:"status"`
+	RejectReason   string              `json:"rejectReason,omitempty"`
+	Snapshot       json.RawMessage     `json:"snapshot"`
+	IdempotencyKey string              `json:"idempotencyKey"`
+	CreatedAt      time.Time           `json:"createdAt"`
+	UpdatedAt      time.Time           `json:"updatedAt"`
+}
+
+type GrantOrder struct {
+	ID              string          `json:"id"`
+	TenantID        string          `json:"tenantId"`
+	ActivityID      string          `json:"activityId"`
+	ParticipationID string          `json:"participationId"`
+	Subject         EventSubject    `json:"subject"`
+	RewardType      RewardType      `json:"rewardType"`
+	RewardAmount    string          `json:"rewardAmount"`
+	RewardPayload   json.RawMessage `json:"rewardPayload"`
+	BillNo          string          `json:"billNo"`
+	GrantStatus     GrantStatus     `json:"grantStatus"`
+	GrantChannel    GrantChannel    `json:"grantChannel"`
+	RetryCount      int             `json:"retryCount"`
+	ErrorMessage    string          `json:"errorMessage,omitempty"`
+	IdempotencyKey  string          `json:"idempotencyKey"`
+	CreatedAt       time.Time       `json:"createdAt"`
+	UpdatedAt       time.Time       `json:"updatedAt"`
+}
+
+type RewardCommand struct {
+	CommandID       string         `json:"commandId"`
+	TenantID        string         `json:"tenantId"`
+	ActivityID      string         `json:"activityId"`
+	ParticipationID string         `json:"participationId"`
+	Subject         EventSubject   `json:"subject"`
+	Reward          map[string]any `json:"reward"`
+	Reason          map[string]any `json:"reason"`
+	IdempotencyKey  string         `json:"idempotencyKey"`
+}
+
+type OutboxMessage struct {
+	ID            string          `json:"id"`
+	TenantID      string          `json:"tenantId"`
+	MessageType   string          `json:"messageType"`
+	TargetChannel GrantChannel    `json:"targetChannel"`
+	TargetRef     string          `json:"targetRef"`
+	Payload       json.RawMessage `json:"payload"`
+	SendStatus    OutboxStatus    `json:"sendStatus"`
+	RetryCount    int             `json:"retryCount"`
+	NextRetryAt   *time.Time      `json:"nextRetryAt,omitempty"`
+	ErrorMessage  string          `json:"errorMessage,omitempty"`
+	CreatedAt     time.Time       `json:"createdAt"`
+	UpdatedAt     time.Time       `json:"updatedAt"`
+}
+
+
+2026-05-24T10:02:37.286178Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:02:37.286191Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:02:37.286601Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:02:37.286605Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:02:37.287041Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:02:37.287046Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:02:37.287577Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:02:37.287580Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:02:37.288041Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:02:37.288044Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:02:37.289033Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:02:37.289036Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+exec
+/bin/zsh -lc "sed -n '260,330p' docs/data-model.md" in /Users/tong/Documents/GitHub/OracleBetX-Projects/ExMarketing
+exec
+/bin/zsh -lc "sed -n '250,380p' docs/api.md" in /Users/tong/Documents/GitHub/OracleBetX-Projects/ExMarketing
+ succeeded in 0ms:
+
+## marketing_quota
+
+预算、库存和次数限制表。
+
+| 字段 | 说明 |
+|---|---|
+| `id` | Quota ID |
+| `activity_id` | 活动 ID |
+| `quota_type` | Quota 类型 |
+| `scope` | 作用域 |
+| `scope_key` | 作用域 key |
+| `total_value` | 总额度 |
+| `used_value` | 已使用 |
+| `frozen_value` | 已冻结，预留字段 |
+| `version` | 乐观锁版本 |
+| `created_at` | 创建时间 |
+| `updated_at` | 更新时间 |
+
+Quota 类型：
+
+```text
+BUDGET
+STOCK
+USER_LIMIT
+DAILY_LIMIT
+```
+
+作用域：
+
+```text
+ACTIVITY
+USER
+IP
+DEVICE
+```
+
+当前实现：
+
+```text
+BUDGET + ACTIVITY + TOTAL
+USER_LIMIT + USER + subject.id
+```
+
+PostgreSQL 扣减必须使用条件更新：
+
+```sql
+UPDATE marketing_quota
+SET used_value = used_value + $amount,
+    version = version + 1
+WHERE used_value + $amount <= total_value;
+```
+
+## marketing_outbox
+
+发奖指令 Outbox。
+
+| 字段 | 说明 |
+|---|---|
+| `id` | Outbox ID |
+| `tenant_id` | 租户 ID |
+| `message_type` | 消息类型 |
+| `target_channel` | 目标通道 |
+| `target_ref` | 目标地址或引用 |
+| `payload_json` | 消息 payload |
+| `send_status` | 发送状态 |
+| `retry_count` | 重试次数 |
+| `next_retry_at` | 下次重试时间 |
+| `error_message` | 错误信息 |
+| `created_at` | 创建时间 |
+| `updated_at` | 更新时间 |
+
+ succeeded in 0ms:
+}
+```
+
+## 创建 Quota
+
+```http
+POST /admin/v1/quotas
+```
+
+活动总预算：
+
+```bash
+curl -X POST http://localhost:8080/admin/v1/quotas \
+  -H 'content-type: application/json' \
+  -d '{
+    "activityId": "act_xxx",
+    "quotaType": "BUDGET",
+    "scope": "ACTIVITY",
+    "scopeKey": "TOTAL",
+    "totalValue": "10000.00"
+  }'
+```
+
+用户参与次数限制：
+
+```bash
+curl -X POST http://localhost:8080/admin/v1/quotas \
+  -H 'content-type: application/json' \
+  -d '{
+    "activityId": "act_xxx",
+    "quotaType": "USER_LIMIT",
+    "scope": "USER",
+    "scopeKey": "10001",
+    "totalValue": "1"
+  }'
+```
+
+当前支持的 quota：
+
+```text
+BUDGET       活动预算
+STOCK        奖品库存，模型已定义，业务流程待扩展
+USER_LIMIT   用户次数限制
+DAILY_LIMIT  每日次数限制，模型已定义，业务流程待扩展
+```
+
+当前支持的 scope：
+
+```text
+ACTIVITY
+USER
+IP
+DEVICE
+```
+
+## 模拟运行
+
+```http
+POST /admin/v1/simulate
+```
+
+模拟运行不会写入：
+
+```text
+marketing_event_inbox
+marketing_participation
+marketing_grant_order
+marketing_outbox
+marketing_quota
+```
+
+示例：
+
+```bash
+curl -X POST http://localhost:8080/admin/v1/simulate \
+  -H 'content-type: application/json' \
+  -d '{
+    "eventId": "evt_sim_001",
+    "eventType": "DEPOSIT_SUCCESS",
+    "sourceSystem": "payment",
+    "tenantId": "site_001",
+    "subject": {"type": "USER", "id": "10001"},
+    "biz": {"bizType": "DEPOSIT", "bizId": "pay_sim_001"},
+    "occurredAt": "2026-05-24T12:00:00Z",
+    "attributes": {
+      "amount": "299.00",
+      "currency": "CNY",
+      "isFirstDeposit": true
+    }
+  }'
+```
+
+输出包含：
+
+```text
+命中的 participation 预览
+预计 grant_order
+预计 outbox reward command
+拒绝原因
+```
+
+## 上报标准事件
+
+```http
+POST /openapi/v1/events
+Idempotency-Key: site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:pay_123
+```
+
+示例：
+
+```bash
+curl -X POST http://localhost:8080/openapi/v1/events \
+  -H 'content-type: application/json' \
+  -H 'Idempotency-Key: site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:pay_123' \
+  -d '{
+    "eventId": "evt_20260524_000001",
+    "eventType": "DEPOSIT_SUCCESS",
+    "sourceSystem": "payment",
+    "tenantId": "site_001",
+    "subject": {"type": "USER", "id": "10001"},
+    "biz": {"bizType": "DEPOSIT", "bizId": "pay_123"},
+    "occurredAt": "2026-05-24T12:00:00Z",
+    "attributes": {
+      "amount": "299.00",
+      "currency": "CNY",
+      "isFirstDeposit": true
+    }
+  }'
+```
+
+处理流程：
+
+exec
+/bin/zsh -lc "sed -n '250,360p' internal/postgres/repository.go" in /Users/tong/Documents/GitHub/OracleBetX-Projects/ExMarketing
+exec
+/bin/zsh -lc "sed -n '120,220p' internal/marketing/memory_repository.go" in /Users/tong/Documents/GitHub/OracleBetX-Projects/ExMarketing
+ succeeded in 0ms:
+		return err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.grantOrders {
+		if r.grantOrders[i].TenantID == tenantID && r.grantOrders[i].BillNo == commandID {
+			r.grantOrders[i].GrantStatus = status
+			r.grantOrders[i].ErrorMessage = message
+			return nil
+		}
+	}
+	return ErrNotFound
+}
+
+func (r *MemoryRepository) CreateGrantOutboxesWithQuota(ctx context.Context, activityID string, subjectID string, totalRewardAmount string, reserveUserLimit bool, orders []GrantOrder, messages []OutboxMessage) ([]GrantOrder, []OutboxMessage, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, false, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if !r.reserveQuotaLocked(activityID, QuotaBudget, QuotaScopeActivity, "TOTAL", totalRewardAmount) {
+		return nil, nil, false, nil
+	}
+	if reserveUserLimit && !r.reserveQuotaLocked(activityID, QuotaUserLimit, QuotaScopeUser, subjectID, "1") {
+		r.releaseQuotaLocked(activityID, QuotaBudget, QuotaScopeActivity, "TOTAL", totalRewardAmount)
+		return nil, nil, false, nil
+	}
+	r.grantOrders = append(r.grantOrders, orders...)
+	r.outboxMessages = append(r.outboxMessages, messages...)
+	return orders, messages, true, nil
+}
+
+func (r *MemoryRepository) CreateOutbox(ctx context.Context, message OutboxMessage) (OutboxMessage, error) {
+	if err := ctx.Err(); err != nil {
+		return OutboxMessage{}, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.outboxMessages = append(r.outboxMessages, message)
+	return message, nil
+}
+
+func (r *MemoryRepository) CreateQuota(ctx context.Context, quota Quota) (Quota, error) {
+	if err := ctx.Err(); err != nil {
+		return Quota{}, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.quotas = append(r.quotas, quota)
+	return quota, nil
+}
+
+func (r *MemoryRepository) ReserveQuota(ctx context.Context, activityID string, quotaType QuotaType, scope QuotaScope, scopeKey string, amount string) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	for i := range r.quotas {
+		q := &r.quotas[i]
+		if q.ActivityID != activityID || q.Type != quotaType || q.Scope != scope || q.ScopeKey != scopeKey {
+			continue
+		}
+		total := decimal.MustParse(q.TotalValue)
+		used := decimal.MustParse(q.UsedValue)
+		increment := decimal.MustParse(amount)
+		next := used.Add(increment)
+		if next.Cmp(total) > 0 {
+			return false, nil
+		}
+		q.UsedValue = next.String()
+		q.Version++
+		q.UpdatedAt = time.Now().UTC()
+		return true, nil
+	}
+	return true, nil
+}
+
+func (r *MemoryRepository) ListPendingOutbox(ctx context.Context, limit int) ([]OutboxMessage, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var out []OutboxMessage
+	for _, message := range r.outboxMessages {
+		if len(out) >= limit {
+			break
+		}
+		if message.SendStatus == OutboxPending || message.SendStatus == OutboxFailed {
+			if message.NextRetryAt == nil || !message.NextRetryAt.After(time.Now().UTC()) {
+				out = append(out, message)
+			}
+		}
+	}
+	for _, claimed := range out {
+		for i := range r.outboxMessages {
+			if r.outboxMessages[i].ID == claimed.ID {
+				r.outboxMessages[i].SendStatus = OutboxSending
+
+ succeeded in 0ms:
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return marketing.ErrNotFound
+	}
+	return nil
+}
+
+func (r *Repository) CreateGrantOutboxesWithQuota(ctx context.Context, activityID string, subjectID string, totalRewardAmount string, reserveUserLimit bool, orders []marketing.GrantOrder, messages []marketing.OutboxMessage) ([]marketing.GrantOrder, []marketing.OutboxMessage, bool, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	defer rollback(tx)
+
+	ok, err := reserveQuotaTx(ctx, tx, activityID, marketing.QuotaBudget, marketing.QuotaScopeActivity, "TOTAL", totalRewardAmount)
+	if err != nil || !ok {
+		return nil, nil, ok, err
+	}
+	if reserveUserLimit {
+		ok, err = reserveQuotaTx(ctx, tx, activityID, marketing.QuotaUserLimit, marketing.QuotaScopeUser, subjectID, "1")
+		if err != nil || !ok {
+			return nil, nil, ok, err
+		}
+	}
+
+	for _, order := range orders {
+		_, err = tx.ExecContext(ctx, `
+			INSERT INTO marketing_grant_order (
+				id, tenant_id, activity_id, participation_id, subject_type, subject_id,
+				reward_type, reward_amount, reward_payload_json, bill_no, grant_status,
+				grant_channel, retry_count, error_message, idempotency_key, created_at, updated_at
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+		`, order.ID, order.TenantID, order.ActivityID, order.ParticipationID, order.Subject.Type, order.Subject.ID,
+			order.RewardType, emptyDecimal(order.RewardAmount), order.RewardPayload, order.BillNo, order.GrantStatus,
+			order.GrantChannel, order.RetryCount, nullString(order.ErrorMessage), order.IdempotencyKey, order.CreatedAt, order.UpdatedAt)
+		if err != nil {
+			return nil, nil, false, err
+		}
+	}
+	for _, message := range messages {
+		_, err = tx.ExecContext(ctx, `
+			INSERT INTO marketing_outbox (
+				id, tenant_id, message_type, target_channel, target_ref, payload_json,
+				send_status, retry_count, next_retry_at, error_message, created_at, updated_at
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		`, message.ID, message.TenantID, message.MessageType, message.TargetChannel, message.TargetRef,
+			message.Payload, message.SendStatus, message.RetryCount, message.NextRetryAt,
+			nullString(message.ErrorMessage), message.CreatedAt, message.UpdatedAt)
+		if err != nil {
+			return nil, nil, false, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, nil, false, err
+	}
+	return orders, messages, true, nil
+}
+
+func (r *Repository) CreateOutbox(ctx context.Context, message marketing.OutboxMessage) (marketing.OutboxMessage, error) {
+	_, err := r.db.ExecContext(ctx, `
+		INSERT INTO marketing_outbox (
+			id, tenant_id, message_type, target_channel, target_ref, payload_json,
+			send_status, retry_count, next_retry_at, error_message, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+	`, message.ID, message.TenantID, message.MessageType, message.TargetChannel, message.TargetRef,
+		message.Payload, message.SendStatus, message.RetryCount, message.NextRetryAt,
+		nullString(message.ErrorMessage), message.CreatedAt, message.UpdatedAt)
+	return message, err
+}
+
+func (r *Repository) CreateQuota(ctx context.Context, quota marketing.Quota) (marketing.Quota, error) {
+	_, err := r.db.ExecContext(ctx, `
+		INSERT INTO marketing_quota (
+			id, activity_id, quota_type, scope, scope_key, total_value, used_value,
+			frozen_value, version, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+	`, quota.ID, quota.ActivityID, quota.Type, quota.Scope, quota.ScopeKey,
+		emptyDecimal(quota.TotalValue), emptyDecimal(quota.UsedValue), emptyDecimal(quota.FrozenValue),
+		quota.Version, quota.CreatedAt, quota.UpdatedAt)
+	return quota, err
+}
+
+func (r *Repository) ReserveQuota(ctx context.Context, activityID string, quotaType marketing.QuotaType, scope marketing.QuotaScope, scopeKey string, amount string) (bool, error) {
+	result, err := r.db.ExecContext(ctx, `
+		UPDATE marketing_quota
+		SET used_value = used_value + $5::numeric,
+		    version = version + 1,
+		    updated_at = NOW()
+		WHERE activity_id = $1
+		  AND quota_type = $2
+		  AND scope = $3
+		  AND scope_key = $4
+		  AND used_value + $5::numeric <= total_value
+	`, activityID, quotaType, scope, scopeKey, emptyDecimal(amount))
+	if err != nil {
+		return false, err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	if affected > 0 {
+		return true, nil
+	}
+
+
+2026-05-24T10:02:43.148263Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:02:43.148270Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:02:43.148574Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:02:43.148578Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:02:43.148853Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:02:43.148856Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:02:43.149157Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:02:43.149162Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:02:43.150040Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:02:43.150045Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:02:43.151536Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:02:43.151553Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+exec
+/bin/zsh -lc "sed -n '1,220p' tasks/2026-05-24-094535/review.md" in /Users/tong/Documents/GitHub/OracleBetX-Projects/ExMarketing
+ succeeded in 0ms:
+# Review
+
+## Agent 指令
+
+你是 Review Agent。请审核 analysis.md。
+
+不改代码，不提交。
+
+## Findings
+
+~~~text
+P0:
+P1:
+P2:
+~~~
+
+## Open Questions
+
+待填写。
+
+## Decision
+
+~~~text
+PASS / BLOCK
+~~~
+
+规则：
+
+~~~text
+存在 P0/P1 -> BLOCK
+Score < 70 -> BLOCK
+无 P0/P1 且 Score >= 70 -> PASS
+~~~
+
+需求：2026-05-24-094535
+
+2026-05-24T10:02:51.113749Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:02:51.113759Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:02:51.114138Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:02:51.114142Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:02:51.114490Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:02:51.114492Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:02:51.114847Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:02:51.114850Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:02:51.115198Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:02:51.115202Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:02:51.116206Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:02:51.116210Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+codex
+审核结论目前没有看到会导致研发不能进入的 P0/P1。会把剩余问题降为 P2/P3 形式写入 `review.md`，并保留 PASS，因为 analysis 自评分 82 且核心事务边界、库存、幂等、审计和验收都覆盖到了。
+apply patch
+patch: completed
+/Users/tong/Documents/GitHub/OracleBetX-Projects/ExMarketing/tasks/2026-05-24-094535/review.md
+diff --git a/tasks/2026-05-24-094535/review.md b/tasks/2026-05-24-094535/review.md
+index 00eb1915696364cb214bafdd25ca9c58a2e3d5cd..ed0bb7cb886eaf2052a3808a1bf43692b3e5c980
+--- a/tasks/2026-05-24-094535/review.md
++++ b/tasks/2026-05-24-094535/review.md
+@@ -1,35 +1,62 @@
+ # Review
+ 
+-## Agent 指令
++## Scope
+ 
+-你是 Review Agent。请审核 analysis.md。
++审核对象：`tasks/2026-05-24-094535/analysis.md`
+ 
+-不改代码，不提交。
++审核约束：
++
++- 只审核 analysis，不改代码。
++- 存在 P0/P1 或 Score < 70 必须 BLOCK。
+ 
+ ## Findings
+ 
+-~~~text
+-P0:
+-P1:
++```text
++P0: 无
++P1: 无
+ P2:
+-~~~
++  1. analysis 没有明确说明已对照 CLAUDE.md 要求读取上游设计文档
++     /Users/tong/Documents/GitHub/OracleBetX-Projects/act-analysis/22-独立活动营销中台设计.md。
++     本任务涉及预算、库存、次数和发奖账务语义，研发前建议再核对该设计文档中的库存 scope、
++     participation 状态流转和失败审计命名，避免实现与原始设计偏离。
++  2. 方案提出 STOCK scopeKey 可选 rewardCode 或 rewardID，并要求实现阶段固定一种。
++     这不是阻塞项，但为了减少研发歧义，建议 analysis 直接收敛为 rewardCode，因为 admin API
++     和活动配置中运营可稳定感知 rewardCode，rewardID 更偏内部生成值。
++  3. 验收用例覆盖了主要行为，但未明确要求验证失败后的 participation 不存在或不会保持
++     REWARDABLE 脏状态。该点是现状缺口中的核心问题，建议作为单独断言加入测试清单。
++P3:
++  1. 建议在错误表达部分明确 HTTP response body 的外部错误码或 message 约定，避免研发只做到
++     409 status，但调用方无法区分 BUDGET/STOCK/USER_LIMIT。
++```
+ 
+-## Open Questions
++## Assessment
+ 
+-待填写。
++analysis 对需求拆解基本完整，识别了当前实现中最关键的事务边界问题：rewardable participation 在 quota 事务外提前写入；同时覆盖了预算、库存、用户次数、多奖励 all-or-nothing、重复幂等事件、失败审计和 PostgreSQL 条件更新验证。
+ 
++推荐的边界“单个 activity 发奖事务原子化，不扩大为跨活动全局事务”与当前架构一致，也能控制本次改动范围。验收标准包含内存仓储、PostgreSQL smoke 和并发测试方向，满足高风险账务路径进入研发前的最低清晰度。
++
++## Score
++
++```text
++84
++```
++
++评分拆分：
++
++```text
++需求清晰度        18/20
++范围可控          18/20
++风险可控          16/20
++验收标准明确      16/20
++架构一致性        16/20
++```
++
+ ## Decision
+ 
+-~~~text
+-PASS / BLOCK
+-~~~
++```text
++PASS
++```
+ 
+-规则：
+-
+-~~~text
+-存在 P0/P1 -> BLOCK
+-Score < 70 -> BLOCK
+-无 P0/P1 且 Score >= 70 -> PASS
+-~~~
++无 P0/P1，Score >= 70，允许进入研发。
+ 
+ 需求：2026-05-24-094535
+
+diff --git a/tasks/2026-05-24-094535/review.md b/tasks/2026-05-24-094535/review.md
+index 00eb1915696364cb214bafdd25ca9c58a2e3d5cd..ed0bb7cb886eaf2052a3808a1bf43692b3e5c980
+--- a/tasks/2026-05-24-094535/review.md
++++ b/tasks/2026-05-24-094535/review.md
+@@ -1,35 +1,62 @@
+ # Review
+ 
+-## Agent 指令
++## Scope
+ 
+-你是 Review Agent。请审核 analysis.md。
++审核对象：`tasks/2026-05-24-094535/analysis.md`
+ 
+-不改代码，不提交。
++审核约束：
++
++- 只审核 analysis，不改代码。
++- 存在 P0/P1 或 Score < 70 必须 BLOCK。
+ 
+ ## Findings
+ 
+-~~~text
+-P0:
+-P1:
++```text
++P0: 无
++P1: 无
+ P2:
+-~~~
++  1. analysis 没有明确说明已对照 CLAUDE.md 要求读取上游设计文档
++     /Users/tong/Documents/GitHub/OracleBetX-Projects/act-analysis/22-独立活动营销中台设计.md。
++     本任务涉及预算、库存、次数和发奖账务语义，研发前建议再核对该设计文档中的库存 scope、
++     participation 状态流转和失败审计命名，避免实现与原始设计偏离。
++  2. 方案提出 STOCK scopeKey 可选 rewardCode 或 rewardID，并要求实现阶段固定一种。
++     这不是阻塞项，但为了减少研发歧义，建议 analysis 直接收敛为 rewardCode，因为 admin API
++     和活动配置中运营可稳定感知 rewardCode，rewardID 更偏内部生成值。
++  3. 验收用例覆盖了主要行为，但未明确要求验证失败后的 participation 不存在或不会保持
++     REWARDABLE 脏状态。该点是现状缺口中的核心问题，建议作为单独断言加入测试清单。
++P3:
++  1. 建议在错误表达部分明确 HTTP response body 的外部错误码或 message 约定，避免研发只做到
++     409 status，但调用方无法区分 BUDGET/STOCK/USER_LIMIT。
++```
+ 
+-## Open Questions
++## Assessment
+ 
+-待填写。
++analysis 对需求拆解基本完整，识别了当前实现中最关键的事务边界问题：rewardable participation 在 quota 事务外提前写入；同时覆盖了预算、库存、用户次数、多奖励 all-or-nothing、重复幂等事件、失败审计和 PostgreSQL 条件更新验证。
+ 
++推荐的边界“单个 activity 发奖事务原子化，不扩大为跨活动全局事务”与当前架构一致，也能控制本次改动范围。验收标准包含内存仓储、PostgreSQL smoke 和并发测试方向，满足高风险账务路径进入研发前的最低清晰度。
++
++## Score
++
++```text
++84
++```
++
++评分拆分：
++
++```text
++需求清晰度        18/20
++范围可控          18/20
++风险可控          16/20
++验收标准明确      16/20
++架构一致性        16/20
++```
++
+ ## Decision
+ 
+-~~~text
+-PASS / BLOCK
+-~~~
++```text
++PASS
++```
+ 
+-规则：
+-
+-~~~text
+-存在 P0/P1 -> BLOCK
+-Score < 70 -> BLOCK
+-无 P0/P1 且 Score >= 70 -> PASS
+-~~~
++无 P0/P1，Score >= 70，允许进入研发。
+ 
+ 需求：2026-05-24-094535
+
+2026-05-24T10:03:09.064572Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:03:09.064583Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:03:09.065198Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:03:09.065201Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:03:09.065527Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:03:09.065530Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:03:09.065836Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:03:09.065838Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:03:09.066365Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:03:09.066368Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:03:09.067149Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:03:09.067151Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+exec
+/bin/zsh -lc "sed -n '1,220p' tasks/2026-05-24-094535/review.md" in /Users/tong/Documents/GitHub/OracleBetX-Projects/ExMarketing
+ succeeded in 0ms:
+# Review
+
+## Scope
+
+审核对象：`tasks/2026-05-24-094535/analysis.md`
+
+审核约束：
+
+- 只审核 analysis，不改代码。
+- 存在 P0/P1 或 Score < 70 必须 BLOCK。
+
+## Findings
+
+```text
+P0: 无
+P1: 无
+P2:
+  1. analysis 没有明确说明已对照 CLAUDE.md 要求读取上游设计文档
+     /Users/tong/Documents/GitHub/OracleBetX-Projects/act-analysis/22-独立活动营销中台设计.md。
+     本任务涉及预算、库存、次数和发奖账务语义，研发前建议再核对该设计文档中的库存 scope、
+     participation 状态流转和失败审计命名，避免实现与原始设计偏离。
+  2. 方案提出 STOCK scopeKey 可选 rewardCode 或 rewardID，并要求实现阶段固定一种。
+     这不是阻塞项，但为了减少研发歧义，建议 analysis 直接收敛为 rewardCode，因为 admin API
+     和活动配置中运营可稳定感知 rewardCode，rewardID 更偏内部生成值。
+  3. 验收用例覆盖了主要行为，但未明确要求验证失败后的 participation 不存在或不会保持
+     REWARDABLE 脏状态。该点是现状缺口中的核心问题，建议作为单独断言加入测试清单。
+P3:
+  1. 建议在错误表达部分明确 HTTP response body 的外部错误码或 message 约定，避免研发只做到
+     409 status，但调用方无法区分 BUDGET/STOCK/USER_LIMIT。
+```
+
+## Assessment
+
+analysis 对需求拆解基本完整，识别了当前实现中最关键的事务边界问题：rewardable participation 在 quota 事务外提前写入；同时覆盖了预算、库存、用户次数、多奖励 all-or-nothing、重复幂等事件、失败审计和 PostgreSQL 条件更新验证。
+
+推荐的边界“单个 activity 发奖事务原子化，不扩大为跨活动全局事务”与当前架构一致，也能控制本次改动范围。验收标准包含内存仓储、PostgreSQL smoke 和并发测试方向，满足高风险账务路径进入研发前的最低清晰度。
+
+## Score
+
+```text
+84
+```
+
+评分拆分：
+
+```text
+需求清晰度        18/20
+范围可控          18/20
+风险可控          16/20
+验收标准明确      16/20
+架构一致性        16/20
+```
+
+## Decision
+
+```text
+PASS
+```
+
+无 P0/P1，Score >= 70，允许进入研发。
+
+需求：2026-05-24-094535
+
+diff --git a/tasks/2026-05-24-094535/review.md b/tasks/2026-05-24-094535/review.md
+index 00eb1915696364cb214bafdd25ca9c58a2e3d5cd..ed0bb7cb886eaf2052a3808a1bf43692b3e5c980
+--- a/tasks/2026-05-24-094535/review.md
++++ b/tasks/2026-05-24-094535/review.md
+@@ -1,35 +1,62 @@
+ # Review
+ 
+-## Agent 指令
++## Scope
+ 
+-你是 Review Agent。请审核 analysis.md。
++审核对象：`tasks/2026-05-24-094535/analysis.md`
+ 
+-不改代码，不提交。
++审核约束：
++
++- 只审核 analysis，不改代码。
++- 存在 P0/P1 或 Score < 70 必须 BLOCK。
+ 
+ ## Findings
+ 
+-~~~text
+-P0:
+-P1:
++```text
++P0: 无
++P1: 无
+ P2:
+-~~~
++  1. analysis 没有明确说明已对照 CLAUDE.md 要求读取上游设计文档
++     /Users/tong/Documents/GitHub/OracleBetX-Projects/act-analysis/22-独立活动营销中台设计.md。
++     本任务涉及预算、库存、次数和发奖账务语义，研发前建议再核对该设计文档中的库存 scope、
++     participation 状态流转和失败审计命名，避免实现与原始设计偏离。
++  2. 方案提出 STOCK scopeKey 可选 rewardCode 或 rewardID，并要求实现阶段固定一种。
++     这不是阻塞项，但为了减少研发歧义，建议 analysis 直接收敛为 rewardCode，因为 admin API
++     和活动配置中运营可稳定感知 rewardCode，rewardID 更偏内部生成值。
++  3. 验收用例覆盖了主要行为，但未明确要求验证失败后的 participation 不存在或不会保持
++     REWARDABLE 脏状态。该点是现状缺口中的核心问题，建议作为单独断言加入测试清单。
++P3:
++  1. 建议在错误表达部分明确 HTTP response body 的外部错误码或 message 约定，避免研发只做到
++     409 status，但调用方无法区分 BUDGET/STOCK/USER_LIMIT。
++```
+ 
+-## Open Questions
++## Assessment
+ 
+-待填写。
++analysis 对需求拆解基本完整，识别了当前实现中最关键的事务边界问题：rewardable participation 在 quota 事务外提前写入；同时覆盖了预算、库存、用户次数、多奖励 all-or-nothing、重复幂等事件、失败审计和 PostgreSQL 条件更新验证。
+ 
++推荐的边界“单个 activity 发奖事务原子化，不扩大为跨活动全局事务”与当前架构一致，也能控制本次改动范围。验收标准包含内存仓储、PostgreSQL smoke 和并发测试方向，满足高风险账务路径进入研发前的最低清晰度。
++
++## Score
++
++```text
++84
++```
++
++评分拆分：
++
++```text
++需求清晰度        18/20
++范围可控          18/20
++风险可控          16/20
++验收标准明确      16/20
++架构一致性        16/20
++```
++
+ ## Decision
+ 
+-~~~text
+-PASS / BLOCK
+-~~~
++```text
++PASS
++```
+ 
+-规则：
+-
+-~~~text
+-存在 P0/P1 -> BLOCK
+-Score < 70 -> BLOCK
+-无 P0/P1 且 Score >= 70 -> PASS
+-~~~
++无 P0/P1，Score >= 70，允许进入研发。
+ 
+ 需求：2026-05-24-094535
+
+2026-05-24T10:03:12.113357Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:03:12.113364Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:03:12.113663Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:03:12.113667Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:03:12.113974Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:03:12.113976Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:03:12.114280Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:03:12.114283Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:03:12.114584Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:03:12.114588Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+2026-05-24T10:03:12.115273Z  WARN codex_core_skills::loader: ignoring interface.icon_small: icon path must not contain '..'
+2026-05-24T10:03:12.115276Z  WARN codex_core_skills::loader: ignoring interface.icon_large: icon path must not contain '..'
+codex
+已完成审核，只写入了 [review.md](/Users/tong/Documents/GitHub/OracleBetX-Projects/ExMarketing/tasks/2026-05-24-094535/review.md)。
+
+结论：`PASS`，Score `84`。无 P0/P1；记录了 3 个 P2 和 1 个 P3 建议。
+diff --git a/tasks/2026-05-24-094535/review.md b/tasks/2026-05-24-094535/review.md
+index 00eb1915696364cb214bafdd25ca9c58a2e3d5cd..ed0bb7cb886eaf2052a3808a1bf43692b3e5c980
+--- a/tasks/2026-05-24-094535/review.md
++++ b/tasks/2026-05-24-094535/review.md
+@@ -1,35 +1,62 @@
+ # Review
+ 
+-## Agent 指令
++## Scope
+ 
+-你是 Review Agent。请审核 analysis.md。
++审核对象：`tasks/2026-05-24-094535/analysis.md`
+ 
+-不改代码，不提交。
++审核约束：
++
++- 只审核 analysis，不改代码。
++- 存在 P0/P1 或 Score < 70 必须 BLOCK。
+ 
+ ## Findings
+ 
+-~~~text
+-P0:
+-P1:
++```text
++P0: 无
++P1: 无
+ P2:
+-~~~
++  1. analysis 没有明确说明已对照 CLAUDE.md 要求读取上游设计文档
++     /Users/tong/Documents/GitHub/OracleBetX-Projects/act-analysis/22-独立活动营销中台设计.md。
++     本任务涉及预算、库存、次数和发奖账务语义，研发前建议再核对该设计文档中的库存 scope、
++     participation 状态流转和失败审计命名，避免实现与原始设计偏离。
++  2. 方案提出 STOCK scopeKey 可选 rewardCode 或 rewardID，并要求实现阶段固定一种。
++     这不是阻塞项，但为了减少研发歧义，建议 analysis 直接收敛为 rewardCode，因为 admin API
++     和活动配置中运营可稳定感知 rewardCode，rewardID 更偏内部生成值。
++  3. 验收用例覆盖了主要行为，但未明确要求验证失败后的 participation 不存在或不会保持
++     REWARDABLE 脏状态。该点是现状缺口中的核心问题，建议作为单独断言加入测试清单。
++P3:
++  1. 建议在错误表达部分明确 HTTP response body 的外部错误码或 message 约定，避免研发只做到
++     409 status，但调用方无法区分 BUDGET/STOCK/USER_LIMIT。
++```
+ 
+-## Open Questions
++## Assessment
+ 
+-待填写。
++analysis 对需求拆解基本完整，识别了当前实现中最关键的事务边界问题：rewardable participation 在 quota 事务外提前写入；同时覆盖了预算、库存、用户次数、多奖励 all-or-nothing、重复幂等事件、失败审计和 PostgreSQL 条件更新验证。
+ 
++推荐的边界“单个 activity 发奖事务原子化，不扩大为跨活动全局事务”与当前架构一致，也能控制本次改动范围。验收标准包含内存仓储、PostgreSQL smoke 和并发测试方向，满足高风险账务路径进入研发前的最低清晰度。
++
++## Score
++
++```text
++84
++```
++
++评分拆分：
++
++```text
++需求清晰度        18/20
++范围可控          18/20
++风险可控          16/20
++验收标准明确      16/20
++架构一致性        16/20
++```
++
+ ## Decision
+ 
+-~~~text
+-PASS / BLOCK
+-~~~
++```text
++PASS
++```
+ 
+-规则：
+-
+-~~~text
+-存在 P0/P1 -> BLOCK
+-Score < 70 -> BLOCK
+-无 P0/P1 且 Score >= 70 -> PASS
+-~~~
++无 P0/P1，Score >= 70，允许进入研发。
+ 
+ 需求：2026-05-24-094535
+
+已完成审核，只写入了 [review.md](/Users/tong/Documents/GitHub/OracleBetX-Projects/ExMarketing/tasks/2026-05-24-094535/review.md)。
+
+结论：`PASS`，Score `84`。无 P0/P1；记录了 3 个 P2 和 1 个 P3 建议。
+tokens used
+32,319
+
+finishedAt=2026-05-24T10:03:14Z exitCode=0 error=<nil>

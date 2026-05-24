@@ -272,6 +272,54 @@ type Quota struct {
 	UpdatedAt   time.Time  `json:"updatedAt"`
 }
 
+type QuotaReservation struct {
+	Type     QuotaType  `json:"quotaType"`
+	Scope    QuotaScope `json:"scope"`
+	ScopeKey string     `json:"scopeKey"`
+	Amount   string     `json:"amount"`
+}
+
+type AtomicGrantCommand struct {
+	Participation     Participation
+	BudgetAmount      string
+	ReserveUserLimit  bool
+	UserScopeKey      string
+	StockReservations []QuotaReservation
+	GrantOrders       []GrantOrder
+	OutboxMessages    []OutboxMessage
+}
+
+type AtomicGrantResult struct {
+	Participation  Participation
+	GrantOrders    []GrantOrder
+	OutboxMessages []OutboxMessage
+}
+
+type QuotaExceededError struct {
+	Type     QuotaType
+	Scope    QuotaScope
+	ScopeKey string
+	Amount   string
+}
+
+func (e QuotaExceededError) Error() string {
+	parts := []string{"quota exceeded"}
+	if e.Type != "" {
+		parts = append(parts, string(e.Type))
+	}
+	if e.Scope != "" {
+		parts = append(parts, string(e.Scope))
+	}
+	if e.ScopeKey != "" {
+		parts = append(parts, e.ScopeKey)
+	}
+	return strings.Join(parts, ": ")
+}
+
+func (e QuotaExceededError) Unwrap() error {
+	return ErrQuotaExceeded
+}
+
 type CreateQuotaCommand struct {
 	ActivityID string     `json:"activityId"`
 	Type       QuotaType  `json:"quotaType"`

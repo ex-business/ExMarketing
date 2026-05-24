@@ -1,49 +1,1279 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>ExMarketing Admin</title>
   <style>
-    body { font-family: system-ui, sans-serif; margin: 24px; color: #1f2937; }
-    main { max-width: 1120px; margin: 0 auto; }
-    h1 { font-size: 24px; margin: 0 0 16px; }
-    section { border: 1px solid #d1d5db; border-radius: 8px; padding: 16px; margin: 16px 0; }
-    textarea { width: 100%; min-height: 220px; font-family: ui-monospace, monospace; font-size: 13px; }
-    button { padding: 8px 12px; border: 1px solid #111827; background: #111827; color: white; border-radius: 6px; cursor: pointer; }
-    pre { background: #f3f4f6; padding: 12px; overflow: auto; border-radius: 6px; min-height: 80px; }
+    :root {
+      --bg: #f7f8fb;
+      --panel: #ffffff;
+      --line: #d8dee8;
+      --text: #172033;
+      --muted: #687386;
+      --blue: #2563eb;
+      --green: #15803d;
+      --amber: #b45309;
+      --red: #b91c1c;
+      --ink: #111827;
+      --soft: #eef2f7;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.45;
+    }
+    .app-shell {
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: 244px minmax(720px, 1fr) 464px;
+      background: var(--bg);
+    }
+    .sidebar {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      border-right: 1px solid var(--line);
+      background: #fff;
+      padding: 18px 8px 14px;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 0 10px 18px;
+    }
+    .brand-name {
+      font-size: 16px;
+      font-weight: 820;
+      color: var(--ink);
+    }
+    .brand-mark {
+      width: 28px;
+      height: 28px;
+      border-radius: 7px;
+      display: grid;
+      place-items: center;
+      background: #eef6ff;
+      color: #0f4c81;
+      font-weight: 900;
+    }
+    .nav-group {
+      border-top: 1px solid #eef2f7;
+      padding: 12px 10px;
+    }
+    .nav-label {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 750;
+      margin-bottom: 6px;
+    }
+    .sidebar-footer {
+      margin-top: auto;
+      border-top: 1px solid #eef2f7;
+      padding: 12px 10px 0;
+    }
+    .workspace {
+      min-width: 0;
+      padding: 22px 24px 36px;
+      overflow: auto;
+      max-height: 100vh;
+    }
+    .workspace-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 18px;
+      margin-bottom: 16px;
+    }
+    .workspace-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+    .agent-console {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      border-left: 1px solid var(--line);
+      background: #f3f7fc;
+      min-width: 0;
+    }
+    .console-head {
+      height: 56px;
+      padding: 0 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      border-bottom: 1px solid var(--line);
+      background: #f8fbff;
+    }
+    .console-title {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 800;
+      color: var(--ink);
+      min-width: 0;
+    }
+    .console-title-text {
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+    }
+    .console-dot {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      display: grid;
+      place-items: center;
+      background: #0f172a;
+      color: #93c5fd;
+      font-size: 14px;
+      font-weight: 900;
+    }
+    .console-body {
+      flex: 1;
+      min-height: 0;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .console-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 12px;
+    }
+    .console-card-title {
+      font-size: 13px;
+      font-weight: 800;
+      color: var(--ink);
+    }
+    .console-status-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-bottom: 8px;
+    }
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .run-history {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      max-height: 148px;
+      overflow: auto;
+    }
+    .run-item {
+      width: 100%;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--text);
+      border-radius: 7px;
+      cursor: pointer;
+      padding: 7px 8px;
+      text-align: left;
+      font: 12px/1.35 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    .run-item:hover {
+      border-color: #bfdbfe;
+      background: #eff6ff;
+    }
+    .run-item.red {
+      border-color: #fecaca;
+      background: #fef2f2;
+    }
+    .run-item.green {
+      border-color: #bbf7d0;
+      background: #f0fdf4;
+    }
+    .run-item.active {
+      outline: 2px solid #bfdbfe;
+      outline-offset: 1px;
+    }
+    h1 {
+      margin: 0;
+      font-size: 20px;
+      font-weight: 750;
+      letter-spacing: 0;
+    }
+    .subtitle {
+      color: var(--muted);
+      font-size: 13px;
+      margin-top: 2px;
+    }
+    .tab {
+      width: 100%;
+      border: 0;
+      background: transparent;
+      color: var(--text);
+      padding: 8px 10px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: 650;
+      text-align: left;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      min-height: 34px;
+    }
+    .tab.active {
+      background: #e8f3ff;
+      color: var(--ink);
+      box-shadow: inset 3px 0 0 var(--blue);
+    }
+    .tab:focus {
+      outline: none;
+    }
+    .tab:focus-visible {
+      outline: none;
+      background: #e8f3ff;
+    }
+    .toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin-bottom: 16px;
+    }
+    .button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid var(--ink);
+      background: var(--ink);
+      color: #fff;
+      border-radius: 7px;
+      cursor: pointer;
+      padding: 9px 12px;
+      font-weight: 700;
+      text-decoration: none;
+    }
+    .button.secondary {
+      background: var(--panel);
+      color: var(--ink);
+      border-color: var(--line);
+    }
+    .button:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
+    .workflow-grid {
+      display: grid;
+      grid-template-columns: minmax(300px, 380px) minmax(0, 1fr);
+      gap: 14px;
+      align-items: start;
+    }
+    .hero-cards {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+    .hero-card {
+      border: 1px solid #bfdbfe;
+      background: #eff8ff;
+      border-radius: 8px;
+      padding: 14px 16px;
+      min-height: 112px;
+    }
+    .hero-card strong {
+      display: block;
+      font-size: 14px;
+      margin-bottom: 6px;
+      color: #0f3b66;
+    }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      min-width: 0;
+    }
+    .panel-head {
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .panel-title {
+      font-size: 15px;
+      font-weight: 750;
+      margin: 0;
+    }
+    .list {
+      max-height: calc(100vh - 390px);
+      overflow: auto;
+    }
+    .req-row {
+      width: 100%;
+      border: 0;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
+      color: var(--text);
+      cursor: pointer;
+      padding: 13px 16px;
+      text-align: left;
+    }
+    .req-row.active {
+      background: #eef6ff;
+      box-shadow: inset 3px 0 0 var(--blue);
+    }
+    .req-title {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: flex-start;
+      font-weight: 750;
+      font-size: 14px;
+    }
+    .req-desc {
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 6px;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+    .badges {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 8px;
+    }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 22px;
+      padding: 2px 7px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 750;
+      white-space: nowrap;
+    }
+    .badge.green { color: var(--green); border-color: #bbf7d0; background: #f0fdf4; }
+    .badge.amber { color: var(--amber); border-color: #fde68a; background: #fffbeb; }
+    .badge.red { color: var(--red); border-color: #fecaca; background: #fef2f2; }
+    .badge.blue { color: var(--blue); border-color: #bfdbfe; background: #eff6ff; }
+    .detail-body {
+      padding: 16px;
+    }
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+    .metric {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+      background: #fbfcfe;
+      min-height: 72px;
+    }
+    .metric-label {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 750;
+      text-transform: uppercase;
+    }
+    .metric-value {
+      margin-top: 5px;
+      font-size: 14px;
+      font-weight: 800;
+      overflow-wrap: anywhere;
+    }
+    .timeline {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(142px, 1fr));
+      gap: 8px;
+      margin: 14px 0 16px;
+      overflow-x: auto;
+      padding-bottom: 2px;
+    }
+    .stage {
+      position: relative;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+      background: #fff;
+      min-height: 124px;
+      min-width: 0;
+    }
+    .stage.green {
+      border-color: #bbf7d0;
+      background: #f0fdf4;
+    }
+    .stage.blue {
+      border-color: #bfdbfe;
+      background: #eff6ff;
+    }
+    .stage.amber {
+      border-color: #fde68a;
+      background: #fffbeb;
+    }
+    .stage.red {
+      border-color: #fecaca;
+      background: #fef2f2;
+    }
+    .stage::after {
+      content: "";
+      position: absolute;
+      right: -9px;
+      top: 31px;
+      width: 9px;
+      height: 2px;
+      background: var(--line);
+    }
+    .stage:last-child::after { display: none; }
+    .stage-name {
+      font-size: 13px;
+      font-weight: 800;
+      margin-bottom: 8px;
+    }
+    .stage-meta {
+      color: var(--muted);
+      font-size: 11px;
+      margin-top: 7px;
+      overflow-wrap: anywhere;
+    }
+    .console-stage {
+      cursor: pointer;
+      font-family: inherit;
+    }
+    .console-stage.active {
+      outline: 2px solid #bfdbfe;
+      outline-offset: 1px;
+    }
+    pre {
+      margin: 0;
+      min-height: 300px;
+      max-height: calc(100vh - 450px);
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #0f172a;
+      color: #e5e7eb;
+      padding: 14px;
+      font: 12px/1.55 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+    }
+    textarea {
+      width: 100%;
+      min-height: 220px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+      font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      resize: vertical;
+    }
+    input, select {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      padding: 9px 10px;
+      background: #fff;
+      color: var(--text);
+      font: 13px/1.4 inherit;
+    }
+    label {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 750;
+      margin-bottom: 5px;
+    }
+    .field-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 100px;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+    .ops {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 12px 0 14px;
+      align-items: center;
+    }
+    .ops select, .ops input {
+      width: auto;
+      min-width: 150px;
+    }
+    .console {
+      flex: 1;
+      min-height: 260px;
+      max-height: none;
+      border-radius: 8px;
+    }
+    .forms {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 18px;
+    }
+    .hidden { display: none; }
+    .empty {
+      padding: 40px 16px;
+      color: var(--muted);
+      text-align: center;
+    }
+    @media (max-width: 1280px) {
+      .app-shell {
+        grid-template-columns: 220px minmax(0, 1fr);
+      }
+      .agent-console {
+        position: static;
+        grid-column: 1 / -1;
+        height: 420px;
+        border-left: 0;
+        border-top: 1px solid var(--line);
+      }
+      .workspace {
+        max-height: none;
+      }
+    }
+    @media (max-width: 980px) {
+      .app-shell {
+        display: block;
+      }
+      .sidebar {
+        position: static;
+        height: auto;
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+      .sidebar-footer { display: none; }
+      .workspace-header, .toolbar {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+      .workflow-grid, .forms, .hero-cards {
+        grid-template-columns: 1fr;
+      }
+      .stage::after { display: none; }
+      .summary {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      .field-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+    @media (max-width: 560px) {
+      .workspace, .console-body { padding-left: 14px; padding-right: 14px; }
+      .summary { grid-template-columns: 1fr; }
+    }
   </style>
 </head>
 <body>
-<main>
-  <h1>ExMarketing Admin</h1>
-  <section>
-    <button onclick="loadActivities()">Refresh Activities</button>
-    <pre id="activities"></pre>
+<div class="app-shell">
+  <aside class="sidebar">
+    <div class="brand">
+      <div>
+        <div class="brand-name">ExMarketing</div>
+        <div class="subtitle">Agent Ops</div>
+      </div>
+      <div class="brand-mark">EX</div>
+    </div>
+    <div class="nav-group">
+      <div class="nav-label">Application</div>
+      <button class="tab active" data-tab="workflow" onclick="switchTab('workflow')">Agent 工作台</button>
+      <button class="tab" data-tab="activity" onclick="switchTab('activity')">活动配置</button>
+      <button class="tab" data-tab="simulate" onclick="switchTab('simulate')">模拟运行</button>
+    </div>
+    <div class="nav-group">
+      <div class="nav-label">Workflow</div>
+      <button class="tab" type="button" onclick="showGitDiff()">Git Diff</button>
+      <a class="tab" href="https://smith.langchain.com/studio/?baseUrl=http://127.0.0.1:2024" target="_blank" rel="noreferrer">LangGraph Studio</a>
+    </div>
+    <div class="sidebar-footer">
+      <div class="nav-label">Project</div>
+      <div class="subtitle">ex-business / ExMarketing</div>
+      <div class="subtitle">本地控制台：/admin/</div>
+    </div>
+  </aside>
+
+  <main class="workspace">
+  <section id="createView" class="hidden">
+    <div class="workspace-header">
+      <div>
+        <h1>新增需求</h1>
+        <div class="subtitle">录入需求，进入 backlog 后由 intake 创建任务目录和 Agent 交接文件。</div>
+        <div class="subtitle" id="agentConfig">Agent 命令：检查中</div>
+      </div>
+      <div class="workspace-actions">
+        <a class="button secondary" href="https://smith.langchain.com/studio/?baseUrl=http://127.0.0.1:2024" target="_blank" rel="noreferrer">打开 Studio</a>
+        <button class="button" onclick="switchTab('workflow')">进入工作台</button>
+      </div>
+    </div>
+
+    <div class="hero-cards">
+      <div class="hero-card">
+        <strong>1. 新增需求</strong>
+        <div class="subtitle">录入需求后进入 backlog，由 intake 创建任务目录和 Agent 交接文件。</div>
+      </div>
+      <div class="hero-card">
+        <strong>2. 自动流转</strong>
+        <div class="subtitle">Analysis 达到 80 分后，依次进入 Review、Test Plan、Dev、Test、Commit。</div>
+      </div>
+      <div class="hero-card">
+        <strong>3. 可视化追踪</strong>
+        <div class="subtitle">右侧实时输出日志，中间查看每个 Agent 的状态、产物和 Git Diff。</div>
+      </div>
+    </div>
+
+    <div class="panel" style="margin-bottom:18px">
+      <div class="panel-head">
+        <h3 class="panel-title">新增需求</h3>
+        <button class="button secondary" onclick="intakeRequirements()">接收 NEW 需求</button>
+      </div>
+      <div class="detail-body">
+        <div class="field-grid">
+          <div>
+            <label for="newTitle">标题</label>
+            <input id="newTitle" placeholder="例如：预算原子扣减">
+          </div>
+          <div>
+            <label for="newRisk">风险</label>
+            <select id="newRisk">
+              <option>中</option>
+              <option>低</option>
+              <option>高</option>
+            </select>
+          </div>
+        </div>
+        <label for="newDescription">需求描述</label>
+        <textarea id="newDescription" style="min-height:86px" placeholder="写清楚背景、目标、验收标准或约束"></textarea>
+        <div class="ops">
+          <button class="button" onclick="createRequirement()">新增需求</button>
+          <button class="button secondary" onclick="showGitDiff()">查看 Git Diff</button>
+        </div>
+      </div>
+    </div>
   </section>
-  <section>
-    <h2>Create Activity</h2>
-    <textarea id="activity">{}</textarea>
-    <button onclick="postJson('/admin/v1/activities', 'activity', 'activityResult')">Create</button>
-    <pre id="activityResult"></pre>
+
+  <section id="workflowView">
+    <div class="workspace-header">
+      <div>
+        <h1>Agent 工作流看板</h1>
+        <div class="subtitle">接收任务、分配 Agent、运行下一步、查看状态、产物和提交前差异。</div>
+      </div>
+      <div class="workspace-actions">
+        <button class="button secondary" onclick="switchTab('create')">新增需求</button>
+        <button class="button secondary" onclick="intakeRequirements()">接收 NEW 需求</button>
+        <button class="button secondary" onclick="showGitDiff()">查看 Git Diff</button>
+        <button class="button" onclick="loadWorkflow()">刷新</button>
+      </div>
+    </div>
+    <div class="workflow-grid">
+      <div class="panel">
+        <div class="panel-head">
+          <h3 class="panel-title">需求列表</h3>
+          <span class="badge" id="requirementCount">0</span>
+        </div>
+        <div class="list" id="requirements"></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head">
+          <h3 class="panel-title" id="detailTitle">选择一个需求</h3>
+          <button class="button secondary" id="detailRefresh" onclick="loadDetail(selectedId)" disabled>刷新详情</button>
+        </div>
+        <div class="detail-body" id="detail">
+          <div class="empty">左侧选择需求后查看 Agent 流程、产物和日志路径。</div>
+        </div>
+      </div>
+    </div>
   </section>
-  <section>
-    <h2>Simulate Event</h2>
-    <textarea id="event">{}</textarea>
-    <button onclick="postJson('/admin/v1/simulate', 'event', 'simulationResult')">Simulate</button>
-    <pre id="simulationResult"></pre>
+
+  <section id="activityView" class="hidden">
+    <div class="toolbar">
+      <div>
+        <h2 class="panel-title">活动配置</h2>
+        <div class="subtitle">查看和创建营销活动。</div>
+      </div>
+      <button class="button" onclick="loadActivities()">刷新活动</button>
+    </div>
+    <div class="forms">
+      <div class="panel">
+        <div class="panel-head"><h3 class="panel-title">活动列表</h3></div>
+        <div class="detail-body"><pre id="activities"></pre></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h3 class="panel-title">创建活动</h3></div>
+        <div class="detail-body">
+          <textarea id="activity">{}</textarea>
+          <div style="margin-top:10px"><button class="button" onclick="postJson('/admin/v1/activities', 'activity', 'activityResult')">创建</button></div>
+          <div style="margin-top:10px"><pre id="activityResult"></pre></div>
+        </div>
+      </div>
+    </div>
   </section>
-</main>
+
+  <section id="simulateView" class="hidden">
+    <div class="panel">
+      <div class="panel-head"><h3 class="panel-title">模拟运行</h3></div>
+      <div class="detail-body">
+        <textarea id="event">{}</textarea>
+        <div style="margin-top:10px"><button class="button" onclick="postJson('/admin/v1/simulate', 'event', 'simulationResult')">模拟</button></div>
+        <div style="margin-top:10px"><pre id="simulationResult"></pre></div>
+      </div>
+    </div>
+  </section>
+  </main>
+
+  <aside class="agent-console">
+    <div class="console-head">
+      <div class="console-title"><span class="console-dot">A</span><span class="console-title-text" id="consoleTitle">选择一个需求</span></div>
+      <button class="button secondary" onclick="loadWorkflow()">刷新</button>
+    </div>
+    <div class="console-body">
+      <div class="console-card">
+        <div class="console-status-head">
+          <div class="console-card-title">运行状态</div>
+          <div class="legend">
+            <span class="badge amber">等待</span>
+            <span class="badge blue">运行</span>
+            <span class="badge green">完成</span>
+            <span class="badge red">失败</span>
+          </div>
+        </div>
+        <div class="badges" id="consoleStages">
+          <span class="badge blue">Analysis</span>
+          <span class="badge amber">Review</span>
+          <span class="badge amber">Test Plan</span>
+          <span class="badge amber">Dev</span>
+          <span class="badge amber">Test</span>
+          <span class="badge amber">Commit</span>
+        </div>
+      </div>
+      <div class="console-card">
+        <div class="console-status-head">
+          <div class="console-card-title">运行历史</div>
+          <span class="badge" id="runCount">0</span>
+        </div>
+        <div class="run-history" id="runHistory">
+          <div class="subtitle">选择需求后显示每次运行。</div>
+        </div>
+      </div>
+      <pre class="console" id="workflowConsole">等待 Agent 输出...</pre>
+    </div>
+  </aside>
+</div>
+
 <script>
+const agentOrder = ['analysis', 'review', 'test-plan', 'dev', 'test', 'commit'];
+const agentNames = {
+  analysis: '需求分析',
+  review: '需求审核',
+  'test-plan': '测试用例',
+  dev: '开发实现',
+  test: '实际测试',
+  commit: '提交'
+};
+const statusNames = {
+  WAITING: '等待中',
+  RUNNING: '运行中',
+  DONE: '已完成',
+  FAILED: '失败'
+};
+const artifactFiles = ['task.md', 'analysis.md', 'review.md', 'test-plan.md', 'implementation.md', 'test.md', 'commit.md', 'agent-report.md', 'agent-status.json', 'agent-prompts.md'];
+const agentArtifacts = {
+  analysis: 'analysis.md',
+  review: 'review.md',
+  'test-plan': 'test-plan.md',
+  dev: 'implementation.md',
+  test: 'test.md',
+  commit: 'commit.md'
+};
+let selectedId = '';
+let currentArtifacts = {};
+let currentArtifact = 'task.md';
+let currentRuns = [];
+let currentRunId = '';
+let refreshTimer = 0;
+let logTimer = 0;
+let liveLog = { requirementId: '', agent: '' };
+
+function switchTab(name) {
+  for (const tab of document.querySelectorAll('.tab')) tab.classList.toggle('active', tab.dataset.tab === name);
+  document.getElementById('createView').classList.toggle('hidden', name !== 'create');
+  document.getElementById('workflowView').classList.toggle('hidden', name !== 'workflow');
+  document.getElementById('activityView').classList.toggle('hidden', name !== 'activity');
+  document.getElementById('simulateView').classList.toggle('hidden', name !== 'simulate');
+  if (name === 'create') loadConfig();
+  if (name === 'workflow') loadWorkflow();
+  if (name === 'activity') loadActivities();
+}
+
+async function loadWorkflow() {
+  await loadConfig();
+  const res = await fetch('/admin/v1/workflow/requirements');
+  const data = await res.json();
+  const items = data.items || [];
+  scheduleRefresh(items);
+  document.getElementById('requirementCount').textContent = String(items.length);
+  const list = document.getElementById('requirements');
+  if (!items.length) {
+    list.innerHTML = '<div class="empty">还没有需求。先用 workflowctl add 和 intake 创建一个任务。</div>';
+    return;
+  }
+  list.innerHTML = items.map(item => renderRequirementRow(item)).join('');
+  if (!selectedId || !items.some(item => item.id === selectedId)) selectedId = items[0].id;
+  markSelected();
+  await loadDetail(selectedId);
+}
+
+async function loadConfig() {
+  const data = await requestJson('/admin/v1/workflow/config');
+  const target = document.getElementById('agentConfig');
+  if (!data.ok || !data.body.agentCommandConfigured) {
+    target.textContent = 'Agent 命令：未配置 EX_MARKETING_AGENT_CMD；Analysis 阈值：' + (data.body.analysisPassScore ?? 80);
+    target.style.color = 'var(--red)';
+    return;
+  }
+  target.textContent = 'Agent 命令：已配置 - ' + data.body.agentCommandPreview + '；Analysis 阈值：' + data.body.analysisPassScore;
+  target.style.color = 'var(--green)';
+}
+
+async function createRequirement() {
+  const title = document.getElementById('newTitle').value.trim();
+  const description = document.getElementById('newDescription').value.trim();
+  const risk = document.getElementById('newRisk').value;
+  if (!title || !description) {
+    writeConsole('标题和需求描述不能为空');
+    return;
+  }
+  const data = await requestJson('/admin/v1/workflow/requirements', {
+    method: 'POST',
+    body: JSON.stringify({ title, description, risk })
+  });
+  if (data.ok) {
+    selectedId = data.body.id;
+    document.getElementById('newTitle').value = '';
+    document.getElementById('newDescription').value = '';
+    writeConsole('需求已新增：' + data.body.id);
+    await loadWorkflow();
+    switchTab('workflow');
+    return;
+  }
+  writeConsole(JSON.stringify(data.body, null, 2));
+}
+
+async function intakeRequirements() {
+  const data = await requestJson('/admin/v1/workflow/intake', { method: 'POST', body: '{}' });
+  writeConsole(JSON.stringify(data.body, null, 2));
+  await loadWorkflow();
+}
+
+function renderRequirementRow(item) {
+  const agentCounts = countAgents(item.agents || {});
+  return `
+    <button class="req-row" data-id="${escapeHtml(item.id)}" onclick="selectRequirement('${escapeJs(item.id)}')">
+      <div class="req-title">
+        <span>${escapeHtml(item.title || item.id)}</span>
+        ${badge(item.status, statusTone(item.status))}
+      </div>
+      <div class="req-desc">${escapeHtml(item.description || '')}</div>
+      <div class="badges">
+        ${badge('risk ' + (item.risk || '-'), riskTone(item.risk))}
+        ${badge('score ' + Number(item.score || 0), 'blue')}
+        ${badge('done ' + agentCounts.done + '/6', agentCounts.done === 6 ? 'green' : 'amber')}
+        ${badge('failed ' + agentCounts.failed, agentCounts.failed ? 'red' : '')}
+      </div>
+    </button>`;
+}
+
+function selectRequirement(id) {
+  selectedId = id;
+  markSelected();
+  loadDetail(id);
+}
+
+function markSelected() {
+  for (const row of document.querySelectorAll('.req-row')) row.classList.toggle('active', row.dataset.id === selectedId);
+}
+
+async function loadDetail(id) {
+  if (!id) return;
+  document.getElementById('detailRefresh').disabled = false;
+  const res = await fetch('/admin/v1/workflow/requirements/' + encodeURIComponent(id));
+  const data = await res.json();
+  if (!res.ok) {
+    document.getElementById('detail').innerHTML = `<div class="empty">${escapeHtml(data.error || '加载失败')}</div>`;
+    return;
+  }
+  const req = data.requirement || {};
+  currentArtifacts = data.artifacts || {};
+  currentRuns = data.runs || [];
+  if (!currentArtifacts[currentArtifact]) currentArtifact = 'task.md';
+  document.getElementById('detailTitle').textContent = req.title || req.id;
+  document.getElementById('consoleTitle').textContent = req.title || req.id || '选择一个需求';
+  document.getElementById('detail').innerHTML = renderDetail(req, data.agents || {});
+  renderArtifact();
+  renderConsoleStages(data.agents || {});
+  renderRunHistory();
+}
+
+function renderDetail(req, agents) {
+  return `
+    <div class="summary">
+      ${metric('需求 ID', req.id || '-')}
+      ${metric('流程状态', req.status || '-')}
+      ${metric('风险', req.risk || '-')}
+      ${metric('评分', String(req.score || 0))}
+    </div>
+    <div class="timeline">
+      ${agentOrder.map(agent => renderStage(agent, agents[agent] || {})).join('')}
+    </div>
+    <div class="ops">
+      <select id="agentSelect">
+        <option value="auto">自动选择下一个 Agent</option>
+        <option value="analysis">Analysis Agent</option>
+        <option value="review">Review Agent</option>
+        <option value="test-plan">Test Plan Agent</option>
+        <option value="dev">Dev Agent</option>
+        <option value="test">Test Agent</option>
+        <option value="commit">Commit Agent</option>
+      </select>
+      <button class="button" onclick="runSelectedAgent()">运行 Agent</button>
+      <button class="button" onclick="runPipeline()">自动运行全部</button>
+      <button class="button secondary" onclick="loadSelectedLog()">查看日志</button>
+      <button class="button secondary" onclick="showGitDiff()">查看 Git Diff</button>
+    </div>
+    <div class="ops">
+      <input id="commitMessage" placeholder="commit message，例如：Add workflow admin controls">
+      <button class="button secondary" onclick="commitRequirement()" ${req.status === 'COMMIT_READY' ? '' : 'disabled'}>测试通过后提交</button>
+    </div>
+  `;
+}
+
+function renderStage(agent, state) {
+  const status = state.status || 'WAITING';
+  const tone = agentTone(status);
+  return `
+    <div class="stage ${tone}" title="${escapeHtml(localStatus(status))}">
+      <div class="stage-name">${agentNames[agent]}</div>
+      <div class="stage-meta">output: ${escapeHtml(state.output || '-')}</div>
+      <div class="stage-meta">log: ${escapeHtml(state.log || '-')}</div>
+      <div class="stage-meta">start: ${formatTime(state.startedAt)}</div>
+      <div class="stage-meta">elapsed: ${escapeHtml(durationSince(state.startedAt, state.finishedAt))}</div>
+      <div class="stage-meta">finish: ${formatTime(state.finishedAt)}</div>
+      ${state.error ? `<div class="stage-meta" style="color:var(--red)">error: ${escapeHtml(state.error)}</div>` : ''}
+    </div>
+  `;
+}
+
+function renderConsoleStages(agents) {
+  const target = document.getElementById('consoleStages');
+  if (!target) return;
+  target.innerHTML = agentOrder.map(agent => {
+    const state = agents[agent] || {};
+    const file = agentArtifacts[agent];
+    const tone = agentTone(state.status || 'WAITING');
+    const active = currentArtifact === file || currentArtifact === 'log:' + agent ? ' active' : '';
+    return `<button class="badge ${tone} console-stage${active}" type="button" title="${escapeHtml(localStatus(state.status || 'WAITING'))}" onclick="selectAgentOutput('${agent}')">${escapeHtml(agentNames[agent])}</button>`;
+  }).join('');
+}
+
+function selectAgentOutput(agent) {
+  currentRunId = '';
+  currentArtifact = agentArtifacts[agent] || 'task.md';
+  renderArtifact();
+}
+
+function renderRunHistory() {
+  const count = document.getElementById('runCount');
+  const target = document.getElementById('runHistory');
+  if (!target) return;
+  if (count) count.textContent = String(currentRuns.length);
+  if (!currentRuns.length) {
+    target.innerHTML = '<div class="subtitle">还没有运行记录。</div>';
+    return;
+  }
+  target.innerHTML = currentRuns.map(run => {
+    const tone = runTone(run);
+    const active = currentRunId === run.id ? ' active' : '';
+    const label = `${agentNames[run.agent] || run.agent || 'Agent'} ${run.id}`;
+    const meta = run.current ? '当前' : formatTime(run.modifiedAt);
+    return `<button class="run-item ${tone}${active}" type="button" onclick="loadRunLog('${escapeJs(run.id)}')" title="${escapeHtml(run.path || run.id)}"><strong>${escapeHtml(label)}</strong><br>${escapeHtml(meta)}</button>`;
+  }).join('');
+}
+
+async function loadRunLog(runId) {
+  if (!selectedId || !runId) return;
+  const data = await requestJson('/admin/v1/workflow/requirements/' + encodeURIComponent(selectedId) + '/runs/' + encodeURIComponent(runId));
+  if (!data.ok) {
+    writeConsole(JSON.stringify(data.body, null, 2));
+    return;
+  }
+  currentRunId = runId;
+  currentArtifact = 'run:' + runId;
+  currentArtifacts[currentArtifact] = data.body.content || '(empty)';
+  renderRunHistory();
+  renderArtifact();
+}
+
+function scheduleRefresh(items) {
+  if (refreshTimer) clearTimeout(refreshTimer);
+  const runningItem = items.find(item => Object.values(item.agents || {}).some(agent => agent.status === 'RUNNING'));
+  if (runningItem) {
+    const runningAgent = Object.entries(runningItem.agents || {}).find(([, agent]) => agent.status === 'RUNNING');
+    if (runningAgent) startLiveLog(runningItem.id, runningAgent[0]);
+  } else {
+    stopLiveLog();
+  }
+  const hasRunning = Boolean(runningItem);
+  if (hasRunning) {
+    refreshTimer = setTimeout(loadWorkflow, 2000);
+  }
+}
+
+function startLiveLog(requirementId, agent) {
+  if (liveLog.requirementId === requirementId && liveLog.agent === agent && logTimer) return;
+  stopLiveLog();
+  liveLog = { requirementId, agent };
+  currentArtifact = 'log:' + agent;
+  if (!artifactFiles.includes(currentArtifact)) artifactFiles.push(currentArtifact);
+  pollLiveLog();
+  logTimer = setInterval(pollLiveLog, 2000);
+}
+
+function stopLiveLog() {
+  if (logTimer) clearInterval(logTimer);
+  logTimer = 0;
+  liveLog = { requirementId: '', agent: '' };
+}
+
+async function pollLiveLog() {
+  if (!liveLog.requirementId || !liveLog.agent) return;
+  const data = await requestJson('/admin/v1/workflow/requirements/' + encodeURIComponent(liveLog.requirementId) + '/logs/' + encodeURIComponent(liveLog.agent));
+  if (!data.ok) return;
+  const key = 'log:' + liveLog.agent;
+  currentArtifacts[key] = data.body.content || '(日志文件已创建，等待输出...)';
+  if (selectedId === liveLog.requirementId && currentArtifact === key) {
+    renderArtifact(true);
+  }
+  writeConsole('实时日志：' + (data.body.path || key) + '\n\n' + currentArtifacts[key]);
+}
+
+async function runSelectedAgent() {
+  if (!selectedId) return;
+  const agent = document.getElementById('agentSelect').value;
+  writeConsole('开始运行 ' + agent + ' ...');
+  const data = await requestJson('/admin/v1/workflow/requirements/' + encodeURIComponent(selectedId) + '/run-agent', {
+    method: 'POST',
+    body: JSON.stringify({ agent })
+  });
+  writeConsole(JSON.stringify(data.body, null, 2));
+  await loadWorkflow();
+}
+
+async function runPipeline() {
+  if (!selectedId) return;
+  writeConsole('开始自动运行 Agent 流水线 ...');
+  const data = await requestJson('/admin/v1/workflow/requirements/' + encodeURIComponent(selectedId) + '/run-pipeline', {
+    method: 'POST',
+    body: JSON.stringify({ maxSteps: 6 })
+  });
+  if (!data.ok && data.body.logContent) {
+    writeConsole('运行失败：' + (data.body.error || '') + '\n\n日志：' + (data.body.log || '') + '\n\n' + data.body.logContent);
+    currentArtifact = 'log:' + (data.body.agent || 'agent');
+    currentArtifacts[currentArtifact] = data.body.logContent;
+    if (!artifactFiles.includes(currentArtifact)) artifactFiles.push(currentArtifact);
+  } else {
+    writeConsole(JSON.stringify(data.body, null, 2));
+    currentArtifact = 'agent-report.md';
+  }
+  await loadWorkflow();
+}
+
+async function loadSelectedLog() {
+  if (!selectedId) return;
+  const agent = document.getElementById('agentSelect').value === 'auto' ? inferAgentFromStatus() : document.getElementById('agentSelect').value;
+  startLiveLog(selectedId, agent);
+  const data = await requestJson('/admin/v1/workflow/requirements/' + encodeURIComponent(selectedId) + '/logs/' + encodeURIComponent(agent));
+  currentArtifact = 'log:' + agent;
+  currentArtifacts[currentArtifact] = data.body.content || '(empty)';
+  if (!artifactFiles.includes(currentArtifact)) artifactFiles.push(currentArtifact);
+  document.getElementById('detail').innerHTML = renderDetail({ id: selectedId, status: '日志查看', risk: '-', score: 0, title: document.getElementById('detailTitle').textContent }, {});
+  renderArtifact();
+}
+
+async function showGitDiff() {
+  const data = await requestJson('/admin/v1/git/diff');
+  const text = '## git diff --stat\n\n' + (data.body.stat || '') + '\n\n## git diff\n\n' + (data.body.diff || '');
+  writeConsole(text || '(empty)');
+}
+
+async function commitRequirement() {
+  if (!selectedId) return;
+  const message = document.getElementById('commitMessage').value.trim();
+  if (!message) {
+    writeConsole('commit message 不能为空');
+    return;
+  }
+  const data = await requestJson('/admin/v1/git/commit', {
+    method: 'POST',
+    body: JSON.stringify({ requirementId: selectedId, message })
+  });
+  writeConsole(JSON.stringify(data.body, null, 2));
+  await loadWorkflow();
+}
+
+function inferAgentFromStatus() {
+  const status = document.querySelector('.metric:nth-child(2) .metric-value')?.textContent || '';
+  if (status === 'ANALYSIS_READY') return 'analysis';
+  if (status === 'REVIEW_READY') return 'review';
+  if (status === 'TEST_PLAN_READY') return 'test-plan';
+  if (status === 'TEST_PLAN_DONE') return 'dev';
+  if (status === 'DEV_READY') return 'dev';
+  if (status === 'TEST_EXEC_READY' || status === 'TEST_READY') return 'test';
+  if (status === 'COMMIT_READY') return 'commit';
+  return 'analysis';
+}
+
+function selectArtifact(file) {
+  currentRunId = '';
+  currentArtifact = file;
+  renderArtifact();
+}
+
+function renderArtifact(autoScroll = false) {
+  const content = currentArtifacts[currentArtifact] || '(empty)';
+  const target = document.getElementById('workflowConsole');
+  if (!target) return;
+  target.textContent = '## ' + currentArtifact + '\n\n' + content;
+  if (autoScroll) target.scrollTop = target.scrollHeight;
+  for (const chip of document.querySelectorAll('.console-stage')) {
+    const text = chip.textContent || '';
+    const agent = agentOrder.find(name => text.startsWith(agentNames[name]));
+    chip.classList.toggle('active', Boolean(agent && (agentArtifacts[agent] === currentArtifact || currentArtifact === 'log:' + agent)));
+  }
+  renderRunHistory();
+}
+
 async function loadActivities() {
   const res = await fetch('/admin/v1/activities');
   document.getElementById('activities').textContent = JSON.stringify(await res.json(), null, 2);
 }
+
 async function postJson(url, inputId, outputId) {
   const res = await fetch(url, {method: 'POST', headers: {'content-type': 'application/json'}, body: document.getElementById(inputId).value});
   document.getElementById(outputId).textContent = JSON.stringify(await res.json(), null, 2);
 }
-loadActivities();
+
+async function requestJson(url, options = {}) {
+  const res = await fetch(url, {
+    headers: {'content-type': 'application/json', ...(options.headers || {})},
+    ...options
+  });
+  const body = await res.json();
+  return { ok: res.ok, status: res.status, body };
+}
+
+function writeConsole(text) {
+  document.getElementById('workflowConsole').textContent = text;
+}
+
+function metric(label, value) {
+  return `<div class="metric"><div class="metric-label">${escapeHtml(label)}</div><div class="metric-value">${escapeHtml(value)}</div></div>`;
+}
+
+function badge(text, tone) {
+  const cls = tone ? `badge ${tone}` : 'badge';
+  return `<span class="${cls}">${escapeHtml(String(text || '-'))}</span>`;
+}
+
+function countAgents(agents) {
+  const values = Object.values(agents);
+  return {
+    done: values.filter(agent => agent.status === 'DONE').length,
+    failed: values.filter(agent => agent.status === 'FAILED').length
+  };
+}
+
+function agentTone(status) {
+  if (status === 'DONE') return 'green';
+  if (status === 'RUNNING') return 'blue';
+  if (status === 'FAILED') return 'red';
+  return 'amber';
+}
+
+function localStatus(status) {
+  return statusNames[status] || status || '-';
+}
+
+function statusTone(status) {
+  if (String(status || '').includes('PASS') || status === 'COMMITTED') return 'green';
+  if (String(status || '').includes('FAIL') || String(status || '').includes('BLOCK')) return 'red';
+  if (String(status || '').includes('READY')) return 'blue';
+  return 'amber';
+}
+
+function runTone(run) {
+  if (String(run.nextStatus || '').includes('FAIL') || String(run.nextStatus || '').includes('BLOCK') || run.error) return 'red';
+  if (run.status === 'DONE' || run.current) return 'green';
+  return '';
+}
+
+function riskTone(risk) {
+  if (risk === '高') return 'red';
+  if (risk === '低') return 'green';
+  return 'amber';
+}
+
+function formatTime(value) {
+  if (!value) return '-';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString();
+}
+
+function durationSince(start, finish) {
+  if (!start) return '-';
+  const startDate = new Date(start);
+  const endDate = finish ? new Date(finish) : new Date();
+  if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) return '-';
+  const seconds = Math.max(0, Math.floor((endDate.getTime() - startDate.getTime()) / 1000));
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  return minutes ? `${minutes}m ${rest}s` : `${rest}s`;
+}
+
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+}
+
+function escapeJs(value) {
+  return String(value ?? '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+}
+
+loadWorkflow();
 </script>
 </body>
 </html>

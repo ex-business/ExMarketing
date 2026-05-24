@@ -1,0 +1,26 @@
+{
+  "requirementId": "2026-05-24-example-automated-requirement",
+  "updatedAt": "2026-05-24T09:23:49.186117Z",
+  "agents": {
+    "analysis": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-24-example-automated-requirement/analysis.md"
+    },
+    "commit": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-24-example-automated-requirement/commit.md"
+    },
+    "dev": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-24-example-automated-requirement/implementation.md"
+    },
+    "review": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-24-example-automated-requirement/review.md"
+    },
+    "test": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-24-example-automated-requirement/test.md"
+    }
+  }
+}

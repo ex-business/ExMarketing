@@ -131,23 +131,34 @@ func (r *MemoryRepository) UpdateGrantOrderByCommandID(ctx context.Context, tena
 	return ErrNotFound
 }
 
-func (r *MemoryRepository) CreateGrantOutboxesWithQuota(ctx context.Context, activityID string, subjectID string, totalRewardAmount string, reserveUserLimit bool, orders []GrantOrder, messages []OutboxMessage) ([]GrantOrder, []OutboxMessage, bool, error) {
+func (r *MemoryRepository) CreateParticipationGrantOutboxesWithQuota(ctx context.Context, cmd AtomicGrantCommand) (AtomicGrantResult, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, nil, false, err
+		return AtomicGrantResult{}, err
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if !r.reserveQuotaLocked(activityID, QuotaBudget, QuotaScopeActivity, "TOTAL", totalRewardAmount) {
-		return nil, nil, false, nil
+	nextQuotas := slices.Clone(r.quotas)
+	if !reserveQuotaIn(nextQuotas, cmd.Participation.ActivityID, QuotaBudget, QuotaScopeActivity, "TOTAL", cmd.BudgetAmount) {
+		return AtomicGrantResult{}, QuotaExceededError{Type: QuotaBudget, Scope: QuotaScopeActivity, ScopeKey: "TOTAL", Amount: cmd.BudgetAmount}
 	}
-	if reserveUserLimit && !r.reserveQuotaLocked(activityID, QuotaUserLimit, QuotaScopeUser, subjectID, "1") {
-		r.releaseQuotaLocked(activityID, QuotaBudget, QuotaScopeActivity, "TOTAL", totalRewardAmount)
-		return nil, nil, false, nil
+	if cmd.ReserveUserLimit && !reserveQuotaIn(nextQuotas, cmd.Participation.ActivityID, QuotaUserLimit, QuotaScopeUser, cmd.UserScopeKey, "1") {
+		return AtomicGrantResult{}, QuotaExceededError{Type: QuotaUserLimit, Scope: QuotaScopeUser, ScopeKey: cmd.UserScopeKey, Amount: "1"}
 	}
-	r.grantOrders = append(r.grantOrders, orders...)
-	r.outboxMessages = append(r.outboxMessages, messages...)
-	return orders, messages, true, nil
+	for _, reservation := range cmd.StockReservations {
+		if !reserveQuotaIn(nextQuotas, cmd.Participation.ActivityID, reservation.Type, reservation.Scope, reservation.ScopeKey, reservation.Amount) {
+			return AtomicGrantResult{}, QuotaExceededError{Type: reservation.Type, Scope: reservation.Scope, ScopeKey: reservation.ScopeKey, Amount: reservation.Amount}
+		}
+	}
+	r.quotas = nextQuotas
+	r.participations = append(r.participations, cmd.Participation)
+	r.grantOrders = append(r.grantOrders, cmd.GrantOrders...)
+	r.outboxMessages = append(r.outboxMessages, cmd.OutboxMessages...)
+	return AtomicGrantResult{
+		Participation:  cmd.Participation,
+		GrantOrders:    cmd.GrantOrders,
+		OutboxMessages: cmd.OutboxMessages,
+	}, nil
 }
 
 func (r *MemoryRepository) CreateOutbox(ctx context.Context, message OutboxMessage) (OutboxMessage, error) {
@@ -289,8 +300,12 @@ func (r *MemoryRepository) updateOutbox(ctx context.Context, id string, update f
 }
 
 func (r *MemoryRepository) reserveQuotaLocked(activityID string, quotaType QuotaType, scope QuotaScope, scopeKey string, amount string) bool {
-	for i := range r.quotas {
-		q := &r.quotas[i]
+	return reserveQuotaIn(r.quotas, activityID, quotaType, scope, scopeKey, amount)
+}
+
+func reserveQuotaIn(quotas []Quota, activityID string, quotaType QuotaType, scope QuotaScope, scopeKey string, amount string) bool {
+	for i := range quotas {
+		q := &quotas[i]
 		if q.ActivityID != activityID || q.Type != quotaType || q.Scope != scope || q.ScopeKey != scopeKey {
 			continue
 		}

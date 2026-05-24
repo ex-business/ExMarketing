@@ -4,11 +4,15 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/ex-stack/ExMarketing/internal/engine"
 	"github.com/ex-stack/ExMarketing/internal/fact"
 	"github.com/ex-stack/ExMarketing/internal/marketing"
+	"github.com/ex-stack/ExMarketing/internal/workflow"
 )
 
 type Handler struct {
@@ -28,6 +32,17 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /admin/v1/quotas", h.createQuota)
 	mux.HandleFunc("GET /admin/v1/audit", h.listAudit)
 	mux.HandleFunc("POST /admin/v1/simulate", h.simulate)
+	mux.HandleFunc("GET /admin/v1/workflow/requirements", h.listWorkflowRequirements)
+	mux.HandleFunc("GET /admin/v1/workflow/config", h.getWorkflowConfig)
+	mux.HandleFunc("POST /admin/v1/workflow/requirements", h.createWorkflowRequirement)
+	mux.HandleFunc("POST /admin/v1/workflow/intake", h.intakeWorkflowRequirements)
+	mux.HandleFunc("GET /admin/v1/workflow/requirements/{id}", h.getWorkflowRequirement)
+	mux.HandleFunc("POST /admin/v1/workflow/requirements/{id}/run-agent", h.runWorkflowAgent)
+	mux.HandleFunc("POST /admin/v1/workflow/requirements/{id}/run-pipeline", h.runWorkflowPipeline)
+	mux.HandleFunc("GET /admin/v1/workflow/requirements/{id}/logs/{agent}", h.getWorkflowAgentLog)
+	mux.HandleFunc("GET /admin/v1/workflow/requirements/{id}/runs/{runID}", h.getWorkflowRunLog)
+	mux.HandleFunc("GET /admin/v1/git/diff", h.getGitDiff)
+	mux.HandleFunc("POST /admin/v1/git/commit", h.createGitCommit)
 	mux.HandleFunc("GET /v1/campaigns", h.listActivities)
 	mux.HandleFunc("POST /v1/campaigns", h.createActivity)
 	mux.HandleFunc("POST /openapi/v1/events", h.createEvent)
@@ -137,7 +152,7 @@ func (h *Handler) createEvent(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if errors.Is(err, marketing.ErrQuotaExceeded) {
-			writeError(w, http.StatusConflict, err.Error())
+			writeQuotaError(w, err)
 			return
 		}
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -187,6 +202,93 @@ func (h *Handler) queryFacts(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, response)
 }
 
+func (h *Handler) listWorkflowRequirements(w http.ResponseWriter, r *http.Request) {
+	backlog, err := workflow.Load("requirements/backlog.json")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	items := make([]map[string]any, 0, len(backlog.Items))
+	for _, req := range backlog.Items {
+		status, _ := workflow.EnsureAgentStatus(req)
+		items = append(items, map[string]any{
+			"id":          req.ID,
+			"title":       req.Title,
+			"description": req.Description,
+			"status":      req.Status,
+			"risk":        req.Risk,
+			"score":       req.Score,
+			"taskDir":     req.TaskDir,
+			"createdAt":   req.CreatedAt,
+			"updatedAt":   req.UpdatedAt,
+			"agents":      status.Agents,
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (h *Handler) getWorkflowRequirement(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	backlog, err := workflow.Load("requirements/backlog.json")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	for _, req := range backlog.Items {
+		if req.ID != id {
+			continue
+		}
+		if err := workflow.EnsureTaskFiles(req); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		status, err := workflow.EnsureAgentStatus(req)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		artifacts, err := readWorkflowArtifacts(req.TaskDir)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		runs, err := workflow.ListRunHistory(req)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"requirement": req,
+			"agents":      status.Agents,
+			"artifacts":   artifacts,
+			"runs":        runs,
+		})
+		return
+	}
+	writeError(w, http.StatusNotFound, "requirement not found")
+}
+
+func readWorkflowArtifacts(taskDir string) (map[string]string, error) {
+	cleanTaskDir := filepath.Clean(taskDir)
+	if cleanTaskDir == "." || strings.HasPrefix(cleanTaskDir, "..") {
+		return nil, errors.New("invalid taskDir")
+	}
+	files := []string{"task.md", "analysis.md", "review.md", "test-plan.md", "implementation.md", "test.md", "commit.md", "agent-report.md", "agent-prompts.md", "agent-status.json"}
+	artifacts := make(map[string]string, len(files))
+	for _, name := range files {
+		path := filepath.Join(cleanTaskDir, name)
+		bytes, err := os.ReadFile(path)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return nil, err
+		}
+		artifacts[name] = string(bytes)
+	}
+	return artifacts, nil
+}
+
 func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("content-type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
@@ -195,4 +297,18 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 
 func writeError(w http.ResponseWriter, status int, message string) {
 	writeJSON(w, status, map[string]string{"error": message})
+}
+
+func writeQuotaError(w http.ResponseWriter, err error) {
+	body := map[string]any{
+		"error": err.Error(),
+		"code":  "QUOTA_EXCEEDED",
+	}
+	var quotaErr marketing.QuotaExceededError
+	if errors.As(err, &quotaErr) {
+		body["quotaType"] = quotaErr.Type
+		body["scope"] = quotaErr.Scope
+		body["scopeKey"] = quotaErr.ScopeKey
+	}
+	writeJSON(w, http.StatusConflict, body)
 }

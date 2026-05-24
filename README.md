@@ -58,6 +58,8 @@ POST /admin/v1/activities
 POST /admin/v1/quotas
 GET  /admin/v1/audit
 POST /admin/v1/simulate
+GET  /admin/v1/workflow/requirements
+GET  /admin/v1/workflow/requirements/{id}
 POST /openapi/v1/events
 POST /openapi/v1/facts/query
 POST /openapi/v1/reward/callback
@@ -148,4 +150,36 @@ internal/fact         HTTP fact provider client
 internal/plugin       activity plugin registry contract
 db/migration          first-phase schema
 docs                  design notes
+```
+
+## Agent Workflow
+
+```bash
+go run ./cmd/workflowctl add --title "example" --description "需求描述"
+go run ./cmd/workflowctl intake
+go run ./cmd/workflowctl list
+EX_MARKETING_AGENT_CMD='/Applications/Codex.app/Contents/Resources/codex exec --cd . --sandbox danger-full-access --ask-for-approval never -' \
+  go run ./cmd/workflowctl run-agent --id <requirement-id>
+go run ./cmd/workflowctl agent-status --id <requirement-id>
+```
+
+本地服务启动后可以打开工作流看板：
+
+```text
+http://localhost:8080/admin/
+```
+
+## Documents
+
+```text
+docs/architecture.md  架构说明
+docs/api.md           API 接入示例
+docs/data-model.md    数据模型和状态枚举
+docs/operations.md    本地运维、排障和生产前检查
+docs/roadmap.md       分阶段路线图
+docs/workflow.md      任务流水线 Agent 协作流程
+docs/automation.md    需求列表驱动的自动化流程
+docs/langgraph-studio.md LangGraph + LangSmith Studio 集成
+CLAUDE.md             开发流程和硬性规则
+tasks/                任务级分析、审核、开发、测试、提交产物
 ```

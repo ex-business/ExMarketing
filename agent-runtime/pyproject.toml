@@ -1,0 +1,16 @@
+[project]
+name = "exmarketing-agent-runtime"
+version = "0.1.0"
+description = "LangGraph runtime for ExMarketing agent workflow"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+  "langgraph>=0.2.0",
+]
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+

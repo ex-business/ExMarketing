@@ -17,7 +17,7 @@ type Repository interface {
 	CreateGrantOrder(ctx context.Context, order GrantOrder) (GrantOrder, error)
 	UpdateGrantOrderByCommandID(ctx context.Context, tenantID string, commandID string, status GrantStatus, message string) error
 	CreateOutbox(ctx context.Context, message OutboxMessage) (OutboxMessage, error)
-	CreateGrantOutboxesWithQuota(ctx context.Context, activityID string, subjectID string, totalRewardAmount string, reserveUserLimit bool, orders []GrantOrder, messages []OutboxMessage) ([]GrantOrder, []OutboxMessage, bool, error)
+	CreateParticipationGrantOutboxesWithQuota(ctx context.Context, cmd AtomicGrantCommand) (AtomicGrantResult, error)
 
 	CreateQuota(ctx context.Context, quota Quota) (Quota, error)
 	ReserveQuota(ctx context.Context, activityID string, quotaType QuotaType, scope QuotaScope, scopeKey string, amount string) (bool, error)

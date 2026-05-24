@@ -38,8 +38,10 @@ type runWorkflowAgentRequest struct {
 }
 
 type runWorkflowPipelineRequest struct {
-	Command  string `json:"command"`
-	MaxSteps int    `json:"maxSteps"`
+	Command         string `json:"command"`
+	MaxSteps        int    `json:"maxSteps"`
+	ContinueQueue   bool   `json:"continueQueue"`
+	MaxRequirements int    `json:"maxRequirements"`
 }
 
 type createGitCommitRequest struct {
@@ -391,118 +393,233 @@ func (h *Handler) runWorkflowPipeline(w http.ResponseWriter, r *http.Request) {
 	if request.MaxSteps <= 0 || request.MaxSteps > 12 {
 		request.MaxSteps = 12
 	}
+	if request.MaxRequirements <= 0 || request.MaxRequirements > 50 {
+		if request.ContinueQueue {
+			request.MaxRequirements = 50
+		} else {
+			request.MaxRequirements = 1
+		}
+	}
 
 	backlog, err := workflow.Load(workflowBacklogPath)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	startIndex := -1
 	for i := range backlog.Items {
-		item := &backlog.Items[i]
-		if item.ID != id {
-			continue
+		if backlog.Items[i].ID == id {
+			startIndex = i
+			break
 		}
+	}
+	if startIndex < 0 {
+		writeError(w, http.StatusNotFound, "requirement not found")
+		return
+	}
+
+	currentIndex := startIndex
+	allRuns := make([]workflow.AgentRun, 0, request.MaxSteps)
+	completed := make([]workflow.Requirement, 0, request.MaxRequirements)
+	message := "自动流水线运行完成。"
+	for requirementStep := 0; requirementStep < request.MaxRequirements && currentIndex >= 0; requirementStep++ {
+		item := &backlog.Items[currentIndex]
 		if item.TaskDir == "" {
 			writeError(w, http.StatusBadRequest, "taskDir is empty; run intake first")
 			return
 		}
-		if err := workflow.EnsureTaskFiles(*item); err != nil {
+		runs, itemMessage, pipelineErr := runRequirementPipeline(&backlog, item, request)
+		allRuns = append(allRuns, runs...)
+		message = itemMessage
+		if err := workflow.WriteAgentReport(*item, runs, item.Status, itemMessage); err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		reconcileCommitFailure(item)
-		runs := make([]workflow.AgentRun, 0, request.MaxSteps)
-		message := "自动流水线运行完成。"
-		for step := 0; step < request.MaxSteps; step++ {
-			if item.Status == workflow.StatusReviewPass {
-				parallelRuns, nextStatus, err := runReviewPassParallel(*item, request.Command)
-				runs = append(runs, parallelRuns...)
-				if err != nil {
-					_ = workflow.WriteAgentReport(*item, runs, item.Status, fmt.Sprintf("测试用例和开发并行阶段失败: %v", err))
-					writeJSON(w, http.StatusInternalServerError, map[string]any{
-						"error": fmt.Sprintf("parallel test-plan/dev failed: %v", err),
-						"runs":  parallelRuns,
-					})
-					return
-				}
-				item.Status = nextStatus
-				item.UpdatedAt = time.Now().UTC()
-				if err := workflow.Save(workflowBacklogPath, backlog); err != nil {
-					writeError(w, http.StatusInternalServerError, err.Error())
-					return
-				}
-				if item.Status == workflow.StatusTestExecReady {
-					continue
-				}
-			}
-			agent, err := workflow.ResolveAgent(item.Status, workflow.AgentAuto)
+		if pipelineErr != nil {
+			writePipelineError(w, pipelineErr, runs)
+			return
+		}
+		if item.Status != workflow.StatusCommitted || !request.ContinueQueue {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"runs":          allRuns,
+				"requirement":   item,
+				"completed":     completed,
+				"active":        item,
+				"report":        filepath.Join(item.TaskDir, workflow.AgentReportFileName),
+				"message":       message,
+				"continueQueue": request.ContinueQueue,
+			})
+			return
+		}
+		completed = append(completed, *item)
+		nextIndex := nextRunnableRequirementIndex(backlog, currentIndex)
+		if nextIndex < 0 {
+			message = "当前需求已完成。需求列表里没有下一个可运行任务。"
+			writeJSON(w, http.StatusOK, map[string]any{
+				"runs":          allRuns,
+				"requirement":   item,
+				"completed":     completed,
+				"active":        item,
+				"report":        filepath.Join(item.TaskDir, workflow.AgentReportFileName),
+				"message":       message,
+				"continueQueue": request.ContinueQueue,
+			})
+			return
+		}
+		currentIndex = nextIndex
+	}
+	active := &backlog.Items[currentIndex]
+	writeJSON(w, http.StatusOK, map[string]any{
+		"runs":          allRuns,
+		"requirement":   active,
+		"completed":     completed,
+		"active":        active,
+		"report":        filepath.Join(active.TaskDir, workflow.AgentReportFileName),
+		"message":       message,
+		"continueQueue": request.ContinueQueue,
+	})
+}
+
+type pipelineError struct {
+	StatusCode  int
+	Message     string
+	Agent       workflow.Agent
+	Log         string
+	LogContent  string
+	ParallelRun []workflow.AgentRun
+}
+
+func runRequirementPipeline(backlog *workflow.Backlog, item *workflow.Requirement, request runWorkflowPipelineRequest) ([]workflow.AgentRun, string, *pipelineError) {
+	if err := workflow.EnsureTaskFiles(*item); err != nil {
+		return nil, "", &pipelineError{StatusCode: http.StatusInternalServerError, Message: err.Error()}
+	}
+	reconcileCommitFailure(item)
+	runs := make([]workflow.AgentRun, 0, request.MaxSteps)
+	message := "自动流水线运行完成。"
+	for step := 0; step < request.MaxSteps; step++ {
+		if item.Status == workflow.StatusReviewPass {
+			parallelRuns, nextStatus, err := runReviewPassParallel(*item, request.Command)
+			runs = append(runs, parallelRuns...)
 			if err != nil {
-				message = err.Error()
-				break
-			}
-			run, err := workflow.RunAgent(*item, agent, request.Command)
-			if err != nil {
-				if agent == workflow.AgentCommit {
-					run.NextStatus = workflow.StatusCommitFail
-					runs = append(runs, run)
-					item.Status = workflow.StatusCommitFail
-					item.UpdatedAt = time.Now().UTC()
-					if resetErr := workflow.ResetDevAndTestAfterCommitFailure(*item); resetErr != nil {
-						writeError(w, http.StatusInternalServerError, resetErr.Error())
-						return
-					}
-					if err := workflow.Save(workflowBacklogPath, backlog); err != nil {
-						writeError(w, http.StatusInternalServerError, err.Error())
-						return
-					}
-					if err := workflow.WriteAgentReport(*item, runs, item.Status, fmt.Sprintf("Commit Agent 失败，已重置开发实现和实际测试，并把失败上下文打回 Dev Agent: %v", err)); err != nil {
-						writeError(w, http.StatusInternalServerError, err.Error())
-						return
-					}
-					continue
+				return runs, fmt.Sprintf("测试用例和开发并行阶段失败: %v", err), &pipelineError{
+					StatusCode:  http.StatusInternalServerError,
+					Message:     fmt.Sprintf("parallel test-plan/dev failed: %v", err),
+					ParallelRun: parallelRuns,
 				}
-				_ = workflow.WriteAgentReport(*item, runs, item.Status, fmt.Sprintf("自动流水线在 %s 失败: %v", agent, err))
-				logContent := ""
-				if run.OutputPath != "" {
-					if bytes, readErr := os.ReadFile(run.OutputPath); readErr == nil {
-						logContent = filterAgentLogNoise(string(bytes))
-					}
-				}
-				writeJSON(w, http.StatusInternalServerError, map[string]any{
-					"error":      fmt.Sprintf("agent %s failed: %v", agent, err),
-					"agent":      agent,
-					"log":        run.OutputPath,
-					"logContent": logContent,
-				})
-				return
 			}
-			runs = append(runs, run)
-			item.Status = run.NextStatus
-			if run.Score >= 0 {
-				item.Score = run.Score
-			}
+			item.Status = nextStatus
 			item.UpdatedAt = time.Now().UTC()
-			if err := workflow.Save(workflowBacklogPath, backlog); err != nil {
-				writeError(w, http.StatusInternalServerError, err.Error())
-				return
+			if err := workflow.Save(workflowBacklogPath, *backlog); err != nil {
+				return runs, message, &pipelineError{StatusCode: http.StatusInternalServerError, Message: err.Error()}
 			}
-			if item.Status == workflow.StatusCommitted {
-				break
+			if item.Status == workflow.StatusTestExecReady {
+				continue
 			}
 		}
-		if err := workflow.WriteAgentReport(*item, runs, item.Status, message); err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
+		agent, err := workflow.ResolveAgent(item.Status, workflow.AgentAuto)
+		if err != nil {
+			message = err.Error()
+			break
 		}
-		writeJSON(w, http.StatusOK, map[string]any{
-			"runs":        runs,
-			"requirement": item,
-			"report":      filepath.Join(item.TaskDir, workflow.AgentReportFileName),
-			"message":     message,
-		})
+		run, err := workflow.RunAgent(*item, agent, request.Command)
+		if err != nil {
+			if agent == workflow.AgentCommit {
+				run.NextStatus = workflow.StatusCommitFail
+				runs = append(runs, run)
+				item.Status = workflow.StatusCommitFail
+				item.UpdatedAt = time.Now().UTC()
+				if resetErr := workflow.ResetDevAndTestAfterCommitFailure(*item); resetErr != nil {
+					return runs, message, &pipelineError{StatusCode: http.StatusInternalServerError, Message: resetErr.Error()}
+				}
+				if err := workflow.Save(workflowBacklogPath, *backlog); err != nil {
+					return runs, message, &pipelineError{StatusCode: http.StatusInternalServerError, Message: err.Error()}
+				}
+				return runs, fmt.Sprintf("Commit Agent 失败，已重置开发实现和实际测试，并把失败上下文打回 Dev Agent: %v", err), nil
+			}
+			logContent := ""
+			if run.OutputPath != "" {
+				if bytes, readErr := os.ReadFile(run.OutputPath); readErr == nil {
+					logContent = filterAgentLogNoise(string(bytes))
+				}
+			}
+			return runs, fmt.Sprintf("自动流水线在 %s 失败: %v", agent, err), &pipelineError{
+				StatusCode: http.StatusInternalServerError,
+				Message:    fmt.Sprintf("agent %s failed: %v", agent, err),
+				Agent:      agent,
+				Log:        run.OutputPath,
+				LogContent: logContent,
+			}
+		}
+		runs = append(runs, run)
+		item.Status = run.NextStatus
+		if run.Score >= 0 {
+			item.Score = run.Score
+		}
+		item.UpdatedAt = time.Now().UTC()
+		if err := workflow.Save(workflowBacklogPath, *backlog); err != nil {
+			return runs, message, &pipelineError{StatusCode: http.StatusInternalServerError, Message: err.Error()}
+		}
+		if item.Status == workflow.StatusCommitted {
+			break
+		}
+	}
+	return runs, message, nil
+}
+
+func writePipelineError(w http.ResponseWriter, err *pipelineError, runs []workflow.AgentRun) {
+	if err == nil {
 		return
 	}
-	writeError(w, http.StatusNotFound, "requirement not found")
+	body := map[string]any{
+		"error": err.Message,
+		"runs":  runs,
+	}
+	if err.Agent != "" {
+		body["agent"] = err.Agent
+	}
+	if err.Log != "" {
+		body["log"] = err.Log
+	}
+	if err.LogContent != "" {
+		body["logContent"] = err.LogContent
+	}
+	if len(err.ParallelRun) > 0 {
+		body["runs"] = err.ParallelRun
+	}
+	writeJSON(w, err.StatusCode, body)
+}
+
+func nextRunnableRequirementIndex(backlog workflow.Backlog, currentIndex int) int {
+	if len(backlog.Items) == 0 {
+		return -1
+	}
+	for offset := 1; offset < len(backlog.Items); offset++ {
+		index := (currentIndex + offset) % len(backlog.Items)
+		item := backlog.Items[index]
+		if isRunnableRequirement(item) {
+			return index
+		}
+	}
+	return -1
+}
+
+func isRunnableRequirement(item workflow.Requirement) bool {
+	if item.TaskDir == "" {
+		return false
+	}
+	if _, err := workflow.ResolveAgent(item.Status, workflow.AgentAuto); err != nil {
+		return false
+	}
+	status, err := workflow.EnsureAgentStatus(item)
+	if err != nil {
+		return false
+	}
+	for _, agent := range status.Agents {
+		if agent.Status == workflow.AgentStatusRunning {
+			return false
+		}
+	}
+	return true
 }
 
 func runReviewPassParallel(item workflow.Requirement, command string) ([]workflow.AgentRun, string, error) {

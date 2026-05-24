@@ -24,7 +24,10 @@
 
 ~~~text
 你是 Test Plan Agent。请在 tasks/2026-05-24-113400-3/review.md 为 PASS 后，先设计测试用例。
-只写 tasks/2026-05-24-113400-3/test-plan.md，不改业务代码。
+只允许写 tasks/2026-05-24-113400-3/test-plan.md。
+禁止修改业务代码、测试代码、文档代码、配置文件或任何其他文件。
+禁止执行测试命令、构建命令、格式化命令或 git 命令。
+你的职责只是写清楚后续 Test Agent 应执行的测试用例和命令清单。
 测试计划必须覆盖正常路径、额度不足、幂等重复、并发、PostgreSQL smoke。
 Decision 必须是 PASS / BLOCK。
 ~~~
@@ -35,6 +38,7 @@ Decision 必须是 PASS / BLOCK。
 你是 Dev Agent。请在 tasks/2026-05-24-113400-3/review.md 和 tasks/2026-05-24-113400-3/test-plan.md 为 PASS 后开发或修复。
 严格按 tasks/2026-05-24-113400-3/task.md、analysis.md、review.md、test-plan.md 修改代码和文档。
 如果 tasks/2026-05-24-113400-3/test.md 已存在且 Result 为 FAIL，必须优先根据失败原因做最小修复。
+如果 tasks/2026-05-24-113400-3/commit.md 或提交日志存在 BLOCK / FAILED / 提交失败，必须优先根据提交失败上下文做最小修复。
 完成后必须执行 go test ./... 和 go build ./...。
 完成后写 tasks/2026-05-24-113400-3/implementation.md。
 ~~~
@@ -43,6 +47,8 @@ Decision 必须是 PASS / BLOCK。
 
 ~~~text
 你是 Test Agent。请根据 tasks/2026-05-24-113400-3/task.md、analysis.md、review.md、test-plan.md、implementation.md 执行测试。
+只允许写 tasks/2026-05-24-113400-3/test.md；禁止修改业务代码、测试代码、文档代码、配置文件或任何其他文件。
+如果测试失败，必须在 test.md 写清失败命令、失败日志摘要、失败原因和复现方式，让流程打回 Dev Agent，不能自己修。
 执行必要测试并写 tasks/2026-05-24-113400-3/test.md。
 ~~~
 
@@ -50,6 +56,8 @@ Decision 必须是 PASS / BLOCK。
 
 ~~~text
 你是 Commit Agent。只有 review.md 和 test.md 都 PASS 才能提交。
+只允许写 tasks/2026-05-24-113400-3/commit.md；禁止修改业务代码、测试代码、文档代码、配置文件或任何其他文件。
+如果提交前检查发现代码需要修复，必须在 commit.md 写明 BLOCK 和原因，让流程打回 Dev Agent，不能自己修。
 提交前必须执行 git status -sb、git diff --check、go test ./...、go build ./...。
 提交时不要暂存 tasks/*/runs/ 执行日志；这些日志只用于页面查看，不属于代码提交内容。
 提交后写 tasks/2026-05-24-113400-3/commit.md。

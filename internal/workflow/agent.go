@@ -351,7 +351,7 @@ func validateReadOnlyAgentWrites(req Requirement, agent Agent, snapshot writeGua
 	allowed := filepath.ToSlash(filepath.Clean(filepath.Join(req.TaskDir, ArtifactForAgent(agent))))
 	var violations []string
 	for file := range after {
-		if snapshot.Files[file] || file == allowed {
+		if snapshot.Files[file] || file == allowed || isWorkflowRuntimeFile(req, file) {
 			continue
 		}
 		violations = append(violations, file)
@@ -360,6 +360,16 @@ func validateReadOnlyAgentWrites(req Requirement, agent Agent, snapshot writeGua
 		return nil
 	}
 	return fmt.Errorf("%s agent is read-only and may only write %s; unexpected changed files: %s", agent, allowed, strings.Join(violations, ", "))
+}
+
+func isWorkflowRuntimeFile(req Requirement, file string) bool {
+	taskDir := filepath.ToSlash(filepath.Clean(req.TaskDir))
+	switch file {
+	case filepath.ToSlash(filepath.Clean(filepath.Join(req.TaskDir, AgentStatusFileName))),
+		filepath.ToSlash(filepath.Clean(filepath.Join(req.TaskDir, AgentReportFileName))):
+		return true
+	}
+	return strings.HasPrefix(file, taskDir+"/runs/")
 }
 
 func readOnlyAgent(agent Agent) bool {

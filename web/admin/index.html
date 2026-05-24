@@ -2138,7 +2138,7 @@ function runPipeline(continueQueue = false) {
   setTimeout(loadWorkflow, 800);
   requestJson('/admin/v1/workflow/requirements/' + encodeURIComponent(requirementId) + '/run-pipeline', {
     method: 'POST',
-    body: JSON.stringify({ maxSteps: 12 })
+    body: JSON.stringify({ maxSteps: 12, continueQueue, maxRequirements: continueQueue ? 50 : 1 })
   }).then(data => {
     if (!data.ok && data.body.logContent) {
       writeConsole('运行失败：' + (data.body.error || '') + '\n\n日志：' + (data.body.log || '') + '\n\n' + data.body.logContent);
@@ -2152,6 +2152,15 @@ function runPipeline(continueQueue = false) {
     if (data.ok) {
       const lastRun = (data.body.runs || []).slice(-1)[0];
       if (lastRun?.Agent) startLiveLog(requirementId, lastRun.Agent);
+      if (continueQueue && data.body.continueQueue) {
+        const active = data.body.active || data.body.requirement;
+        if (active?.id) selectedId = active.id;
+        const completed = data.body.completed || [];
+        if (completed.length) {
+          writeConsole('自动队列已连续完成 ' + completed.length + ' 个需求。' + (active?.id ? '\n当前选中：' + (active.title || active.id) : ''));
+        }
+        return loadWorkflow({ scrollSelected: true });
+      }
       if (continueQueue && data.body.requirement?.status === 'COMMITTED') {
         return continueWithNextRequirement(requirementId);
       }

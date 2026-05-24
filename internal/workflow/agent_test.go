@@ -329,6 +329,40 @@ git diff --check failed.
 	}
 }
 
+func TestReadOnlyWriteGuardIgnoresWorkflowRuntimeFiles(t *testing.T) {
+	dir := t.TempDir()
+	req := Requirement{
+		ID:      "req-1",
+		Title:   "Title",
+		TaskDir: dir,
+	}
+	if err := CreateTaskFiles(req); err != nil {
+		t.Fatalf("create task files: %v", err)
+	}
+	command := `cat >/dev/null && cat > "$EX_MARKETING_TASK_DIR/analysis.md" <<'EOF'
+# Analysis
+
+## Score
+
+~~~text
+90
+~~~
+
+## Decision
+
+~~~text
+PASS
+~~~
+EOF`
+	run, err := RunAgent(req, AgentAnalysis, command)
+	if err != nil {
+		t.Fatalf("run analysis should ignore agent-status runtime writes: %v", err)
+	}
+	if run.NextStatus != StatusReviewReady {
+		t.Fatalf("next status = %s, want %s", run.NextStatus, StatusReviewReady)
+	}
+}
+
 func TestEnsureTaskFilesRefreshesCanonicalAgentPrompts(t *testing.T) {
 	dir := t.TempDir()
 	req := Requirement{

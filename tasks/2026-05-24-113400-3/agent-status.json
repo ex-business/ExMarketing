@@ -1,10 +1,14 @@
 {
   "requirementId": "2026-05-24-113400-3",
-  "updatedAt": "2026-05-24T11:34:00.359Z",
+  "updatedAt": "2026-05-24T15:32:03.188957Z",
   "agents": {
     "analysis": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-113400-3/analysis.md"
+      "status": "DONE",
+      "startedAt": "2026-05-24T15:30:34.159973Z",
+      "finishedAt": "2026-05-24T15:32:03.188954Z",
+      "output": "tasks/2026-05-24-113400-3/analysis.md",
+      "log": "tasks/2026-05-24-113400-3/runs/20260524T153034Z-analysis.log",
+      "nextStatus": "REVIEW_READY"
     },
     "commit": {
       "status": "WAITING",

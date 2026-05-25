@@ -10,6 +10,7 @@ import (
 
 	"github.com/ex-stack/ExMarketing/internal/decimal"
 	"github.com/ex-stack/ExMarketing/internal/marketing"
+	activityplugin "github.com/ex-stack/ExMarketing/internal/plugin"
 	"github.com/ex-stack/ExMarketing/internal/reward"
 	"github.com/ex-stack/ExMarketing/internal/rule"
 )
@@ -17,6 +18,7 @@ import (
 type Service struct {
 	repository       marketing.Repository
 	ruleRegistry     *rule.Registry
+	pluginRegistry   *activityplugin.Registry
 	rewardCalculator reward.Calculator
 	now              func() time.Time
 }
@@ -25,14 +27,22 @@ func NewService(repository marketing.Repository) *Service {
 	return &Service{
 		repository:       repository,
 		ruleRegistry:     rule.NewRegistry(),
+		pluginRegistry:   activityplugin.NewRegistry(),
 		rewardCalculator: reward.ConfigCalculator{},
 		now:              func() time.Time { return time.Now().UTC() },
 	}
 }
 
+func (s *Service) RegisterActivityPlugin(plugin activityplugin.ActivityPlugin) error {
+	return s.pluginRegistry.Register(plugin)
+}
+
 func (s *Service) CreateActivity(ctx context.Context, cmd marketing.CreateActivityCommand) (marketing.Activity, error) {
 	now := s.now()
 	if err := cmd.Validate(now); err != nil {
+		return marketing.Activity{}, err
+	}
+	if err := s.validateActivityPluginConfig(cmd); err != nil {
 		return marketing.Activity{}, err
 	}
 
@@ -50,6 +60,7 @@ func (s *Service) CreateActivity(ctx context.Context, cmd marketing.CreateActivi
 		Priority:       cmd.Priority,
 		ExclusiveGroup: cmd.ExclusiveGroup,
 		Stackable:      cmd.Stackable,
+		PluginCode:     strings.TrimSpace(cmd.PluginCode),
 		Version:        1,
 		Config:         cmd.Config,
 		Rules:          normalizeRules(cmd.Rules, now),
@@ -74,6 +85,9 @@ func (s *Service) ValidatePrelaunch(ctx context.Context, req marketing.Prelaunch
 	if err := ctx.Err(); err != nil {
 		return marketing.PrelaunchValidationResult{}, err
 	}
+	if len(req.RegisteredPlugins) == 0 {
+		req.RegisteredPlugins = s.pluginRegistry.Registrations()
+	}
 	result := marketing.ValidatePrelaunch(req, s.now())
 	actor := strings.TrimSpace(req.Actor)
 	if actor == "" {
@@ -81,6 +95,24 @@ func (s *Service) ValidatePrelaunch(ctx context.Context, req marketing.Prelaunch
 	}
 	_ = s.audit(ctx, req.Activity.TenantID, actor, "PRELAUNCH_VALIDATE", "activity", req.Activity.Code, result.AuditSummary)
 	return result, nil
+}
+
+func (s *Service) validateActivityPluginConfig(cmd marketing.CreateActivityCommand) error {
+	pluginCode := strings.TrimSpace(cmd.PluginCode)
+	if pluginCode == "" {
+		return nil
+	}
+	plugin, ok := s.pluginRegistry.Get(pluginCode)
+	if !ok {
+		return errors.Join(marketing.ErrInvalidActivity, errors.New(activityplugin.ReasonPluginNotRegistered+": pluginCode is not registered"))
+	}
+	if !s.pluginRegistry.IsCompatible(pluginCode, cmd.Type) {
+		return errors.Join(marketing.ErrInvalidActivity, errors.New(activityplugin.ReasonPluginIncompatible+": pluginCode is not compatible with activityType"))
+	}
+	if err := plugin.ValidateConfig(cmd.Config); err != nil {
+		return errors.Join(marketing.ErrInvalidActivity, err)
+	}
+	return nil
 }
 
 func (s *Service) CreateQuota(ctx context.Context, cmd marketing.CreateQuotaCommand) (marketing.Quota, error) {
@@ -236,11 +268,12 @@ func (s *Service) SimulateEvent(ctx context.Context, event marketing.ActivityEve
 			continue
 		}
 
-		participation, grants, outbox, ruleResult, rewardPreviews, stockReservations, totalRewardAmount := s.simulateActivity(event, activity)
+		participation, grants, outbox, ruleResult, pluginSnapshot, rewardPreviews, stockReservations, totalRewardAmount := s.simulateActivity(event, activity)
 		activityResult := simulationActivityBase(activity, &ruleResult)
 		activityResult.Decision = ruleResult.Decision
 		activityResult.DecisionReasonCode = ruleResult.ReasonCode
 		activityResult.DecisionReason = ruleResult.Reason
+		activityResult.Plugin = pluginSnapshot
 		activityResult.RewardPreviews = rewardPreviews
 		activityResult.ParticipationPreview = &participation
 		activityResult.GrantOrderPreviews = grants
@@ -311,11 +344,24 @@ func (s *Service) evaluateActivity(ctx context.Context, inbox marketing.EventInb
 		UpdatedAt:      now,
 	}
 
-	ruleResult := s.executeRules(inbox.Event, activity)
+	pluginSnapshot, state, pluginRejected, pluginRuleResult, err := s.preparePlugin(ctx, activity, inbox.Event)
+	if err != nil {
+		return participation, nil, nil, marketing.ActivityRuleResult{}, false, err
+	}
+	if pluginRejected {
+		participation.Status = marketing.ParticipationRejected
+		participation.RejectReason = pluginRuleResult.ReasonCode + ": " + pluginRuleResult.Reason
+		participation.Snapshot = participationSnapshot(activity, inbox, pluginRuleResult, nil, pluginSnapshot)
+		participation.UpdatedAt = now
+		created, err := s.repository.CreateParticipation(ctx, participation)
+		return created, nil, nil, pluginRuleResult, false, err
+	}
+
+	ruleResult := s.executeRulesWithState(inbox.Event, activity, state)
 	if ruleResult.Decision != marketing.RuleDecisionPassed {
 		participation.Status = marketing.ParticipationRejected
 		participation.RejectReason = ruleResult.ReasonCode + ": " + ruleResult.Reason
-		participation.Snapshot = participationSnapshot(activity, inbox, ruleResult, nil)
+		participation.Snapshot = participationSnapshot(activity, inbox, ruleResult, nil, pluginSnapshot)
 		participation.UpdatedAt = now
 		created, err := s.repository.CreateParticipation(ctx, participation)
 		return created, nil, nil, ruleResult, false, err
@@ -337,7 +383,7 @@ func (s *Service) evaluateActivity(ctx context.Context, inbox marketing.EventInb
 			TenantID:       activity.TenantID,
 			ActivityID:     activity.ID,
 			IdempotencyKey: inbox.IdempotencyKey,
-			State:          activityState(activity, now),
+			State:          state,
 		}, configuredReward)
 		if err != nil {
 			return participation, orders, messages, ruleResult, true, err
@@ -411,11 +457,17 @@ func (s *Service) evaluateActivity(ctx context.Context, inbox marketing.EventInb
 	if len(orders) == 0 {
 		participation.Status = marketing.ParticipationQualified
 		participation.RejectReason = reward.ReasonZeroRewardSkipped + ": no payable reward"
-		participation.Snapshot = participationSnapshot(activity, inbox, ruleResult, rewardSummaries)
+		if err := s.appendPluginIntents(ctx, activity, inbox.Event, &participation, pluginSnapshot); err != nil {
+			return participation, orders, messages, ruleResult, true, err
+		}
+		participation.Snapshot = participationSnapshot(activity, inbox, ruleResult, rewardSummaries, pluginSnapshot)
 		createdParticipation, err := s.repository.CreateParticipation(ctx, participation)
 		return createdParticipation, nil, nil, ruleResult, true, err
 	}
-	participation.Snapshot = participationSnapshot(activity, inbox, ruleResult, rewardSummaries)
+	if err := s.appendPluginIntents(ctx, activity, inbox.Event, &participation, pluginSnapshot); err != nil {
+		return participation, orders, messages, ruleResult, true, err
+	}
+	participation.Snapshot = participationSnapshot(activity, inbox, ruleResult, rewardSummaries, pluginSnapshot)
 	atomicResult, err := s.repository.CreateParticipationGrantOutboxesWithQuota(ctx, marketing.AtomicGrantCommand{
 		Participation:     participation,
 		BudgetAmount:      totalRewardAmount.String(),
@@ -449,7 +501,7 @@ func (s *Service) evaluateActivity(ctx context.Context, inbox marketing.EventInb
 	return atomicResult.Participation, atomicResult.GrantOrders, atomicResult.OutboxMessages, ruleResult, true, nil
 }
 
-func (s *Service) simulateActivity(event marketing.ActivityEvent, activity marketing.Activity) (marketing.Participation, []marketing.GrantOrder, []marketing.OutboxMessage, marketing.ActivityRuleResult, []marketing.RewardPreview, []marketing.QuotaReservation, decimal.Decimal) {
+func (s *Service) simulateActivity(event marketing.ActivityEvent, activity marketing.Activity) (marketing.Participation, []marketing.GrantOrder, []marketing.OutboxMessage, marketing.ActivityRuleResult, *marketing.ActivityPluginSnapshot, []marketing.RewardPreview, []marketing.QuotaReservation, decimal.Decimal) {
 	now := s.now()
 	participation := marketing.Participation{
 		ID:             marketingID("sim_part"),
@@ -463,11 +515,23 @@ func (s *Service) simulateActivity(event marketing.ActivityEvent, activity marke
 		CreatedAt:      now,
 		UpdatedAt:      now,
 	}
-	ruleResult := s.executeRules(event, activity)
+	pluginSnapshot, state, pluginRejected, pluginRuleResult, err := s.preparePlugin(context.Background(), activity, event)
+	if err != nil {
+		pluginRuleResult = pluginErrorRuleResult(activity, activityplugin.ReasonPluginContextError, err.Error())
+		participation.Status = marketing.ParticipationRejected
+		participation.RejectReason = pluginRuleResult.ReasonCode + ": " + pluginRuleResult.Reason
+		return participation, nil, nil, pluginRuleResult, pluginSnapshot, nil, nil, decimal.Zero()
+	}
+	if pluginRejected {
+		participation.Status = marketing.ParticipationRejected
+		participation.RejectReason = pluginRuleResult.ReasonCode + ": " + pluginRuleResult.Reason
+		return participation, nil, nil, pluginRuleResult, pluginSnapshot, nil, nil, decimal.Zero()
+	}
+	ruleResult := s.executeRulesWithState(event, activity, state)
 	if ruleResult.Decision != marketing.RuleDecisionPassed {
 		participation.Status = marketing.ParticipationRejected
 		participation.RejectReason = ruleResult.ReasonCode + ": " + ruleResult.Reason
-		return participation, nil, nil, ruleResult, nil, nil, decimal.Zero()
+		return participation, nil, nil, ruleResult, pluginSnapshot, nil, nil, decimal.Zero()
 	}
 
 	var orders []marketing.GrantOrder
@@ -481,13 +545,13 @@ func (s *Service) simulateActivity(event marketing.ActivityEvent, activity marke
 			TenantID:       activity.TenantID,
 			ActivityID:     activity.ID,
 			IdempotencyKey: event.IdempotencyKey(),
-			State:          activityState(activity, now),
+			State:          state,
 		}, configuredReward)
 		if err != nil {
 			participation.Status = marketing.ParticipationFailed
 			participation.RejectReason = err.Error()
 			rewardPreviews = append(rewardPreviews, rewardErrorPreview(configuredReward, err))
-			return participation, orders, outbox, ruleResult, rewardPreviews, stockReservations, totalRewardAmount
+			return participation, orders, outbox, ruleResult, pluginSnapshot, rewardPreviews, stockReservations, totalRewardAmount
 		}
 		rewardPreviews = append(rewardPreviews, rewardPreview(configuredReward, rewardResult))
 		if rewardResult.Skipped {
@@ -497,7 +561,7 @@ func (s *Service) simulateActivity(event marketing.ActivityEvent, activity marke
 		if err != nil {
 			participation.Status = marketing.ParticipationFailed
 			participation.RejectReason = err.Error()
-			return participation, orders, outbox, ruleResult, rewardPreviews, stockReservations, totalRewardAmount
+			return participation, orders, outbox, ruleResult, pluginSnapshot, rewardPreviews, stockReservations, totalRewardAmount
 		}
 		totalRewardAmount = totalRewardAmount.Add(amount)
 		commandID := marketingID("sim_cmd")
@@ -557,7 +621,11 @@ func (s *Service) simulateActivity(event marketing.ActivityEvent, activity marke
 		participation.Status = marketing.ParticipationQualified
 		participation.RejectReason = reward.ReasonZeroRewardSkipped + ": no payable reward"
 	}
-	return participation, orders, outbox, ruleResult, rewardPreviews, stockReservations, totalRewardAmount
+	if err := s.appendPluginIntents(context.Background(), activity, event, &participation, pluginSnapshot); err != nil {
+		participation.Status = marketing.ParticipationFailed
+		participation.RejectReason = err.Error()
+	}
+	return participation, orders, outbox, ruleResult, pluginSnapshot, rewardPreviews, stockReservations, totalRewardAmount
 }
 
 func simulationActivityBase(activity marketing.Activity, ruleResult *marketing.ActivityRuleResult) marketing.SimulationActivityResult {
@@ -689,14 +757,154 @@ func quotaUnavailablePreview(preview marketing.QuotaImpactPreview, reason string
 }
 
 func (s *Service) executeRules(event marketing.ActivityEvent, activity marketing.Activity) marketing.ActivityRuleResult {
+	return s.executeRulesWithState(event, activity, activityState(activity, s.now()))
+}
+
+func (s *Service) executeRulesWithState(event marketing.ActivityEvent, activity marketing.Activity, state map[string]any) marketing.ActivityRuleResult {
 	result := rule.Execute(rule.Context{
 		Event: event,
-		State: activityState(activity, s.now()),
+		State: state,
 	}, activity.Rules, s.ruleRegistry)
 	result.ActivityID = activity.ID
 	result.ActivityCode = activity.Code
 	result.ActivityVersion = activity.Version
 	return result
+}
+
+func (s *Service) preparePlugin(ctx context.Context, activity marketing.Activity, event marketing.ActivityEvent) (*marketing.ActivityPluginSnapshot, map[string]any, bool, marketing.ActivityRuleResult, error) {
+	state := activityState(activity, s.now())
+	pluginCode := strings.TrimSpace(activity.PluginCode)
+	if pluginCode == "" {
+		return nil, state, false, marketing.ActivityRuleResult{}, nil
+	}
+	activityPlugin, ok := s.pluginRegistry.Get(pluginCode)
+	if !ok {
+		result := pluginErrorRuleResult(activity, activityplugin.ReasonPluginNotRegistered, "pluginCode is not registered")
+		return &marketing.ActivityPluginSnapshot{
+			PluginCode: pluginCode,
+			PrecheckResult: marketing.PluginPrecheckResult{
+				Allowed:    false,
+				ReasonCode: result.ReasonCode,
+				Reason:     result.Reason,
+			},
+		}, state, true, result, nil
+	}
+	if !s.pluginRegistry.IsCompatible(pluginCode, activity.Type) {
+		result := pluginErrorRuleResult(activity, activityplugin.ReasonPluginIncompatible, "pluginCode is not compatible with activityType")
+		return &marketing.ActivityPluginSnapshot{
+			PluginCode: pluginCode,
+			PrecheckResult: marketing.PluginPrecheckResult{
+				Allowed:    false,
+				ReasonCode: result.ReasonCode,
+				Reason:     result.Reason,
+			},
+		}, state, true, result, nil
+	}
+	pluginResult, err := activityPlugin.BuildContext(ctx, activityplugin.BuildContextRequest{
+		Activity: activity,
+		Event:    event,
+	})
+	if err != nil {
+		result := pluginErrorRuleResult(activity, activityplugin.ReasonPluginContextError, err.Error())
+		return &marketing.ActivityPluginSnapshot{
+			PluginCode: pluginCode,
+			PrecheckResult: marketing.PluginPrecheckResult{
+				Allowed:    false,
+				ReasonCode: result.ReasonCode,
+				Reason:     result.Reason,
+			},
+		}, state, true, result, nil
+	}
+	precheck := marketing.PluginPrecheckResult{
+		Allowed:    pluginResult.Precheck.Allowed,
+		ReasonCode: pluginResult.Precheck.ReasonCode,
+		Reason:     pluginResult.Precheck.Reason,
+	}
+	if precheck.ReasonCode == "" {
+		precheck.ReasonCode = "OK"
+	}
+	if precheck.Reason == "" {
+		precheck.Reason = "plugin precheck passed"
+	}
+	snapshot := &marketing.ActivityPluginSnapshot{
+		PluginCode:     pluginCode,
+		PluginContext:  pluginResult.Context,
+		PrecheckResult: precheck,
+		Explain:        pluginResult.Explain,
+	}
+	if !precheck.Allowed {
+		if precheck.ReasonCode == "OK" {
+			precheck.ReasonCode = activityplugin.ReasonPluginPrecheck
+			snapshot.PrecheckResult = precheck
+		}
+		return snapshot, state, true, pluginErrorRuleResult(activity, precheck.ReasonCode, precheck.Reason), nil
+	}
+	state["plugin"] = map[string]any{pluginCode: pluginResult.Context}
+	return snapshot, state, false, marketing.ActivityRuleResult{}, nil
+}
+
+func (s *Service) appendPluginIntents(ctx context.Context, activity marketing.Activity, event marketing.ActivityEvent, participation *marketing.Participation, snapshot *marketing.ActivityPluginSnapshot) error {
+	if snapshot == nil || snapshot.PluginCode == "" {
+		return nil
+	}
+	activityPlugin, ok := s.pluginRegistry.Get(snapshot.PluginCode)
+	if !ok {
+		return errors.New(activityplugin.ReasonPluginNotRegistered + ": pluginCode is not registered")
+	}
+	intents, err := activityPlugin.AfterQualified(ctx, activityplugin.AfterQualifiedRequest{
+		Activity:                    activity,
+		Event:                       event,
+		ParticipationID:             participation.ID,
+		ParticipationIdempotencyKey: participation.IdempotencyKey,
+		PluginContext:               snapshot.PluginContext,
+	})
+	if err != nil {
+		return errors.New(activityplugin.ReasonPluginIntentError + ": " + err.Error())
+	}
+	snapshot.StateChangeIntents = make([]marketing.PluginStateChangeIntent, 0, len(intents))
+	for _, intent := range intents {
+		pluginCode := firstNonEmpty(intent.PluginCode, snapshot.PluginCode)
+		idempotencyKey := intent.IdempotencyKey
+		if idempotencyKey == "" {
+			idempotencyKey = participation.IdempotencyKey + ":plugin:" + pluginCode + ":" + intent.IntentType
+		}
+		snapshot.StateChangeIntents = append(snapshot.StateChangeIntents, marketing.PluginStateChangeIntent{
+			PluginCode:                  pluginCode,
+			IntentType:                  intent.IntentType,
+			TenantID:                    firstNonEmpty(intent.TenantID, activity.TenantID),
+			ActivityID:                  firstNonEmpty(intent.ActivityID, activity.ID),
+			ActivityCode:                firstNonEmpty(intent.ActivityCode, activity.Code),
+			Subject:                     event.Subject,
+			Biz:                         event.Biz,
+			EventID:                     firstNonEmpty(intent.EventID, event.EventID),
+			ParticipationID:             firstNonEmpty(intent.ParticipationID, participation.ID),
+			ParticipationIdempotencyKey: firstNonEmpty(intent.ParticipationIdempotencyKey, participation.IdempotencyKey),
+			IdempotencyKey:              idempotencyKey,
+			Payload:                     intent.Payload,
+		})
+	}
+	return nil
+}
+
+func pluginErrorRuleResult(activity marketing.Activity, reasonCode string, reason string) marketing.ActivityRuleResult {
+	return marketing.ActivityRuleResult{
+		ActivityID:      activity.ID,
+		ActivityCode:    activity.Code,
+		ActivityVersion: activity.Version,
+		Decision:        marketing.RuleDecisionRejected,
+		FailedStage:     marketing.RuleStageQualify,
+		ReasonCode:      reasonCode,
+		Reason:          reason,
+		CanReward:       false,
+		CanReserveQuota: false,
+		StageResults: []marketing.RuleStageResult{{
+			Stage:       marketing.RuleStageQualify,
+			Status:      marketing.RuleDecisionRejected,
+			FailedCount: 1,
+			ReasonCode:  reasonCode,
+			Reason:      reason,
+		}},
+	}
 }
 
 func activityState(activity marketing.Activity, now time.Time) map[string]any {
@@ -813,7 +1021,7 @@ func participationIdempotencyKey(activity marketing.Activity, event marketing.Ac
 	return activity.TenantID + ":" + activity.ID + ":" + event.IdempotencyKey()
 }
 
-func participationSnapshot(activity marketing.Activity, inbox marketing.EventInbox, ruleResult marketing.ActivityRuleResult, rewardSummaries []map[string]any) json.RawMessage {
+func participationSnapshot(activity marketing.Activity, inbox marketing.EventInbox, ruleResult marketing.ActivityRuleResult, rewardSummaries []map[string]any, pluginSnapshot *marketing.ActivityPluginSnapshot) json.RawMessage {
 	snapshot := map[string]any{
 		"activity": map[string]any{
 			"id":             activity.ID,
@@ -823,6 +1031,7 @@ func participationSnapshot(activity marketing.Activity, inbox marketing.EventInb
 			"priority":       activity.Priority,
 			"exclusiveGroup": activity.ExclusiveGroup,
 			"stackable":      activity.Stackable,
+			"pluginCode":     activity.PluginCode,
 			"config":         rawJSONValue(activity.Config),
 			"rules":          activity.Rules,
 			"rewards":        activity.Rewards,
@@ -841,6 +1050,9 @@ func participationSnapshot(activity marketing.Activity, inbox marketing.EventInb
 		},
 		"ruleResult": ruleResult,
 		"rewards":    rewardSummaries,
+	}
+	if pluginSnapshot != nil {
+		snapshot["plugin"] = pluginSnapshot
 	}
 	bytes, _ := json.Marshal(snapshot)
 	return bytes
@@ -882,4 +1094,13 @@ func rawJSONValue(raw json.RawMessage) any {
 		return string(raw)
 	}
 	return value
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }

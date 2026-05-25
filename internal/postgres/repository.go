@@ -53,15 +53,15 @@ func (r *Repository) CreateActivity(ctx context.Context, activity marketing.Acti
 		INSERT INTO marketing_activity (
 			id, tenant_id, activity_code, activity_name, activity_type, status,
 			trigger_events, start_time, end_time, timezone, priority, exclusive_group,
-			stackable, version, config_json, created_at, updated_at
+			stackable, plugin_code, version, config_json, created_at, updated_at
 		) VALUES (
 			$1, $2, $3, $4, $5, $6,
 			$7, $8, $9, $10, $11, $12,
-			$13, $14, $15, $16, $17
+			$13, $14, $15, $16, $17, $18
 		)
 	`, activity.ID, activity.TenantID, activity.Code, activity.Name, activity.Type, activity.Status,
 		triggerEvents, activity.StartTime, activity.EndTime, activity.Timezone, activity.Priority, activity.ExclusiveGroup,
-		activity.Stackable, activity.Version, nullJSON(activity.Config), activity.CreatedAt, activity.UpdatedAt)
+		activity.Stackable, activity.PluginCode, activity.Version, nullJSON(activity.Config), activity.CreatedAt, activity.UpdatedAt)
 	if err != nil {
 		return marketing.Activity{}, err
 	}
@@ -102,7 +102,7 @@ func (r *Repository) ListActivities(ctx context.Context) ([]marketing.Activity, 
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, tenant_id, activity_code, activity_name, activity_type, status,
 		       trigger_events, start_time, end_time, timezone, priority, exclusive_group,
-		       stackable, version, config_json, created_at, updated_at
+		       stackable, plugin_code, version, config_json, created_at, updated_at
 		FROM marketing_activity
 		ORDER BY created_at DESC
 	`)
@@ -134,7 +134,7 @@ func (r *Repository) FindMatchingActivities(ctx context.Context, tenantID string
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, tenant_id, activity_code, activity_name, activity_type, status,
 		       trigger_events, start_time, end_time, timezone, priority, exclusive_group,
-		       stackable, version, config_json, created_at, updated_at
+		       stackable, plugin_code, version, config_json, created_at, updated_at
 		FROM marketing_activity
 		WHERE tenant_id = $1
 		  AND EXISTS (
@@ -884,7 +884,7 @@ func scanActivity(scanner activityScanner) (marketing.Activity, error) {
 	err := scanner.Scan(
 		&activity.ID, &activity.TenantID, &activity.Code, &activity.Name, &activity.Type, &activity.Status,
 		&triggerEvents, &activity.StartTime, &activity.EndTime, &activity.Timezone, &activity.Priority, &activity.ExclusiveGroup,
-		&activity.Stackable, &activity.Version, &config, &activity.CreatedAt, &activity.UpdatedAt,
+		&activity.Stackable, &activity.PluginCode, &activity.Version, &config, &activity.CreatedAt, &activity.UpdatedAt,
 	)
 	if err != nil {
 		return marketing.Activity{}, err

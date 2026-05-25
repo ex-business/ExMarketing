@@ -57,6 +57,14 @@ internal/fact         HTTP fact provider client
 internal/plugin       activity plugin registry contract
 ```
 
+ActivityPlugin is an optional extension point for new gameplay contexts such
+as lottery, red-packet rain, sign-in, task, VIP, or invite mechanics. A plugin
+may build deterministic context exposed only as `state.plugin.<pluginCode>.*`,
+return a precheck result, and preview post-qualification stateChangeIntents.
+It must not replace rule evaluation, reward calculation, quota reservation,
+participation, grant_order, outbox, callback, or idempotency handling. This
+phase does not add plugin state tables or execute real gameplay state changes.
+
 The service supports two repository modes:
 
 ```text

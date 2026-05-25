@@ -242,6 +242,9 @@ func (r *workerTestRepo) CreateParticipationGrantOutboxesWithQuota(context.Conte
 func (r *workerTestRepo) CreateQuota(context.Context, marketing.Quota) (marketing.Quota, error) {
 	panic("not implemented")
 }
+func (r *workerTestRepo) ListActivityQuotas(context.Context, string) ([]marketing.Quota, error) {
+	panic("not implemented")
+}
 func (r *workerTestRepo) ReserveQuota(context.Context, string, marketing.QuotaType, marketing.QuotaScope, string, string) (bool, error) {
 	panic("not implemented")
 }

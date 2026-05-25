@@ -538,10 +538,11 @@ func renderAgentPrompts(req Requirement) string {
 
 ~~~text
 你是 Analysis Agent，只负责需求分析和需求细化。请处理 %s。
-读取 %s/task.md、PRD/设计文档、业务规则文档、已有 API/数据字典说明。
+如果 %s/review.md 存在 BLOCK、P0/P1/P2、Open Questions 或打回原因，必须先读取并逐条回应 Review Agent 的意见，再读取 %s/task.md、PRD/设计文档、业务规则文档、已有 API/数据字典说明。
 不需要读取代码，不允许用代码实现细节替代需求澄清。
 只写 %s/analysis.md，不写代码，不改代码，不提交，不做实现，不设计具体代码改法。
 输出细化后的需求说明、背景目标、参与方、输入输出、业务规则、边界条件、异常场景、非目标范围、风险、验收标准和待确认问题。
+如果是 Review 打回后的返工，analysis.md 必须单独包含“Review 反馈处理”小节，说明每条打回意见如何处理或为何仍需 BLOCK。
 如果关键信息不清楚，必须 Decision BLOCK，并列出需要补充的问题；不要用代码实现假设替代需求澄清。
 按评分规则打分，Score >= 80 且需求细节清楚、可审核、可验收才 Decision PASS。
 ~~~
@@ -586,7 +587,7 @@ func renderAgentPrompts(req Requirement) string {
 提交时不要暂存 tasks/*/runs/ 执行日志；这些日志只用于页面查看，不属于代码提交内容。
 提交后写 %s/commit.md。
 ~~~
-`, req.ID, req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir, renderTestPlanAgentPrompt(req), req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir)
+`, req.ID, req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir, renderTestPlanAgentPrompt(req), req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir)
 }
 
 func renderTestPlanAgentPrompt(req Requirement) string {

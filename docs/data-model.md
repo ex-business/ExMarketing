@@ -36,6 +36,7 @@ marketing_fact_provider
 | `end_time` | 结束时间 |
 | `timezone` | 活动时区 |
 | `priority` | 优先级，越大越先匹配 |
+| `plugin_code` | 可选 ActivityPlugin 编码；未配置时走普通配置链路 |
 | `exclusive_group` | 互斥组 |
 | `stackable` | 是否允许叠加命中 |
 | `version` | 配置版本 |
@@ -258,10 +259,11 @@ tenantId + ":" + activityId + ":" + eventInbox.idempotency_key
 `snapshot_json` 固定包含：
 
 ```text
-activity     活动 ID、activityCode、activityType、version、互斥叠加字段、config、rules、rewards
+activity     活动 ID、activityCode、activityType、pluginCode、version、互斥叠加字段、config、rules、rewards
 event        inboxId、eventId、eventType、sourceSystem、tenantId、subject、biz、occurredAt、attributes、idempotencyKey
 ruleResult   MATCH / QUALIFY / REWARD / RISK_LIMIT_BUDGET 执行摘要
 rewards      rewardCode、rewardType、calculateType、grantChannel、amount、currency、skipped、reasonCode、reason
+plugin       pluginCode、pluginContext、precheckResult、explain、stateChangeIntents
 ```
 
 规则拒绝时写 `REJECTED` participation 和 `reject_reason`，不生成 grant_order/outbox，不扣 quota。规则通过但全部奖励为 `0.0000` 时写 `QUALIFIED` participation，并在 `reject_reason` 中记录 `ZERO_REWARD_SKIPPED: no payable reward`；不写 `REWARDABLE`，不生成 grant_order/outbox，不扣 quota。

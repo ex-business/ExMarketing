@@ -12,6 +12,7 @@ CREATE TABLE marketing_activity (
   priority INT NOT NULL DEFAULT 0,
   exclusive_group VARCHAR(64) DEFAULT '',
   stackable BOOLEAN NOT NULL DEFAULT FALSE,
+  plugin_code VARCHAR(64) DEFAULT '',
   version INT NOT NULL DEFAULT 1,
   config_json JSON,
   created_at TIMESTAMP NOT NULL,

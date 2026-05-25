@@ -170,6 +170,13 @@ db/migration          first-phase schema
 docs                  design notes
 ```
 
+ActivityPlugin is reserved for new gameplay context that cannot be expressed
+with normal activity config, rules, rewards, and quotas. Plugin context is
+exposed to rules and rewards only through `state.plugin.<pluginCode>.*`; normal
+first-deposit, re-deposit, and discount activities should stay data-configured.
+Plugins do not directly grant rewards, reserve quota, write outbox commands, or
+persist real gameplay state in this phase.
+
 ## Agent Workflow
 
 ```bash

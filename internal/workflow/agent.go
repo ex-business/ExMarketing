@@ -114,10 +114,11 @@ func renderAnalysisFeedbackContext(taskDir string) string {
 	}
 	var b strings.Builder
 	b.WriteString("\n\n## 分析返工反馈\n\n")
-	b.WriteString("上一轮分析或审核未通过。请根据下面反馈重新梳理需求细节，补齐业务规则、边界条件、异常场景、待确认问题和验收方式；只有 Score >= 80 且 Decision PASS 才能继续交给 Review Agent。\n\n")
+	b.WriteString("上一轮分析或审核未通过。必须先读取并逐条处理 Review Agent 在 review.md 中的打回意见，再结合 task.md、analysis.md 和上游文档重新梳理需求细节。\n\n")
+	b.WriteString("返工输出必须能回应 Review 的 P0/P1/P2、Open Questions 和 BLOCK 原因；不能只重写需求而忽略审核意见。只有 Score >= 80 且 Decision PASS 才能继续交给 Review Agent。\n\n")
 	b.WriteString("注意：Analysis Agent 只完善需求细节，不读代码、不写代码、不改代码、不提交；如果历史 analysis.md 中出现实现指令，以本次 prompt 为准。\n\n")
-	appendAgentFailureFeedback(&b, "Analysis", "analysis.md", string(analysisContent), analysisStatus)
 	appendAgentFailureFeedback(&b, "Review", "review.md", string(reviewContent), reviewStatus)
+	appendAgentFailureFeedback(&b, "Analysis", "analysis.md", string(analysisContent), analysisStatus)
 	return b.String()
 }
 

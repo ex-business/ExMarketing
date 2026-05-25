@@ -201,6 +201,67 @@ BLOCK
 	}
 }
 
+func TestAnalysisPromptPrioritizesReviewFeedback(t *testing.T) {
+	dir := t.TempDir()
+	req := Requirement{
+		ID:      "req-1",
+		Title:   "Title",
+		TaskDir: dir,
+	}
+	if err := CreateTaskFiles(req); err != nil {
+		t.Fatalf("create task files: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "analysis.md"), []byte(`# Analysis
+
+## Score
+
+~~~text
+86
+~~~
+
+## Decision
+
+~~~text
+PASS
+~~~
+`), 0o644); err != nil {
+		t.Fatalf("write analysis: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "review.md"), []byte(`# Review
+
+## Findings
+
+P1: 必须明确 MQ 是否拆出。
+
+## Decision
+
+~~~text
+BLOCK
+~~~
+`), 0o644); err != nil {
+		t.Fatalf("write review: %v", err)
+	}
+
+	prompt, err := PromptForAgent(dir, AgentAnalysis)
+	if err != nil {
+		t.Fatalf("prompt for analysis: %v", err)
+	}
+	if !strings.Contains(prompt, "必须先读取并逐条处理 Review Agent") {
+		t.Fatalf("expected review-first instruction, got: %s", prompt)
+	}
+	reviewIndex := strings.Index(prompt, "### Review 失败")
+	analysisIndex := strings.Index(prompt, "### Analysis 失败")
+	if reviewIndex < 0 {
+		t.Fatalf("expected review failure section, got: %s", prompt)
+	}
+	if analysisIndex >= 0 && analysisIndex < reviewIndex {
+		t.Fatalf("expected review feedback before analysis feedback, got: %s", prompt)
+	}
+	if !strings.Contains(prompt, "必须明确 MQ 是否拆出") {
+		t.Fatalf("expected review finding in prompt, got: %s", prompt)
+	}
+}
+
 func TestDevPromptIncludesTestFailureFeedback(t *testing.T) {
 	dir := t.TempDir()
 	req := Requirement{

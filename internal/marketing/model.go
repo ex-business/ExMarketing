@@ -135,6 +135,7 @@ type Activity struct {
 	Priority       int             `json:"priority"`
 	ExclusiveGroup string          `json:"exclusiveGroup"`
 	Stackable      bool            `json:"stackable"`
+	PluginCode     string          `json:"pluginCode,omitempty"`
 	Version        int             `json:"version"`
 	Config         json.RawMessage `json:"config,omitempty"`
 	Rules          []Rule          `json:"rules"`
@@ -193,6 +194,35 @@ type ActivityRuleResult struct {
 	CanReward       bool              `json:"canReward"`
 	CanReserveQuota bool              `json:"canReserveQuota"`
 	StageResults    []RuleStageResult `json:"stageResults"`
+}
+
+type PluginPrecheckResult struct {
+	Allowed    bool   `json:"allowed"`
+	ReasonCode string `json:"reasonCode,omitempty"`
+	Reason     string `json:"reason,omitempty"`
+}
+
+type PluginStateChangeIntent struct {
+	PluginCode                  string         `json:"pluginCode"`
+	IntentType                  string         `json:"intentType"`
+	TenantID                    string         `json:"tenantId"`
+	ActivityID                  string         `json:"activityId"`
+	ActivityCode                string         `json:"activityCode"`
+	Subject                     EventSubject   `json:"subject"`
+	Biz                         EventBiz       `json:"biz"`
+	EventID                     string         `json:"eventId"`
+	ParticipationID             string         `json:"participationId"`
+	ParticipationIdempotencyKey string         `json:"participationIdempotencyKey"`
+	IdempotencyKey              string         `json:"idempotencyKey"`
+	Payload                     map[string]any `json:"payload,omitempty"`
+}
+
+type ActivityPluginSnapshot struct {
+	PluginCode         string                    `json:"pluginCode,omitempty"`
+	PluginContext      map[string]any            `json:"pluginContext,omitempty"`
+	PrecheckResult     PluginPrecheckResult      `json:"precheckResult,omitempty"`
+	Explain            map[string]any            `json:"explain,omitempty"`
+	StateChangeIntents []PluginStateChangeIntent `json:"stateChangeIntents,omitempty"`
 }
 
 func (r *Rule) UnmarshalJSON(data []byte) error {
@@ -529,25 +559,26 @@ type SimulationSummary struct {
 }
 
 type SimulationActivityResult struct {
-	ActivityID             string               `json:"activityId"`
-	ActivityCode           string               `json:"activityCode"`
-	ActivityName           string               `json:"activityName"`
-	ActivityType           string               `json:"activityType"`
-	Status                 ActivityStatus       `json:"status"`
-	Version                int                  `json:"version"`
-	Priority               int                  `json:"priority"`
-	ExclusiveGroup         string               `json:"exclusiveGroup,omitempty"`
-	Stackable              bool                 `json:"stackable"`
-	Decision               RuleDecision         `json:"decision"`
-	DecisionReasonCode     string               `json:"decisionReasonCode,omitempty"`
-	DecisionReason         string               `json:"decisionReason,omitempty"`
-	RuleResult             ActivityRuleResult   `json:"ruleResult"`
-	RewardPreviews         []RewardPreview      `json:"rewardPreviews,omitempty"`
-	QuotaImpactPreviews    []QuotaImpactPreview `json:"quotaImpactPreviews,omitempty"`
-	ParticipationPreview   *Participation       `json:"participationPreview,omitempty"`
-	GrantOrderPreviews     []GrantOrder         `json:"grantOrderPreviews,omitempty"`
-	OutboxCommandPreviews  []OutboxMessage      `json:"outboxCommandPreviews,omitempty"`
-	WouldCreateGrantOrders bool                 `json:"wouldCreateGrantOrders"`
+	ActivityID             string                  `json:"activityId"`
+	ActivityCode           string                  `json:"activityCode"`
+	ActivityName           string                  `json:"activityName"`
+	ActivityType           string                  `json:"activityType"`
+	Status                 ActivityStatus          `json:"status"`
+	Version                int                     `json:"version"`
+	Priority               int                     `json:"priority"`
+	ExclusiveGroup         string                  `json:"exclusiveGroup,omitempty"`
+	Stackable              bool                    `json:"stackable"`
+	Decision               RuleDecision            `json:"decision"`
+	DecisionReasonCode     string                  `json:"decisionReasonCode,omitempty"`
+	DecisionReason         string                  `json:"decisionReason,omitempty"`
+	RuleResult             ActivityRuleResult      `json:"ruleResult"`
+	Plugin                 *ActivityPluginSnapshot `json:"plugin,omitempty"`
+	RewardPreviews         []RewardPreview         `json:"rewardPreviews,omitempty"`
+	QuotaImpactPreviews    []QuotaImpactPreview    `json:"quotaImpactPreviews,omitempty"`
+	ParticipationPreview   *Participation          `json:"participationPreview,omitempty"`
+	GrantOrderPreviews     []GrantOrder            `json:"grantOrderPreviews,omitempty"`
+	OutboxCommandPreviews  []OutboxMessage         `json:"outboxCommandPreviews,omitempty"`
+	WouldCreateGrantOrders bool                    `json:"wouldCreateGrantOrders"`
 }
 
 type RewardPreview struct {
@@ -661,6 +692,7 @@ type CreateActivityCommand struct {
 	Priority       int             `json:"priority"`
 	ExclusiveGroup string          `json:"exclusiveGroup"`
 	Stackable      bool            `json:"stackable"`
+	PluginCode     string          `json:"pluginCode,omitempty"`
 	Version        int             `json:"version"`
 	Config         json.RawMessage `json:"config,omitempty"`
 	Rules          []Rule          `json:"rules"`
@@ -732,7 +764,7 @@ func (cmd CreateActivityCommand) Validate(now time.Time) error {
 		return err
 	}
 	for i, rule := range cmd.Rules {
-		if err := validateRule(i, rule); err != nil {
+		if err := validateRule(i, rule, cmd.PluginCode); err != nil {
 			return err
 		}
 	}
@@ -741,7 +773,7 @@ func (cmd CreateActivityCommand) Validate(now time.Time) error {
 	}
 	enabledRewards := 0
 	for i, reward := range cmd.Rewards {
-		if err := validateReward(i, reward); err != nil {
+		if err := validateReward(i, reward, cmd.PluginCode); err != nil {
 			return err
 		}
 		if reward.Enabled {
@@ -848,7 +880,7 @@ func validateActivityConfig(raw json.RawMessage) error {
 	return nil
 }
 
-func validateRule(index int, rule Rule) error {
+func validateRule(index int, rule Rule, pluginCode string) error {
 	if strings.TrimSpace(rule.Code) == "" {
 		return invalidActivityf("rules[%d].ruleCode is required", index)
 	}
@@ -873,7 +905,7 @@ func validateRule(index int, rule Rule) error {
 		if strings.TrimSpace(condition.Field) == "" {
 			return invalidActivityf("rules[%d].ruleConfig.conditions[%d].field is required", index, i)
 		}
-		if !supportedRuleField(condition.Field) {
+		if !supportedConfiguredField(condition.Field, pluginCode) {
 			return invalidActivityf("rules[%d].ruleConfig.conditions[%d].field is unsupported", index, i)
 		}
 		op := strings.ToUpper(strings.TrimSpace(condition.Op))
@@ -894,7 +926,7 @@ func validateRule(index int, rule Rule) error {
 	return nil
 }
 
-func validateReward(index int, reward Reward) error {
+func validateReward(index int, reward Reward, pluginCode string) error {
 	if strings.TrimSpace(reward.Code) == "" {
 		return invalidActivityf("rewards[%d].rewardCode is required", index)
 	}
@@ -938,7 +970,7 @@ func validateReward(index int, reward Reward) error {
 			return invalidActivityf("rewards[%d].rewardConfig.flowMultiple must be decimal", index)
 		}
 	}
-	return validateRewardConfigByCalculateType(index, reward, cfg)
+	return validateRewardConfigByCalculateType(index, reward, cfg, pluginCode)
 }
 
 func validRewardCalculateType(calculateType CalculateType) bool {
@@ -950,30 +982,30 @@ func validRewardCalculateType(calculateType CalculateType) bool {
 	}
 }
 
-func validateRewardConfigByCalculateType(index int, reward Reward, cfg RewardConfig) error {
+func validateRewardConfigByCalculateType(index int, reward Reward, cfg RewardConfig, pluginCode string) error {
 	switch reward.CalculateType {
 	case CalculateFixed:
 		return validateNonNegativeDecimal(fmt.Sprintf("rewards[%d].rewardConfig.amount", index), cfg.Amount)
 	case CalculateRatio:
-		return validateRatioRewardConfig(index, cfg)
+		return validateRatioRewardConfig(index, cfg, pluginCode)
 	case CalculateLadder:
-		return validateLadderRewardConfig(index, cfg)
+		return validateLadderRewardConfig(index, cfg, pluginCode)
 	case CalculateRandom:
 		return validateRandomRewardConfig(index, cfg)
 	case CalculateProbability:
 		return validateProbabilityRewardConfig(index, reward, cfg)
 	case CalculatePoolSplit:
-		return validatePoolSplitRewardConfig(index, cfg)
+		return validatePoolSplitRewardConfig(index, cfg, pluginCode)
 	default:
 		return invalidActivityf("rewards[%d].calculateType is unsupported", index)
 	}
 }
 
-func validateRatioRewardConfig(index int, cfg RewardConfig) error {
+func validateRatioRewardConfig(index int, cfg RewardConfig, pluginCode string) error {
 	if strings.TrimSpace(cfg.BaseField) == "" {
 		return invalidActivityf("rewards[%d].rewardConfig.baseField is required", index)
 	}
-	if !supportedRuleField(cfg.BaseField) {
+	if !supportedConfiguredField(cfg.BaseField, pluginCode) {
 		return invalidActivityf("rewards[%d].rewardConfig.baseField is unsupported", index)
 	}
 	if err := validateNonNegativeDecimal(fmt.Sprintf("rewards[%d].rewardConfig.rate", index), cfg.Rate); err != nil {
@@ -987,11 +1019,11 @@ func validateRatioRewardConfig(index int, cfg RewardConfig) error {
 	return nil
 }
 
-func validateLadderRewardConfig(index int, cfg RewardConfig) error {
+func validateLadderRewardConfig(index int, cfg RewardConfig, pluginCode string) error {
 	if strings.TrimSpace(cfg.Field) == "" {
 		return invalidActivityf("rewards[%d].rewardConfig.field is required", index)
 	}
-	if !supportedRuleField(cfg.Field) {
+	if !supportedConfiguredField(cfg.Field, pluginCode) {
 		return invalidActivityf("rewards[%d].rewardConfig.field is unsupported", index)
 	}
 	if len(cfg.Ladders) == 0 {
@@ -1097,7 +1129,7 @@ func validateProbabilityRewardConfig(index int, reward Reward, cfg RewardConfig)
 	return nil
 }
 
-func validatePoolSplitRewardConfig(index int, cfg RewardConfig) error {
+func validatePoolSplitRewardConfig(index int, cfg RewardConfig, pluginCode string) error {
 	if err := validateNonNegativeDecimal(fmt.Sprintf("rewards[%d].rewardConfig.poolAmount", index), cfg.PoolAmount); err != nil {
 		return err
 	}
@@ -1106,14 +1138,14 @@ func validatePoolSplitRewardConfig(index int, cfg RewardConfig) error {
 		if strings.TrimSpace(cfg.ParticipantCountField) == "" {
 			return invalidActivityf("rewards[%d].rewardConfig.participantCountField is required", index)
 		}
-		if !supportedRuleField(cfg.ParticipantCountField) {
+		if !supportedConfiguredField(cfg.ParticipantCountField, pluginCode) {
 			return invalidActivityf("rewards[%d].rewardConfig.participantCountField is unsupported", index)
 		}
 	case "WEIGHT":
 		if strings.TrimSpace(cfg.WeightField) == "" || strings.TrimSpace(cfg.TotalWeightField) == "" {
 			return invalidActivityf("rewards[%d].rewardConfig.weightField and totalWeightField are required", index)
 		}
-		if !supportedRuleField(cfg.WeightField) || !supportedRuleField(cfg.TotalWeightField) {
+		if !supportedConfiguredField(cfg.WeightField, pluginCode) || !supportedConfiguredField(cfg.TotalWeightField, pluginCode) {
 			return invalidActivityf("rewards[%d].rewardConfig weight fields are unsupported", index)
 		}
 	default:
@@ -1172,11 +1204,11 @@ func parseOptionalTime(name, value string) (time.Time, bool, error) {
 	return parsed, true, nil
 }
 
-func supportedRuleField(field string) bool {
+func supportedConfiguredField(field string, pluginCode string) bool {
 	if strings.HasPrefix(field, "attributes.") && len(field) > len("attributes.") {
 		return true
 	}
-	if strings.HasPrefix(field, "state.") && len(field) > len("state.") {
+	if supportedStateField(field, pluginCode) {
 		return true
 	}
 	if strings.HasPrefix(field, "facts.") && len(field) > len("facts.") {
@@ -1188,6 +1220,20 @@ func supportedRuleField(field string) bool {
 	default:
 		return false
 	}
+}
+
+func supportedStateField(field string, pluginCode string) bool {
+	for _, prefix := range []string{"state.activity.", "state.subject.", "state.quota.", "state.exclusive."} {
+		if strings.HasPrefix(field, prefix) && len(field) > len(prefix) {
+			return true
+		}
+	}
+	pluginCode = strings.TrimSpace(pluginCode)
+	if pluginCode == "" {
+		return false
+	}
+	prefix := "state.plugin." + pluginCode + "."
+	return strings.HasPrefix(field, prefix) && len(field) > len(prefix)
 }
 
 func jsonScalarString(value any) string {

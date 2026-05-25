@@ -239,11 +239,12 @@ triggerEvents     触发事件类型列表
 timezone          活动时区，必须显式填写
 exclusiveGroup    互斥组，同组默认只命中一个
 stackable         是否允许叠加命中
+pluginCode        可选 ActivityPlugin 编码；普通满减、首存、续存不需要配置
 rules             活动规则
 rewards           奖励配置
 ```
 
-创建阶段会进行基础 Schema 校验。当前普通活动只允许 `CONDITION` 规则、`FIXED` / `RATIO` / `LADDER` / `RANDOM` / `PROBABILITY` / `POOL_SPLIT` 奖励计算、`AUTO` 发奖模式，以及 `HTTP` / `WEBHOOK` 发奖通道；`rewardConfig.targetRef` 对可执行发奖必填且必须是 `http` 或 `https` URL。`MQ`、`MANUAL_EXPORT`、`MANUAL`、未知配置字段、非法版本或不可解析 Decimal 会返回 `400 Bad Request`。
+创建阶段会进行基础 Schema 校验。当前普通活动只允许 `CONDITION` 规则、`FIXED` / `RATIO` / `LADDER` / `RANDOM` / `PROBABILITY` / `POOL_SPLIT` 奖励计算、`AUTO` 发奖模式，以及 `HTTP` / `WEBHOOK` 发奖通道；`rewardConfig.targetRef` 对可执行发奖必填且必须是 `http` 或 `https` URL。`MQ`、`MANUAL_EXPORT`、`MANUAL`、未知配置字段、非法版本或不可解析 Decimal 会返回 `400 Bad Request`。配置 `pluginCode` 时必须命中服务内注册的 ActivityPlugin，且与 `activityType` 兼容；未知插件会在创建或上线前校验阶段拒绝。
 
 奖励计算使用 Decimal 语义并输出 4 位小数。`RATIO` 支持 `maxAmount` 封顶，`LADDER` 使用闭区间且拒绝重叠阶梯，`RANDOM` / `PROBABILITY` 使用 tenant、activity、rewardCode、幂等键、配置版本和 `seedSalt` 形成稳定 seed，`POOL_SPLIT` 只支持事件即时 `COUNT` / `WEIGHT` 分摊。计算结果为 0 时不会生成发奖单、outbox 或 quota 扣减。
 
@@ -253,7 +254,7 @@ rewards           奖励配置
 MATCH -> QUALIFY -> REWARD -> RISK_LIMIT_BUDGET
 ```
 
-`RISK_LIMIT_BUDGET` 是业务阶段名称，实际规则阶段仍使用 `RISK` 或 `LIMIT`；`BUDGET` 是 quota 类型，不是合法 `rulePhase`。`CONDITION` 字段路径支持 `attributes.*`、`state.*` 和 `facts.*`，字段缺失、类型不匹配、非法操作符或未注册 evaluator 不会默认通过。
+`RISK_LIMIT_BUDGET` 是业务阶段名称，实际规则阶段仍使用 `RISK` 或 `LIMIT`；`BUDGET` 是 quota 类型，不是合法 `rulePhase`。`CONDITION` 字段路径支持 `attributes.*`、`facts.*`、`state.activity.*`、`state.subject.*`、`state.quota.*`、`state.exclusive.*`，以及绑定插件时唯一允许的 `state.plugin.<pluginCode>.*`。插件上下文不能使用 `plugin.*`、`state.<activityType>.*` 或短路径别名；字段缺失、类型不匹配、非法操作符或未注册 evaluator 不会默认通过。
 
 ## 查询活动
 
@@ -386,9 +387,10 @@ quotaImpactPreviews 预算、库存、用户次数影响预览
 participationPreview
 grantOrderPreviews
 outboxCommandPreviews
+plugin.pluginCode / plugin.pluginContext / plugin.precheckResult / plugin.stateChangeIntents
 ```
 
-模拟结果只表示按当前配置和当前 quota 快照的预览，不代表 quota 已锁定、奖励已发放或发奖指令已投递。若 quota 预览 `wouldExceed=true`，该活动会返回 `QUOTA_EXCEEDED` 风险原因，并且不会展示可执行的 grant order / outbox command 预览。缺少对应 quota 行时按无限制展示为 `unlimited=true`。
+模拟结果只表示按当前配置和当前 quota 快照的预览，不代表 quota 已锁定、奖励已发放、插件状态已消费或发奖指令已投递。若 quota 预览 `wouldExceed=true`，该活动会返回 `QUOTA_EXCEEDED` 风险原因，并且不会展示可执行的 grant order / outbox command 预览。缺少对应 quota 行时按无限制展示为 `unlimited=true`。
 
 ## Outbox DLQ
 

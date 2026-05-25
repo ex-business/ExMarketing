@@ -346,12 +346,6 @@ func (h *Handler) runWorkflowAgent(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		if agent == workflow.AgentAnalysis {
-			if _, err := workflow.AutoSupplementRequirement(*item); err != nil {
-				writeError(w, http.StatusInternalServerError, err.Error())
-				return
-			}
-		}
 		run, err := workflow.RunAgent(*item, agent, request.Command)
 		if err != nil {
 			if agent == workflow.AgentCommit {
@@ -585,11 +579,6 @@ func runRequirementPipeline(backlog *workflow.Backlog, item *workflow.Requiremen
 		if err != nil {
 			message = err.Error()
 			break
-		}
-		if agent == workflow.AgentAnalysis {
-			if _, err := workflow.AutoSupplementRequirement(*item); err != nil {
-				return runs, message, &pipelineError{StatusCode: http.StatusInternalServerError, Message: err.Error()}
-			}
 		}
 		run, err := workflow.RunAgent(*item, agent, request.Command)
 		if err != nil {

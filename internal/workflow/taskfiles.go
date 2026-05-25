@@ -46,254 +46,6 @@ func EnsureTaskFiles(req Requirement) error {
 	return os.WriteFile(filepath.Join(req.TaskDir, "agent-prompts.md"), []byte(renderAgentPrompts(req)), 0o644)
 }
 
-func AutoSupplementRequirement(req Requirement) (bool, error) {
-	if req.TaskDir == "" {
-		return false, fmt.Errorf("taskDir is required")
-	}
-	path := filepath.Join(req.TaskDir, "task.md")
-	bytes, err := os.ReadFile(path)
-	if err != nil {
-		return false, err
-	}
-	content := string(bytes)
-	if hasOwnerDecisionSection(content) {
-		return false, nil
-	}
-	supplement, ok := defaultOwnerDecisionSupplement(req, content)
-	if !ok {
-		return false, nil
-	}
-	next := strings.TrimRight(content, "\n") + "\n\n" + supplement + "\n"
-	if err := os.WriteFile(path, []byte(next), 0o644); err != nil {
-		return false, err
-	}
-	return true, nil
-}
-
-func hasOwnerDecisionSection(content string) bool {
-	return strings.Contains(content, "## Owner 补充决策") ||
-		strings.Contains(content, "## Owner 决策") ||
-		strings.Contains(content, "## 业主补充决策")
-}
-
-func defaultOwnerDecisionSupplement(req Requirement, taskContent string) (string, bool) {
-	haystack := strings.ToLower(req.ID + "\n" + req.Title + "\n" + req.Description + "\n" + taskContent)
-	if strings.Contains(haystack, "outbox") && strings.Contains(haystack, "dlq") &&
-		(strings.Contains(haystack, "http/mq/webhook") || strings.Contains(haystack, "mq/webhook")) {
-		return outboxDLQOwnerDecisionSupplement(), true
-	}
-	if strings.Contains(haystack, "fact query") || strings.Contains(haystack, "fact provider") || strings.Contains(haystack, "facts.*") {
-		return factQueryOwnerDecisionSupplement(), true
-	}
-	if strings.Contains(haystack, "管理后台") || strings.Contains(haystack, "admin") {
-		if strings.Contains(haystack, "审批") || strings.Contains(haystack, "上线") || strings.Contains(haystack, "活动配置") {
-			return adminConsoleOwnerDecisionSupplement(), true
-		}
-	}
-	return "", false
-}
-
-func outboxDLQOwnerDecisionSupplement() string {
-	return `## Owner 补充决策
-
-### 本期范围
-
-本期只实现 HTTP / Webhook Outbox Worker。
-
-MQ Command Out 不在本期实现范围内，拆分为后续独立任务。本期如果遇到 ` + "`target_channel = MQ`" + `，不进行投递，不把 MQ sender / MQ retry / MQ DLQ / MQ replay / MQ close 作为本任务验收项。
-
-### 重试策略
-
-Outbox Worker 使用指数退避重试。
-
-默认参数：
-
-- 最大重试失败次数：5 次。
-- 初始延迟：30 秒。
-- 退避倍率：2。
-- 最大延迟：30 分钟。
-- jitter：允许正负 20% 抖动，避免集中重试。
-- 时间基准：以本次发送失败写入时间作为下一次 ` + "`next_retry_at`" + ` 的计算基准。
-- 验收容差：` + "`next_retry_at`" + ` 允许正负 2 秒的测试容差，jitter 验收只校验落在允许区间内。
-
-每次失败必须更新：
-
-- ` + "`retry_count`" + `
-- ` + "`next_retry_at`" + `
-- ` + "`error_message`" + `
-- ` + "`updated_at`" + `
-
-可重试失败：
-
-- 网络连接失败。
-- DNS / TLS 错误。
-- 请求超时。
-- HTTP 408。
-- HTTP 429。
-- HTTP 5xx。
-
-不可重试失败：
-
-- HTTP 400 / 401 / 403 / 404 / 409 / 422：视为业务或配置错误，直接进入 DLQ。
-- payload 格式错误：直接进入 DLQ。
-- ` + "`target_ref`" + ` 非法：直接进入 DLQ。
-
-HTTP 2xx 视为发送成功。本期不校验响应体业务字段。
-
-HTTP 429 如果存在 ` + "`Retry-After`" + `，优先使用 ` + "`Retry-After`" + `；如果不存在或不可解析，则使用指数退避。
-
-达到最大重试失败次数后进入 DLQ，自动投递停止。
-
-### DLQ 状态语义
-
-Outbox 增加机器可判定的关闭语义，使用明确状态 ` + "`DLQ_CLOSED`" + ` 表示人工关闭后的最终状态。
-
-状态流转：
-
-` + "```text" + `
-PENDING -> SENDING -> SENT
-PENDING -> SENDING -> FAILED -> PENDING
-FAILED -> DLQ
-DLQ -> PENDING      # replay
-DLQ -> DLQ_CLOSED   # close
-` + "```" + `
-
-规则：
-
-- ` + "`DLQ`" + ` 可以 replay。
-- ` + "`DLQ_CLOSED`" + ` 不允许 replay。
-- close 只允许对 ` + "`DLQ`" + ` 执行。
-- replay 只允许对 ` + "`DLQ`" + ` 执行。
-- close 必须记录 operator、reason、closed_at。
-- replay 必须记录 operator、reason、replayed_at。
-- replay 不重新执行活动规则、奖励计算、quota 扣减、participation 创建、grant_order 创建。
-- replay 只重新发送原 outbox payload。
-- retry / replay 必须复用原 ` + "`commandId`" + ` / ` + "`bill_no`" + `，依赖外部发奖系统幂等。
-- replay 后如果再次失败，继续按同一重试和 DLQ 规则处理。
-- close 与自动重试并发时，以状态条件更新为准；只有当前仍为 ` + "`DLQ`" + ` 才允许 close 成功。
-- replay 与自动重试并发时，以状态条件更新为准；只有当前仍为 ` + "`DLQ`" + ` 才允许 replay 成功。`
-}
-
-func factQueryOwnerDecisionSupplement() string {
-	return `## Owner 补充决策
-
-### Provider Registry 契约
-
-本期采用持久化 provider registry，不允许活动规则或 ` + "`/openapi/v1/facts/query`" + ` 直接传 inline provider 配置绕过 registry。
-
-Fact Provider 以 ` + "`tenantId + factCode`" + ` 唯一定位。
-
-Provider 字段：
-
-- ` + "`tenantId`" + `
-- ` + "`factCode`" + `
-- ` + "`providerType`" + `，本期只支持 ` + "`HTTP`" + `
-- ` + "`endpoint`" + `
-- ` + "`method`" + `，本期支持 ` + "`GET`" + ` / ` + "`POST`" + `
-- ` + "`authRef`" + `
-- ` + "`mapping`" + `
-- ` + "`cacheTtlSeconds`" + `
-- ` + "`enabled`" + `
-- ` + "`timeoutMs`" + `
-- ` + "`createdAt`" + `
-- ` + "`updatedAt`" + `
-
-只有 ` + "`enabled = true`" + ` 且 schema 校验通过的 provider 才能被规则引用和 Fact Query 使用。
-
-### 规则配置校验
-
-后台配置规则时，如果规则引用 ` + "`facts.<factCode>.*`" + `，必须校验当前 tenant 下存在已启用的 ` + "`factCode`" + ` provider。
-
-未配置 provider 时：
-
-- 规则保存或上线校验必须失败。
-- 错误信息必须指出缺失的 ` + "`factCode`" + `。
-- 不能在运行时临时接受 inline provider 配置。
-
-事件 ` + "`attributes`" + ` 足够完成判断时，不强制配置 Fact Provider。
-
-### Fact Query API 输入契约
-
-` + "`POST /openapi/v1/facts/query`" + ` 本期只接受：
-
-- ` + "`tenantId`" + `
-- ` + "`factCode`" + `
-- ` + "`subject`" + `
-- ` + "`biz`" + `
-- ` + "`attributes`" + `
-- ` + "`traceId`" + ` 或 request id
-
-不接受 inline endpoint、inline auth、inline mapping 或 inline provider。
-
-服务端按 ` + "`tenantId + factCode`" + ` 查找 enabled provider，完成 HTTP 查询、mapping、缓存和错误降级。
-
-### 租户隔离
-
-provider registry、规则校验、Fact Query 查询都必须按 ` + "`tenantId`" + ` 隔离。
-
-跨 tenant 不能读取、引用或执行 provider。
-
-### Mapping 与缓存
-
-` + "`mapping`" + ` 负责把外部 HTTP 响应映射为标准 ` + "`facts.<factCode>.*`" + ` 字段。
-
-` + "`cacheTtlSeconds`" + ` 为 0 表示不缓存，大于 0 表示按 tenant、factCode、subject、biz 和必要 attributes 组成缓存 key。
-
-### 失败降级
-
-Fact Query 是可选能力。provider 不存在、未启用、HTTP 失败、超时、mapping 失败或缓存失败时，必须返回可解释错误原因。
-
-规则执行时是否阻断由规则配置决定，但失败原因必须进入 rule result / simulation explain。`
-}
-
-func adminConsoleOwnerDecisionSupplement() string {
-	return `## Owner 补充决策
-
-### 本期范围
-
-本期只交付“当前后端 API 已支持或已在本工程明确存在的本地管理页面”。
-
-审批流、上线发布、活动编辑发布、复制、删除、暂停、恢复、结束、版本回滚属于后续独立任务。本期页面可以展示入口或占位状态，但必须禁用这些操作，不允许伪造成功，不允许用前端状态假装后端已经支持。
-
-本期页面定位为本地开发 / 内网管理台，不作为公网生产 Admin。
-
-### 本期可执行页面
-
-- 活动列表。
-- 新增活动。
-- 活动详情只读展示。
-- Quota 创建和展示。
-- 模拟运行。
-- 审计记录查询。
-- 当前 git diff / Agent 工作台相关页面。
-- 已有 API 可返回的事件、Fact Query、Callback、对账或 DLQ 相关只读/操作能力；如果后端接口不存在，页面必须禁用并展示“待后端接入”。
-
-### 审批与上线
-
-审批流和上线发布不在本期实现范围内。
-
-本期规则：
-
-- 不提供可点击成功的提交审批、审批通过、审批拒绝、撤回、上线、下线、版本回滚。
-- 如果展示审批/上线区域，只能展示禁用状态和待接入说明。
-- 不能在前端本地改状态模拟审批成功。
-- 不能把静态 mock 当作真实后端结果。
-
-### 活动编辑发布
-
-活动编辑、复制、删除、暂停、恢复、结束、版本回滚不在本期实现范围内。
-
-本期只允许：
-
-- 通过现有 ` + "`POST /admin/v1/activities`" + ` 创建活动。
-- 通过现有列表/详情能力查看活动。
-- 展示后端返回的真实状态。
-
-### 错误处理
-
-所有页面操作必须展示后端真实错误原因。接口不存在、接口返回非 2xx、校验失败、状态冲突时，页面必须显示失败，不得显示成功。`
-}
-
 func writeFileIfMissing(path, content string) error {
 	if _, err := os.Stat(path); err == nil {
 		return nil
@@ -666,11 +418,16 @@ func renderAgentPrompts(req Requirement) string {
 
 ~~~text
 你是 Analysis Agent，只负责需求分析和需求细化。请处理 %s。
-如果 %s/review.md 存在 BLOCK、P0/P1/P2、Open Questions 或打回原因，必须先读取并逐条回应 Review Agent 的意见，再读取 %s/task.md、PRD/设计文档、业务规则文档、已有 API/数据字典说明。
+如果 %s/review.md 存在 BLOCK、P0/P1/P2、Open Questions 或打回原因，必须先读取并逐条回应 Review Agent 的意见。
+如果 %s/analysis.md 自己上一轮存在 Decision BLOCK、Score < 80、扣分原因或待确认问题，必须继续读取并逐条回应 Analysis 自己的 BLOCK 原因、扣分项、待确认问题和错误假设。
+然后再读取 %s/task.md、PRD/设计文档、业务规则文档、已有 API/数据字典说明。
 不需要读取代码，不允许用代码实现细节替代需求澄清。
 只写 %s/analysis.md，不写代码，不改代码，不提交，不做实现，不设计具体代码改法。
 输出细化后的需求说明、背景目标、参与方、输入输出、业务规则、边界条件、异常场景、非目标范围、风险、验收标准和待确认问题。
 如果是 Review 打回后的返工，analysis.md 必须单独包含“Review 反馈处理”小节，说明每条打回意见如何处理或为何仍需 BLOCK。
+如果是 Analysis 自己上一轮 BLOCK 后的返工，analysis.md 必须单独包含“Analysis 自检修正”小节，说明每条 BLOCK 原因、扣分项、待确认问题如何修正。
+返工时必须基于拒绝原因补充需求细节、边界条件、输入输出、验收标准和非目标范围；能从 task.md、backlog、PRD/设计文档或业务规则文档推导出明确最小口径的，直接写入 analysis.md 并说明推导依据。
+如果仍无法从现有材料推导，必须继续 Decision BLOCK，并列出缺的需求信息；不要等待系统自动补充决策。
 如果关键信息不清楚，必须 Decision BLOCK，并列出需要补充的问题；不要用代码实现假设替代需求澄清。
 按评分规则打分，Score >= 80 且需求细节清楚、可审核、可验收才 Decision PASS。
 ~~~
@@ -715,7 +472,7 @@ func renderAgentPrompts(req Requirement) string {
 提交时不要暂存 tasks/*/runs/ 执行日志；这些日志只用于页面查看，不属于代码提交内容。
 提交后写 %s/commit.md。
 ~~~
-`, req.ID, req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir, renderTestPlanAgentPrompt(req), req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir)
+`, req.ID, req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir, renderTestPlanAgentPrompt(req), req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir, req.TaskDir)
 }
 
 func renderTestPlanAgentPrompt(req Requirement) string {

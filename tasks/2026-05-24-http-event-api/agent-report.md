@@ -6,11 +6,11 @@
 
 风险: 高
 
-最终状态: REVIEW_PASS
+最终状态: COMMITTED
 
-生成时间: 2026-05-25T15:13:17Z
+生成时间: 2026-05-25T15:21:59Z
 
-说明: 单步 Agent 运行完成。
+说明: 自动流水线运行完成。
 
 ## Agent 状态
 
@@ -18,20 +18,44 @@
 | --- | --- | --- | --- | --- |
 | analysis | DONE | tasks/2026-05-24-http-event-api/analysis.md | tasks/2026-05-24-http-event-api/runs/20260525T150548Z-analysis.log | REVIEW_READY |
 | review | DONE | tasks/2026-05-24-http-event-api/review.md | tasks/2026-05-24-http-event-api/runs/20260525T151238Z-review.log | REVIEW_PASS |
-| test-plan | INTERRUPTED | tasks/2026-05-24-http-event-api/test-plan.md | tasks/2026-05-24-http-event-api/runs/20260525T150934Z-test-plan.log |  |
-| dev | INTERRUPTED | tasks/2026-05-24-http-event-api/implementation.md | tasks/2026-05-24-http-event-api/runs/20260525T150934Z-dev.log |  |
-| test | WAITING | tasks/2026-05-24-http-event-api/test.md |  |  |
-| commit | WAITING | tasks/2026-05-24-http-event-api/commit.md |  |  |
+| test-plan | DONE | tasks/2026-05-24-http-event-api/test-plan.md | tasks/2026-05-24-http-event-api/runs/20260525T151317Z-test-plan.log | REVIEW_PASS |
+| dev | DONE | tasks/2026-05-24-http-event-api/implementation.md | tasks/2026-05-24-http-event-api/runs/20260525T151317Z-dev.log | REVIEW_PASS |
+| test | DONE | tasks/2026-05-24-http-event-api/test.md | tasks/2026-05-24-http-event-api/runs/20260525T151828Z-test.log | COMMIT_READY |
+| commit | DONE | tasks/2026-05-24-http-event-api/commit.md | tasks/2026-05-24-http-event-api/runs/20260525T152003Z-commit.log | COMMITTED |
 
 ## 本次运行
 
-### review
+### test-plan
 
 - ExitCode: 0
 - NextStatus: REVIEW_PASS
 - Score: -1
-- Log: tasks/2026-05-24-http-event-api/runs/20260525T151238Z-review.log
-- Artifact: tasks/2026-05-24-http-event-api/review.md
+- Log: tasks/2026-05-24-http-event-api/runs/20260525T151317Z-test-plan.log
+- Artifact: tasks/2026-05-24-http-event-api/test-plan.md
+
+### dev
+
+- ExitCode: 0
+- NextStatus: REVIEW_PASS
+- Score: -1
+- Log: tasks/2026-05-24-http-event-api/runs/20260525T151317Z-dev.log
+- Artifact: tasks/2026-05-24-http-event-api/implementation.md
+
+### test
+
+- ExitCode: 0
+- NextStatus: COMMIT_READY
+- Score: -1
+- Log: tasks/2026-05-24-http-event-api/runs/20260525T151828Z-test.log
+- Artifact: tasks/2026-05-24-http-event-api/test.md
+
+### commit
+
+- ExitCode: 0
+- NextStatus: COMMITTED
+- Score: -1
+- Log: tasks/2026-05-24-http-event-api/runs/20260525T152003Z-commit.log
+- Artifact: tasks/2026-05-24-http-event-api/commit.md
 
 
 ## 产物文件

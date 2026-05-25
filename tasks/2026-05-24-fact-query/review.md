@@ -7,33 +7,41 @@ P0:
 - 无。
 
 P1:
-- tasks/2026-05-24-fact-query/analysis.md:113-122,374: `/openapi/v1/facts/query` 输入契约仍未完全收敛，不能进入 Dev。task.md:54-63 的 Owner 决策明确写的是“本期只接受” `tenantId`、`factCode`、`subject`、`biz`、`attributes`、`traceId` 或 request id，并且 analysis.md:113-120 也重复了同一固定列表；但 analysis.md:122 又允许可选携带 `eventType`、`sourceSystem`、`occurredAt`。这会让 Dev 和 Test Plan 无法判断这些事件顶层字段到底应该被接受、透传给 provider、参与缓存 key，还是作为非白名单字段拒绝。该矛盾直接影响公开 API 契约、provider 请求上下文和缓存隔离验收，必须先统一：要么严格遵守 Owner 决策只接受固定字段；要么修改 task/analysis 的验收口径，明确这些字段是正式允许输入、校验规则和缓存 key 组成部分。
+- 无。
 
 P2:
 - 无。
 ~~~
 
+## Review Notes
+
+- `analysis.md:73-92` 已将 provider registry 固定为 `marketing_fact_provider` 或等价持久化字段，并明确 `tenant_id + fact_code` 唯一、`enabled`、`mapping_json`、`cache_ttl_seconds`、`updated_at` 等关键契约，覆盖 `task.md:17-38` 的 Owner 决策。
+- `analysis.md:94-120` 已收敛 `/openapi/v1/facts/query` 输入白名单，只接受 `tenantId`、`factCode`、`subject`、`biz`、`attributes`、`traceId` 或 request id，并明确拒绝 `eventType`、`sourceSystem`、`occurredAt` 顶层输入及所有 inline provider 配置。
+- `analysis.md:167-187` 已明确现有 `POST /admin/v1/activities` 在保存或上线时同步校验 `facts.<factCode>.<path>` 引用，包括同 tenant enabled HTTP provider、schema、mapping 字段覆盖和操作符类型兼容。
+- `analysis.md:271-292` 与 `analysis.md:368-369` 已固定 `cacheTtlSeconds` 语义：缺失或 `0` 不跨事件缓存，`1..3600` 缓存，负数或大于 `3600` 拒绝并返回 `FACT_CACHE_TTL_INVALID` 或等价配置错误。
+- `analysis.md:232-249`、`analysis.md:274-278`、`analysis.md:370-378` 已明确 provider 查询失败不会让依赖 fact 的规则默认通过，且不改变 participation、grant_order、outbox、quota 的既有生命周期。
+
 ## Open Questions
 
-1. `/openapi/v1/facts/query` 是否正式允许 `eventType`、`sourceSystem`、`occurredAt`？如果允许，需要同步更新 Owner 输入契约和验收标准；如果不允许，需要从 analysis.md 的 API 输入章节移除该可选说明，并说明 provider 请求上下文如何在缺少这些字段时构造。
+1. 无阻塞问题。`analysis.md:380-388` 中的 Provider 管理入口、密钥管理、响应体大小、生产鉴权和审计落点属于后续生产化细节，不影响当前最小可验收契约进入 Dev。
 
 ## Score
 
 ~~~text
-需求清晰度        17 / 20
-需求边界清楚      18 / 20
-风险可控          17 / 20
-验收标准明确      16 / 20
-约束一致性        14 / 20
-总分              82 / 100
+需求清晰度        19 / 20
+需求边界清楚      19 / 20
+风险可控          18 / 20
+验收标准明确      19 / 20
+约束一致性        19 / 20
+总分              94 / 100
 ~~~
 
 ## Decision
 
 ~~~text
-BLOCK
+PASS
 ~~~
 
-理由：存在 P1。上一轮关于 provider registry、inline provider、后台校验入口和 `cacheTtlSeconds` 上限的阻塞点已经基本收敛，但 Fact Query API 入参白名单仍与 Owner 决策冲突。该点会影响实现和测试用例的确定性，需要先修正后再进入 Dev。
+理由：上一轮阻塞点已经在当前 `analysis.md` 中收敛。Provider registry 唯一来源、禁止 inline provider、后台活动同步校验入口、`/facts/query` 输入白名单、租户隔离、mapping 契约、缓存 TTL 上限和失败降级语义均具备可实现、可测试的验收口径。当前无 P0/P1，Score 94。
 
 需求：2026-05-24-fact-query

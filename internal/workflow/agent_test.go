@@ -164,7 +164,7 @@ func TestResolveAgentRoutesCommitFailBackToDev(t *testing.T) {
 	}
 }
 
-func TestDevPromptIncludesAnalysisFailureFeedback(t *testing.T) {
+func TestAnalysisPromptIncludesSelfFailureFeedback(t *testing.T) {
 	dir := t.TempDir()
 	req := Requirement{
 		ID:      "req-1",
@@ -196,8 +196,10 @@ BLOCK
 	if err != nil {
 		t.Fatalf("prompt for analysis: %v", err)
 	}
-	if !strings.Contains(prompt, "分析返工反馈") || !strings.Contains(prompt, "缺少边界条件") {
-		t.Fatalf("expected analysis prompt to include failure feedback, got: %s", prompt)
+	for _, want := range []string{"分析返工反馈", "Analysis 自己上一轮的 BLOCK 原因", "基于拒绝原因补充", "推导依据", "### Analysis 失败", "缺少边界条件"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("expected analysis prompt to include %q, got: %s", want, prompt)
+		}
 	}
 }
 
@@ -248,6 +250,9 @@ BLOCK
 	}
 	if !strings.Contains(prompt, "必须先读取并逐条处理 Review Agent") {
 		t.Fatalf("expected review-first instruction, got: %s", prompt)
+	}
+	if !strings.Contains(prompt, "Analysis 自己上一轮") {
+		t.Fatalf("expected self-analysis instruction, got: %s", prompt)
 	}
 	reviewIndex := strings.Index(prompt, "### Review 失败")
 	analysisIndex := strings.Index(prompt, "### Analysis 失败")
@@ -472,6 +477,83 @@ EOF`
 	}
 }
 
+func TestReadOnlyWriteGuardIgnoresOtherTaskDirs(t *testing.T) {
+	dir := t.TempDir()
+	req := Requirement{
+		ID:      "req-1",
+		Title:   "Title",
+		TaskDir: dir,
+	}
+	otherDir := filepath.Join("tasks", "other-task-write-guard-test")
+	t.Cleanup(func() { _ = os.RemoveAll(otherDir) })
+	if err := CreateTaskFiles(req); err != nil {
+		t.Fatalf("create task files: %v", err)
+	}
+	if err := os.MkdirAll(otherDir, 0o755); err != nil {
+		t.Fatalf("mkdir other task: %v", err)
+	}
+	files, err := gitChangedFiles()
+	if err != nil {
+		t.Fatalf("changed files: %v", err)
+	}
+	snapshot := writeGuardSnapshot{Enabled: true, Files: files}
+	if err := os.WriteFile(filepath.Join(otherDir, "review.md"), []byte("changed by another agent"), 0o644); err != nil {
+		t.Fatalf("write other task: %v", err)
+	}
+	logPath := filepath.Join(dir, "runs", "guard.log")
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
+		t.Fatalf("mkdir runs: %v", err)
+	}
+	logFile, err := os.Create(logPath)
+	if err != nil {
+		t.Fatalf("create log: %v", err)
+	}
+	defer logFile.Close()
+
+	if err := validateReadOnlyAgentWrites(req, AgentReview, snapshot, logFile); err != nil {
+		t.Fatalf("expected writes outside current task dir to be ignored, got: %v", err)
+	}
+}
+
+func TestReadOnlyWriteGuardRejectsCodeWritesOutsideTaskDir(t *testing.T) {
+	dir := t.TempDir()
+	req := Requirement{
+		ID:      "req-1",
+		Title:   "Title",
+		TaskDir: dir,
+	}
+	if err := CreateTaskFiles(req); err != nil {
+		t.Fatalf("create task files: %v", err)
+	}
+	target := "write-guard-test.tmp"
+	t.Cleanup(func() { _ = os.Remove(target) })
+	files, err := gitChangedFiles()
+	if err != nil {
+		t.Fatalf("changed files: %v", err)
+	}
+	snapshot := writeGuardSnapshot{Enabled: true, Files: files}
+	if err := os.WriteFile(target, []byte("unexpected code write"), 0o644); err != nil {
+		t.Fatalf("write code file: %v", err)
+	}
+	logPath := filepath.Join(dir, "runs", "guard.log")
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
+		t.Fatalf("mkdir runs: %v", err)
+	}
+	logFile, err := os.Create(logPath)
+	if err != nil {
+		t.Fatalf("create log: %v", err)
+	}
+	defer logFile.Close()
+
+	err = validateReadOnlyAgentWrites(req, AgentReview, snapshot, logFile)
+	if err == nil {
+		t.Fatal("expected code write outside task dir to be rejected")
+	}
+	if !strings.Contains(err.Error(), filepath.Base(target)) {
+		t.Fatalf("expected violation to include %s, got %v", target, err)
+	}
+}
+
 func TestEnsureTaskFilesRefreshesCanonicalAgentPrompts(t *testing.T) {
 	dir := t.TempDir()
 	req := Requirement{
@@ -504,113 +586,6 @@ func TestEnsureTaskFilesRefreshesCanonicalAgentPrompts(t *testing.T) {
 	}
 	if !strings.Contains(got, "只负责需求分析和需求细化") || !strings.Contains(got, "不写代码") {
 		t.Fatalf("expected canonical analysis prompt, got: %s", got)
-	}
-}
-
-func TestAutoSupplementRequirementAddsOutboxDLQOwnerDecisions(t *testing.T) {
-	dir := t.TempDir()
-	req := Requirement{
-		ID:          "2026-05-24-outbox-worker-dlq",
-		Title:       "Outbox Worker 重试与 DLQ",
-		Description: "实现 marketing_outbox 的 HTTP/MQ/Webhook 发送、指数退避重试、最大重试次数、DLQ、人工重放和关闭。",
-		Status:      StatusAnalysisReady,
-		Risk:        "高",
-		TaskDir:     dir,
-	}
-	if err := CreateTaskFiles(req); err != nil {
-		t.Fatalf("create task files: %v", err)
-	}
-
-	changed, err := AutoSupplementRequirement(req)
-	if err != nil {
-		t.Fatalf("auto supplement: %v", err)
-	}
-	if !changed {
-		t.Fatal("expected supplement to be added")
-	}
-	content, err := os.ReadFile(filepath.Join(req.TaskDir, "task.md"))
-	if err != nil {
-		t.Fatalf("read task: %v", err)
-	}
-	text := string(content)
-	for _, want := range []string{"## Owner 补充决策", "本期只实现 HTTP / Webhook Outbox Worker", "DLQ_CLOSED", "最大重试失败次数：5 次"} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("expected %q in task.md, got:\n%s", want, text)
-		}
-	}
-
-	changed, err = AutoSupplementRequirement(req)
-	if err != nil {
-		t.Fatalf("second auto supplement: %v", err)
-	}
-	if changed {
-		t.Fatal("expected existing owner decisions to be left unchanged")
-	}
-}
-
-func TestAutoSupplementRequirementAddsFactQueryOwnerDecisions(t *testing.T) {
-	dir := t.TempDir()
-	req := Requirement{
-		ID:          "2026-05-24-fact-query",
-		Title:       "Fact Query 可选事实查询",
-		Description: "实现标准 Fact Provider 配置、HTTP 查询、字段 mapping、cacheTtlSeconds、facts.* 规则字段读取。",
-		Status:      StatusAnalysisReady,
-		Risk:        "中",
-		TaskDir:     dir,
-	}
-	if err := CreateTaskFiles(req); err != nil {
-		t.Fatalf("create task files: %v", err)
-	}
-
-	changed, err := AutoSupplementRequirement(req)
-	if err != nil {
-		t.Fatalf("auto supplement: %v", err)
-	}
-	if !changed {
-		t.Fatal("expected supplement to be added")
-	}
-	content, err := os.ReadFile(filepath.Join(req.TaskDir, "task.md"))
-	if err != nil {
-		t.Fatalf("read task: %v", err)
-	}
-	text := string(content)
-	for _, want := range []string{"Provider Registry 契约", "tenantId + factCode", "不接受 inline endpoint", "enabled = true"} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("expected %q in task.md, got:\n%s", want, text)
-		}
-	}
-}
-
-func TestAutoSupplementRequirementAddsAdminConsoleOwnerDecisions(t *testing.T) {
-	dir := t.TempDir()
-	req := Requirement{
-		ID:          "2026-05-24-admin-config-pages",
-		Title:       "管理后台页面",
-		Description: "补齐活动配置、审批流、模拟运行、操作审计页面。",
-		Status:      StatusAnalysisReady,
-		Risk:        "中",
-		TaskDir:     dir,
-	}
-	if err := CreateTaskFiles(req); err != nil {
-		t.Fatalf("create task files: %v", err)
-	}
-
-	changed, err := AutoSupplementRequirement(req)
-	if err != nil {
-		t.Fatalf("auto supplement: %v", err)
-	}
-	if !changed {
-		t.Fatal("expected supplement to be added")
-	}
-	content, err := os.ReadFile(filepath.Join(req.TaskDir, "task.md"))
-	if err != nil {
-		t.Fatalf("read task: %v", err)
-	}
-	text := string(content)
-	for _, want := range []string{"当前后端 API 已支持", "审批流和上线发布不在本期实现范围内", "不能把静态 mock 当作真实后端结果"} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("expected %q in task.md, got:\n%s", want, text)
-		}
 	}
 }
 

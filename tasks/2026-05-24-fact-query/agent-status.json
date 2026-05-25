@@ -1,6 +1,6 @@
 {
   "requirementId": "2026-05-24-fact-query",
-  "updatedAt": "2026-05-25T13:28:18.585834Z",
+  "updatedAt": "2026-05-25T15:05:40.46876Z",
   "agents": {
     "analysis": {
       "status": "INTERRUPTED",
@@ -21,11 +21,12 @@
     },
     "review": {
       "status": "DONE",
-      "startedAt": "2026-05-25T13:25:46.420706Z",
-      "finishedAt": "2026-05-25T13:26:55.794765Z",
+      "startedAt": "2026-05-25T15:04:45.204705Z",
+      "finishedAt": "2026-05-25T15:05:40.468568Z",
       "output": "tasks/2026-05-24-fact-query/review.md",
-      "log": "tasks/2026-05-24-fact-query/runs/20260525T132546Z-review.log",
-      "nextStatus": "REVIEW_BLOCK"
+      "log": "tasks/2026-05-24-fact-query/runs/20260525T150445Z-review.log",
+      "exitCode": 0,
+      "nextStatus": "REVIEW_PASS"
     },
     "test": {
       "status": "WAITING",

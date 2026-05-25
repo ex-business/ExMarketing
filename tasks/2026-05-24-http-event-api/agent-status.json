@@ -1,6 +1,6 @@
 {
   "requirementId": "2026-05-24-http-event-api",
-  "updatedAt": "2026-05-25T15:20:03.522191Z",
+  "updatedAt": "2026-05-25T15:21:59.215349Z",
   "agents": {
     "analysis": {
       "status": "DONE",
@@ -11,11 +11,12 @@
       "nextStatus": "REVIEW_READY"
     },
     "commit": {
-      "status": "RUNNING",
+      "status": "DONE",
       "startedAt": "2026-05-25T15:20:03.52205Z",
+      "finishedAt": "2026-05-25T15:21:59.215345Z",
       "output": "tasks/2026-05-24-http-event-api/commit.md",
       "log": "tasks/2026-05-24-http-event-api/runs/20260525T152003Z-commit.log",
-      "pid": 95201
+      "nextStatus": "COMMITTED"
     },
     "dev": {
       "status": "DONE",

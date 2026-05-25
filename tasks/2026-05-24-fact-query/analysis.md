@@ -91,22 +91,11 @@ ExMarketing 是独立活动营销中台，外部系统通过标准事件、Fact 
 
 唯一性要求：`tenant_id + fact_code` 唯一。缓存 key 必须包含 provider 配置版本或 `updated_at`，避免配置变更后复用旧事实。
 
-### 标准事件上下文输入
+### 标准事件上下文约束
 
-Fact Query 使用现有标准事件模型作为上下文：
+正式事件处理链路中，Fact Query 使用标准事件模型作为上下文；但公开调试接口 `/openapi/v1/facts/query` 本期只接受 Owner 决策列出的固定字段，不额外接受 `eventType`、`sourceSystem`、`occurredAt`。
 
-- `eventId`
-- `eventType`
-- `sourceSystem`
-- `tenantId`
-- `subject.type`
-- `subject.id`
-- `biz.bizType`
-- `biz.bizId`
-- `occurredAt`
-- `attributes`
-
-事件顶层、`subject`、`biz` 的未知字段不得通过 Fact Query 绕过 Event API 约束；业务扩展字段仍只能放入 `attributes`。
+如果 provider 请求需要事件类型、来源系统或发生时间，本期必须通过 provider 配置、`subject`、`biz` 或 `attributes` 中已允许字段表达；不能扩展 `/facts/query` 顶层输入白名单。
 
 ### Fact Query API 输入
 
@@ -119,7 +108,7 @@ Fact Query 使用现有标准事件模型作为上下文：
 - `attributes`
 - `traceId` 或 request id
 
-可选情况下可携带 `eventType`、`sourceSystem`、`occurredAt` 以形成完整 provider 请求上下文。无论是否携带这些字段，API 都不得接受：
+不得携带 `eventType`、`sourceSystem`、`occurredAt` 作为 `/facts/query` 顶层输入。不得接受：
 
 - inline endpoint
 - inline method
@@ -280,7 +269,7 @@ Provider 原始响应：
 12. Provider 响应必须是可解析 JSON；mapping 只能从 JSON 响应读取字段。
 13. Provider 响应必须经过 mapping 后才能进入规则上下文，不允许规则直接依赖未声明的原始响应字段。
 14. `cacheTtlSeconds` 缺失或 `0` 表示不跨事件缓存；`1..3600` 启用缓存；负数或大于 `3600` 拒绝 provider 配置。
-15. 缓存 key 至少隔离 `tenantId`、`factCode`、provider 配置版本或 `updatedAt`、`subject.type`、`subject.id`、`eventType`、`biz.bizType`、`biz.bizId`，以及会影响 provider 响应的必要 attributes。
+15. 缓存 key 至少隔离 `tenantId`、`factCode`、provider 配置版本或 `updatedAt`、`subject.type`、`subject.id`、`biz.bizType`、`biz.bizId`，以及会影响 provider 响应的必要 attributes。
 16. 同一事件处理上下文中，同一 tenant、同一 factCode、同一 subject/biz 的重复查询应复用本次结果，避免同一活动多条规则重复请求。
 17. Provider 查询失败不得让依赖该 fact 的规则默认通过；本任务的“降级”定义为记录失败原因并使依赖该 fact 的规则失败。
 18. 一个 factCode 查询失败只影响依赖该 factCode 的规则和活动，不影响不依赖该 factCode 的活动。

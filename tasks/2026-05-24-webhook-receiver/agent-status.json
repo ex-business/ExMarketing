@@ -1,10 +1,14 @@
 {
   "requirementId": "2026-05-24-webhook-receiver",
-  "updatedAt": "2026-05-24T11:39:29.023054Z",
+  "updatedAt": "2026-05-25T15:56:20.206654Z",
   "agents": {
     "analysis": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-webhook-receiver/analysis.md"
+      "status": "DONE",
+      "startedAt": "2026-05-25T15:53:26.798148Z",
+      "finishedAt": "2026-05-25T15:56:20.206649Z",
+      "output": "tasks/2026-05-24-webhook-receiver/analysis.md",
+      "log": "tasks/2026-05-24-webhook-receiver/runs/20260525T155326Z-analysis.log",
+      "nextStatus": "ANALYSIS_FAIL"
     },
     "commit": {
       "status": "WAITING",

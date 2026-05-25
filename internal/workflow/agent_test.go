@@ -548,6 +548,72 @@ func TestAutoSupplementRequirementAddsOutboxDLQOwnerDecisions(t *testing.T) {
 	}
 }
 
+func TestAutoSupplementRequirementAddsFactQueryOwnerDecisions(t *testing.T) {
+	dir := t.TempDir()
+	req := Requirement{
+		ID:          "2026-05-24-fact-query",
+		Title:       "Fact Query 可选事实查询",
+		Description: "实现标准 Fact Provider 配置、HTTP 查询、字段 mapping、cacheTtlSeconds、facts.* 规则字段读取。",
+		Status:      StatusAnalysisReady,
+		Risk:        "中",
+		TaskDir:     dir,
+	}
+	if err := CreateTaskFiles(req); err != nil {
+		t.Fatalf("create task files: %v", err)
+	}
+
+	changed, err := AutoSupplementRequirement(req)
+	if err != nil {
+		t.Fatalf("auto supplement: %v", err)
+	}
+	if !changed {
+		t.Fatal("expected supplement to be added")
+	}
+	content, err := os.ReadFile(filepath.Join(req.TaskDir, "task.md"))
+	if err != nil {
+		t.Fatalf("read task: %v", err)
+	}
+	text := string(content)
+	for _, want := range []string{"Provider Registry 契约", "tenantId + factCode", "不接受 inline endpoint", "enabled = true"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected %q in task.md, got:\n%s", want, text)
+		}
+	}
+}
+
+func TestAutoSupplementRequirementAddsAdminConsoleOwnerDecisions(t *testing.T) {
+	dir := t.TempDir()
+	req := Requirement{
+		ID:          "2026-05-24-admin-config-pages",
+		Title:       "管理后台页面",
+		Description: "补齐活动配置、审批流、模拟运行、操作审计页面。",
+		Status:      StatusAnalysisReady,
+		Risk:        "中",
+		TaskDir:     dir,
+	}
+	if err := CreateTaskFiles(req); err != nil {
+		t.Fatalf("create task files: %v", err)
+	}
+
+	changed, err := AutoSupplementRequirement(req)
+	if err != nil {
+		t.Fatalf("auto supplement: %v", err)
+	}
+	if !changed {
+		t.Fatal("expected supplement to be added")
+	}
+	content, err := os.ReadFile(filepath.Join(req.TaskDir, "task.md"))
+	if err != nil {
+		t.Fatalf("read task: %v", err)
+	}
+	text := string(content)
+	for _, want := range []string{"当前后端 API 已支持", "审批流和上线发布不在本期实现范围内", "不能把静态 mock 当作真实后端结果"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected %q in task.md, got:\n%s", want, text)
+		}
+	}
+}
+
 func TestRunAgent(t *testing.T) {
 	dir := t.TempDir()
 	req := Requirement{

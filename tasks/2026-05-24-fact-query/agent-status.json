@@ -1,14 +1,15 @@
 {
   "requirementId": "2026-05-24-fact-query",
-  "updatedAt": "2026-05-25T11:01:31.128714Z",
+  "updatedAt": "2026-05-25T13:28:18.585834Z",
   "agents": {
     "analysis": {
-      "status": "DONE",
-      "startedAt": "2026-05-25T10:57:35.551119Z",
-      "finishedAt": "2026-05-25T11:00:17.842079Z",
+      "status": "INTERRUPTED",
+      "startedAt": "2026-05-25T13:28:04.051346Z",
+      "finishedAt": "2026-05-25T13:28:18.578832Z",
       "output": "tasks/2026-05-24-fact-query/analysis.md",
-      "log": "tasks/2026-05-24-fact-query/runs/20260525T105735Z-analysis.log",
-      "nextStatus": "REVIEW_READY"
+      "log": "tasks/2026-05-24-fact-query/runs/20260525T132804Z-analysis.log",
+      "exitCode": -1,
+      "error": "agent stopped by user: pid 80067"
     },
     "commit": {
       "status": "WAITING",
@@ -20,10 +21,10 @@
     },
     "review": {
       "status": "DONE",
-      "startedAt": "2026-05-25T11:00:18.203906Z",
-      "finishedAt": "2026-05-25T11:01:31.12871Z",
+      "startedAt": "2026-05-25T13:25:46.420706Z",
+      "finishedAt": "2026-05-25T13:26:55.794765Z",
       "output": "tasks/2026-05-24-fact-query/review.md",
-      "log": "tasks/2026-05-24-fact-query/runs/20260525T110018Z-review.log",
+      "log": "tasks/2026-05-24-fact-query/runs/20260525T132546Z-review.log",
       "nextStatus": "REVIEW_BLOCK"
     },
     "test": {

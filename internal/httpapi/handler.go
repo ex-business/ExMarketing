@@ -219,12 +219,12 @@ func (h *Handler) simulate(w http.ResponseWriter, r *http.Request) {
 	decoder.UseNumber()
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&event); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json body")
+		writeErrorCode(w, http.StatusBadRequest, "INVALID_EVENT", err.Error())
 		return
 	}
 	result, err := h.engine.SimulateEvent(r.Context(), event)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeErrorCode(w, http.StatusBadRequest, "INVALID_EVENT", err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
@@ -236,7 +236,7 @@ func (h *Handler) createEvent(w http.ResponseWriter, r *http.Request) {
 	decoder.UseNumber()
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&event); err != nil {
-		writeErrorCode(w, http.StatusBadRequest, "INVALID_EVENT", "invalid json body")
+		writeErrorCode(w, http.StatusBadRequest, "INVALID_EVENT", err.Error())
 		return
 	}
 

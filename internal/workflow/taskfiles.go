@@ -82,6 +82,14 @@ func defaultOwnerDecisionSupplement(req Requirement, taskContent string) (string
 		(strings.Contains(haystack, "http/mq/webhook") || strings.Contains(haystack, "mq/webhook")) {
 		return outboxDLQOwnerDecisionSupplement(), true
 	}
+	if strings.Contains(haystack, "fact query") || strings.Contains(haystack, "fact provider") || strings.Contains(haystack, "facts.*") {
+		return factQueryOwnerDecisionSupplement(), true
+	}
+	if strings.Contains(haystack, "管理后台") || strings.Contains(haystack, "admin") {
+		if strings.Contains(haystack, "审批") || strings.Contains(haystack, "上线") || strings.Contains(haystack, "活动配置") {
+			return adminConsoleOwnerDecisionSupplement(), true
+		}
+	}
 	return "", false
 }
 
@@ -164,6 +172,126 @@ DLQ -> DLQ_CLOSED   # close
 - replay 后如果再次失败，继续按同一重试和 DLQ 规则处理。
 - close 与自动重试并发时，以状态条件更新为准；只有当前仍为 ` + "`DLQ`" + ` 才允许 close 成功。
 - replay 与自动重试并发时，以状态条件更新为准；只有当前仍为 ` + "`DLQ`" + ` 才允许 replay 成功。`
+}
+
+func factQueryOwnerDecisionSupplement() string {
+	return `## Owner 补充决策
+
+### Provider Registry 契约
+
+本期采用持久化 provider registry，不允许活动规则或 ` + "`/openapi/v1/facts/query`" + ` 直接传 inline provider 配置绕过 registry。
+
+Fact Provider 以 ` + "`tenantId + factCode`" + ` 唯一定位。
+
+Provider 字段：
+
+- ` + "`tenantId`" + `
+- ` + "`factCode`" + `
+- ` + "`providerType`" + `，本期只支持 ` + "`HTTP`" + `
+- ` + "`endpoint`" + `
+- ` + "`method`" + `，本期支持 ` + "`GET`" + ` / ` + "`POST`" + `
+- ` + "`authRef`" + `
+- ` + "`mapping`" + `
+- ` + "`cacheTtlSeconds`" + `
+- ` + "`enabled`" + `
+- ` + "`timeoutMs`" + `
+- ` + "`createdAt`" + `
+- ` + "`updatedAt`" + `
+
+只有 ` + "`enabled = true`" + ` 且 schema 校验通过的 provider 才能被规则引用和 Fact Query 使用。
+
+### 规则配置校验
+
+后台配置规则时，如果规则引用 ` + "`facts.<factCode>.*`" + `，必须校验当前 tenant 下存在已启用的 ` + "`factCode`" + ` provider。
+
+未配置 provider 时：
+
+- 规则保存或上线校验必须失败。
+- 错误信息必须指出缺失的 ` + "`factCode`" + `。
+- 不能在运行时临时接受 inline provider 配置。
+
+事件 ` + "`attributes`" + ` 足够完成判断时，不强制配置 Fact Provider。
+
+### Fact Query API 输入契约
+
+` + "`POST /openapi/v1/facts/query`" + ` 本期只接受：
+
+- ` + "`tenantId`" + `
+- ` + "`factCode`" + `
+- ` + "`subject`" + `
+- ` + "`biz`" + `
+- ` + "`attributes`" + `
+- ` + "`traceId`" + ` 或 request id
+
+不接受 inline endpoint、inline auth、inline mapping 或 inline provider。
+
+服务端按 ` + "`tenantId + factCode`" + ` 查找 enabled provider，完成 HTTP 查询、mapping、缓存和错误降级。
+
+### 租户隔离
+
+provider registry、规则校验、Fact Query 查询都必须按 ` + "`tenantId`" + ` 隔离。
+
+跨 tenant 不能读取、引用或执行 provider。
+
+### Mapping 与缓存
+
+` + "`mapping`" + ` 负责把外部 HTTP 响应映射为标准 ` + "`facts.<factCode>.*`" + ` 字段。
+
+` + "`cacheTtlSeconds`" + ` 为 0 表示不缓存，大于 0 表示按 tenant、factCode、subject、biz 和必要 attributes 组成缓存 key。
+
+### 失败降级
+
+Fact Query 是可选能力。provider 不存在、未启用、HTTP 失败、超时、mapping 失败或缓存失败时，必须返回可解释错误原因。
+
+规则执行时是否阻断由规则配置决定，但失败原因必须进入 rule result / simulation explain。`
+}
+
+func adminConsoleOwnerDecisionSupplement() string {
+	return `## Owner 补充决策
+
+### 本期范围
+
+本期只交付“当前后端 API 已支持或已在本工程明确存在的本地管理页面”。
+
+审批流、上线发布、活动编辑发布、复制、删除、暂停、恢复、结束、版本回滚属于后续独立任务。本期页面可以展示入口或占位状态，但必须禁用这些操作，不允许伪造成功，不允许用前端状态假装后端已经支持。
+
+本期页面定位为本地开发 / 内网管理台，不作为公网生产 Admin。
+
+### 本期可执行页面
+
+- 活动列表。
+- 新增活动。
+- 活动详情只读展示。
+- Quota 创建和展示。
+- 模拟运行。
+- 审计记录查询。
+- 当前 git diff / Agent 工作台相关页面。
+- 已有 API 可返回的事件、Fact Query、Callback、对账或 DLQ 相关只读/操作能力；如果后端接口不存在，页面必须禁用并展示“待后端接入”。
+
+### 审批与上线
+
+审批流和上线发布不在本期实现范围内。
+
+本期规则：
+
+- 不提供可点击成功的提交审批、审批通过、审批拒绝、撤回、上线、下线、版本回滚。
+- 如果展示审批/上线区域，只能展示禁用状态和待接入说明。
+- 不能在前端本地改状态模拟审批成功。
+- 不能把静态 mock 当作真实后端结果。
+
+### 活动编辑发布
+
+活动编辑、复制、删除、暂停、恢复、结束、版本回滚不在本期实现范围内。
+
+本期只允许：
+
+- 通过现有 ` + "`POST /admin/v1/activities`" + ` 创建活动。
+- 通过现有列表/详情能力查看活动。
+- 展示后端返回的真实状态。
+
+### 错误处理
+
+所有页面操作必须展示后端真实错误原因。接口不存在、接口返回非 2xx、校验失败、状态冲突时，页面必须显示失败，不得显示成功。`
 }
 
 func writeFileIfMissing(path, content string) error {

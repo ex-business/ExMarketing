@@ -497,7 +497,43 @@ Idempotency-Key: site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:pay_123
 tenantId + ":" + sourceSystem + ":" + eventType + ":" + biz.bizType + ":" + biz.bizId
 ```
 
-事件模型只允许以下字段：`eventId`、`eventType`、`sourceSystem`、`tenantId`、`subject`、`biz`、`occurredAt`、`attributes`。业务扩展字段必须放在 `attributes` 内；顶层、`subject`、`biz` 中的未知字段会返回 `INVALID_EVENT`。
+事件模型只允许以下 8 个顶层字段：`eventId`、`eventType`、`sourceSystem`、`tenantId`、`subject`、`biz`、`occurredAt`、`attributes`。业务扩展字段必须放在 `attributes` 内；顶层、`subject`、`biz` 中的未知字段会返回 `INVALID_EVENT`。
+
+字段约束：
+
+| 字段 | 类型 | 必填 | 未知字段 | 说明 |
+| --- | --- | --- | --- | --- |
+| `eventId` | non-empty string | 是 | 不允许 | 外部事件 ID，用于追踪；不作为唯一幂等主键。 |
+| `eventType` | non-empty string | 是 | 不允许 | 事件类型。Schema 不内置具体业务枚举，活动由 `triggerEvents` 匹配。 |
+| `sourceSystem` | non-empty string | 是 | 不允许 | 来源系统。Schema 不内置来源系统白名单。 |
+| `tenantId` | non-empty string | 是 | 不允许 | 租户隔离字段，必须参与 `Idempotency-Key`。 |
+| `subject` | object | 是 | 只允许 `type`、`id` | 事件主体。 |
+| `biz` | object | 是 | 只允许 `bizType`、`bizId` | 业务对象标识。 |
+| `occurredAt` | RFC3339 string | 是 | 不允许 | 必须包含时区，例如 `Z` 或 `+08:00`。 |
+| `attributes` | object | 是 | 允许任意内部业务字段 | 唯一业务扩展入口，可为空 `{}`，可包含嵌套 object/array。 |
+
+`subject` 子字段：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `subject.type` | non-empty string | 是 | 主体类型，例如 `USER`；Schema 不固定枚举。 |
+| `subject.id` | non-empty string | 是 | 主体 ID。 |
+
+`biz` 子字段：
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `biz.bizType` | non-empty string | 是 | 业务对象类型，例如 `DEPOSIT`、`ORDER`；Schema 不固定枚举。 |
+| `biz.bizId` | non-empty string | 是 | 业务对象 ID。 |
+
+时间示例：
+
+```text
+合法:   2026-05-24T12:00:00Z
+合法:   2026-05-24T12:00:00+08:00
+非法:   2026-05-24T12:00:00        # 缺少时区
+非法:   2026-99-99                 # 日期非法
+```
 
 示例：
 
@@ -556,6 +592,40 @@ curl -X POST http://localhost:8080/openapi/v1/events \
 ```
 
 完全重复的事件返回 `200 OK` 且 `duplicate=true`，不会再次创建 participation、grant_order 或 outbox。相同 `Idempotency-Key` 但 payload 不一致返回 `400 INVALID_IDEMPOTENCY_KEY`。
+
+非法事件示例：
+
+```json
+{
+  "code": "INVALID_EVENT",
+  "error": "amount is unknown; business fields must be placed in attributes"
+}
+```
+
+```json
+{
+  "code": "INVALID_EVENT",
+  "error": "subject.vipLevel is unknown; business fields must be placed in attributes"
+}
+```
+
+```json
+{
+  "code": "INVALID_EVENT",
+  "error": "occurredAt must be RFC3339 time with timezone"
+}
+```
+
+幂等键错误示例：
+
+```json
+{
+  "code": "INVALID_IDEMPOTENCY_KEY",
+  "error": "Idempotency-Key does not match event payload"
+}
+```
+
+Fact Query 的 `event` payload 使用同一标准事件结构；能通过事件 `attributes` 携带的数据，不应通过 Fact Query 实时查询外部系统。
 
 Quota 不足响应体：
 

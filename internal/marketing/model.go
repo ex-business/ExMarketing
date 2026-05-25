@@ -340,6 +340,88 @@ type ActivityEvent struct {
 	Attributes   map[string]any `json:"attributes"`
 }
 
+func (event *ActivityEvent) UnmarshalJSON(data []byte) error {
+	var raw map[string]json.RawMessage
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	if err := decoder.Decode(&raw); err != nil {
+		return fmt.Errorf("event must be object: %w", err)
+	}
+	if raw == nil {
+		return errors.New("event must be object")
+	}
+
+	allowed := map[string]struct{}{
+		"eventId":      {},
+		"eventType":    {},
+		"sourceSystem": {},
+		"tenantId":     {},
+		"subject":      {},
+		"biz":          {},
+		"occurredAt":   {},
+		"attributes":   {},
+	}
+	for field := range raw {
+		if _, ok := allowed[field]; !ok {
+			return fmt.Errorf("%s is unknown; business fields must be placed in attributes", field)
+		}
+	}
+	for _, field := range []string{"eventId", "eventType", "sourceSystem", "tenantId", "subject", "biz", "occurredAt", "attributes"} {
+		if _, ok := raw[field]; !ok {
+			return fmt.Errorf("%s is required", field)
+		}
+	}
+
+	eventID, err := requiredString(raw, "eventId")
+	if err != nil {
+		return err
+	}
+	eventType, err := requiredString(raw, "eventType")
+	if err != nil {
+		return err
+	}
+	sourceSystem, err := requiredString(raw, "sourceSystem")
+	if err != nil {
+		return err
+	}
+	tenantID, err := requiredString(raw, "tenantId")
+	if err != nil {
+		return err
+	}
+	occurredAtValue, err := requiredString(raw, "occurredAt")
+	if err != nil {
+		return err
+	}
+	occurredAt, err := time.Parse(time.RFC3339, occurredAtValue)
+	if err != nil {
+		return fmt.Errorf("occurredAt must be RFC3339 time with timezone")
+	}
+	subject, err := decodeEventSubject(raw["subject"])
+	if err != nil {
+		return err
+	}
+	biz, err := decodeEventBiz(raw["biz"])
+	if err != nil {
+		return err
+	}
+	attributes, err := decodeObject(raw["attributes"], "attributes")
+	if err != nil {
+		return err
+	}
+
+	*event = ActivityEvent{
+		EventID:      eventID,
+		EventType:    eventType,
+		SourceSystem: sourceSystem,
+		TenantID:     tenantID,
+		Subject:      subject,
+		Biz:          biz,
+		OccurredAt:   occurredAt,
+		Attributes:   attributes,
+	}
+	return nil
+}
+
 type EventSubject struct {
 	Type string `json:"type"`
 	ID   string `json:"id"`
@@ -1297,22 +1379,147 @@ func parseNonNegativeConfigDecimal(name, value string) (decimal.Decimal, error) 
 }
 
 func (event *ActivityEvent) Validate() error {
-	if event.EventID == "" || event.EventType == "" || event.SourceSystem == "" || event.TenantID == "" {
-		return errors.Join(ErrInvalidEvent, errors.New("eventId, eventType, sourceSystem and tenantId are required"))
+	if strings.TrimSpace(event.EventID) == "" {
+		return errors.Join(ErrInvalidEvent, errors.New("eventId must be non-empty string"))
 	}
-	if event.Subject.Type == "" || event.Subject.ID == "" {
-		return errors.Join(ErrInvalidEvent, errors.New("subject.type and subject.id are required"))
+	if strings.TrimSpace(event.EventType) == "" {
+		return errors.Join(ErrInvalidEvent, errors.New("eventType must be non-empty string"))
 	}
-	if event.Biz.BizType == "" || event.Biz.BizID == "" {
-		return errors.Join(ErrInvalidEvent, errors.New("biz.bizType and biz.bizId are required"))
+	if strings.TrimSpace(event.SourceSystem) == "" {
+		return errors.Join(ErrInvalidEvent, errors.New("sourceSystem must be non-empty string"))
+	}
+	if strings.TrimSpace(event.TenantID) == "" {
+		return errors.Join(ErrInvalidEvent, errors.New("tenantId must be non-empty string"))
+	}
+	if strings.TrimSpace(event.Subject.Type) == "" {
+		return errors.Join(ErrInvalidEvent, errors.New("subject.type must be non-empty string"))
+	}
+	if strings.TrimSpace(event.Subject.ID) == "" {
+		return errors.Join(ErrInvalidEvent, errors.New("subject.id must be non-empty string"))
+	}
+	if strings.TrimSpace(event.Biz.BizType) == "" {
+		return errors.Join(ErrInvalidEvent, errors.New("biz.bizType must be non-empty string"))
+	}
+	if strings.TrimSpace(event.Biz.BizID) == "" {
+		return errors.Join(ErrInvalidEvent, errors.New("biz.bizId must be non-empty string"))
 	}
 	if event.OccurredAt.IsZero() {
 		return errors.Join(ErrInvalidEvent, errors.New("occurredAt is required"))
 	}
 	if event.Attributes == nil {
-		event.Attributes = map[string]any{}
+		return errors.Join(ErrInvalidEvent, errors.New("attributes must be object"))
 	}
 	return nil
+}
+
+func requiredString(raw map[string]json.RawMessage, field string) (string, error) {
+	if isJSONNull(raw[field]) {
+		return "", fmt.Errorf("%s must be non-empty string", field)
+	}
+	var value string
+	if err := json.Unmarshal(raw[field], &value); err != nil {
+		return "", fmt.Errorf("%s must be non-empty string", field)
+	}
+	if strings.TrimSpace(value) == "" {
+		return "", fmt.Errorf("%s must be non-empty string", field)
+	}
+	return value, nil
+}
+
+func decodeEventSubject(data json.RawMessage) (EventSubject, error) {
+	raw, err := decodeRawObject(data, "subject")
+	if err != nil {
+		return EventSubject{}, err
+	}
+	for field := range raw {
+		if field != "type" && field != "id" {
+			return EventSubject{}, fmt.Errorf("subject.%s is unknown; business fields must be placed in attributes", field)
+		}
+	}
+	for _, field := range []string{"type", "id"} {
+		if _, ok := raw[field]; !ok {
+			return EventSubject{}, fmt.Errorf("subject.%s is required", field)
+		}
+	}
+	subjectType, err := requiredRawString(raw["type"], "subject.type")
+	if err != nil {
+		return EventSubject{}, err
+	}
+	subjectID, err := requiredRawString(raw["id"], "subject.id")
+	if err != nil {
+		return EventSubject{}, err
+	}
+	return EventSubject{Type: subjectType, ID: subjectID}, nil
+}
+
+func decodeEventBiz(data json.RawMessage) (EventBiz, error) {
+	raw, err := decodeRawObject(data, "biz")
+	if err != nil {
+		return EventBiz{}, err
+	}
+	for field := range raw {
+		if field != "bizType" && field != "bizId" {
+			return EventBiz{}, fmt.Errorf("biz.%s is unknown; business fields must be placed in attributes", field)
+		}
+	}
+	for _, field := range []string{"bizType", "bizId"} {
+		if _, ok := raw[field]; !ok {
+			return EventBiz{}, fmt.Errorf("biz.%s is required", field)
+		}
+	}
+	bizType, err := requiredRawString(raw["bizType"], "biz.bizType")
+	if err != nil {
+		return EventBiz{}, err
+	}
+	bizID, err := requiredRawString(raw["bizId"], "biz.bizId")
+	if err != nil {
+		return EventBiz{}, err
+	}
+	return EventBiz{BizType: bizType, BizID: bizID}, nil
+}
+
+func decodeRawObject(data json.RawMessage, field string) (map[string]json.RawMessage, error) {
+	if isJSONNull(data) {
+		return nil, fmt.Errorf("%s must be object", field)
+	}
+	var raw map[string]json.RawMessage
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	if err := decoder.Decode(&raw); err != nil || raw == nil {
+		return nil, fmt.Errorf("%s must be object", field)
+	}
+	return raw, nil
+}
+
+func requiredRawString(data json.RawMessage, field string) (string, error) {
+	if isJSONNull(data) {
+		return "", fmt.Errorf("%s must be non-empty string", field)
+	}
+	var value string
+	if err := json.Unmarshal(data, &value); err != nil {
+		return "", fmt.Errorf("%s must be non-empty string", field)
+	}
+	if strings.TrimSpace(value) == "" {
+		return "", fmt.Errorf("%s must be non-empty string", field)
+	}
+	return value, nil
+}
+
+func decodeObject(data json.RawMessage, field string) (map[string]any, error) {
+	if isJSONNull(data) {
+		return nil, fmt.Errorf("%s must be object", field)
+	}
+	var value map[string]any
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	if err := decoder.Decode(&value); err != nil || value == nil {
+		return nil, fmt.Errorf("%s must be object", field)
+	}
+	return value, nil
+}
+
+func isJSONNull(data json.RawMessage) bool {
+	return bytes.Equal(bytes.TrimSpace(data), []byte("null"))
 }
 
 func (event ActivityEvent) Normalized() ActivityEvent {

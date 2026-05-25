@@ -7,27 +7,25 @@ P0:
 - 无。
 
 P1:
-- tasks/2026-05-24-fact-query/analysis.md:59-76,144-180,320-327: Provider 配置契约仍未收敛，不能进入 Dev。task.md 明确要求“标准 Fact Provider 配置”和“未配置 provider 时后台不允许配置依赖该事实源的规则”，analysis.md 也把“只有已配置、已校验、当前启用的 HTTP Fact Provider 才允许被活动规则引用”列为核心口径；但文档随后允许 provider 配置来自预置表、后台配置或本地开发配置，并把最终管理入口、tenantId 是否进入正式数据字典、/openapi/v1/facts/query 是否鉴权等放入“不阻塞”的待确认项。现有 data-model 又注明 marketing_fact_provider 当前无 tenantId、mapping、enabled 且运行时未从表加载 provider。这个缺口会让 Dev 无法判断应新增/修改哪个持久化契约、后台创建活动到底校验哪个 provider registry、/facts/query 是按 factCode 查已配置 provider 还是继续接受 inline provider。若按 inline provider 实现，会直接绕过“未配置 provider 不允许依赖”的验收；若各自选择配置来源，又会产生不可测试的行为差异。
+- tasks/2026-05-24-fact-query/analysis.md:113-122,374: `/openapi/v1/facts/query` 输入契约仍未完全收敛，不能进入 Dev。task.md:54-63 的 Owner 决策明确写的是“本期只接受” `tenantId`、`factCode`、`subject`、`biz`、`attributes`、`traceId` 或 request id，并且 analysis.md:113-120 也重复了同一固定列表；但 analysis.md:122 又允许可选携带 `eventType`、`sourceSystem`、`occurredAt`。这会让 Dev 和 Test Plan 无法判断这些事件顶层字段到底应该被接受、透传给 provider、参与缓存 key，还是作为非白名单字段拒绝。该矛盾直接影响公开 API 契约、provider 请求上下文和缓存隔离验收，必须先统一：要么严格遵守 Owner 决策只接受固定字段；要么修改 task/analysis 的验收口径，明确这些字段是正式允许输入、校验规则和缓存 key 组成部分。
 
 P2:
-- tasks/2026-05-24-fact-query/analysis.md:73,242,311,324: cacheTtlSeconds 上限只写“建议不超过 3600 秒”且最大值仍待确认。该项不会单独阻塞需求分析，但会降低测试计划的确定性；建议在 analysis 中固定本任务的行为为“超过 3600 拒绝”或“超过 3600 按 3600 截断”，并指定可观察响应。
+- 无。
 ~~~
 
 ## Open Questions
 
-1. 本任务的 provider registry 是否以 `marketing_fact_provider` 为唯一来源？如果是，analysis 需要明确新增/调整字段：`tenant_id`、`fact_code` 唯一约束、`mapping_json`、`enabled`、配置版本或更新时间。
-2. `/openapi/v1/facts/query` 的请求应按 `tenantId + factCode + event` 查询已配置 provider，还是允许 debug-only inline provider？如果允许 inline，需要明确它不能作为活动规则配置校验依据，并且安全/脱敏/错误码完全一致。
-3. 后台活动创建校验 provider 的入口是现有 `POST /admin/v1/activities` 同步校验，还是新增 Fact Provider 管理 API 后再引用？
+1. `/openapi/v1/facts/query` 是否正式允许 `eventType`、`sourceSystem`、`occurredAt`？如果允许，需要同步更新 Owner 输入契约和验收标准；如果不允许，需要从 analysis.md 的 API 输入章节移除该可选说明，并说明 provider 请求上下文如何在缺少这些字段时构造。
 
 ## Score
 
 ~~~text
-需求清晰度        15 / 20
-需求边界清楚      17 / 20
-风险可控          15 / 20
-验收标准明确      17 / 20
+需求清晰度        17 / 20
+需求边界清楚      18 / 20
+风险可控          17 / 20
+验收标准明确      16 / 20
 约束一致性        14 / 20
-总分              78 / 100
+总分              82 / 100
 ~~~
 
 ## Decision
@@ -36,6 +34,6 @@ P2:
 BLOCK
 ~~~
 
-理由：存在 P1，且 Score < 80。analysis.md 已覆盖 Fact Query 的大部分安全、mapping、缓存和失败语义，但 provider 配置来源与运行时/后台校验契约没有固定，正好落在本需求的核心验收点上。需要先把 provider registry、tenant 隔离、mapping/enabled 持久化字段和 `/facts/query` 输入契约收敛后再进入 Dev。
+理由：存在 P1。上一轮关于 provider registry、inline provider、后台校验入口和 `cacheTtlSeconds` 上限的阻塞点已经基本收敛，但 Fact Query API 入参白名单仍与 Owner 决策冲突。该点会影响实现和测试用例的确定性，需要先修正后再进入 Dev。
 
 需求：2026-05-24-fact-query

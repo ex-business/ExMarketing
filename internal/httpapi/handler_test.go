@@ -313,6 +313,23 @@ func TestSimulateEventQuotaExceededSuppressesGrantPreview(t *testing.T) {
 	}
 }
 
+func TestSimulateEventRejectsInvalidStandardEventSchema(t *testing.T) {
+	handler := newTestHandler()
+
+	event := strings.Replace(depositEventJSON("evt_sim_invalid_schema", "pay_sim_invalid_schema", `null`), `"occurredAt": "2026-05-24T12:00:00Z"`, `"occurredAt": "2026-05-24T12:00:00"`, 1)
+	req := httptest.NewRequest(http.MethodPost, "/admin/v1/simulate", strings.NewReader(event))
+	rec := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusBadRequest, rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `"code":"INVALID_EVENT"`) || !strings.Contains(body, "occurredAt") {
+		t.Fatalf("expected INVALID_EVENT with field reason, got: %s", body)
+	}
+}
+
 func TestActivityEventRequiresIdempotencyKey(t *testing.T) {
 	handler := newTestHandler()
 
@@ -361,6 +378,9 @@ func TestActivityEventRejectsUnknownFields(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), `"code":"INVALID_EVENT"`) {
 		t.Fatalf("expected invalid event code, got: %s", rec.Body.String())
 	}
+	if !strings.Contains(rec.Body.String(), `orderAmount`) {
+		t.Fatalf("expected unknown field path, got: %s", rec.Body.String())
+	}
 }
 
 func TestActivityEventRejectsNestedUnknownFields(t *testing.T) {
@@ -383,6 +403,9 @@ func TestActivityEventRejectsNestedUnknownFields(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `"code":"INVALID_EVENT"`) {
 		t.Fatalf("expected invalid event code, got: %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `subject.name`) {
+		t.Fatalf("expected nested unknown field path, got: %s", rec.Body.String())
 	}
 }
 
@@ -432,6 +455,19 @@ func TestActivityEventRejectsMissingRequiredField(t *testing.T) {
 				"attributes": {}
 			}`,
 			key: "site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:pay_missing_biz",
+		},
+		{
+			name: "missing attributes",
+			event: `{
+				"eventId": "evt_missing_attrs",
+				"eventType": "DEPOSIT_SUCCESS",
+				"sourceSystem": "payment",
+				"tenantId": "site_001",
+				"subject": {"type": "USER", "id": "10001"},
+				"biz": {"bizType": "DEPOSIT", "bizId": "pay_missing_attrs"},
+				"occurredAt": "2026-05-24T12:00:00Z"
+			}`,
+			key: "site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:pay_missing_attrs",
 		},
 	}
 
@@ -491,37 +527,131 @@ func TestActivityEventDuplicateAndConflict(t *testing.T) {
 	}
 }
 
-func TestActivityEventNormalizesNullAttributes(t *testing.T) {
+func TestActivityEventRejectsInvalidSchemaFields(t *testing.T) {
 	handler := newTestHandler()
 
-	event := depositEventJSON("evt_null_attrs", "pay_null_attrs", `null`)
-	rec := postRawEvent(t, handler, event, "site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:pay_null_attrs")
-	if rec.Code != http.StatusAccepted {
-		t.Fatalf("expected status %d, got %d: %s", http.StatusAccepted, rec.Code, rec.Body.String())
+	tests := []struct {
+		name    string
+		event   string
+		key     string
+		message string
+	}{
+		{
+			name:    "null attributes",
+			event:   depositEventJSON("evt_null_attrs", "pay_null_attrs", `null`),
+			key:     "site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:pay_null_attrs",
+			message: "attributes must be object",
+		},
+		{
+			name:    "array attributes",
+			event:   depositEventJSON("evt_array_attrs", "pay_array_attrs", `[]`),
+			key:     "site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:pay_array_attrs",
+			message: "attributes must be object",
+		},
+		{
+			name: "subject is string",
+			event: `{
+				"eventId": "evt_subject_string",
+				"eventType": "DEPOSIT_SUCCESS",
+				"sourceSystem": "payment",
+				"tenantId": "site_001",
+				"subject": "10001",
+				"biz": {"bizType": "DEPOSIT", "bizId": "pay_subject_string"},
+				"occurredAt": "2026-05-24T12:00:00Z",
+				"attributes": {}
+			}`,
+			key:     "site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:pay_subject_string",
+			message: "subject must be object",
+		},
+		{
+			name: "missing subject id",
+			event: `{
+				"eventId": "evt_subject_missing_id",
+				"eventType": "DEPOSIT_SUCCESS",
+				"sourceSystem": "payment",
+				"tenantId": "site_001",
+				"subject": {"type": "USER"},
+				"biz": {"bizType": "DEPOSIT", "bizId": "pay_subject_missing_id"},
+				"occurredAt": "2026-05-24T12:00:00Z",
+				"attributes": {}
+			}`,
+			key:     "site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:pay_subject_missing_id",
+			message: "subject.id is required",
+		},
+		{
+			name: "biz unknown field",
+			event: `{
+				"eventId": "evt_biz_unknown",
+				"eventType": "DEPOSIT_SUCCESS",
+				"sourceSystem": "payment",
+				"tenantId": "site_001",
+				"subject": {"type": "USER", "id": "10001"},
+				"biz": {"bizType": "DEPOSIT", "bizId": "pay_biz_unknown", "amount": "299.00"},
+				"occurredAt": "2026-05-24T12:00:00Z",
+				"attributes": {}
+			}`,
+			key:     "site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:pay_biz_unknown",
+			message: "biz.amount",
+		},
+		{
+			name: "invalid time",
+			event: `{
+				"eventId": "evt_bad_time",
+				"eventType": "DEPOSIT_SUCCESS",
+				"sourceSystem": "payment",
+				"tenantId": "site_001",
+				"subject": {"type": "USER", "id": "10001"},
+				"biz": {"bizType": "DEPOSIT", "bizId": "pay_bad_time"},
+				"occurredAt": "2026-99-99",
+				"attributes": {}
+			}`,
+			key:     "site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:pay_bad_time",
+			message: "occurredAt",
+		},
+		{
+			name: "time missing timezone",
+			event: `{
+				"eventId": "evt_no_tz",
+				"eventType": "DEPOSIT_SUCCESS",
+				"sourceSystem": "payment",
+				"tenantId": "site_001",
+				"subject": {"type": "USER", "id": "10001"},
+				"biz": {"bizType": "DEPOSIT", "bizId": "pay_no_tz"},
+				"occurredAt": "2026-05-24T12:00:00",
+				"attributes": {}
+			}`,
+			key:     "site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:pay_no_tz",
+			message: "occurredAt",
+		},
 	}
-	if !strings.Contains(rec.Body.String(), `"attributes":{}`) {
-		t.Fatalf("expected attributes to normalize to empty object, got: %s", rec.Body.String())
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := postRawEvent(t, handler, tt.event, tt.key)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("expected status %d, got %d: %s", http.StatusBadRequest, rec.Code, rec.Body.String())
+			}
+			body := rec.Body.String()
+			if !strings.Contains(body, `"code":"INVALID_EVENT"`) || !strings.Contains(body, tt.message) {
+				t.Fatalf("expected INVALID_EVENT containing %q, got: %s", tt.message, body)
+			}
+		})
 	}
 }
 
-func TestActivityEventNormalizesMissingAttributes(t *testing.T) {
+func TestActivityEventAcceptsEmptyAndNestedAttributes(t *testing.T) {
 	handler := newTestHandler()
 
-	event := `{
-		"eventId": "evt_missing_attrs",
-		"eventType": "DEPOSIT_SUCCESS",
-		"sourceSystem": "payment",
-		"tenantId": "site_001",
-		"subject": {"type": "USER", "id": "10001"},
-		"biz": {"bizType": "DEPOSIT", "bizId": "pay_missing_attrs"},
-		"occurredAt": "2026-05-24T12:00:00Z"
-	}`
-	rec := postRawEvent(t, handler, event, "site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:pay_missing_attrs")
+	event := depositEventJSON("evt_empty_attrs", "pay_empty_attrs", `{}`)
+	rec := postRawEvent(t, handler, event, "site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:pay_empty_attrs")
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("expected status %d, got %d: %s", http.StatusAccepted, rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), `"attributes":{}`) {
-		t.Fatalf("expected attributes to normalize to empty object, got: %s", rec.Body.String())
+
+	event = depositEventJSON("evt_nested_attrs", "pay_nested_attrs", `{"amount":"299.00","risk":{"tags":["vip","first"]},"items":[{"sku":"A"}]}`)
+	rec = postRawEvent(t, handler, event, "site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:pay_nested_attrs")
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusAccepted, rec.Code, rec.Body.String())
 	}
 }
 
@@ -1422,7 +1552,8 @@ func postDepositEvent(t *testing.T, handler *Handler, eventID string, bizID stri
 }
 
 func depositEventJSON(eventID string, bizID string, attributesJSON string) string {
-	if attributesJSON != "null" && !strings.HasPrefix(strings.TrimSpace(attributesJSON), "{") {
+	trimmedAttributes := strings.TrimSpace(attributesJSON)
+	if attributesJSON != "null" && !strings.HasPrefix(trimmedAttributes, "{") && !strings.HasPrefix(trimmedAttributes, "[") {
 		attributesJSON = "{" + attributesJSON + "}"
 	}
 	return `{

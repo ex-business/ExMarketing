@@ -14,26 +14,42 @@ go build ./...
 
 ## Scope
 
-待填写。
+营销活动插件支持：
+
+- 新增活动插件注册、上下文、运行时校验和预览链路。
+- 新增上线前插件兼容性校验。
+- 新增 `marketing_activity.plugin_code` 持久化字段与相关仓储映射。
+- 补充插件、规则、奖励、PostgreSQL 和工作流相关测试与任务记录。
+
+未暂存 `tasks/*/runs/` 执行日志。
 
 ## Review
 
 ~~~text
-PASS / BLOCK
+PASS
 ~~~
 
 ## Test
 
 ~~~text
-PASS / FAIL
+PASS
+~~~
+
+## Pre-Commit Checks
+
+~~~text
+git status -sb: PASS
+git diff --check: PASS
+go test ./...: PASS
+go build ./...: PASS
 ~~~
 
 ## Commit
 
 ~~~text
-hash:
-message:
-remote:
+hash: af0fab3
+message: feat: add marketing activity plugin support
+remote: not pushed
 ~~~
 
 需求：2026-05-24-113400-9

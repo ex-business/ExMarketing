@@ -826,6 +826,86 @@
       grid-template-columns: repeat(2, minmax(0, 1fr));
       gap: 18px;
     }
+    .admin-grid {
+      display: grid;
+      grid-template-columns: minmax(360px, 1.05fr) minmax(360px, 0.95fr);
+      gap: 18px;
+      align-items: start;
+      margin-bottom: 18px;
+    }
+    .admin-stack {
+      display: grid;
+      gap: 18px;
+    }
+    .admin-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+    .admin-table th,
+    .admin-table td {
+      border-bottom: 1px solid var(--line);
+      padding: 8px 7px;
+      text-align: left;
+      vertical-align: top;
+    }
+    .admin-table th {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 800;
+      background: #fbfcfe;
+    }
+    .admin-table td {
+      overflow-wrap: anywhere;
+    }
+    .readonly-box {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfcfe;
+      padding: 12px;
+      color: var(--text);
+      font-size: 13px;
+      margin-bottom: 10px;
+    }
+    .warning-box {
+      border: 1px solid #fde68a;
+      border-radius: 8px;
+      background: #fffbeb;
+      color: #92400e;
+      padding: 10px 12px;
+      font-size: 13px;
+      margin-bottom: 10px;
+    }
+    .error-box {
+      border: 1px solid #fecaca;
+      border-radius: 8px;
+      background: #fef2f2;
+      color: var(--red);
+      padding: 10px 12px;
+      font-size: 13px;
+      margin-bottom: 10px;
+      white-space: pre-wrap;
+    }
+    .success-box {
+      border: 1px solid #bbf7d0;
+      border-radius: 8px;
+      background: #f0fdf4;
+      color: var(--green);
+      padding: 10px 12px;
+      font-size: 13px;
+      margin-bottom: 10px;
+      white-space: pre-wrap;
+    }
+    .disabled-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .output {
+      min-height: 170px;
+      max-height: 360px;
+    }
     .hidden { display: none; }
     .empty {
       padding: 40px 16px;
@@ -909,7 +989,7 @@
         align-items: flex-start;
         flex-direction: column;
       }
-      .workflow-grid, .forms, .hero-cards, .template-list {
+      .workflow-grid, .forms, .hero-cards, .template-list, .admin-grid {
         grid-template-columns: 1fr;
       }
       .flow-add {
@@ -947,6 +1027,7 @@
       <button class="tab active" data-tab="workflow" data-short="工" onclick="switchTab('workflow')">Agent 工作台</button>
       <button class="tab" data-tab="activity" data-short="活" onclick="switchTab('activity')">活动配置</button>
       <button class="tab" data-tab="simulate" data-short="模" onclick="switchTab('simulate')">模拟运行</button>
+      <button class="tab" data-tab="ops" data-short="审" onclick="switchTab('ops')">审计运维</button>
     </div>
     <div class="nav-group">
       <div class="nav-label">Workflow</div>
@@ -1081,21 +1162,69 @@
     <div class="toolbar">
       <div>
         <h2 class="panel-title">活动配置</h2>
-        <div class="subtitle">查看和创建营销活动。</div>
+        <div class="subtitle">通用活动模型：列表、只读摘要、新增活动和 Quota 创建。</div>
       </div>
       <button class="button" onclick="loadActivities()">刷新活动</button>
     </div>
-    <div class="forms">
+    <div class="warning-box">活动详情接口和完整 quota 查询接口本期未明确存在；详情只展示列表或创建响应中的真实字段，缺失 quota 视为 unlimited。</div>
+    <div class="admin-grid">
       <div class="panel">
-        <div class="panel-head"><h3 class="panel-title">活动列表</h3></div>
-        <div class="detail-body"><pre id="activities"></pre></div>
+        <div class="panel-head">
+          <h3 class="panel-title">活动列表</h3>
+          <span class="badge" id="activityCount">0</span>
+        </div>
+        <div class="detail-body">
+          <div id="activityError"></div>
+          <div id="activities"></div>
+        </div>
       </div>
+      <div class="panel">
+        <div class="panel-head"><h3 class="panel-title">活动详情只读</h3></div>
+        <div class="detail-body" id="activityDetail">
+          <div class="empty">从左侧活动列表选择一条记录。</div>
+        </div>
+      </div>
+    </div>
+    <div class="admin-grid">
       <div class="panel">
         <div class="panel-head"><h3 class="panel-title">创建活动</h3></div>
         <div class="detail-body">
-          <textarea id="activity">{}</textarea>
-          <div style="margin-top:10px"><button class="button" onclick="postJson('/admin/v1/activities', 'activity', 'activityResult')">创建</button></div>
-          <div style="margin-top:10px"><pre id="activityResult"></pre></div>
+          <textarea id="activity"></textarea>
+          <div class="ops">
+            <button class="button" onclick="createActivityFromAdmin()">创建</button>
+            <button class="button secondary" onclick="fillActivitySample()">填入示例</button>
+          </div>
+          <pre class="output" id="activityResult"></pre>
+        </div>
+      </div>
+      <div class="admin-stack">
+        <div class="panel">
+          <div class="panel-head"><h3 class="panel-title">Quota 创建</h3></div>
+          <div class="detail-body">
+            <div class="readonly-box">当前明确 API 只有 <code>POST /admin/v1/quotas</code>。创建成功展示后端返回；未配置的 BUDGET / STOCK / USER_LIMIT 在模拟解释中按 unlimited 表达。</div>
+            <textarea id="quota"></textarea>
+            <div class="ops">
+              <button class="button" onclick="postJson('/admin/v1/quotas', 'quota', 'quotaResult')">创建 Quota</button>
+              <button class="button secondary" onclick="fillQuotaSample()">填入示例</button>
+            </div>
+            <pre class="output" id="quotaResult"></pre>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h3 class="panel-title">待后端接入能力</h3></div>
+          <div class="detail-body">
+            <div class="warning-box">审批、上线、编辑发布、复制、删除、暂停、恢复、结束和版本回滚不在本期实现范围内。</div>
+            <div class="disabled-actions">
+              <button class="button secondary" disabled>提交审批</button>
+              <button class="button secondary" disabled>审批通过</button>
+              <button class="button secondary" disabled>上线</button>
+              <button class="button secondary" disabled>暂停</button>
+              <button class="button secondary" disabled>恢复</button>
+              <button class="button secondary" disabled>复制</button>
+              <button class="button secondary" disabled>删除</button>
+              <button class="button secondary" disabled>版本回滚</button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -1105,9 +1234,137 @@
     <div class="panel">
       <div class="panel-head"><h3 class="panel-title">模拟运行</h3></div>
       <div class="detail-body">
-        <textarea id="event">{}</textarea>
-        <div style="margin-top:10px"><button class="button" onclick="postJson('/admin/v1/simulate', 'event', 'simulationResult')">模拟</button></div>
-        <div style="margin-top:10px"><pre id="simulationResult"></pre></div>
+        <div class="readonly-box">模拟运行只调用 <code>POST /admin/v1/simulate</code>，后端返回命中/未命中、规则解释、奖励预览、quota 影响和 outbox 预览；不会写入真实业务表。</div>
+        <textarea id="event"></textarea>
+        <div class="ops">
+          <button class="button" onclick="postJson('/admin/v1/simulate', 'event', 'simulationResult')">模拟</button>
+          <button class="button secondary" onclick="fillEventSample()">填入示例</button>
+        </div>
+        <pre class="output" id="simulationResult"></pre>
+      </div>
+    </div>
+  </section>
+
+  <section id="opsView" class="hidden">
+    <div class="toolbar">
+      <div>
+        <h2 class="panel-title">审计运维</h2>
+        <div class="subtitle">审计记录、奖励对账、DLQ、Fact Query 和 Callback 调试。</div>
+      </div>
+      <button class="button secondary" onclick="loadAudit()">刷新审计</button>
+    </div>
+    <div class="admin-grid">
+      <div class="panel">
+        <div class="panel-head"><h3 class="panel-title">审计记录</h3></div>
+        <div class="detail-body">
+          <div class="field-grid">
+            <div>
+              <label for="auditTenant">tenantId</label>
+              <input id="auditTenant" value="site_001">
+            </div>
+            <div>
+              <label for="auditLimit">limit</label>
+              <input id="auditLimit" value="100">
+            </div>
+          </div>
+          <div class="field-grid">
+            <div>
+              <label for="auditAction">action</label>
+              <input id="auditAction" placeholder="CREATE_ACTIVITY / CREATE_QUOTA / SIMULATION_RUN">
+            </div>
+            <div>
+              <label for="auditActor">actor</label>
+              <input id="auditActor" placeholder="ops">
+            </div>
+          </div>
+          <div class="ops"><button class="button" onclick="loadAudit()">查询审计</button></div>
+          <pre class="output" id="auditResult"></pre>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><h3 class="panel-title">奖励对账</h3></div>
+        <div class="detail-body">
+          <div class="readonly-box">至少填写 tenantId，并提供 commandId、grantOrderId、activityId、subject、eventId 或 idempotencyKey 之一。</div>
+          <div class="field-grid">
+            <div>
+              <label for="reconTenant">tenantId</label>
+              <input id="reconTenant" value="site_001">
+            </div>
+            <div>
+              <label for="reconLimit">limit</label>
+              <input id="reconLimit" value="100">
+            </div>
+          </div>
+          <label for="reconQuery">查询条件 JSON</label>
+          <textarea id="reconQuery"></textarea>
+          <div class="ops">
+            <button class="button" onclick="loadReconciliation()">查询对账</button>
+            <button class="button secondary" onclick="fillReconciliationSample()">填入示例</button>
+          </div>
+          <pre class="output" id="reconciliationResult"></pre>
+        </div>
+      </div>
+    </div>
+    <div class="admin-grid">
+      <div class="panel">
+        <div class="panel-head"><h3 class="panel-title">DLQ 运维</h3></div>
+        <div class="detail-body">
+          <div class="field-grid">
+            <div>
+              <label for="dlqTenant">tenantId</label>
+              <input id="dlqTenant" value="site_001">
+            </div>
+            <div>
+              <label for="dlqLimit">limit</label>
+              <input id="dlqLimit" value="100">
+            </div>
+          </div>
+          <div class="ops">
+            <label><input id="dlqClosed" type="checkbox" style="width:auto"> includeClosed</label>
+            <button class="button" onclick="loadDLQ()">查询 DLQ</button>
+          </div>
+          <pre class="output" id="dlqResult"></pre>
+          <div class="field-grid">
+            <div>
+              <label for="dlqId">outboxId</label>
+              <input id="dlqId" placeholder="outbox id">
+            </div>
+            <div>
+              <label for="dlqOperator">operator</label>
+              <input id="dlqOperator" value="ops">
+            </div>
+          </div>
+          <label for="dlqReason">reason</label>
+          <input id="dlqReason" value="manual operation">
+          <div class="ops">
+            <button class="button secondary" onclick="operateDLQ('replay')">Replay</button>
+            <button class="button secondary" onclick="operateDLQ('close')">Close</button>
+          </div>
+        </div>
+      </div>
+      <div class="admin-stack">
+        <div class="panel">
+          <div class="panel-head"><h3 class="panel-title">Fact Query</h3></div>
+          <div class="detail-body">
+            <textarea id="factQuery"></textarea>
+            <div class="ops">
+              <button class="button" onclick="postJson('/openapi/v1/facts/query', 'factQuery', 'factResult')">查询 Fact</button>
+              <button class="button secondary" onclick="fillFactSample()">填入示例</button>
+            </div>
+            <pre class="output" id="factResult"></pre>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h3 class="panel-title">发奖 Callback</h3></div>
+          <div class="detail-body">
+            <textarea id="callback"></textarea>
+            <div class="ops">
+              <button class="button" onclick="postJson('/openapi/v1/reward/callback', 'callback', 'callbackResult')">提交回调</button>
+              <button class="button secondary" onclick="fillCallbackSample()">填入示例</button>
+            </div>
+            <pre class="output" id="callbackResult"></pre>
+          </div>
+        </div>
       </div>
     </div>
   </section>
@@ -1251,6 +1508,7 @@ let liveLog = { requirementId: '', agent: '' };
 let confirmResolver = null;
 let autoRunQueue = false;
 let batchMode = false;
+let adminActivities = [];
 
 function toggleSidebar() {
   const shell = document.getElementById('appShell');
@@ -1270,6 +1528,7 @@ function switchTab(name) {
   document.getElementById('workflowView').classList.toggle('hidden', name !== 'workflow');
   document.getElementById('activityView').classList.toggle('hidden', name !== 'activity');
   document.getElementById('simulateView').classList.toggle('hidden', name !== 'simulate');
+  document.getElementById('opsView').classList.toggle('hidden', name !== 'ops');
   if (name === 'create') {
     loadConfig();
     loadWorkflowTemplates();
@@ -1277,6 +1536,7 @@ function switchTab(name) {
   if (name === 'workflow') loadWorkflow();
   if (name !== 'workflow') stopRefreshCountdown();
   if (name === 'activity') loadActivities();
+  if (name === 'ops') loadAudit();
 }
 
 async function loadWorkflow(options = {}) {
@@ -2325,13 +2585,324 @@ function renderArtifact(autoScroll = false) {
 }
 
 async function loadActivities() {
-  const res = await fetch('/admin/v1/activities');
-  document.getElementById('activities').textContent = JSON.stringify(await res.json(), null, 2);
+  const data = await requestJson('/admin/v1/activities');
+  const error = document.getElementById('activityError');
+  const count = document.getElementById('activityCount');
+  if (!data.ok) {
+    adminActivities = [];
+    if (count) count.textContent = '0';
+    if (error) error.innerHTML = `<div class="error-box">HTTP ${data.status}\n${escapeHtml(JSON.stringify(data.body, null, 2))}</div>`;
+    document.getElementById('activities').innerHTML = '<div class="empty">活动列表加载失败。</div>';
+    return;
+  }
+  if (error) error.innerHTML = '';
+  adminActivities = data.body.items || [];
+  if (count) count.textContent = String(adminActivities.length);
+  if (!adminActivities.length) {
+    document.getElementById('activities').innerHTML = '<div class="empty">当前没有活动。</div>';
+    document.getElementById('activityDetail').innerHTML = renderQuotaBoundary();
+    return;
+  }
+  document.getElementById('activities').innerHTML = renderActivityTable(adminActivities);
+  renderActivityDetail(adminActivities[0].id);
+}
+
+function renderActivityTable(items) {
+  return `
+    <table class="admin-table">
+      <thead>
+        <tr>
+          <th>编码</th>
+          <th>名称</th>
+          <th>类型</th>
+          <th>状态</th>
+          <th>触发事件</th>
+          <th>时间</th>
+          <th>版本</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${items.map(item => `
+          <tr onclick="renderActivityDetail('${escapeJs(item.id)}')" style="cursor:pointer">
+            <td>${escapeHtml(item.activityCode || '-')}</td>
+            <td>${escapeHtml(item.activityName || '-')}</td>
+            <td>${escapeHtml(item.activityType || '-')}</td>
+            <td>${badge(item.status || '-', statusTone(item.status || ''))}</td>
+            <td>${escapeHtml((item.triggerEvents || []).join(', ') || '-')}</td>
+            <td>${escapeHtml(formatRange(item.startTime, item.endTime, item.timezone))}</td>
+            <td>${escapeHtml(String(item.version ?? '-'))}</td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+  `;
+}
+
+function renderActivityDetail(id) {
+  const item = adminActivities.find(activity => activity.id === id);
+  const target = document.getElementById('activityDetail');
+  if (!item || !target) return;
+  const rules = item.rules || [];
+  const rewards = item.rewards || [];
+  target.innerHTML = `
+    ${renderQuotaBoundary()}
+    <div class="summary">
+      ${metric('tenant', item.tenantId || '-')}
+      ${metric('优先级', String(item.priority ?? '-'))}
+      ${metric('互斥组', item.exclusiveGroup || '-')}
+      ${metric('可叠加', item.stackable ? 'true' : 'false')}
+    </div>
+    <div class="readonly-box">
+      <strong>${escapeHtml(item.activityCode || item.id)}</strong><br>
+      ${escapeHtml(item.activityName || '')}<br>
+      ${escapeHtml(formatRange(item.startTime, item.endTime, item.timezone))}
+    </div>
+    <h3 class="panel-title">规则配置</h3>
+    ${rules.length ? renderSmallTable(rules, ['ruleCode', 'rulePhase', 'ruleType', 'sort', 'enabled', 'version']) : '<div class="empty">后端返回中没有规则。</div>'}
+    <h3 class="panel-title" style="margin-top:14px">奖励配置</h3>
+    ${rewards.length ? renderSmallTable(rewards, ['rewardCode', 'rewardType', 'calculateType', 'grantMode', 'grantChannel', 'enabled', 'version']) : '<div class="empty">后端返回中没有奖励。</div>'}
+    <h3 class="panel-title" style="margin-top:14px">原始返回</h3>
+    <pre class="output">${escapeHtml(JSON.stringify(item, null, 2))}</pre>
+  `;
+}
+
+function renderQuotaBoundary() {
+  return '<div class="readonly-box">完整 quota 查询 API 未接入本期页面；缺失 quota 行按 unlimited 展示，创建结果以后端返回为准。</div>';
+}
+
+function renderSmallTable(items, fields) {
+  return `
+    <table class="admin-table">
+      <thead><tr>${fields.map(field => `<th>${escapeHtml(field)}</th>`).join('')}</tr></thead>
+      <tbody>
+        ${items.map(item => `<tr>${fields.map(field => `<td>${escapeHtml(formatValue(item[field]))}</td>`).join('')}</tr>`).join('')}
+      </tbody>
+    </table>
+  `;
+}
+
+function metric(label, value) {
+  return `<div class="metric"><div class="metric-label">${escapeHtml(label)}</div><div class="metric-value">${escapeHtml(value)}</div></div>`;
+}
+
+async function createActivityFromAdmin() {
+  await postJson('/admin/v1/activities', 'activity', 'activityResult');
+  await loadActivities();
 }
 
 async function postJson(url, inputId, outputId) {
-  const res = await fetch(url, {method: 'POST', headers: {'content-type': 'application/json'}, body: document.getElementById(inputId).value});
-  document.getElementById(outputId).textContent = JSON.stringify(await res.json(), null, 2);
+  const target = document.getElementById(outputId);
+  try {
+    JSON.parse(document.getElementById(inputId).value || '{}');
+  } catch (err) {
+    target.textContent = 'JSON 解析失败: ' + err.message;
+    target.style.color = '#fecaca';
+    return;
+  }
+  const data = await requestJson(url, {method: 'POST', body: document.getElementById(inputId).value});
+  target.textContent = 'HTTP ' + data.status + '\n' + JSON.stringify(data.body, null, 2);
+  target.style.color = data.ok ? '#e5e7eb' : '#fecaca';
+}
+
+async function loadAudit() {
+  const params = new URLSearchParams();
+  addQuery(params, 'tenantId', valueOf('auditTenant'));
+  addQuery(params, 'actor', valueOf('auditActor'));
+  addQuery(params, 'action', valueOf('auditAction'));
+  addQuery(params, 'limit', valueOf('auditLimit'));
+  const data = await requestJson('/admin/v1/audit?' + params.toString());
+  writeResult('auditResult', data);
+}
+
+async function loadReconciliation() {
+  let query = {};
+  try {
+    query = JSON.parse(valueOf('reconQuery') || '{}');
+  } catch (err) {
+    document.getElementById('reconciliationResult').textContent = 'JSON 解析失败: ' + err.message;
+    return;
+  }
+  const params = new URLSearchParams();
+  addQuery(params, 'tenantId', valueOf('reconTenant'));
+  addQuery(params, 'limit', valueOf('reconLimit'));
+  for (const [key, value] of Object.entries(query)) addQuery(params, key, value);
+  const data = await requestJson('/admin/v1/reward/reconciliation?' + params.toString());
+  writeResult('reconciliationResult', data);
+}
+
+async function loadDLQ() {
+  const params = new URLSearchParams();
+  addQuery(params, 'tenantId', valueOf('dlqTenant'));
+  addQuery(params, 'limit', valueOf('dlqLimit'));
+  if (document.getElementById('dlqClosed').checked) addQuery(params, 'includeClosed', 'true');
+  const data = await requestJson('/admin/v1/outbox/dlq?' + params.toString());
+  writeResult('dlqResult', data);
+}
+
+async function operateDLQ(action) {
+  const id = valueOf('dlqId');
+  if (!id) {
+    document.getElementById('dlqResult').textContent = 'outboxId 不能为空';
+    return;
+  }
+  const body = {
+    tenantId: valueOf('dlqTenant'),
+    operator: valueOf('dlqOperator'),
+    reason: valueOf('dlqReason')
+  };
+  const data = await requestJson('/admin/v1/outbox/' + encodeURIComponent(id) + '/' + action, {
+    method: 'POST',
+    body: JSON.stringify(body)
+  });
+  writeResult('dlqResult', data);
+}
+
+function writeResult(id, data) {
+  const target = document.getElementById(id);
+  target.textContent = 'HTTP ' + data.status + '\n' + JSON.stringify(data.body, null, 2);
+  target.style.color = data.ok ? '#e5e7eb' : '#fecaca';
+}
+
+function addQuery(params, key, value) {
+  if (value !== undefined && value !== null && String(value).trim() !== '') params.set(key, String(value));
+}
+
+function valueOf(id) {
+  return (document.getElementById(id)?.value || '').trim();
+}
+
+function formatRange(start, end, timezone) {
+  return [start || '-', end || '-', timezone || ''].filter(Boolean).join(' / ');
+}
+
+function formatValue(value) {
+  if (value === undefined || value === null || value === '') return '-';
+  if (Array.isArray(value)) return value.join(', ');
+  if (typeof value === 'object') return JSON.stringify(value);
+  return String(value);
+}
+
+function setJsonSample(id, value) {
+  const target = document.getElementById(id);
+  if (target) target.value = JSON.stringify(value, null, 2);
+}
+
+function fillActivitySample() {
+  setJsonSample('activity', {
+    operator: 'ops',
+    tenantId: 'site_001',
+    activityCode: 'GENERIC_RATIO_BONUS',
+    activityName: 'Generic Ratio Bonus',
+    activityType: 'DEPOSIT_BONUS',
+    status: 'ACTIVE',
+    triggerEvents: ['DEPOSIT_SUCCESS'],
+    startTime: '2026-05-24T00:00:00Z',
+    endTime: '2026-06-24T00:00:00Z',
+    timezone: 'UTC',
+    priority: 100,
+    exclusiveGroup: 'deposit_bonus',
+    stackable: false,
+    rules: [
+      {
+        ruleCode: 'AMOUNT_QUALIFY',
+        rulePhase: 'QUALIFY',
+        ruleType: 'CONDITION',
+        ruleConfig: {
+          logic: 'AND',
+          conditions: [
+            {field: 'attributes.amount', op: '>=', value: '100.00'}
+          ]
+        },
+        sort: 1,
+        enabled: true,
+        version: 1
+      }
+    ],
+    rewards: [
+      {
+        rewardCode: 'RATIO_BONUS',
+        rewardType: 'BONUS',
+        calculateType: 'RATIO',
+        rewardConfig: {
+          baseField: 'attributes.amount',
+          rate: '0.20',
+          maxAmount: '500.00',
+          currency: 'CNY',
+          targetRef: 'https://wallet.example.com/reward'
+        },
+        grantMode: 'AUTO',
+        grantChannel: 'HTTP',
+        enabled: true,
+        version: 1
+      }
+    ]
+  });
+}
+
+function fillQuotaSample() {
+  setJsonSample('quota', {
+    operator: 'ops',
+    tenantId: 'site_001',
+    activityId: 'act_xxx',
+    quotaType: 'BUDGET',
+    scope: 'ACTIVITY',
+    scopeKey: 'TOTAL',
+    totalValue: '10000.00'
+  });
+}
+
+function fillEventSample() {
+  setJsonSample('event', {
+    eventId: 'evt_sim_001',
+    eventType: 'DEPOSIT_SUCCESS',
+    sourceSystem: 'payment',
+    tenantId: 'site_001',
+    subject: {type: 'USER', id: '10001'},
+    biz: {bizType: 'DEPOSIT', bizId: 'pay_sim_001'},
+    occurredAt: '2026-05-24T12:00:00Z',
+    attributes: {
+      amount: '299.00',
+      currency: 'CNY',
+      isFirstDeposit: true
+    }
+  });
+}
+
+function fillReconciliationSample() {
+  setJsonSample('reconQuery', {activityId: 'act_xxx'});
+}
+
+function fillFactSample() {
+  setJsonSample('factQuery', {
+    provider: {
+      factCode: 'USER_PROFILE',
+      provider: 'HTTP',
+      endpoint: 'https://member.example.com/openapi/user/profile',
+      method: 'POST',
+      cacheTtlSeconds: 300
+    },
+    event: {
+      eventId: 'evt_fact_001',
+      eventType: 'DEPOSIT_SUCCESS',
+      sourceSystem: 'payment',
+      tenantId: 'site_001',
+      subject: {type: 'USER', id: '10001'},
+      biz: {bizType: 'DEPOSIT', bizId: 'pay_fact_001'},
+      occurredAt: '2026-05-24T12:00:00Z',
+      attributes: {}
+    }
+  });
+}
+
+function fillCallbackSample() {
+  setJsonSample('callback', {
+    tenantId: 'site_001',
+    commandId: 'cmd_xxx',
+    status: 'SUCCESS',
+    externalGrantId: 'wallet_bill_888',
+    message: 'granted',
+    finishedAt: '2026-05-24T12:00:03Z'
+  });
 }
 
 async function requestJson(url, options = {}) {
@@ -2525,6 +3096,12 @@ function cssEscape(value) {
   return String(value ?? '').replace(/["\\]/g, '\\$&');
 }
 
+fillActivitySample();
+fillQuotaSample();
+fillEventSample();
+fillReconciliationSample();
+fillFactSample();
+fillCallbackSample();
 loadWorkflow();
 </script>
 </body>

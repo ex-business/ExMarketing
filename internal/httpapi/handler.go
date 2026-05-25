@@ -35,6 +35,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /admin/v1/outbox/dlq", h.listOutboxDLQ)
 	mux.HandleFunc("POST /admin/v1/outbox/{id}/replay", h.replayOutboxDLQ)
 	mux.HandleFunc("POST /admin/v1/outbox/{id}/close", h.closeOutboxDLQ)
+	mux.HandleFunc("GET /admin/v1/reward/reconciliation", h.listRewardReconciliation)
 	mux.HandleFunc("POST /admin/v1/simulate", h.simulate)
 	mux.HandleFunc("GET /admin/v1/workflow/requirements", h.listWorkflowRequirements)
 	mux.HandleFunc("GET /admin/v1/workflow/config", h.getWorkflowConfig)
@@ -47,6 +48,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("DELETE /admin/v1/workflow/requirements/{id}", h.deleteWorkflowRequirement)
 	mux.HandleFunc("POST /admin/v1/workflow/requirements/{id}/run-agent", h.runWorkflowAgent)
 	mux.HandleFunc("POST /admin/v1/workflow/requirements/{id}/run-pipeline", h.runWorkflowPipeline)
+	mux.HandleFunc("POST /admin/v1/workflow/requirements/{id}/stop-agent", h.stopWorkflowAgent)
 	mux.HandleFunc("GET /admin/v1/workflow/requirements/{id}/logs/{agent}", h.getWorkflowAgentLog)
 	mux.HandleFunc("GET /admin/v1/workflow/requirements/{id}/runs/{runID}", h.getWorkflowRunLog)
 	mux.HandleFunc("GET /admin/v1/git/diff", h.getGitDiff)
@@ -138,6 +140,20 @@ func (h *Handler) replayOutboxDLQ(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) closeOutboxDLQ(w http.ResponseWriter, r *http.Request) {
 	h.handleOutboxDLQOperation(w, r, h.engine.CloseOutboxDLQ)
+}
+
+func (h *Handler) listRewardReconciliation(w http.ResponseWriter, r *http.Request) {
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	items, err := h.engine.ListRewardReconciliation(r.Context(), marketing.RewardReconciliationQuery{
+		TenantID:  r.URL.Query().Get("tenantId"),
+		CommandID: r.URL.Query().Get("commandId"),
+		Limit:     limit,
+	})
+	if err != nil {
+		writeErrorCode(w, http.StatusBadRequest, "INVALID_RECONCILIATION_REQUEST", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
 func (h *Handler) handleOutboxDLQOperation(w http.ResponseWriter, r *http.Request, operation func(context.Context, string, marketing.DLQOperationCommand) (marketing.OutboxMessage, error)) {
@@ -238,15 +254,40 @@ func (h *Handler) rewardCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.engine.ApplyRewardCallback(r.Context(), callback); err != nil {
+	result, err := h.engine.ApplyRewardCallback(r.Context(), callback)
+	if err != nil {
 		if errors.Is(err, marketing.ErrNotFound) {
-			writeError(w, http.StatusNotFound, err.Error())
+			writeErrorCode(w, http.StatusNotFound, "GRANT_ORDER_NOT_FOUND", err.Error())
 			return
 		}
-		writeError(w, http.StatusBadRequest, err.Error())
+		if errors.Is(err, marketing.ErrInvalidCallback) {
+			writeErrorCode(w, http.StatusBadRequest, "INVALID_CALLBACK_REQUEST", err.Error())
+			return
+		}
+		if errors.Is(err, marketing.ErrCallbackConflict) {
+			writeErrorCode(w, http.StatusConflict, "CALLBACK_STATUS_CONFLICT", err.Error())
+			return
+		}
+		if errors.Is(err, marketing.ErrGrantOrderClosed) {
+			writeErrorCode(w, http.StatusConflict, "GRANT_ORDER_CLOSED", err.Error())
+			return
+		}
+		if errors.Is(err, marketing.ErrQuotaReservationMissing) {
+			writeErrorCode(w, http.StatusConflict, "QUOTA_RESERVATION_MISSING", err.Error())
+			return
+		}
+		if errors.Is(err, marketing.ErrQuotaReservationConflict) {
+			writeErrorCode(w, http.StatusConflict, "QUOTA_RESERVATION_CONFLICT", err.Error())
+			return
+		}
+		if errors.Is(err, marketing.ErrQuotaAggregateConflict) {
+			writeErrorCode(w, http.StatusConflict, "QUOTA_AGGREGATE_CONFLICT", err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (h *Handler) queryFacts(w http.ResponseWriter, r *http.Request) {

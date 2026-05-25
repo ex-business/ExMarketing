@@ -227,6 +227,12 @@ func (r *workerTestRepo) CreateGrantOrder(context.Context, marketing.GrantOrder)
 func (r *workerTestRepo) UpdateGrantOrderByCommandID(context.Context, string, string, marketing.GrantStatus, string) error {
 	panic("not implemented")
 }
+func (r *workerTestRepo) ApplyRewardCallback(context.Context, marketing.RewardCallback) (marketing.RewardCallbackResult, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) ListRewardReconciliation(context.Context, marketing.RewardReconciliationQuery) ([]marketing.RewardReconciliationItem, error) {
+	panic("not implemented")
+}
 func (r *workerTestRepo) CreateOutbox(context.Context, marketing.OutboxMessage) (marketing.OutboxMessage, error) {
 	panic("not implemented")
 }

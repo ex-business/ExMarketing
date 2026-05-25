@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/ex-stack/ExMarketing/internal/workflow"
@@ -345,6 +346,12 @@ func (h *Handler) runWorkflowAgent(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		if agent == workflow.AgentAnalysis {
+			if _, err := workflow.AutoSupplementRequirement(*item); err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+		}
 		run, err := workflow.RunAgent(*item, agent, request.Command)
 		if err != nil {
 			if agent == workflow.AgentCommit {
@@ -480,6 +487,60 @@ func (h *Handler) runWorkflowPipeline(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (h *Handler) stopWorkflowAgent(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	backlog, err := workflow.Load(workflowBacklogPath)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	for i := range backlog.Items {
+		item := &backlog.Items[i]
+		if item.ID != id {
+			continue
+		}
+		status, err := workflow.EnsureAgentStatus(*item)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		for _, agent := range []workflow.Agent{workflow.AgentAnalysis, workflow.AgentReview, workflow.AgentTestPlan, workflow.AgentDev, workflow.AgentTest, workflow.AgentCommit} {
+			current := status.Agents[string(agent)]
+			if current.Status != workflow.AgentStatusRunning {
+				continue
+			}
+			if current.PID <= 0 {
+				if err := workflow.MarkAgentInterrupted(*item, agent, "agent stopped: missing process id"); err != nil {
+					writeError(w, http.StatusInternalServerError, err.Error())
+					return
+				}
+				writeJSON(w, http.StatusOK, map[string]any{"requirement": item, "agent": agent, "stopped": false, "message": "running status interrupted; pid is missing"})
+				return
+			}
+			if err := syscall.Kill(current.PID, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			reason := fmt.Sprintf("agent stopped by user: pid %d", current.PID)
+			if err := workflow.MarkAgentInterrupted(*item, agent, reason); err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			item.UpdatedAt = time.Now().UTC()
+			if err := workflow.Save(workflowBacklogPath, backlog); err != nil {
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			_ = workflow.WriteAgentReport(*item, nil, item.Status, reason)
+			writeJSON(w, http.StatusOK, map[string]any{"requirement": item, "agent": agent, "pid": current.PID, "stopped": true, "message": reason})
+			return
+		}
+		writeError(w, http.StatusBadRequest, "no running agent")
+		return
+	}
+	writeError(w, http.StatusNotFound, "requirement not found")
+}
+
 type pipelineError struct {
 	StatusCode  int
 	Message     string
@@ -497,6 +558,10 @@ func runRequirementPipeline(backlog *workflow.Backlog, item *workflow.Requiremen
 	runs := make([]workflow.AgentRun, 0, request.MaxSteps)
 	message := "自动流水线运行完成。"
 	for step := 0; step < request.MaxSteps; step++ {
+		if needsHumanRequirementInput(item.Status) {
+			message = "需求需要人工补充或重新细化，已停止自动继续执行。"
+			break
+		}
 		if item.Status == workflow.StatusReviewPass {
 			parallelRuns, nextStatus, err := runReviewPassParallel(*item, request.Command)
 			runs = append(runs, parallelRuns...)
@@ -520,6 +585,11 @@ func runRequirementPipeline(backlog *workflow.Backlog, item *workflow.Requiremen
 		if err != nil {
 			message = err.Error()
 			break
+		}
+		if agent == workflow.AgentAnalysis {
+			if _, err := workflow.AutoSupplementRequirement(*item); err != nil {
+				return runs, message, &pipelineError{StatusCode: http.StatusInternalServerError, Message: err.Error()}
+			}
 		}
 		run, err := workflow.RunAgent(*item, agent, request.Command)
 		if err != nil {
@@ -558,6 +628,10 @@ func runRequirementPipeline(backlog *workflow.Backlog, item *workflow.Requiremen
 		item.UpdatedAt = time.Now().UTC()
 		if err := workflow.Save(workflowBacklogPath, *backlog); err != nil {
 			return runs, message, &pipelineError{StatusCode: http.StatusInternalServerError, Message: err.Error()}
+		}
+		if needsHumanRequirementInput(item.Status) {
+			message = "需求需要人工补充或重新细化，已停止自动继续执行。"
+			break
 		}
 		if item.Status == workflow.StatusCommitted {
 			break
@@ -607,6 +681,9 @@ func isRunnableRequirement(item workflow.Requirement) bool {
 	if item.TaskDir == "" {
 		return false
 	}
+	if needsHumanRequirementInput(item.Status) {
+		return false
+	}
 	if _, err := workflow.ResolveAgent(item.Status, workflow.AgentAuto); err != nil {
 		return false
 	}
@@ -620,6 +697,10 @@ func isRunnableRequirement(item workflow.Requirement) bool {
 		}
 	}
 	return true
+}
+
+func needsHumanRequirementInput(status string) bool {
+	return status == workflow.StatusAnalysisFail || status == workflow.StatusReviewBlock
 }
 
 func runReviewPassParallel(item workflow.Requirement, command string) ([]workflow.AgentRun, string, error) {

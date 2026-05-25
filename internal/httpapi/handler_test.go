@@ -522,6 +522,119 @@ func TestActivityEventStockExceededReturnsConflictAndNoRewardableResult(t *testi
 	}
 }
 
+func TestRewardCallbackSuccessConfirmsQuotaAndIsIdempotent(t *testing.T) {
+	handler := newTestHandler()
+	activityID := createActivity(t, handler)
+	createQuota(t, handler, activityID, marketing.QuotaBudget, marketing.QuotaScopeActivity, "TOTAL", "100")
+	createQuota(t, handler, activityID, marketing.QuotaStock, marketing.QuotaScopeActivity, "FIRST_DEPOSIT_RATIO", "10")
+
+	eventRec := postDepositEvent(t, handler, "evt_callback_success", "pay_callback_success")
+	if eventRec.Code != http.StatusAccepted {
+		t.Fatalf("expected event accepted, got %d: %s", eventRec.Code, eventRec.Body.String())
+	}
+	var eventResult marketing.ProcessEventResult
+	if err := json.Unmarshal(eventRec.Body.Bytes(), &eventResult); err != nil {
+		t.Fatalf("decode event result: %v", err)
+	}
+	commandID := eventResult.GrantOrders[0].BillNo
+
+	rec := postRewardCallback(t, handler, `{
+		"tenantId": "site_001",
+		"commandId": "`+commandID+`",
+		"status": "SUCCESS",
+		"externalGrantId": "wallet_001",
+		"message": "paid",
+		"finishedAt": "2026-05-24T12:05:00Z"
+	}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected callback OK, got %d: %s", rec.Code, rec.Body.String())
+	}
+	for _, want := range []string{`"grantStatus":"SUCCESS"`, `"participationStatus":"GRANTED"`, `"reservationStatus":"CONFIRMED"`} {
+		if !strings.Contains(rec.Body.String(), want) {
+			t.Fatalf("expected %s, got: %s", want, rec.Body.String())
+		}
+	}
+
+	rec = postRewardCallback(t, handler, `{
+		"tenantId": "site_001",
+		"commandId": "`+commandID+`",
+		"status": "SUCCESS",
+		"externalGrantId": "wallet_001",
+		"message": "paid again",
+		"finishedAt": "2026-05-24T12:06:00Z"
+	}`)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"duplicate":true`) {
+		t.Fatalf("expected duplicate success callback, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	reconcile := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(reconcile, httptest.NewRequest(http.MethodGet, "/admin/v1/reward/reconciliation?tenantId=site_001&commandId="+commandID, nil))
+	if reconcile.Code != http.StatusOK {
+		t.Fatalf("expected reconciliation OK, got %d: %s", reconcile.Code, reconcile.Body.String())
+	}
+	for _, want := range []string{`"commandId":"` + commandID + `"`, `"externalGrantId":"wallet_001"`, `"grantStatus":"SUCCESS"`, `"reservationStatus":"CONFIRMED"`} {
+		if !strings.Contains(reconcile.Body.String(), want) {
+			t.Fatalf("expected reconciliation %s, got: %s", want, reconcile.Body.String())
+		}
+	}
+}
+
+func TestRewardCallbackFailedReleasesQuotaAndRejectsConflictAndUnknown(t *testing.T) {
+	handler := newTestHandler()
+	activityID := createActivity(t, handler)
+	createQuota(t, handler, activityID, marketing.QuotaBudget, marketing.QuotaScopeActivity, "TOTAL", "100")
+	createQuota(t, handler, activityID, marketing.QuotaStock, marketing.QuotaScopeActivity, "FIRST_DEPOSIT_RATIO", "10")
+
+	eventRec := postDepositEvent(t, handler, "evt_callback_failed", "pay_callback_failed")
+	if eventRec.Code != http.StatusAccepted {
+		t.Fatalf("expected event accepted, got %d: %s", eventRec.Code, eventRec.Body.String())
+	}
+	var eventResult marketing.ProcessEventResult
+	if err := json.Unmarshal(eventRec.Body.Bytes(), &eventResult); err != nil {
+		t.Fatalf("decode event result: %v", err)
+	}
+	commandID := eventResult.GrantOrders[0].BillNo
+
+	rec := postRewardCallback(t, handler, `{
+		"tenantId": "site_001",
+		"commandId": "`+commandID+`",
+		"status": "FAILED",
+		"message": "wallet rejected",
+		"finishedAt": "2026-05-24T12:05:00Z"
+	}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected failed callback OK, got %d: %s", rec.Code, rec.Body.String())
+	}
+	for _, want := range []string{`"grantStatus":"FAILED"`, `"participationStatus":"FAILED"`, `"reservationStatus":"RELEASED"`} {
+		if !strings.Contains(rec.Body.String(), want) {
+			t.Fatalf("expected %s, got: %s", want, rec.Body.String())
+		}
+	}
+
+	conflict := postRewardCallback(t, handler, `{
+		"tenantId": "site_001",
+		"commandId": "`+commandID+`",
+		"status": "SUCCESS",
+		"externalGrantId": "wallet_late",
+		"message": "late success",
+		"finishedAt": "2026-05-24T12:06:00Z"
+	}`)
+	if conflict.Code != http.StatusConflict || !strings.Contains(conflict.Body.String(), `"code":"CALLBACK_STATUS_CONFLICT"`) {
+		t.Fatalf("expected conflict response, got %d: %s", conflict.Code, conflict.Body.String())
+	}
+
+	unknown := postRewardCallback(t, handler, `{
+		"tenantId": "site_001",
+		"commandId": "cmd_unknown",
+		"status": "FAILED",
+		"message": "not found",
+		"finishedAt": "2026-05-24T12:05:00Z"
+	}`)
+	if unknown.Code != http.StatusNotFound || !strings.Contains(unknown.Body.String(), `"code":"GRANT_ORDER_NOT_FOUND"`) {
+		t.Fatalf("expected unknown command response, got %d: %s", unknown.Code, unknown.Body.String())
+	}
+}
+
 func TestOutboxDLQQueryReplayAndClose(t *testing.T) {
 	repo := marketing.NewMemoryRepository()
 	handler := NewHandler(engine.NewService(repo))
@@ -1158,6 +1271,14 @@ func postRawEvent(t *testing.T, handler *Handler, event string, idempotencyKey s
 	if idempotencyKey != "" {
 		req.Header.Set("Idempotency-Key", idempotencyKey)
 	}
+	rec := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(rec, req)
+	return rec
+}
+
+func postRewardCallback(t *testing.T, handler *Handler, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/openapi/v1/reward/callback", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	handler.Routes().ServeHTTP(rec, req)
 	return rec

@@ -94,11 +94,11 @@ func TestMemoryAtomicGrantDoesNotDoubleReserveOnDuplicateInbox(t *testing.T) {
 		t.Fatalf("expected no duplicate grants/outbox, grants=%d outbox=%d", len(repo.grantOrders), len(repo.outboxMessages))
 	}
 	for _, quota := range repo.quotas {
-		if quota.Type == QuotaBudget && quota.UsedValue != "20.0000" {
-			t.Fatalf("expected budget used 20, got %s", quota.UsedValue)
+		if quota.Type == QuotaBudget && quota.FrozenValue != "20.0000" {
+			t.Fatalf("expected budget frozen 20, got %s", quota.FrozenValue)
 		}
-		if quota.Type == QuotaStock && quota.UsedValue != "1.0000" {
-			t.Fatalf("expected stock used 1, got %s", quota.UsedValue)
+		if quota.Type == QuotaStock && quota.FrozenValue != "1.0000" {
+			t.Fatalf("expected stock frozen 1, got %s", quota.FrozenValue)
 		}
 	}
 }
@@ -188,8 +188,8 @@ func TestMemoryConcurrentDuplicateGrantRequestOnlyProcessesOnce(t *testing.T) {
 	if len(repo.participations) != 1 || len(repo.grantOrders) != 1 || len(repo.outboxMessages) != 1 {
 		t.Fatalf("expected one persisted grant chain, participations=%d grants=%d outbox=%d", len(repo.participations), len(repo.grantOrders), len(repo.outboxMessages))
 	}
-	assertMemoryQuotaUsed(t, repo, activityID, QuotaBudget, QuotaScopeActivity, "TOTAL", "10.0000")
-	assertMemoryQuotaUsed(t, repo, activityID, QuotaStock, QuotaScopeActivity, "REWARD_A", "1.0000")
+	assertMemoryQuotaFrozen(t, repo, activityID, QuotaBudget, QuotaScopeActivity, "TOTAL", "10.0000")
+	assertMemoryQuotaFrozen(t, repo, activityID, QuotaStock, QuotaScopeActivity, "REWARD_A", "1.0000")
 }
 
 func TestMemoryConcurrentQuotaCompetitionDoesNotOverReserve(t *testing.T) {
@@ -241,8 +241,8 @@ func TestMemoryConcurrentQuotaCompetitionDoesNotOverReserve(t *testing.T) {
 	if len(repo.participations) != 1 || len(repo.grantOrders) != 1 || len(repo.outboxMessages) != 1 {
 		t.Fatalf("expected one persisted grant chain, participations=%d grants=%d outbox=%d", len(repo.participations), len(repo.grantOrders), len(repo.outboxMessages))
 	}
-	assertMemoryQuotaUsed(t, repo, activityID, QuotaBudget, QuotaScopeActivity, "TOTAL", "1.0000")
-	assertMemoryQuotaUsed(t, repo, activityID, QuotaStock, QuotaScopeActivity, "REWARD_A", "1.0000")
+	assertMemoryQuotaFrozen(t, repo, activityID, QuotaBudget, QuotaScopeActivity, "TOTAL", "1.0000")
+	assertMemoryQuotaFrozen(t, repo, activityID, QuotaStock, QuotaScopeActivity, "REWARD_A", "1.0000")
 }
 
 func TestMemoryCreateInboxDetectsDuplicateAndConflict(t *testing.T) {
@@ -365,12 +365,12 @@ func testAtomicOutbox(id string, now time.Time) OutboxMessage {
 	}
 }
 
-func assertMemoryQuotaUsed(t *testing.T, repo *MemoryRepository, activityID string, quotaType QuotaType, scope QuotaScope, scopeKey string, want string) {
+func assertMemoryQuotaFrozen(t *testing.T, repo *MemoryRepository, activityID string, quotaType QuotaType, scope QuotaScope, scopeKey string, want string) {
 	t.Helper()
 	for _, quota := range repo.quotas {
 		if quota.ActivityID == activityID && quota.Type == quotaType && quota.Scope == scope && quota.ScopeKey == scopeKey {
-			if quota.UsedValue != want {
-				t.Fatalf("expected quota %s/%s/%s used %s, got %s", quotaType, scope, scopeKey, want, quota.UsedValue)
+			if quota.FrozenValue != want {
+				t.Fatalf("expected quota %s/%s/%s frozen %s, got %s", quotaType, scope, scopeKey, want, quota.FrozenValue)
 			}
 			return
 		}

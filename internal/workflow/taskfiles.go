@@ -46,6 +46,126 @@ func EnsureTaskFiles(req Requirement) error {
 	return os.WriteFile(filepath.Join(req.TaskDir, "agent-prompts.md"), []byte(renderAgentPrompts(req)), 0o644)
 }
 
+func AutoSupplementRequirement(req Requirement) (bool, error) {
+	if req.TaskDir == "" {
+		return false, fmt.Errorf("taskDir is required")
+	}
+	path := filepath.Join(req.TaskDir, "task.md")
+	bytes, err := os.ReadFile(path)
+	if err != nil {
+		return false, err
+	}
+	content := string(bytes)
+	if hasOwnerDecisionSection(content) {
+		return false, nil
+	}
+	supplement, ok := defaultOwnerDecisionSupplement(req, content)
+	if !ok {
+		return false, nil
+	}
+	next := strings.TrimRight(content, "\n") + "\n\n" + supplement + "\n"
+	if err := os.WriteFile(path, []byte(next), 0o644); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func hasOwnerDecisionSection(content string) bool {
+	return strings.Contains(content, "## Owner 补充决策") ||
+		strings.Contains(content, "## Owner 决策") ||
+		strings.Contains(content, "## 业主补充决策")
+}
+
+func defaultOwnerDecisionSupplement(req Requirement, taskContent string) (string, bool) {
+	haystack := strings.ToLower(req.ID + "\n" + req.Title + "\n" + req.Description + "\n" + taskContent)
+	if strings.Contains(haystack, "outbox") && strings.Contains(haystack, "dlq") &&
+		(strings.Contains(haystack, "http/mq/webhook") || strings.Contains(haystack, "mq/webhook")) {
+		return outboxDLQOwnerDecisionSupplement(), true
+	}
+	return "", false
+}
+
+func outboxDLQOwnerDecisionSupplement() string {
+	return `## Owner 补充决策
+
+### 本期范围
+
+本期只实现 HTTP / Webhook Outbox Worker。
+
+MQ Command Out 不在本期实现范围内，拆分为后续独立任务。本期如果遇到 ` + "`target_channel = MQ`" + `，不进行投递，不把 MQ sender / MQ retry / MQ DLQ / MQ replay / MQ close 作为本任务验收项。
+
+### 重试策略
+
+Outbox Worker 使用指数退避重试。
+
+默认参数：
+
+- 最大重试失败次数：5 次。
+- 初始延迟：30 秒。
+- 退避倍率：2。
+- 最大延迟：30 分钟。
+- jitter：允许正负 20% 抖动，避免集中重试。
+- 时间基准：以本次发送失败写入时间作为下一次 ` + "`next_retry_at`" + ` 的计算基准。
+- 验收容差：` + "`next_retry_at`" + ` 允许正负 2 秒的测试容差，jitter 验收只校验落在允许区间内。
+
+每次失败必须更新：
+
+- ` + "`retry_count`" + `
+- ` + "`next_retry_at`" + `
+- ` + "`error_message`" + `
+- ` + "`updated_at`" + `
+
+可重试失败：
+
+- 网络连接失败。
+- DNS / TLS 错误。
+- 请求超时。
+- HTTP 408。
+- HTTP 429。
+- HTTP 5xx。
+
+不可重试失败：
+
+- HTTP 400 / 401 / 403 / 404 / 409 / 422：视为业务或配置错误，直接进入 DLQ。
+- payload 格式错误：直接进入 DLQ。
+- ` + "`target_ref`" + ` 非法：直接进入 DLQ。
+
+HTTP 2xx 视为发送成功。本期不校验响应体业务字段。
+
+HTTP 429 如果存在 ` + "`Retry-After`" + `，优先使用 ` + "`Retry-After`" + `；如果不存在或不可解析，则使用指数退避。
+
+达到最大重试失败次数后进入 DLQ，自动投递停止。
+
+### DLQ 状态语义
+
+Outbox 增加机器可判定的关闭语义，使用明确状态 ` + "`DLQ_CLOSED`" + ` 表示人工关闭后的最终状态。
+
+状态流转：
+
+` + "```text" + `
+PENDING -> SENDING -> SENT
+PENDING -> SENDING -> FAILED -> PENDING
+FAILED -> DLQ
+DLQ -> PENDING      # replay
+DLQ -> DLQ_CLOSED   # close
+` + "```" + `
+
+规则：
+
+- ` + "`DLQ`" + ` 可以 replay。
+- ` + "`DLQ_CLOSED`" + ` 不允许 replay。
+- close 只允许对 ` + "`DLQ`" + ` 执行。
+- replay 只允许对 ` + "`DLQ`" + ` 执行。
+- close 必须记录 operator、reason、closed_at。
+- replay 必须记录 operator、reason、replayed_at。
+- replay 不重新执行活动规则、奖励计算、quota 扣减、participation 创建、grant_order 创建。
+- replay 只重新发送原 outbox payload。
+- retry / replay 必须复用原 ` + "`commandId`" + ` / ` + "`bill_no`" + `，依赖外部发奖系统幂等。
+- replay 后如果再次失败，继续按同一重试和 DLQ 规则处理。
+- close 与自动重试并发时，以状态条件更新为准；只有当前仍为 ` + "`DLQ`" + ` 才允许 close 成功。
+- replay 与自动重试并发时，以状态条件更新为准；只有当前仍为 ` + "`DLQ`" + ` 才允许 replay 成功。`
+}
+
 func writeFileIfMissing(path, content string) error {
 	if _, err := os.Stat(path); err == nil {
 		return nil

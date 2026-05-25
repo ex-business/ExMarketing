@@ -413,6 +413,54 @@ POST /admin/v1/outbox/{id}/close
 - `operator` 和 `reason` 必填。
 - 操作会写入 `marketing_audit`。
 
+## 发奖回调与对账
+
+```http
+POST /openapi/v1/reward/callback
+```
+
+请求：
+
+```json
+{
+  "tenantId": "site_001",
+  "commandId": "cmd_xxx",
+  "status": "SUCCESS",
+  "externalGrantId": "wallet_001",
+  "message": "paid",
+  "finishedAt": "2026-05-24T12:05:00Z"
+}
+```
+
+规则：
+
+- `tenantId + commandId` 唯一定位 `marketing_grant_order`，不会跨 tenant 更新。
+- `status` 只接受 `SUCCESS` / `FAILED`；`SUCCESS` 必须提供 `externalGrantId`。
+- 首次 `SUCCESS` 会把该 grant_order 关联的 quota reservation 从 `FROZEN` 置为 `CONFIRMED`，并将 quota 聚合从 `frozen_value` 转入 `used_value`。
+- 首次 `FAILED` 会把该 grant_order 关联的 quota reservation 从 `FROZEN` 置为 `RELEASED`，并释放 quota 聚合 `frozen_value`。
+- 相同最终态的重复回调返回 `duplicate=true`，不会重复确认或释放。
+- 相反最终态、`externalGrantId` 冲突、缺少 reservation 或 quota 聚合不一致会返回机器可识别错误。
+
+错误码：
+
+```text
+400  INVALID_CALLBACK_REQUEST
+404  GRANT_ORDER_NOT_FOUND
+409  CALLBACK_STATUS_CONFLICT
+409  GRANT_ORDER_CLOSED
+409  QUOTA_RESERVATION_MISSING
+409  QUOTA_RESERVATION_CONFLICT
+409  QUOTA_AGGREGATE_CONFLICT
+```
+
+对账查询：
+
+```http
+GET /admin/v1/reward/reconciliation?tenantId=site_001&commandId=cmd_xxx
+```
+
+返回 grant_order、participation 状态、回调信息以及该单关联的 quota reservations，供排查长期冻结悬挂和回调异常。
+
 ## 上报标准事件
 
 ```http

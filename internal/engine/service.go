@@ -104,6 +104,13 @@ func (s *Service) ListOutboxDLQ(ctx context.Context, tenantID string, includeClo
 	return s.repository.ListOutboxDLQ(ctx, tenantID, includeClosed, limit)
 }
 
+func (s *Service) ListRewardReconciliation(ctx context.Context, query marketing.RewardReconciliationQuery) ([]marketing.RewardReconciliationItem, error) {
+	if strings.TrimSpace(query.TenantID) == "" {
+		return nil, errors.New("tenantId is required")
+	}
+	return s.repository.ListRewardReconciliation(ctx, query)
+}
+
 func (s *Service) ReplayOutboxDLQ(ctx context.Context, id string, cmd marketing.DLQOperationCommand) (marketing.OutboxMessage, error) {
 	if strings.TrimSpace(cmd.TenantID) == "" || strings.TrimSpace(cmd.Operator) == "" || strings.TrimSpace(cmd.Reason) == "" {
 		return marketing.OutboxMessage{}, errors.Join(marketing.ErrInvalidOperation, errors.New("tenantId, operator and reason are required"))
@@ -208,11 +215,12 @@ func (s *Service) SimulateEvent(ctx context.Context, event marketing.ActivityEve
 	return result, nil
 }
 
-func (s *Service) ApplyRewardCallback(ctx context.Context, callback marketing.RewardCallback) error {
-	if callback.CommandID == "" || callback.TenantID == "" {
-		return errors.New("commandId and tenantId are required")
+func (s *Service) ApplyRewardCallback(ctx context.Context, callback marketing.RewardCallback) (marketing.RewardCallbackResult, error) {
+	if err := callback.Validate(); err != nil {
+		return marketing.RewardCallbackResult{}, err
 	}
-	return s.repository.UpdateGrantOrderByCommandID(ctx, callback.TenantID, callback.CommandID, callback.Status, callback.Message)
+	callback.FinishedAt = callback.FinishedAt.UTC()
+	return s.repository.ApplyRewardCallback(ctx, callback)
 }
 
 func (s *Service) evaluateActivity(ctx context.Context, inbox marketing.EventInbox, activity marketing.Activity) (marketing.Participation, []marketing.GrantOrder, []marketing.OutboxMessage, marketing.ActivityRuleResult, bool, error) {

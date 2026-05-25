@@ -341,6 +341,42 @@ git diff --check failed.
 	}
 }
 
+func TestMarkAgentFailedPreservesInterruptedStatus(t *testing.T) {
+	dir := t.TempDir()
+	req := Requirement{
+		ID:      "req-1",
+		Title:   "Title",
+		TaskDir: dir,
+	}
+	if err := CreateTaskFiles(req); err != nil {
+		t.Fatalf("create task files: %v", err)
+	}
+	logPath := filepath.Join(dir, "runs", "analysis.log")
+	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
+		t.Fatalf("mkdir runs: %v", err)
+	}
+	if err := MarkAgentRunning(req, AgentAnalysis, logPath, 12345); err != nil {
+		t.Fatalf("mark running: %v", err)
+	}
+	if err := MarkAgentInterrupted(req, AgentAnalysis, "agent stopped by user: pid 12345"); err != nil {
+		t.Fatalf("mark interrupted: %v", err)
+	}
+	if err := MarkAgentFailed(req, AgentRun{Agent: AgentAnalysis, OutputPath: logPath, ExitCode: -1}, os.ErrInvalid); err != nil {
+		t.Fatalf("mark failed: %v", err)
+	}
+	status, err := LoadAgentStatus(dir)
+	if err != nil {
+		t.Fatalf("load status: %v", err)
+	}
+	got := status.Agents[string(AgentAnalysis)]
+	if got.Status != AgentStatusStale {
+		t.Fatalf("status = %s, want %s", got.Status, AgentStatusStale)
+	}
+	if !strings.Contains(got.Error, "stopped by user") {
+		t.Fatalf("error = %q, want stopped by user", got.Error)
+	}
+}
+
 func TestReadOnlyWriteGuardIgnoresWorkflowRuntimeFiles(t *testing.T) {
 	dir := t.TempDir()
 	req := Requirement{
@@ -407,6 +443,47 @@ func TestEnsureTaskFilesRefreshesCanonicalAgentPrompts(t *testing.T) {
 	}
 	if !strings.Contains(got, "只负责需求分析和需求细化") || !strings.Contains(got, "不写代码") {
 		t.Fatalf("expected canonical analysis prompt, got: %s", got)
+	}
+}
+
+func TestAutoSupplementRequirementAddsOutboxDLQOwnerDecisions(t *testing.T) {
+	dir := t.TempDir()
+	req := Requirement{
+		ID:          "2026-05-24-outbox-worker-dlq",
+		Title:       "Outbox Worker 重试与 DLQ",
+		Description: "实现 marketing_outbox 的 HTTP/MQ/Webhook 发送、指数退避重试、最大重试次数、DLQ、人工重放和关闭。",
+		Status:      StatusAnalysisReady,
+		Risk:        "高",
+		TaskDir:     dir,
+	}
+	if err := CreateTaskFiles(req); err != nil {
+		t.Fatalf("create task files: %v", err)
+	}
+
+	changed, err := AutoSupplementRequirement(req)
+	if err != nil {
+		t.Fatalf("auto supplement: %v", err)
+	}
+	if !changed {
+		t.Fatal("expected supplement to be added")
+	}
+	content, err := os.ReadFile(filepath.Join(req.TaskDir, "task.md"))
+	if err != nil {
+		t.Fatalf("read task: %v", err)
+	}
+	text := string(content)
+	for _, want := range []string{"## Owner 补充决策", "本期只实现 HTTP / Webhook Outbox Worker", "DLQ_CLOSED", "最大重试失败次数：5 次"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected %q in task.md, got:\n%s", want, text)
+		}
+	}
+
+	changed, err = AutoSupplementRequirement(req)
+	if err != nil {
+		t.Fatalf("second auto supplement: %v", err)
+	}
+	if changed {
+		t.Fatal("expected existing owner decisions to be left unchanged")
 	}
 }
 

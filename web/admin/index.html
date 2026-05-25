@@ -1609,6 +1609,7 @@ function renderDetail(req, agents) {
       </select>
       <button class="button" onclick="runSelectedAgent()">自动运行后续节点</button>
       <button class="button secondary" onclick="runSingleAgent()">只运行当前 Agent</button>
+      <button class="button secondary" onclick="stopCurrentAgent()">停止当前 Agent</button>
       <button class="button secondary" onclick="loadSelectedLog()">查看日志</button>
       <button class="button secondary" onclick="showGitDiff()">查看 Git Diff</button>
     </div>
@@ -1637,7 +1638,7 @@ function renderFlowCanvas(agents) {
 
 function activeAgentLabel(req, agents) {
   const running = Object.entries(agents || {}).find(([, state]) => state.status === 'RUNNING');
-  if (running) return '运行中：' + (agentNames[running[0]] || running[0]);
+  if (running) return '运行中：' + (agentNames[running[0]] || running[0]) + agentDurationSuffix(running[1]);
   const interrupted = Object.entries(agents || {}).find(([, state]) => state.status === 'INTERRUPTED');
   if (interrupted) return '已中断：' + (agentNames[interrupted[0]] || interrupted[0]);
   const next = runnableAgentForStatus(req.status);
@@ -1648,7 +1649,7 @@ function activeAgentLabel(req, agents) {
 
 function displayRequirementStatus(req, agents) {
   const running = Object.entries(agents || {}).find(([, state]) => state.status === 'RUNNING');
-  if (running) return (agentNames[running[0]] || running[0]) + '运行中';
+  if (running) return (agentNames[running[0]] || running[0]) + '运行中' + agentDurationSuffix(running[1]);
   const failed = Object.entries(agents || {}).find(([, state]) => state.status === 'FAILED');
   if (failed) return (agentNames[failed[0]] || failed[0]) + '失败';
   const interrupted = Object.entries(agents || {}).find(([, state]) => state.status === 'INTERRUPTED');
@@ -1660,7 +1661,7 @@ function displayRequirementStatus(req, agents) {
 
 function requirementStatusBadge(req, agents) {
   const running = Object.entries(agents || {}).find(([, state]) => state.status === 'RUNNING');
-  if (running) return badge((agentNames[running[0]] || running[0]) + '运行中', 'blue');
+  if (running) return badge((agentNames[running[0]] || running[0]) + '运行中' + agentDurationSuffix(running[1]), 'blue');
   const failed = Object.entries(agents || {}).find(([, state]) => state.status === 'FAILED');
   if (failed) return badge((agentNames[failed[0]] || failed[0]) + '失败', 'red');
   const interrupted = Object.entries(agents || {}).find(([, state]) => state.status === 'INTERRUPTED');
@@ -1731,9 +1732,10 @@ function renderStageNode(node, state) {
   const status = state.status || 'WAITING';
   const tone = agentToneForState(state);
   const displayStatus = displayAgentStatus(state);
+  const duration = agentDurationLabel(state);
   const collapsed = Boolean(collapsedNodes[node.id]);
   return `
-    <div class="flow-node ${tone}${collapsed ? ' collapsed' : ''}" data-node-id="${escapeHtml(node.id)}" style="left:${node.x}px;top:${node.y}px" title="${escapeHtml(displayStatus)}" onpointerdown="startNodeDrag(event, '${escapeJs(node.id)}')">
+    <div class="flow-node ${tone}${collapsed ? ' collapsed' : ''}" data-node-id="${escapeHtml(node.id)}" style="left:${node.x}px;top:${node.y}px" title="${escapeHtml(displayStatus + (duration ? ' · ' + duration : ''))}" onpointerdown="startNodeDrag(event, '${escapeJs(node.id)}')">
       <span class="node-port in"></span>
       <span class="node-port out"></span>
       <div class="node-name">
@@ -1741,12 +1743,12 @@ function renderStageNode(node, state) {
         <span class="node-actions">${status === 'RUNNING' ? runningIcon() : ''}<button class="node-toggle" type="button" title="展开/折叠节点" onclick="toggleFlowNode('${escapeJs(node.id)}', event)">${collapsed ? '▾' : '▴'}</button></span>
       </div>
       <div class="node-body">
-        <div class="node-meta">status: ${escapeHtml(displayStatus)}</div>
+        <div class="node-meta">状态: ${escapeHtml(displayStatus)}</div>
+        <div class="node-meta">耗时: ${escapeHtml(duration || '-')}</div>
         <div class="node-meta">output: ${escapeHtml(state.output || '-')}</div>
         <div class="node-meta">log: ${escapeHtml(state.log || '-')}</div>
-        <div class="node-meta">start: ${formatTime(state.startedAt)}</div>
-        <div class="node-meta">elapsed: ${escapeHtml(durationSince(state.startedAt, state.finishedAt))}</div>
-        <div class="node-meta">finish: ${formatTime(state.finishedAt)}</div>
+        <div class="node-meta">开始: ${formatTime(state.startedAt)}</div>
+        <div class="node-meta">结束: ${formatTime(state.finishedAt)}</div>
         ${state.error ? `<div class="node-meta" style="color:var(--red)">error: ${escapeHtml(state.error)}</div>` : ''}
       </div>
     </div>
@@ -1936,7 +1938,10 @@ function renderConsoleStages(agents) {
     const state = agents[agent] || {};
     const tone = agentToneForState(state);
     const active = selectedAgent === agent ? ' active' : '';
-    return `<button class="badge ${tone} console-stage${active}" type="button" title="${escapeHtml(displayAgentStatus(state))}" onclick="selectAgentOutput('${agent}')">${escapeHtml(agentNames[agent])}</button>`;
+    const duration = agentDurationLabel(state);
+    const label = duration ? `${agentNames[agent]} ${duration}` : agentNames[agent];
+    const title = displayAgentStatus(state) + (duration ? ' · ' + duration : '');
+    return `<button class="badge ${tone} console-stage${active}" type="button" title="${escapeHtml(title)}" onclick="selectAgentOutput('${agent}')">${escapeHtml(label)}</button>`;
   }).join('');
   if (html !== lastConsoleStagesHTML) {
     setHTMLIfChanged(target, html);
@@ -2117,6 +2122,10 @@ function runSingleAgent() {
       const runAgent = data.body.run?.Agent || agent;
       startLiveLog(requirementId, runAgent);
       const nextStatus = data.body.requirement?.status || '';
+      if (needsHumanRequirementInput(nextStatus)) {
+        writeConsole(JSON.stringify(data.body, null, 2) + '\n\n当前需求需要人工补充或重新细化，已停止自动继续执行。');
+        return loadWorkflow({ scrollSelected: true });
+      }
       const nextAgent = runnableAgentForStatus(nextStatus);
       if (nextAgent) {
         writeConsole(JSON.stringify(data.body, null, 2) + '\n\n当前节点已完成，自动继续执行：' + (agentNames[nextAgent] || nextAgent));
@@ -2173,6 +2182,19 @@ function runPipeline(continueQueue = false) {
   });
 }
 
+async function stopCurrentAgent() {
+  if (!selectedId) return;
+  const ok = await showConfirm('停止当前 Agent', '确认停止当前正在运行的 Agent 吗？\n\n停止后状态会标记为已中断，可以重新运行。', '确认停止');
+  if (!ok) return;
+  const data = await requestJson('/admin/v1/workflow/requirements/' + encodeURIComponent(selectedId) + '/stop-agent', {
+    method: 'POST',
+    body: '{}'
+  });
+  writeConsole(JSON.stringify(data.body, null, 2));
+  stopLiveLog();
+  await loadWorkflow({ scrollSelected: true });
+}
+
 async function continueWithNextRequirement(currentId) {
   await loadWorkflow({ scrollSelected: true });
   const next = findNextRunnableRequirement(currentId);
@@ -2201,6 +2223,7 @@ function findNextRunnableRequirement(currentId) {
 
 function isRunnableRequirement(item) {
   if (!item || item.id === selectedId) return false;
+  if (needsHumanRequirementInput(item.status)) return false;
   if (!runnableAgentForStatus(item.status)) return false;
   return !Object.values(item.agents || {}).some(agent => agent.status === 'RUNNING');
 }
@@ -2421,6 +2444,10 @@ function isReturnToAnalysisStatus(status) {
   return status === 'REVIEW_BLOCK' || status === 'ANALYSIS_FAIL';
 }
 
+function needsHumanRequirementInput(status) {
+  return status === 'REVIEW_BLOCK' || status === 'ANALYSIS_FAIL';
+}
+
 function isRetryStatus(status) {
   return status === 'TEST_FAIL' || status === 'COMMIT_FAIL';
 }
@@ -2469,6 +2496,20 @@ function durationSince(start, finish) {
   const minutes = Math.floor(seconds / 60);
   const rest = seconds % 60;
   return minutes ? `${minutes}m ${rest}s` : `${rest}s`;
+}
+
+function agentDurationLabel(state = {}) {
+  if (!state.startedAt) return '';
+  const value = durationSince(state.startedAt, state.finishedAt);
+  if (!value || value === '-') return '';
+  if (state.status === 'RUNNING') return '已运行 ' + value;
+  if (state.status === 'DONE' || state.status === 'FAILED' || state.status === 'INTERRUPTED') return '耗时 ' + value;
+  return value;
+}
+
+function agentDurationSuffix(state = {}) {
+  const label = agentDurationLabel(state);
+  return label ? '（' + label + '）' : '';
 }
 
 function escapeHtml(value) {

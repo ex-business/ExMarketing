@@ -28,6 +28,7 @@ type GrantStatus string
 type OutboxStatus string
 type QuotaType string
 type QuotaScope string
+type QuotaReservationStatus string
 
 const (
 	ActivityDraft     ActivityStatus = "DRAFT"
@@ -114,6 +115,10 @@ const (
 	QuotaScopeUser     QuotaScope = "USER"
 	QuotaScopeIP       QuotaScope = "IP"
 	QuotaScopeDevice   QuotaScope = "DEVICE"
+
+	QuotaReservationFrozen    QuotaReservationStatus = "FROZEN"
+	QuotaReservationConfirmed QuotaReservationStatus = "CONFIRMED"
+	QuotaReservationReleased  QuotaReservationStatus = "RELEASED"
 )
 
 type Activity struct {
@@ -354,6 +359,8 @@ type GrantOrder struct {
 	GrantChannel    GrantChannel    `json:"grantChannel"`
 	RetryCount      int             `json:"retryCount"`
 	ErrorMessage    string          `json:"errorMessage,omitempty"`
+	ExternalGrantID string          `json:"externalGrantId,omitempty"`
+	FinishedAt      *time.Time      `json:"finishedAt,omitempty"`
 	IdempotencyKey  string          `json:"idempotencyKey"`
 	CreatedAt       time.Time       `json:"createdAt"`
 	UpdatedAt       time.Time       `json:"updatedAt"`
@@ -406,10 +413,20 @@ type Quota struct {
 }
 
 type QuotaReservation struct {
-	Type     QuotaType  `json:"quotaType"`
-	Scope    QuotaScope `json:"scope"`
-	ScopeKey string     `json:"scopeKey"`
-	Amount   string     `json:"amount"`
+	ID           string                 `json:"id,omitempty"`
+	TenantID     string                 `json:"tenantId,omitempty"`
+	ActivityID   string                 `json:"activityId,omitempty"`
+	GrantOrderID string                 `json:"grantOrderId,omitempty"`
+	CommandID    string                 `json:"commandId,omitempty"`
+	Type         QuotaType              `json:"quotaType"`
+	Scope        QuotaScope             `json:"scope"`
+	ScopeKey     string                 `json:"scopeKey"`
+	Amount       string                 `json:"amount"`
+	Status       QuotaReservationStatus `json:"reservationStatus,omitempty"`
+	CreatedAt    time.Time              `json:"createdAt,omitempty"`
+	UpdatedAt    time.Time              `json:"updatedAt,omitempty"`
+	ConfirmedAt  *time.Time             `json:"confirmedAt,omitempty"`
+	ReleasedAt   *time.Time             `json:"releasedAt,omitempty"`
 }
 
 type AtomicGrantCommand struct {
@@ -508,6 +525,17 @@ type ProcessEventResult struct {
 	Duplicate      bool                 `json:"duplicate"`
 }
 
+type RewardCallbackResult struct {
+	CommandID           string              `json:"commandId"`
+	TenantID            string              `json:"tenantId"`
+	GrantOrderID        string              `json:"grantOrderId"`
+	ParticipationID     string              `json:"participationId"`
+	GrantStatus         GrantStatus         `json:"grantStatus"`
+	ParticipationStatus ParticipationStatus `json:"participationStatus,omitempty"`
+	Duplicate           bool                `json:"duplicate"`
+	Reservations        []QuotaReservation  `json:"quotaReservations,omitempty"`
+}
+
 type RewardCallback struct {
 	CommandID       string      `json:"commandId"`
 	TenantID        string      `json:"tenantId"`
@@ -515,6 +543,46 @@ type RewardCallback struct {
 	ExternalGrantID string      `json:"externalGrantId"`
 	Message         string      `json:"message"`
 	FinishedAt      time.Time   `json:"finishedAt"`
+}
+
+func (callback RewardCallback) Validate() error {
+	if strings.TrimSpace(callback.TenantID) == "" || strings.TrimSpace(callback.CommandID) == "" {
+		return errors.Join(ErrInvalidCallback, errors.New("tenantId and commandId are required"))
+	}
+	if callback.Status != GrantSuccess && callback.Status != GrantFailed {
+		return errors.Join(ErrInvalidCallback, errors.New("status must be SUCCESS or FAILED"))
+	}
+	if callback.Status == GrantSuccess && strings.TrimSpace(callback.ExternalGrantID) == "" {
+		return errors.Join(ErrInvalidCallback, errors.New("externalGrantId is required for SUCCESS"))
+	}
+	if callback.FinishedAt.IsZero() {
+		return errors.Join(ErrInvalidCallback, errors.New("finishedAt is required"))
+	}
+	return nil
+}
+
+type RewardReconciliationItem struct {
+	TenantID            string              `json:"tenantId"`
+	CommandID           string              `json:"commandId"`
+	GrantOrderID        string              `json:"grantOrderId"`
+	ExternalGrantID     string              `json:"externalGrantId,omitempty"`
+	ActivityID          string              `json:"activityId"`
+	ParticipationID     string              `json:"participationId"`
+	Subject             EventSubject        `json:"subject"`
+	RewardType          RewardType          `json:"rewardType"`
+	RewardAmount        string              `json:"rewardAmount"`
+	GrantStatus         GrantStatus         `json:"grantStatus"`
+	ParticipationStatus ParticipationStatus `json:"participationStatus"`
+	CallbackMessage     string              `json:"callbackMessage,omitempty"`
+	FinishedAt          *time.Time          `json:"finishedAt,omitempty"`
+	ServerUpdatedAt     time.Time           `json:"serverUpdatedAt"`
+	Reservations        []QuotaReservation  `json:"quotaReservations"`
+}
+
+type RewardReconciliationQuery struct {
+	TenantID  string
+	CommandID string
+	Limit     int
 }
 
 type CreateActivityCommand struct {
@@ -537,13 +605,19 @@ type CreateActivityCommand struct {
 }
 
 var (
-	ErrInvalidActivity     = errors.New("invalid activity")
-	ErrInvalidEvent        = errors.New("invalid event")
-	ErrDuplicateEvent      = errors.New("duplicate event")
-	ErrIdempotencyConflict = errors.New("idempotency key payload conflict")
-	ErrNotFound            = errors.New("not found")
-	ErrQuotaExceeded       = errors.New("quota exceeded")
-	ErrInvalidOperation    = errors.New("invalid operation")
+	ErrInvalidActivity          = errors.New("invalid activity")
+	ErrInvalidEvent             = errors.New("invalid event")
+	ErrDuplicateEvent           = errors.New("duplicate event")
+	ErrIdempotencyConflict      = errors.New("idempotency key payload conflict")
+	ErrNotFound                 = errors.New("not found")
+	ErrQuotaExceeded            = errors.New("quota exceeded")
+	ErrInvalidOperation         = errors.New("invalid operation")
+	ErrInvalidCallback          = errors.New("invalid callback request")
+	ErrCallbackConflict         = errors.New("callback status conflict")
+	ErrGrantOrderClosed         = errors.New("grant order closed")
+	ErrQuotaReservationMissing  = errors.New("quota reservation missing")
+	ErrQuotaReservationConflict = errors.New("quota reservation conflict")
+	ErrQuotaAggregateConflict   = errors.New("quota aggregate conflict")
 )
 
 func (cmd CreateActivityCommand) Validate(now time.Time) error {

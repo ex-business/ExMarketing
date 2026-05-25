@@ -59,34 +59,34 @@
       "id": "2026-05-24-113400-5",
       "title": "参与记录与发奖单生命周期",
       "description": "来源：22-独立活动营销中台设计。所有命中活动必须先写 marketing_participation 快照，再生成 marketing_grant_order，状态覆盖 INIT/QUALIFIED/REJECTED/REWARDABLE/GRANTED/FAILED 与 PENDING/SENDING/SUCCESS/FAILED/RETRY/CLOSED。验收：禁止绕过 participation 和 grant_order 直接发奖；幂等键唯一；失败原因可追踪。",
-      "status": "COMMIT_READY",
+      "status": "COMMITTED",
       "risk": "高",
       "score": 90,
       "taskDir": "tasks/2026-05-24-113400-5",
       "createdAt": "2026-05-24T11:34:00.355875Z",
-      "updatedAt": "2026-05-25T07:17:33.264159Z"
+      "updatedAt": "2026-05-25T07:18:40.717693Z"
     },
     {
       "id": "2026-05-24-outbox-worker-dlq",
       "title": "Outbox Worker 重试与 DLQ",
       "description": "来源：22-独立活动营销中台设计。实现 marketing_outbox 的 HTTP/MQ/Webhook 发送、指数退避重试、最大重试次数、DLQ、人工重放和关闭。验收：业务记录与消息发送解耦；发送失败不丢发奖指令；DLQ 可查看和重放。",
-      "status": "ANALYSIS_READY",
+      "status": "COMMITTED",
       "risk": "高",
-      "score": 0,
+      "score": 93,
       "taskDir": "tasks/2026-05-24-outbox-worker-dlq",
       "createdAt": "2026-05-24T11:34:00.355875Z",
-      "updatedAt": "2026-05-24T11:34:00.355875Z"
+      "updatedAt": "2026-05-25T10:15:19.933151Z"
     },
     {
       "id": "2026-05-24-113400-6",
       "title": "发奖回调与预算确认释放",
       "description": "来源：22-独立活动营销中台设计。外部发奖系统回调成功/失败后，确认预算消耗或释放冻结额度，更新 participation 与 grant_order，并支持对账查询。验收：成功、失败、重复回调、未知单号都有测试；预算冻结不会长期悬挂。",
-      "status": "ANALYSIS_READY",
+      "status": "COMMIT_READY",
       "risk": "高",
-      "score": 0,
+      "score": 89,
       "taskDir": "tasks/2026-05-24-113400-6",
       "createdAt": "2026-05-24T11:34:00.355875Z",
-      "updatedAt": "2026-05-24T11:34:00.355875Z"
+      "updatedAt": "2026-05-25T10:47:50.117637Z"
     },
     {
       "id": "2026-05-24-fact-query",

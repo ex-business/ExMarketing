@@ -99,6 +99,8 @@ CREATE TABLE marketing_grant_order (
   grant_channel VARCHAR(32) NOT NULL,
   retry_count INT NOT NULL DEFAULT 0,
   error_message TEXT,
+  external_grant_id VARCHAR(128),
+  finished_at TIMESTAMP,
   idempotency_key VARCHAR(256) NOT NULL UNIQUE,
   created_at TIMESTAMP NOT NULL,
   updated_at TIMESTAMP NOT NULL
@@ -116,6 +118,24 @@ CREATE TABLE marketing_quota (
   version INT NOT NULL DEFAULT 1,
   created_at TIMESTAMP NOT NULL,
   updated_at TIMESTAMP NOT NULL
+);
+
+CREATE TABLE marketing_quota_reservation (
+  id VARCHAR(64) PRIMARY KEY,
+  tenant_id VARCHAR(64) NOT NULL,
+  activity_id VARCHAR(64) NOT NULL,
+  grant_order_id VARCHAR(64) NOT NULL,
+  command_id VARCHAR(128) NOT NULL,
+  quota_type VARCHAR(32) NOT NULL,
+  scope VARCHAR(32) NOT NULL,
+  scope_key VARCHAR(128) NOT NULL,
+  reserved_amount DECIMAL(18,4) NOT NULL,
+  reservation_status VARCHAR(32) NOT NULL,
+  confirmed_at TIMESTAMP,
+  released_at TIMESTAMP,
+  created_at TIMESTAMP NOT NULL,
+  updated_at TIMESTAMP NOT NULL,
+  UNIQUE (tenant_id, grant_order_id, quota_type, scope, scope_key)
 );
 
 CREATE TABLE marketing_outbox (

@@ -265,6 +265,149 @@ func (r *Repository) UpdateGrantOrderByCommandID(ctx context.Context, tenantID s
 	return nil
 }
 
+func (r *Repository) ApplyRewardCallback(ctx context.Context, callback marketing.RewardCallback) (marketing.RewardCallbackResult, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return marketing.RewardCallbackResult{}, err
+	}
+	defer rollback(tx)
+
+	var order marketing.GrantOrder
+	var externalGrantID sql.NullString
+	var finishedAt sql.NullTime
+	err = tx.QueryRowContext(ctx, `
+		SELECT id, tenant_id, activity_id, participation_id, subject_type, subject_id,
+		       reward_type, reward_amount::text, bill_no, grant_status, COALESCE(error_message, ''),
+		       COALESCE(external_grant_id, ''), finished_at, updated_at
+		FROM marketing_grant_order
+		WHERE tenant_id = $1 AND bill_no = $2
+		FOR UPDATE
+	`, callback.TenantID, callback.CommandID).Scan(
+		&order.ID, &order.TenantID, &order.ActivityID, &order.ParticipationID,
+		&order.Subject.Type, &order.Subject.ID, &order.RewardType, &order.RewardAmount,
+		&order.BillNo, &order.GrantStatus, &order.ErrorMessage, &externalGrantID, &finishedAt, &order.UpdatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return marketing.RewardCallbackResult{}, marketing.ErrNotFound
+		}
+		return marketing.RewardCallbackResult{}, err
+	}
+	order.ExternalGrantID = externalGrantID.String
+	if finishedAt.Valid {
+		order.FinishedAt = &finishedAt.Time
+	}
+	if order.GrantStatus == marketing.GrantClosed {
+		return marketing.RewardCallbackResult{}, marketing.ErrGrantOrderClosed
+	}
+	reservations, err := quotaReservationsForOrderTx(ctx, tx, order.ID)
+	if err != nil {
+		return marketing.RewardCallbackResult{}, err
+	}
+	if order.GrantStatus == marketing.GrantSuccess || order.GrantStatus == marketing.GrantFailed {
+		if order.GrantStatus != callback.Status || (order.ExternalGrantID != "" && callback.ExternalGrantID != "" && order.ExternalGrantID != callback.ExternalGrantID) {
+			return marketing.RewardCallbackResult{}, marketing.ErrCallbackConflict
+		}
+		status, err := participationStatusTx(ctx, tx, order.ParticipationID)
+		if err != nil {
+			return marketing.RewardCallbackResult{}, err
+		}
+		if err := tx.Commit(); err != nil {
+			return marketing.RewardCallbackResult{}, err
+		}
+		return marketing.RewardCallbackResult{
+			CommandID:           order.BillNo,
+			TenantID:            order.TenantID,
+			GrantOrderID:        order.ID,
+			ParticipationID:     order.ParticipationID,
+			GrantStatus:         order.GrantStatus,
+			ParticipationStatus: status,
+			Duplicate:           true,
+			Reservations:        reservations,
+		}, nil
+	}
+	if len(reservations) == 0 {
+		return marketing.RewardCallbackResult{}, marketing.ErrQuotaReservationMissing
+	}
+	for _, reservation := range reservations {
+		if reservation.Status != marketing.QuotaReservationFrozen {
+			return marketing.RewardCallbackResult{}, marketing.ErrQuotaReservationConflict
+		}
+		if err := finishQuotaReservationTx(ctx, tx, reservation, callback.Status); err != nil {
+			return marketing.RewardCallbackResult{}, err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE marketing_grant_order
+		SET grant_status = $1, external_grant_id = $2, error_message = $3, finished_at = $4, updated_at = NOW()
+		WHERE id = $5
+	`, callback.Status, nullString(callback.ExternalGrantID), nullString(callback.Message), callback.FinishedAt, order.ID); err != nil {
+		return marketing.RewardCallbackResult{}, err
+	}
+	status, err := updateParticipationAfterCallbackTx(ctx, tx, order.ParticipationID)
+	if err != nil {
+		return marketing.RewardCallbackResult{}, err
+	}
+	reservations, err = quotaReservationsForOrderTx(ctx, tx, order.ID)
+	if err != nil {
+		return marketing.RewardCallbackResult{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return marketing.RewardCallbackResult{}, err
+	}
+	return marketing.RewardCallbackResult{
+		CommandID:           order.BillNo,
+		TenantID:            order.TenantID,
+		GrantOrderID:        order.ID,
+		ParticipationID:     order.ParticipationID,
+		GrantStatus:         callback.Status,
+		ParticipationStatus: status,
+		Reservations:        reservations,
+	}, nil
+}
+
+func (r *Repository) ListRewardReconciliation(ctx context.Context, query marketing.RewardReconciliationQuery) ([]marketing.RewardReconciliationItem, error) {
+	if query.Limit <= 0 {
+		query.Limit = 100
+	}
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT go.id, go.tenant_id, go.activity_id, go.participation_id, go.subject_type, go.subject_id,
+		       go.reward_type, go.reward_amount::text, go.bill_no, go.grant_status,
+		       COALESCE(go.error_message, ''), COALESCE(go.external_grant_id, ''), go.finished_at, go.updated_at,
+		       p.status
+		FROM marketing_grant_order go
+		JOIN marketing_participation p ON p.id = go.participation_id
+		WHERE go.tenant_id = $1 AND ($2 = '' OR go.bill_no = $2)
+		ORDER BY go.updated_at DESC
+		LIMIT $3
+	`, query.TenantID, query.CommandID, query.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []marketing.RewardReconciliationItem
+	for rows.Next() {
+		var item marketing.RewardReconciliationItem
+		var finishedAt sql.NullTime
+		if err := rows.Scan(&item.GrantOrderID, &item.TenantID, &item.ActivityID, &item.ParticipationID,
+			&item.Subject.Type, &item.Subject.ID, &item.RewardType, &item.RewardAmount,
+			&item.CommandID, &item.GrantStatus, &item.CallbackMessage, &item.ExternalGrantID,
+			&finishedAt, &item.ServerUpdatedAt, &item.ParticipationStatus); err != nil {
+			return nil, err
+		}
+		if finishedAt.Valid {
+			item.FinishedAt = &finishedAt.Time
+		}
+		item.Reservations, err = quotaReservationsForOrder(ctx, r.db, item.GrantOrderID)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
 func (r *Repository) CreateParticipationGrantOutboxesWithQuota(ctx context.Context, cmd marketing.AtomicGrantCommand) (marketing.AtomicGrantResult, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -299,6 +442,19 @@ func (r *Repository) CreateParticipationGrantOutboxesWithQuota(ctx context.Conte
 		`, order.ID, order.TenantID, order.ActivityID, order.ParticipationID, order.Subject.Type, order.Subject.ID,
 			order.RewardType, emptyDecimal(order.RewardAmount), order.RewardPayload, order.BillNo, order.GrantStatus,
 			order.GrantChannel, order.RetryCount, nullString(order.ErrorMessage), order.IdempotencyKey, order.CreatedAt, order.UpdatedAt)
+		if err != nil {
+			return marketing.AtomicGrantResult{}, err
+		}
+	}
+	for _, reservation := range postgresQuotaReservationsForAtomicCommand(cmd, time.Now().UTC()) {
+		_, err = tx.ExecContext(ctx, `
+			INSERT INTO marketing_quota_reservation (
+				id, tenant_id, activity_id, grant_order_id, command_id, quota_type,
+				scope, scope_key, reserved_amount, reservation_status, created_at, updated_at
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::numeric, $10, $11, $12)
+		`, reservation.ID, reservation.TenantID, reservation.ActivityID, reservation.GrantOrderID,
+			reservation.CommandID, reservation.Type, reservation.Scope, reservation.ScopeKey,
+			emptyDecimal(reservation.Amount), reservation.Status, reservation.CreatedAt, reservation.UpdatedAt)
 		if err != nil {
 			return marketing.AtomicGrantResult{}, err
 		}
@@ -353,14 +509,14 @@ func (r *Repository) CreateQuota(ctx context.Context, quota marketing.Quota) (ma
 func (r *Repository) ReserveQuota(ctx context.Context, activityID string, quotaType marketing.QuotaType, scope marketing.QuotaScope, scopeKey string, amount string) (bool, error) {
 	result, err := r.db.ExecContext(ctx, `
 		UPDATE marketing_quota
-		SET used_value = used_value + $5::numeric,
+		SET frozen_value = frozen_value + $5::numeric,
 		    version = version + 1,
 		    updated_at = NOW()
 		WHERE activity_id = $1
 		  AND quota_type = $2
 		  AND scope = $3
 		  AND scope_key = $4
-		  AND used_value + $5::numeric <= total_value
+		  AND used_value + frozen_value + $5::numeric <= total_value
 	`, activityID, quotaType, scope, scopeKey, emptyDecimal(amount))
 	if err != nil {
 		return false, err
@@ -749,14 +905,14 @@ func emptyDecimal(value string) string {
 func reserveQuotaTx(ctx context.Context, tx *sql.Tx, activityID string, quotaType marketing.QuotaType, scope marketing.QuotaScope, scopeKey string, amount string) (bool, error) {
 	result, err := tx.ExecContext(ctx, `
 		UPDATE marketing_quota
-		SET used_value = used_value + $5::numeric,
+		SET frozen_value = frozen_value + $5::numeric,
 		    version = version + 1,
 		    updated_at = NOW()
 		WHERE activity_id = $1
 		  AND quota_type = $2
 		  AND scope = $3
 		  AND scope_key = $4
-		  AND used_value + $5::numeric <= total_value
+		  AND used_value + frozen_value + $5::numeric <= total_value
 	`, activityID, quotaType, scope, scopeKey, emptyDecimal(amount))
 	if err != nil {
 		return false, err
@@ -808,6 +964,210 @@ func insertParticipationTx(ctx context.Context, tx *sql.Tx, participation market
 		participation.Status, nullString(participation.RejectReason), participation.Snapshot,
 		participation.IdempotencyKey, participation.CreatedAt, participation.UpdatedAt)
 	return err
+}
+
+func postgresQuotaReservationsForAtomicCommand(cmd marketing.AtomicGrantCommand, now time.Time) []marketing.QuotaReservation {
+	var reservations []marketing.QuotaReservation
+	for _, order := range cmd.GrantOrders {
+		if order.RewardAmount != "" {
+			reservations = append(reservations, marketing.QuotaReservation{
+				ID:           marketing.NewID("reservation"),
+				TenantID:     order.TenantID,
+				ActivityID:   order.ActivityID,
+				GrantOrderID: order.ID,
+				CommandID:    order.BillNo,
+				Type:         marketing.QuotaBudget,
+				Scope:        marketing.QuotaScopeActivity,
+				ScopeKey:     "TOTAL",
+				Amount:       order.RewardAmount,
+				Status:       marketing.QuotaReservationFrozen,
+				CreatedAt:    now,
+				UpdatedAt:    now,
+			})
+		}
+		rewardCode := rewardCodeFromPayload(order.RewardPayload)
+		if rewardCode != "" {
+			reservations = append(reservations, marketing.QuotaReservation{
+				ID:           marketing.NewID("reservation"),
+				TenantID:     order.TenantID,
+				ActivityID:   order.ActivityID,
+				GrantOrderID: order.ID,
+				CommandID:    order.BillNo,
+				Type:         marketing.QuotaStock,
+				Scope:        marketing.QuotaScopeActivity,
+				ScopeKey:     rewardCode,
+				Amount:       "1",
+				Status:       marketing.QuotaReservationFrozen,
+				CreatedAt:    now,
+				UpdatedAt:    now,
+			})
+		}
+	}
+	return reservations
+}
+
+func rewardCodeFromPayload(payload json.RawMessage) string {
+	var body struct {
+		RewardCode string `json:"rewardCode"`
+	}
+	_ = json.Unmarshal(payload, &body)
+	return body.RewardCode
+}
+
+func quotaReservationsForOrderTx(ctx context.Context, tx *sql.Tx, grantOrderID string) ([]marketing.QuotaReservation, error) {
+	return quotaReservationsForOrder(ctx, tx, grantOrderID)
+}
+
+type quotaReservationQuerier interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
+func quotaReservationsForOrder(ctx context.Context, db quotaReservationQuerier, grantOrderID string) ([]marketing.QuotaReservation, error) {
+	rows, err := db.QueryContext(ctx, `
+		SELECT id, tenant_id, activity_id, grant_order_id, command_id, quota_type,
+		       scope, scope_key, reserved_amount::text, reservation_status,
+		       created_at, updated_at, confirmed_at, released_at
+		FROM marketing_quota_reservation
+		WHERE grant_order_id = $1
+		ORDER BY created_at ASC, id ASC
+	`, grantOrderID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var reservations []marketing.QuotaReservation
+	for rows.Next() {
+		var reservation marketing.QuotaReservation
+		var confirmedAt sql.NullTime
+		var releasedAt sql.NullTime
+		if err := rows.Scan(&reservation.ID, &reservation.TenantID, &reservation.ActivityID,
+			&reservation.GrantOrderID, &reservation.CommandID, &reservation.Type, &reservation.Scope,
+			&reservation.ScopeKey, &reservation.Amount, &reservation.Status,
+			&reservation.CreatedAt, &reservation.UpdatedAt, &confirmedAt, &releasedAt); err != nil {
+			return nil, err
+		}
+		if confirmedAt.Valid {
+			reservation.ConfirmedAt = &confirmedAt.Time
+		}
+		if releasedAt.Valid {
+			reservation.ReleasedAt = &releasedAt.Time
+		}
+		reservations = append(reservations, reservation)
+	}
+	return reservations, rows.Err()
+}
+
+func finishQuotaReservationTx(ctx context.Context, tx *sql.Tx, reservation marketing.QuotaReservation, status marketing.GrantStatus) error {
+	var result sql.Result
+	var err error
+	if status == marketing.GrantSuccess {
+		result, err = tx.ExecContext(ctx, `
+			UPDATE marketing_quota
+			SET frozen_value = frozen_value - $5::numeric,
+			    used_value = used_value + $5::numeric,
+			    version = version + 1,
+			    updated_at = NOW()
+			WHERE activity_id = $1 AND quota_type = $2 AND scope = $3 AND scope_key = $4
+			  AND frozen_value >= $5::numeric
+		`, reservation.ActivityID, reservation.Type, reservation.Scope, reservation.ScopeKey, emptyDecimal(reservation.Amount))
+	} else {
+		result, err = tx.ExecContext(ctx, `
+			UPDATE marketing_quota
+			SET frozen_value = frozen_value - $5::numeric,
+			    version = version + 1,
+			    updated_at = NOW()
+			WHERE activity_id = $1 AND quota_type = $2 AND scope = $3 AND scope_key = $4
+			  AND frozen_value >= $5::numeric
+		`, reservation.ActivityID, reservation.Type, reservation.Scope, reservation.ScopeKey, emptyDecimal(reservation.Amount))
+	}
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return marketing.ErrQuotaAggregateConflict
+	}
+	nextStatus := marketing.QuotaReservationReleased
+	timeColumn := "released_at"
+	if status == marketing.GrantSuccess {
+		nextStatus = marketing.QuotaReservationConfirmed
+		timeColumn = "confirmed_at"
+	}
+	result, err = tx.ExecContext(ctx, `
+		UPDATE marketing_quota_reservation
+		SET reservation_status = $2,
+		    updated_at = NOW(),
+		    `+timeColumn+` = NOW()
+		WHERE id = $1 AND reservation_status = 'FROZEN'
+	`, reservation.ID, nextStatus)
+	if err != nil {
+		return err
+	}
+	affected, err = result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return marketing.ErrQuotaReservationConflict
+	}
+	return nil
+}
+
+func participationStatusTx(ctx context.Context, tx *sql.Tx, participationID string) (marketing.ParticipationStatus, error) {
+	var status marketing.ParticipationStatus
+	err := tx.QueryRowContext(ctx, `SELECT status FROM marketing_participation WHERE id = $1`, participationID).Scan(&status)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", marketing.ErrNotFound
+		}
+		return "", err
+	}
+	return status, nil
+}
+
+func updateParticipationAfterCallbackTx(ctx context.Context, tx *sql.Tx, participationID string) (marketing.ParticipationStatus, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT grant_status FROM marketing_grant_order WHERE participation_id = $1`, participationID)
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+	allFinal := true
+	anyFailed := false
+	for rows.Next() {
+		var status marketing.GrantStatus
+		if err := rows.Scan(&status); err != nil {
+			return "", err
+		}
+		switch status {
+		case marketing.GrantFailed:
+			anyFailed = true
+		case marketing.GrantSuccess:
+		default:
+			allFinal = false
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	if !allFinal {
+		return participationStatusTx(ctx, tx, participationID)
+	}
+	next := marketing.ParticipationGranted
+	if anyFailed {
+		next = marketing.ParticipationFailed
+	}
+	_, err = tx.ExecContext(ctx, `
+		UPDATE marketing_participation
+		SET status = $1, updated_at = NOW()
+		WHERE id = $2
+	`, next, participationID)
+	if err != nil {
+		return "", err
+	}
+	return next, nil
 }
 
 var _ marketing.Repository = (*Repository)(nil)

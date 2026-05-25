@@ -273,6 +273,15 @@ func MarkAgentFailed(req Requirement, run AgentRun, runErr error) error {
 		return err
 	}
 	current := status.Agents[string(run.Agent)]
+	if current.Status == AgentStatusStale {
+		current.PID = 0
+		current.ExitCode = run.ExitCode
+		if current.Log == "" {
+			current.Log = run.OutputPath
+		}
+		status.Agents[string(run.Agent)] = current
+		return SaveAgentStatus(req.TaskDir, status)
+	}
 	now := time.Now().UTC()
 	current.Status = AgentStatusFailed
 	current.FinishedAt = &now
@@ -284,6 +293,27 @@ func MarkAgentFailed(req Requirement, run AgentRun, runErr error) error {
 		current.Error = runErr.Error()
 	}
 	status.Agents[string(run.Agent)] = current
+	return SaveAgentStatus(req.TaskDir, status)
+}
+
+func MarkAgentInterrupted(req Requirement, agent Agent, reason string) error {
+	agentStatusMu.Lock()
+	defer agentStatusMu.Unlock()
+	status, err := EnsureAgentStatus(req)
+	if err != nil {
+		return err
+	}
+	current := status.Agents[string(agent)]
+	now := time.Now().UTC()
+	current.Status = AgentStatusStale
+	current.FinishedAt = &now
+	current.Output = filepath.Join(req.TaskDir, ArtifactForAgent(agent))
+	current.PID = 0
+	if reason == "" {
+		reason = "agent interrupted"
+	}
+	current.Error = reason
+	status.Agents[string(agent)] = current
 	return SaveAgentStatus(req.TaskDir, status)
 }
 

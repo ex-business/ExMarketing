@@ -30,6 +30,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /healthz", h.health)
 	mux.HandleFunc("GET /admin/v1/activities", h.listActivities)
 	mux.HandleFunc("POST /admin/v1/activities", h.createActivity)
+	mux.HandleFunc("POST /admin/v1/activities/prelaunch-validation", h.validatePrelaunch)
 	mux.HandleFunc("POST /admin/v1/quotas", h.createQuota)
 	mux.HandleFunc("GET /admin/v1/audit", h.listAudit)
 	mux.HandleFunc("GET /admin/v1/outbox/dlq", h.listOutboxDLQ)
@@ -95,6 +96,22 @@ func (h *Handler) createActivity(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusCreated, activity)
+}
+
+func (h *Handler) validatePrelaunch(w http.ResponseWriter, r *http.Request) {
+	var req marketing.PrelaunchValidationRequest
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	result, err := h.engine.ValidatePrelaunch(r.Context(), req)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (h *Handler) createQuota(w http.ResponseWriter, r *http.Request) {

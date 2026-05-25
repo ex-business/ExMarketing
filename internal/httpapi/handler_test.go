@@ -209,6 +209,74 @@ func TestSimulateEventReturnsRuleExplainWithoutPersistence(t *testing.T) {
 	}
 }
 
+func TestSimulateEventReturnsActivityAndQuotaPreviewsWithoutPersistence(t *testing.T) {
+	handler := newTestHandler()
+	activityID := createActivity(t, handler)
+	createQuota(t, handler, activityID, marketing.QuotaBudget, marketing.QuotaScopeActivity, "TOTAL", "100")
+	createQuota(t, handler, activityID, marketing.QuotaStock, marketing.QuotaScopeActivity, "FIRST_DEPOSIT_RATIO", "10")
+	createQuota(t, handler, activityID, marketing.QuotaUserLimit, marketing.QuotaScopeUser, "10001", "1")
+
+	event := depositEventJSON("evt_sim_success", "pay_sim_success", `"amount":"299.00","vipLevel":3,"isFirstDeposit":true`)
+	req := httptest.NewRequest(http.MethodPost, "/admin/v1/simulate", strings.NewReader(event))
+	rec := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		`"matchedActivities":[{`,
+		`"rewardPreviews":[{`,
+		`"quotaImpactPreviews":[{`,
+		`"quotaType":"BUDGET"`,
+		`"availableBefore":"100.0000"`,
+		`"delta":"59.8000"`,
+		`"unlimited":false`,
+		`"wouldExceed":false`,
+		`"participationPreview"`,
+		`"grantOrderPreviews":[{`,
+		`"outboxCommandPreviews":[{`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("expected %s in simulation response, got: %s", want, body)
+		}
+	}
+
+	accepted := postRawEvent(t, handler, event, "site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:pay_sim_success")
+	if accepted.Code != http.StatusAccepted {
+		t.Fatalf("expected formal event after simulation to be accepted, got %d: %s", accepted.Code, accepted.Body.String())
+	}
+}
+
+func TestSimulateEventQuotaExceededSuppressesGrantPreview(t *testing.T) {
+	handler := newTestHandler()
+	activityID := createActivity(t, handler)
+	createQuota(t, handler, activityID, marketing.QuotaBudget, marketing.QuotaScopeActivity, "TOTAL", "1")
+
+	event := depositEventJSON("evt_sim_quota", "pay_sim_quota", `"amount":"299.00","vipLevel":3,"isFirstDeposit":true`)
+	req := httptest.NewRequest(http.MethodPost, "/admin/v1/simulate", strings.NewReader(event))
+	rec := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		`"hasQuotaRisk":true`,
+		`"decisionReasonCode":"QUOTA_EXCEEDED"`,
+		`"wouldExceed":true`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("expected %s in quota risk simulation, got: %s", want, body)
+		}
+	}
+	if strings.Contains(body, `"grantOrders":[{`) || strings.Contains(body, `"outboxMessages":[{`) || strings.Contains(body, `"grantOrderPreviews":[{`) || strings.Contains(body, `"outboxCommandPreviews":[{`) {
+		t.Fatalf("expected no grant/outbox previews when quota would exceed, got: %s", body)
+	}
+}
+
 func TestActivityEventRequiresIdempotencyKey(t *testing.T) {
 	handler := newTestHandler()
 
@@ -1132,6 +1200,32 @@ func createActivity(t *testing.T, handler *Handler) string {
 		t.Fatalf("decode activity: %v", err)
 	}
 	return activity.ID
+}
+
+func TestValidatePrelaunchEndpointReturnsItemizedApprovalRequired(t *testing.T) {
+	handler := newTestHandler()
+	body := `{
+		"actor": "operator",
+		"targetAction": "GO_LIVE",
+		"activity": ` + validActivityBody() + `
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/admin/v1/activities/prelaunch-validation", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	handler.Routes().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"conclusion":"APPROVAL_REQUIRED"`) {
+		t.Fatalf("expected approval required result, got: %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"allowGoLive":false`) {
+		t.Fatalf("expected go-live blocked, got: %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"items"`) || !strings.Contains(rec.Body.String(), `"highRiskItems"`) {
+		t.Fatalf("expected itemized validation result, got: %s", rec.Body.String())
+	}
 }
 
 func validActivityBody() string {

@@ -509,11 +509,74 @@ type FactQueryResponse struct {
 }
 
 type SimulationResult struct {
-	Event          ActivityEvent        `json:"event"`
-	Participations []Participation      `json:"participations"`
-	GrantOrders    []GrantOrder         `json:"grantOrders"`
-	OutboxMessages []OutboxMessage      `json:"outboxMessages"`
-	RuleResults    []ActivityRuleResult `json:"ruleResults,omitempty"`
+	Event               ActivityEvent              `json:"event"`
+	SimulatedAt         time.Time                  `json:"simulatedAt"`
+	MatchedActivities   []SimulationActivityResult `json:"matchedActivities"`
+	UnmatchedActivities []SimulationActivityResult `json:"unmatchedActivities"`
+	Summary             SimulationSummary          `json:"summary"`
+	Participations      []Participation            `json:"participations"`
+	GrantOrders         []GrantOrder               `json:"grantOrders"`
+	OutboxMessages      []OutboxMessage            `json:"outboxMessages"`
+	RuleResults         []ActivityRuleResult       `json:"ruleResults,omitempty"`
+}
+
+type SimulationSummary struct {
+	CandidateCount        int  `json:"candidateCount"`
+	MatchedCount          int  `json:"matchedCount"`
+	UnmatchedCount        int  `json:"unmatchedCount"`
+	HasRewardableActivity bool `json:"hasRewardableActivity"`
+	HasQuotaRisk          bool `json:"hasQuotaRisk"`
+}
+
+type SimulationActivityResult struct {
+	ActivityID             string               `json:"activityId"`
+	ActivityCode           string               `json:"activityCode"`
+	ActivityName           string               `json:"activityName"`
+	ActivityType           string               `json:"activityType"`
+	Status                 ActivityStatus       `json:"status"`
+	Version                int                  `json:"version"`
+	Priority               int                  `json:"priority"`
+	ExclusiveGroup         string               `json:"exclusiveGroup,omitempty"`
+	Stackable              bool                 `json:"stackable"`
+	Decision               RuleDecision         `json:"decision"`
+	DecisionReasonCode     string               `json:"decisionReasonCode,omitempty"`
+	DecisionReason         string               `json:"decisionReason,omitempty"`
+	RuleResult             ActivityRuleResult   `json:"ruleResult"`
+	RewardPreviews         []RewardPreview      `json:"rewardPreviews,omitempty"`
+	QuotaImpactPreviews    []QuotaImpactPreview `json:"quotaImpactPreviews,omitempty"`
+	ParticipationPreview   *Participation       `json:"participationPreview,omitempty"`
+	GrantOrderPreviews     []GrantOrder         `json:"grantOrderPreviews,omitempty"`
+	OutboxCommandPreviews  []OutboxMessage      `json:"outboxCommandPreviews,omitempty"`
+	WouldCreateGrantOrders bool                 `json:"wouldCreateGrantOrders"`
+}
+
+type RewardPreview struct {
+	RewardCode    string         `json:"rewardCode"`
+	RewardType    RewardType     `json:"rewardType"`
+	CalculateType CalculateType  `json:"calculateType"`
+	GrantMode     GrantMode      `json:"grantMode"`
+	GrantChannel  GrantChannel   `json:"grantChannel"`
+	Amount        string         `json:"amount,omitempty"`
+	Currency      string         `json:"currency,omitempty"`
+	Skipped       bool           `json:"skipped"`
+	ReasonCode    string         `json:"reasonCode"`
+	Reason        string         `json:"reason"`
+	Detail        map[string]any `json:"detail,omitempty"`
+}
+
+type QuotaImpactPreview struct {
+	QuotaType       QuotaType  `json:"quotaType"`
+	Scope           QuotaScope `json:"scope"`
+	ScopeKey        string     `json:"scopeKey"`
+	CurrentTotal    string     `json:"currentTotal,omitempty"`
+	CurrentUsed     string     `json:"currentUsed,omitempty"`
+	CurrentFrozen   string     `json:"currentFrozen,omitempty"`
+	AvailableBefore string     `json:"availableBefore,omitempty"`
+	Delta           string     `json:"delta"`
+	Unlimited       bool       `json:"unlimited"`
+	WouldExceed     bool       `json:"wouldExceed"`
+	ReasonCode      string     `json:"reasonCode"`
+	Reason          string     `json:"reason"`
 }
 
 type ProcessEventResult struct {

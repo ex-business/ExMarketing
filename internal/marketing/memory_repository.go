@@ -342,6 +342,21 @@ func (r *MemoryRepository) CreateQuota(ctx context.Context, quota Quota) (Quota,
 	return quota, nil
 }
 
+func (r *MemoryRepository) ListActivityQuotas(ctx context.Context, activityID string) ([]Quota, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var out []Quota
+	for _, quota := range r.quotas {
+		if quota.ActivityID == activityID {
+			out = append(out, quota)
+		}
+	}
+	return out, nil
+}
+
 func (r *MemoryRepository) ReserveQuota(ctx context.Context, activityID string, quotaType QuotaType, scope QuotaScope, scopeKey string, amount string) (bool, error) {
 	if err := ctx.Err(); err != nil {
 		return false, err

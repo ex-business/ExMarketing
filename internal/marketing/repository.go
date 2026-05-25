@@ -22,6 +22,7 @@ type Repository interface {
 	CreateParticipationGrantOutboxesWithQuota(ctx context.Context, cmd AtomicGrantCommand) (AtomicGrantResult, error)
 
 	CreateQuota(ctx context.Context, quota Quota) (Quota, error)
+	ListActivityQuotas(ctx context.Context, activityID string) ([]Quota, error)
 	ReserveQuota(ctx context.Context, activityID string, quotaType QuotaType, scope QuotaScope, scopeKey string, amount string) (bool, error)
 
 	ListPendingOutbox(ctx context.Context, limit int) ([]OutboxMessage, error)

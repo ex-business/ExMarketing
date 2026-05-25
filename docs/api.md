@@ -375,12 +375,20 @@ curl -X POST http://localhost:8080/admin/v1/simulate \
 输出包含：
 
 ```text
-命中的 participation 预览
-预计 grant_order
-预计 outbox reward command
-拒绝原因
-ruleResults 规则阶段与规则级解释
+simulatedAt
+matchedActivities / unmatchedActivities
+summary.candidateCount / matchedCount / unmatchedCount
+summary.hasRewardableActivity / hasQuotaRisk
+每个活动的 decision / decisionReasonCode / decisionReason
+ruleResult 规则阶段与规则级解释
+rewardPreviews 奖励计算预览和计算明细
+quotaImpactPreviews 预算、库存、用户次数影响预览
+participationPreview
+grantOrderPreviews
+outboxCommandPreviews
 ```
+
+模拟结果只表示按当前配置和当前 quota 快照的预览，不代表 quota 已锁定、奖励已发放或发奖指令已投递。若 quota 预览 `wouldExceed=true`，该活动会返回 `QUOTA_EXCEEDED` 风险原因，并且不会展示可执行的 grant order / outbox command 预览。缺少对应 quota 行时按无限制展示为 `unlimited=true`。
 
 ## Outbox DLQ
 

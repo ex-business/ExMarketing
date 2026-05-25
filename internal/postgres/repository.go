@@ -506,6 +506,42 @@ func (r *Repository) CreateQuota(ctx context.Context, quota marketing.Quota) (ma
 	return quota, err
 }
 
+func (r *Repository) ListActivityQuotas(ctx context.Context, activityID string) ([]marketing.Quota, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, activity_id, quota_type, scope, scope_key, total_value, used_value,
+		       frozen_value, version, created_at, updated_at
+		FROM marketing_quota
+		WHERE activity_id = $1
+		ORDER BY quota_type, scope, scope_key
+	`, activityID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var quotas []marketing.Quota
+	for rows.Next() {
+		var quota marketing.Quota
+		if err := rows.Scan(
+			&quota.ID,
+			&quota.ActivityID,
+			&quota.Type,
+			&quota.Scope,
+			&quota.ScopeKey,
+			&quota.TotalValue,
+			&quota.UsedValue,
+			&quota.FrozenValue,
+			&quota.Version,
+			&quota.CreatedAt,
+			&quota.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		quotas = append(quotas, quota)
+	}
+	return quotas, rows.Err()
+}
+
 func (r *Repository) ReserveQuota(ctx context.Context, activityID string, quotaType marketing.QuotaType, scope marketing.QuotaScope, scopeKey string, amount string) (bool, error) {
 	result, err := r.db.ExecContext(ctx, `
 		UPDATE marketing_quota

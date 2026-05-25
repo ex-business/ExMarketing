@@ -404,6 +404,7 @@ func (r *Repository) ListPendingOutbox(ctx context.Context, limit int) ([]market
 			SELECT id
 			FROM marketing_outbox
 			WHERE send_status IN ('PENDING', 'FAILED')
+			  AND target_channel IN ('HTTP', 'WEBHOOK')
 			  AND (next_retry_at IS NULL OR next_retry_at <= NOW())
 			ORDER BY created_at ASC
 			LIMIT $1
@@ -438,10 +439,39 @@ func (r *Repository) ListPendingOutbox(ctx context.Context, limit int) ([]market
 	return messages, nil
 }
 
+func (r *Repository) ListOutboxDLQ(ctx context.Context, tenantID string, includeClosed bool, limit int) ([]marketing.OutboxMessage, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, tenant_id, message_type, target_channel, target_ref, payload_json,
+		       send_status, retry_count, next_retry_at, COALESCE(error_message, ''), created_at, updated_at
+		FROM marketing_outbox
+		WHERE ($1 = '' OR tenant_id = $1)
+		  AND (send_status = 'DLQ' OR ($2 AND send_status = 'DLQ_CLOSED'))
+		ORDER BY updated_at DESC
+		LIMIT $3
+	`, tenantID, includeClosed, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var messages []marketing.OutboxMessage
+	for rows.Next() {
+		message, err := scanOutbox(rows)
+		if err != nil {
+			return nil, err
+		}
+		messages = append(messages, message)
+	}
+	return messages, rows.Err()
+}
+
 func (r *Repository) MarkOutboxSent(ctx context.Context, id string) error {
 	_, err := r.db.ExecContext(ctx, `
 		UPDATE marketing_outbox
-		SET send_status = 'SENT', error_message = NULL, updated_at = NOW()
+		SET send_status = 'SENT', next_retry_at = NULL, error_message = NULL, updated_at = NOW()
 		WHERE id = $1
 	`, id)
 	return err
@@ -456,13 +486,89 @@ func (r *Repository) MarkOutboxFailed(ctx context.Context, id string, retryCount
 	return err
 }
 
-func (r *Repository) MarkOutboxDLQ(ctx context.Context, id string, message string) error {
+func (r *Repository) MarkOutboxDLQ(ctx context.Context, id string, retryCount int, message string) error {
 	_, err := r.db.ExecContext(ctx, `
 		UPDATE marketing_outbox
-		SET send_status = 'DLQ', error_message = $2, updated_at = NOW()
+		SET send_status = 'DLQ', retry_count = $2, next_retry_at = NULL, error_message = $3, updated_at = NOW()
 		WHERE id = $1
-	`, id, message)
+	`, id, retryCount, message)
 	return err
+}
+
+func (r *Repository) ReplayOutboxDLQ(ctx context.Context, tenantID string, id string, operator string, reason string, replayedAt time.Time) (marketing.OutboxMessage, error) {
+	return r.updateOutboxDLQ(ctx, tenantID, id, operator, reason, replayedAt, marketing.OutboxPending, "OUTBOX_DLQ_REPLAY")
+}
+
+func (r *Repository) CloseOutboxDLQ(ctx context.Context, tenantID string, id string, operator string, reason string, closedAt time.Time) (marketing.OutboxMessage, error) {
+	return r.updateOutboxDLQ(ctx, tenantID, id, operator, reason, closedAt, marketing.OutboxDLQClosed, "OUTBOX_DLQ_CLOSE")
+}
+
+func (r *Repository) updateOutboxDLQ(ctx context.Context, tenantID string, id string, operator string, reason string, at time.Time, nextStatus marketing.OutboxStatus, action string) (marketing.OutboxMessage, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return marketing.OutboxMessage{}, err
+	}
+	defer rollback(tx)
+
+	var before marketing.OutboxStatus
+	err = tx.QueryRowContext(ctx, `
+		SELECT send_status
+		FROM marketing_outbox
+		WHERE id = $1 AND tenant_id = $2
+		FOR UPDATE
+	`, id, tenantID).Scan(&before)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return marketing.OutboxMessage{}, marketing.ErrNotFound
+		}
+		return marketing.OutboxMessage{}, err
+	}
+	if before != marketing.OutboxDLQ {
+		return marketing.OutboxMessage{}, marketing.ErrInvalidOperation
+	}
+
+	var row *sql.Row
+	if nextStatus == marketing.OutboxPending {
+		row = tx.QueryRowContext(ctx, `
+			UPDATE marketing_outbox
+			SET send_status = $3, next_retry_at = NULL, updated_at = $4
+			WHERE id = $1 AND tenant_id = $2 AND send_status = 'DLQ'
+			RETURNING id, tenant_id, message_type, target_channel, target_ref, payload_json,
+			          send_status, retry_count, next_retry_at, COALESCE(error_message, ''), created_at, updated_at
+		`, id, tenantID, nextStatus, at)
+	} else {
+		row = tx.QueryRowContext(ctx, `
+			UPDATE marketing_outbox
+			SET send_status = $3, updated_at = $4
+			WHERE id = $1 AND tenant_id = $2 AND send_status = 'DLQ'
+			RETURNING id, tenant_id, message_type, target_channel, target_ref, payload_json,
+			          send_status, retry_count, next_retry_at, COALESCE(error_message, ''), created_at, updated_at
+		`, id, tenantID, nextStatus, at)
+	}
+	message, err := scanOutbox(row)
+	if err != nil {
+		return marketing.OutboxMessage{}, err
+	}
+	payload, _ := json.Marshal(map[string]any{
+		"outboxId":     id,
+		"operator":     operator,
+		"reason":       reason,
+		"beforeStatus": before,
+		"afterStatus":  nextStatus,
+		"operatedAt":   at,
+	})
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO marketing_audit (
+			id, tenant_id, actor, action, resource, resource_id, payload_json, created_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+	`, marketing.NewID("audit"), tenantID, operator, action, "outbox", id, payload, at)
+	if err != nil {
+		return marketing.OutboxMessage{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return marketing.OutboxMessage{}, err
+	}
+	return message, nil
 }
 
 func (r *Repository) CreateAudit(ctx context.Context, record marketing.AuditRecord) error {

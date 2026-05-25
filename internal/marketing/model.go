@@ -98,11 +98,12 @@ const (
 	GrantRetry   GrantStatus = "RETRY"
 	GrantClosed  GrantStatus = "CLOSED"
 
-	OutboxPending OutboxStatus = "PENDING"
-	OutboxSending OutboxStatus = "SENDING"
-	OutboxSent    OutboxStatus = "SENT"
-	OutboxFailed  OutboxStatus = "FAILED"
-	OutboxDLQ     OutboxStatus = "DLQ"
+	OutboxPending   OutboxStatus = "PENDING"
+	OutboxSending   OutboxStatus = "SENDING"
+	OutboxSent      OutboxStatus = "SENT"
+	OutboxFailed    OutboxStatus = "FAILED"
+	OutboxDLQ       OutboxStatus = "DLQ"
+	OutboxDLQClosed OutboxStatus = "DLQ_CLOSED"
 
 	QuotaBudget     QuotaType = "BUDGET"
 	QuotaStock      QuotaType = "STOCK"
@@ -384,6 +385,12 @@ type OutboxMessage struct {
 	UpdatedAt     time.Time       `json:"updatedAt"`
 }
 
+type DLQOperationCommand struct {
+	TenantID string `json:"tenantId"`
+	Operator string `json:"operator"`
+	Reason   string `json:"reason"`
+}
+
 type Quota struct {
 	ID          string     `json:"id"`
 	ActivityID  string     `json:"activityId"`
@@ -536,6 +543,7 @@ var (
 	ErrIdempotencyConflict = errors.New("idempotency key payload conflict")
 	ErrNotFound            = errors.New("not found")
 	ErrQuotaExceeded       = errors.New("quota exceeded")
+	ErrInvalidOperation    = errors.New("invalid operation")
 )
 
 func (cmd CreateActivityCommand) Validate(now time.Time) error {

@@ -1,30 +1,53 @@
 {
   "requirementId": "2026-05-24-outbox-worker-dlq",
-  "updatedAt": "2026-05-24T11:34:00.361041Z",
+  "updatedAt": "2026-05-25T10:12:30.661458Z",
   "agents": {
     "analysis": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-outbox-worker-dlq/analysis.md"
+      "status": "DONE",
+      "startedAt": "2026-05-25T09:49:43.56232Z",
+      "finishedAt": "2026-05-25T09:53:26.777089Z",
+      "output": "tasks/2026-05-24-outbox-worker-dlq/analysis.md",
+      "log": "tasks/2026-05-24-outbox-worker-dlq/runs/20260525T094943Z-analysis.log",
+      "nextStatus": "REVIEW_READY"
     },
     "commit": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-outbox-worker-dlq/commit.md"
+      "status": "RUNNING",
+      "startedAt": "2026-05-25T10:12:30.661451Z",
+      "output": "tasks/2026-05-24-outbox-worker-dlq/commit.md",
+      "log": "tasks/2026-05-24-outbox-worker-dlq/runs/20260525T101230Z-commit.log",
+      "pid": 48383
     },
     "dev": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-outbox-worker-dlq/implementation.md"
+      "status": "DONE",
+      "startedAt": "2026-05-25T10:02:27.950898Z",
+      "finishedAt": "2026-05-25T10:11:07.276872Z",
+      "output": "tasks/2026-05-24-outbox-worker-dlq/implementation.md",
+      "log": "tasks/2026-05-24-outbox-worker-dlq/runs/20260525T100227Z-dev.log",
+      "nextStatus": "REVIEW_PASS"
     },
     "review": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-outbox-worker-dlq/review.md"
+      "status": "DONE",
+      "startedAt": "2026-05-25T10:01:13.618463Z",
+      "finishedAt": "2026-05-25T10:02:27.631287Z",
+      "output": "tasks/2026-05-24-outbox-worker-dlq/review.md",
+      "log": "tasks/2026-05-24-outbox-worker-dlq/runs/20260525T100113Z-review.log",
+      "nextStatus": "REVIEW_PASS"
     },
     "test": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-outbox-worker-dlq/test.md"
+      "status": "DONE",
+      "startedAt": "2026-05-25T10:11:07.330829Z",
+      "finishedAt": "2026-05-25T10:12:30.631692Z",
+      "output": "tasks/2026-05-24-outbox-worker-dlq/test.md",
+      "log": "tasks/2026-05-24-outbox-worker-dlq/runs/20260525T101107Z-test.log",
+      "nextStatus": "COMMIT_READY"
     },
     "test-plan": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-outbox-worker-dlq/test-plan.md"
+      "status": "DONE",
+      "startedAt": "2026-05-25T10:02:27.98999Z",
+      "finishedAt": "2026-05-25T10:04:19.133148Z",
+      "output": "tasks/2026-05-24-outbox-worker-dlq/test-plan.md",
+      "log": "tasks/2026-05-24-outbox-worker-dlq/runs/20260525T100227Z-test-plan.log",
+      "nextStatus": "REVIEW_PASS"
     }
   }
 }

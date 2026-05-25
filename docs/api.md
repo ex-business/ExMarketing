@@ -382,6 +382,37 @@ curl -X POST http://localhost:8080/admin/v1/simulate \
 ruleResults 规则阶段与规则级解释
 ```
 
+## Outbox DLQ
+
+```http
+GET /admin/v1/outbox/dlq?tenantId=site_001&includeClosed=true
+```
+
+返回当前 tenant 的 DLQ outbox。默认只返回 `DLQ`，`includeClosed=true` 时同时返回 `DLQ_CLOSED`。
+
+```http
+POST /admin/v1/outbox/{id}/replay
+POST /admin/v1/outbox/{id}/close
+```
+
+请求体：
+
+```json
+{
+  "tenantId": "site_001",
+  "operator": "ops",
+  "reason": "target recovered"
+}
+```
+
+规则：
+
+- `replay` 只允许当前状态为 `DLQ`，成功后同一 outbox 回到 `PENDING`，payload 不变。
+- `close` 只允许当前状态为 `DLQ`，成功后同一 outbox 进入 `DLQ_CLOSED`。
+- `DLQ_CLOSED` 不允许 replay。
+- `operator` 和 `reason` 必填。
+- 操作会写入 `marketing_audit`。
+
 ## 上报标准事件
 
 ```http

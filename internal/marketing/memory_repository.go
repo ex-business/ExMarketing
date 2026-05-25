@@ -2,6 +2,7 @@ package marketing
 
 import (
 	"context"
+	"encoding/json"
 	"slices"
 	"sync"
 	"time"
@@ -244,12 +245,18 @@ func (r *MemoryRepository) ListPendingOutbox(ctx context.Context, limit int) ([]
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	r.mu.RLock()
-	defer r.mu.RUnlock()
+	if limit <= 0 {
+		limit = 50
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	var out []OutboxMessage
 	for _, message := range r.outboxMessages {
 		if len(out) >= limit {
 			break
+		}
+		if message.TargetChannel != GrantHTTP && message.TargetChannel != GrantWebhook {
+			continue
 		}
 		if message.SendStatus == OutboxPending || message.SendStatus == OutboxFailed {
 			if message.NextRetryAt == nil || !message.NextRetryAt.After(time.Now().UTC()) {
@@ -268,9 +275,35 @@ func (r *MemoryRepository) ListPendingOutbox(ctx context.Context, limit int) ([]
 	return out, nil
 }
 
+func (r *MemoryRepository) ListOutboxDLQ(ctx context.Context, tenantID string, includeClosed bool, limit int) ([]OutboxMessage, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if limit <= 0 {
+		limit = 100
+	}
+	var out []OutboxMessage
+	for _, message := range r.outboxMessages {
+		if len(out) >= limit {
+			break
+		}
+		if tenantID != "" && message.TenantID != tenantID {
+			continue
+		}
+		if message.SendStatus == OutboxDLQ || includeClosed && message.SendStatus == OutboxDLQClosed {
+			out = append(out, message)
+		}
+	}
+	return out, nil
+}
+
 func (r *MemoryRepository) MarkOutboxSent(ctx context.Context, id string) error {
 	return r.updateOutbox(ctx, id, func(message *OutboxMessage) {
 		message.SendStatus = OutboxSent
+		message.NextRetryAt = nil
+		message.ErrorMessage = ""
 		message.UpdatedAt = time.Now().UTC()
 	})
 }
@@ -285,12 +318,61 @@ func (r *MemoryRepository) MarkOutboxFailed(ctx context.Context, id string, retr
 	})
 }
 
-func (r *MemoryRepository) MarkOutboxDLQ(ctx context.Context, id string, message string) error {
+func (r *MemoryRepository) MarkOutboxDLQ(ctx context.Context, id string, retryCount int, message string) error {
 	return r.updateOutbox(ctx, id, func(item *OutboxMessage) {
 		item.SendStatus = OutboxDLQ
+		item.RetryCount = retryCount
+		item.NextRetryAt = nil
 		item.ErrorMessage = message
 		item.UpdatedAt = time.Now().UTC()
 	})
+}
+
+func (r *MemoryRepository) ReplayOutboxDLQ(ctx context.Context, tenantID string, id string, operator string, reason string, replayedAt time.Time) (OutboxMessage, error) {
+	if err := ctx.Err(); err != nil {
+		return OutboxMessage{}, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.outboxMessages {
+		item := &r.outboxMessages[i]
+		if item.ID != id || item.TenantID != tenantID {
+			continue
+		}
+		if item.SendStatus != OutboxDLQ {
+			return OutboxMessage{}, ErrInvalidOperation
+		}
+		before := *item
+		item.SendStatus = OutboxPending
+		item.NextRetryAt = nil
+		item.UpdatedAt = replayedAt
+		r.auditRecords = append(r.auditRecords, outboxOperationAudit(tenantID, operator, "OUTBOX_DLQ_REPLAY", id, reason, before.SendStatus, item.SendStatus, replayedAt))
+		return *item, nil
+	}
+	return OutboxMessage{}, ErrNotFound
+}
+
+func (r *MemoryRepository) CloseOutboxDLQ(ctx context.Context, tenantID string, id string, operator string, reason string, closedAt time.Time) (OutboxMessage, error) {
+	if err := ctx.Err(); err != nil {
+		return OutboxMessage{}, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.outboxMessages {
+		item := &r.outboxMessages[i]
+		if item.ID != id || item.TenantID != tenantID {
+			continue
+		}
+		if item.SendStatus != OutboxDLQ {
+			return OutboxMessage{}, ErrInvalidOperation
+		}
+		before := *item
+		item.SendStatus = OutboxDLQClosed
+		item.UpdatedAt = closedAt
+		r.auditRecords = append(r.auditRecords, outboxOperationAudit(tenantID, operator, "OUTBOX_DLQ_CLOSE", id, reason, before.SendStatus, item.SendStatus, closedAt))
+		return *item, nil
+	}
+	return OutboxMessage{}, ErrNotFound
 }
 
 func (r *MemoryRepository) CreateAudit(ctx context.Context, record AuditRecord) error {
@@ -354,6 +436,27 @@ func reserveQuotaIn(quotas []Quota, activityID string, quotaType QuotaType, scop
 		return true
 	}
 	return true
+}
+
+func outboxOperationAudit(tenantID string, operator string, action string, outboxID string, reason string, before OutboxStatus, after OutboxStatus, at time.Time) AuditRecord {
+	payload, _ := json.Marshal(map[string]any{
+		"outboxId":     outboxID,
+		"operator":     operator,
+		"reason":       reason,
+		"beforeStatus": before,
+		"afterStatus":  after,
+		"operatedAt":   at,
+	})
+	return AuditRecord{
+		ID:         NewID("audit"),
+		TenantID:   tenantID,
+		Actor:      operator,
+		Action:     action,
+		Resource:   "outbox",
+		ResourceID: outboxID,
+		Payload:    payload,
+		CreatedAt:  at,
+	}
 }
 
 func participationIdempotencyExists(participations []Participation, key string) bool {

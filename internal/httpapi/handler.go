@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -31,6 +32,9 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /admin/v1/activities", h.createActivity)
 	mux.HandleFunc("POST /admin/v1/quotas", h.createQuota)
 	mux.HandleFunc("GET /admin/v1/audit", h.listAudit)
+	mux.HandleFunc("GET /admin/v1/outbox/dlq", h.listOutboxDLQ)
+	mux.HandleFunc("POST /admin/v1/outbox/{id}/replay", h.replayOutboxDLQ)
+	mux.HandleFunc("POST /admin/v1/outbox/{id}/close", h.closeOutboxDLQ)
 	mux.HandleFunc("POST /admin/v1/simulate", h.simulate)
 	mux.HandleFunc("GET /admin/v1/workflow/requirements", h.listWorkflowRequirements)
 	mux.HandleFunc("GET /admin/v1/workflow/config", h.getWorkflowConfig)
@@ -115,6 +119,49 @@ func (h *Handler) listAudit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": records})
+}
+
+func (h *Handler) listOutboxDLQ(w http.ResponseWriter, r *http.Request) {
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	includeClosed := r.URL.Query().Get("includeClosed") == "true"
+	messages, err := h.engine.ListOutboxDLQ(r.Context(), r.URL.Query().Get("tenantId"), includeClosed, limit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": messages})
+}
+
+func (h *Handler) replayOutboxDLQ(w http.ResponseWriter, r *http.Request) {
+	h.handleOutboxDLQOperation(w, r, h.engine.ReplayOutboxDLQ)
+}
+
+func (h *Handler) closeOutboxDLQ(w http.ResponseWriter, r *http.Request) {
+	h.handleOutboxDLQOperation(w, r, h.engine.CloseOutboxDLQ)
+}
+
+func (h *Handler) handleOutboxDLQOperation(w http.ResponseWriter, r *http.Request, operation func(context.Context, string, marketing.DLQOperationCommand) (marketing.OutboxMessage, error)) {
+	var cmd marketing.DLQOperationCommand
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&cmd); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	message, err := operation(r.Context(), r.PathValue("id"), cmd)
+	if err != nil {
+		if errors.Is(err, marketing.ErrNotFound) {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		if errors.Is(err, marketing.ErrInvalidOperation) {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, message)
 }
 
 func (h *Handler) simulate(w http.ResponseWriter, r *http.Request) {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/ex-stack/ExMarketing/internal/decimal"
@@ -97,6 +98,24 @@ func (s *Service) CreateQuota(ctx context.Context, cmd marketing.CreateQuotaComm
 
 func (s *Service) ListAudit(ctx context.Context, limit int) ([]marketing.AuditRecord, error) {
 	return s.repository.ListAudit(ctx, limit)
+}
+
+func (s *Service) ListOutboxDLQ(ctx context.Context, tenantID string, includeClosed bool, limit int) ([]marketing.OutboxMessage, error) {
+	return s.repository.ListOutboxDLQ(ctx, tenantID, includeClosed, limit)
+}
+
+func (s *Service) ReplayOutboxDLQ(ctx context.Context, id string, cmd marketing.DLQOperationCommand) (marketing.OutboxMessage, error) {
+	if strings.TrimSpace(cmd.TenantID) == "" || strings.TrimSpace(cmd.Operator) == "" || strings.TrimSpace(cmd.Reason) == "" {
+		return marketing.OutboxMessage{}, errors.Join(marketing.ErrInvalidOperation, errors.New("tenantId, operator and reason are required"))
+	}
+	return s.repository.ReplayOutboxDLQ(ctx, cmd.TenantID, id, cmd.Operator, cmd.Reason, s.now())
+}
+
+func (s *Service) CloseOutboxDLQ(ctx context.Context, id string, cmd marketing.DLQOperationCommand) (marketing.OutboxMessage, error) {
+	if strings.TrimSpace(cmd.TenantID) == "" || strings.TrimSpace(cmd.Operator) == "" || strings.TrimSpace(cmd.Reason) == "" {
+		return marketing.OutboxMessage{}, errors.Join(marketing.ErrInvalidOperation, errors.New("tenantId, operator and reason are required"))
+	}
+	return s.repository.CloseOutboxDLQ(ctx, cmd.TenantID, id, cmd.Operator, cmd.Reason, s.now())
 }
 
 func (s *Service) ProcessEvent(ctx context.Context, event marketing.ActivityEvent) (marketing.ProcessEventResult, error) {

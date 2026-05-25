@@ -144,11 +144,27 @@ LIMIT 20;
 DLQ：
 
 ```sql
-SELECT id, target_channel, target_ref, retry_count, error_message, updated_at
+SELECT id, tenant_id, target_channel, target_ref, retry_count, error_message, updated_at, send_status
 FROM marketing_outbox
-WHERE send_status = 'DLQ'
+WHERE send_status IN ('DLQ', 'DLQ_CLOSED')
 ORDER BY updated_at DESC;
 ```
+
+DLQ 管理 API：
+
+```bash
+curl 'http://localhost:8080/admin/v1/outbox/dlq?tenantId=site_001&includeClosed=true'
+
+curl -X POST http://localhost:8080/admin/v1/outbox/{outboxId}/replay \
+  -H 'content-type: application/json' \
+  -d '{"tenantId":"site_001","operator":"ops","reason":"target recovered"}'
+
+curl -X POST http://localhost:8080/admin/v1/outbox/{outboxId}/close \
+  -H 'content-type: application/json' \
+  -d '{"tenantId":"site_001","operator":"ops","reason":"business rejected"}'
+```
+
+`replay` 和 `close` 只允许当前状态为 `DLQ` 的记录；`DLQ_CLOSED` 不允许 replay。操作会写入 `marketing_audit`。
 
 审计：
 
@@ -282,4 +298,3 @@ DLQ 有告警和人工处理流程
 审计表有保留策略
 数据库 migration 有正式发布流程
 ```
-

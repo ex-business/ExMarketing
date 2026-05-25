@@ -40,7 +40,15 @@ Enable the Outbox sender:
 export EX_MARKETING_OUTBOX_WORKER=true
 ```
 
-The worker sends `HTTP` and `WEBHOOK` reward commands to `rewardConfig.targetRef`, retries failures, then marks exhausted messages as `DLQ`.
+The worker sends `HTTP` and `WEBHOOK` reward commands to `rewardConfig.targetRef`, retries retryable failures with exponential backoff, then marks exhausted or non-retryable messages as `DLQ`. `MQ` outbox delivery is intentionally outside the current worker scope.
+
+DLQ messages can be inspected and operated from the admin API:
+
+```bash
+GET  /admin/v1/outbox/dlq?tenantId=site_001&includeClosed=true
+POST /admin/v1/outbox/{id}/replay
+POST /admin/v1/outbox/{id}/close
+```
 
 Stop local PostgreSQL:
 

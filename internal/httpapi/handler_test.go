@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -518,6 +519,142 @@ func TestActivityEventStockExceededReturnsConflictAndNoRewardableResult(t *testi
 	handler.Routes().ServeHTTP(auditRec, httptest.NewRequest(http.MethodGet, "/admin/v1/audit", nil))
 	if !strings.Contains(auditRec.Body.String(), `"quotaType":"STOCK"`) {
 		t.Fatalf("expected stock audit payload, got: %s", auditRec.Body.String())
+	}
+}
+
+func TestOutboxDLQQueryReplayAndClose(t *testing.T) {
+	repo := marketing.NewMemoryRepository()
+	handler := NewHandler(engine.NewService(repo))
+	now := time.Date(2026, 5, 25, 10, 0, 0, 0, time.UTC)
+	_, err := repo.CreateOutbox(context.Background(), marketing.OutboxMessage{
+		ID:            "outbox_dlq_1",
+		TenantID:      "site_001",
+		MessageType:   "REWARD_COMMAND",
+		TargetChannel: marketing.GrantHTTP,
+		TargetRef:     "https://wallet.example.com/reward",
+		Payload:       []byte(`{"commandId":"cmd_1"}`),
+		SendStatus:    marketing.OutboxDLQ,
+		RetryCount:    5,
+		ErrorMessage:  "target returned status 500",
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	})
+	if err != nil {
+		t.Fatalf("create outbox: %v", err)
+	}
+	_, err = repo.CreateOutbox(context.Background(), marketing.OutboxMessage{
+		ID:            "outbox_dlq_other_tenant",
+		TenantID:      "site_002",
+		MessageType:   "REWARD_COMMAND",
+		TargetChannel: marketing.GrantHTTP,
+		TargetRef:     "https://wallet.example.com/reward",
+		Payload:       []byte(`{"commandId":"cmd_2"}`),
+		SendStatus:    marketing.OutboxDLQ,
+		RetryCount:    5,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	})
+	if err != nil {
+		t.Fatalf("create other tenant outbox: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/admin/v1/outbox/dlq?tenantId=site_001", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected DLQ list status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"id":"outbox_dlq_1"`) || strings.Contains(rec.Body.String(), "outbox_dlq_other_tenant") {
+		t.Fatalf("expected tenant-scoped DLQ list, got: %s", rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	replayReq := httptest.NewRequest(http.MethodPost, "/admin/v1/outbox/outbox_dlq_1/replay", strings.NewReader(`{
+		"tenantId": "site_001",
+		"operator": "ops",
+		"reason": "retry after wallet recovery"
+	}`))
+	handler.Routes().ServeHTTP(rec, replayReq)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected replay status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"sendStatus":"PENDING"`) || !strings.Contains(rec.Body.String(), `"commandId":"cmd_1"`) {
+		t.Fatalf("expected replay to keep payload and return PENDING, got: %s", rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	replayReq = httptest.NewRequest(http.MethodPost, "/admin/v1/outbox/outbox_dlq_1/replay", strings.NewReader(`{
+		"tenantId": "site_001",
+		"operator": "ops",
+		"reason": "retry after wallet recovery"
+	}`))
+	handler.Routes().ServeHTTP(rec, replayReq)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected second replay conflict, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	_, err = repo.CreateOutbox(context.Background(), marketing.OutboxMessage{
+		ID:            "outbox_dlq_close",
+		TenantID:      "site_001",
+		MessageType:   "REWARD_COMMAND",
+		TargetChannel: marketing.GrantHTTP,
+		TargetRef:     "https://wallet.example.com/reward",
+		Payload:       []byte(`{"commandId":"cmd_close"}`),
+		SendStatus:    marketing.OutboxDLQ,
+		RetryCount:    5,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	})
+	if err != nil {
+		t.Fatalf("create close outbox: %v", err)
+	}
+	rec = httptest.NewRecorder()
+	closeReq := httptest.NewRequest(http.MethodPost, "/admin/v1/outbox/outbox_dlq_close/close", strings.NewReader(`{
+		"tenantId": "site_001",
+		"operator": "ops",
+		"reason": "business rejected"
+	}`))
+	handler.Routes().ServeHTTP(rec, closeReq)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"sendStatus":"DLQ_CLOSED"`) {
+		t.Fatalf("expected close to DLQ_CLOSED, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	auditRec := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(auditRec, httptest.NewRequest(http.MethodGet, "/admin/v1/audit", nil))
+	for _, want := range []string{`"action":"OUTBOX_DLQ_REPLAY"`, `"action":"OUTBOX_DLQ_CLOSE"`, `"actor":"ops"`} {
+		if !strings.Contains(auditRec.Body.String(), want) {
+			t.Fatalf("expected audit %s, got: %s", want, auditRec.Body.String())
+		}
+	}
+}
+
+func TestOutboxDLQOperationRequiresOperatorAndReason(t *testing.T) {
+	repo := marketing.NewMemoryRepository()
+	handler := NewHandler(engine.NewService(repo))
+	now := time.Date(2026, 5, 25, 10, 0, 0, 0, time.UTC)
+	_, err := repo.CreateOutbox(context.Background(), marketing.OutboxMessage{
+		ID:            "outbox_dlq_missing_reason",
+		TenantID:      "site_001",
+		MessageType:   "REWARD_COMMAND",
+		TargetChannel: marketing.GrantHTTP,
+		TargetRef:     "https://wallet.example.com/reward",
+		Payload:       []byte(`{"commandId":"cmd_1"}`),
+		SendStatus:    marketing.OutboxDLQ,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	})
+	if err != nil {
+		t.Fatalf("create outbox: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/admin/v1/outbox/outbox_dlq_missing_reason/replay", strings.NewReader(`{
+		"tenantId": "site_001",
+		"operator": "ops",
+		"reason": ""
+	}`))
+	handler.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected missing reason conflict, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 

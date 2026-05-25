@@ -23,9 +23,12 @@ type Repository interface {
 	ReserveQuota(ctx context.Context, activityID string, quotaType QuotaType, scope QuotaScope, scopeKey string, amount string) (bool, error)
 
 	ListPendingOutbox(ctx context.Context, limit int) ([]OutboxMessage, error)
+	ListOutboxDLQ(ctx context.Context, tenantID string, includeClosed bool, limit int) ([]OutboxMessage, error)
 	MarkOutboxSent(ctx context.Context, id string) error
 	MarkOutboxFailed(ctx context.Context, id string, retryCount int, nextRetryAt time.Time, message string) error
-	MarkOutboxDLQ(ctx context.Context, id string, message string) error
+	MarkOutboxDLQ(ctx context.Context, id string, retryCount int, message string) error
+	ReplayOutboxDLQ(ctx context.Context, tenantID string, id string, operator string, reason string, replayedAt time.Time) (OutboxMessage, error)
+	CloseOutboxDLQ(ctx context.Context, tenantID string, id string, operator string, reason string, closedAt time.Time) (OutboxMessage, error)
 
 	CreateAudit(ctx context.Context, record AuditRecord) error
 	ListAudit(ctx context.Context, limit int) ([]AuditRecord, error)

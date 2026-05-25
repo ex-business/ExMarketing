@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -102,6 +103,148 @@ func TestMemoryAtomicGrantDoesNotDoubleReserveOnDuplicateInbox(t *testing.T) {
 	}
 }
 
+func TestMemoryRepositoryRejectsDuplicateParticipationAndGrantIdempotencyKeys(t *testing.T) {
+	repo := NewMemoryRepository()
+	now := time.Now().UTC()
+	participation := Participation{
+		ID:             "part_1",
+		TenantID:       "site_001",
+		ActivityID:     "act_1",
+		EventInboxID:   "inbox_1",
+		Status:         ParticipationRejected,
+		Snapshot:       []byte(`{}`),
+		IdempotencyKey: "site_001:act_1:site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:pay_1",
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	if _, err := repo.CreateParticipation(context.Background(), participation); err != nil {
+		t.Fatalf("create participation: %v", err)
+	}
+	participation.ID = "part_2"
+	if _, err := repo.CreateParticipation(context.Background(), participation); !errors.Is(err, ErrIdempotencyConflict) {
+		t.Fatalf("expected duplicate participation idempotency conflict, got %v", err)
+	}
+
+	order := GrantOrder{
+		ID:             "grant_1",
+		IdempotencyKey: "site_001:act_1:site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:pay_1:REWARD_A",
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	if _, err := repo.CreateGrantOrder(context.Background(), order); err != nil {
+		t.Fatalf("create grant order: %v", err)
+	}
+	order.ID = "grant_2"
+	if _, err := repo.CreateGrantOrder(context.Background(), order); !errors.Is(err, ErrIdempotencyConflict) {
+		t.Fatalf("expected duplicate grant idempotency conflict, got %v", err)
+	}
+}
+
+func TestMemoryConcurrentDuplicateGrantRequestOnlyProcessesOnce(t *testing.T) {
+	repo := NewMemoryRepository()
+	now := time.Now().UTC()
+	activityID := "act_concurrent_duplicate"
+	repo.quotas = []Quota{
+		{ID: "quota_budget", ActivityID: activityID, Type: QuotaBudget, Scope: QuotaScopeActivity, ScopeKey: "TOTAL", TotalValue: "100", UsedValue: "0", FrozenValue: "0", Version: 1, CreatedAt: now, UpdatedAt: now},
+		{ID: "quota_stock", ActivityID: activityID, Type: QuotaStock, Scope: QuotaScopeActivity, ScopeKey: "REWARD_A", TotalValue: "100", UsedValue: "0", FrozenValue: "0", Version: 1, CreatedAt: now, UpdatedAt: now},
+	}
+
+	const attempts = 24
+	var wg sync.WaitGroup
+	results := make(chan error, attempts)
+	for i := 0; i < attempts; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := repo.CreateParticipationGrantOutboxesWithQuota(context.Background(), AtomicGrantCommand{
+				Participation:  testAtomicParticipation("part_concurrent_duplicate", activityID, "part_idem_concurrent_duplicate", now),
+				BudgetAmount:   "10",
+				GrantOrders:    []GrantOrder{testAtomicGrant("grant_concurrent_duplicate", activityID, "part_concurrent_duplicate", "grant_idem_concurrent_duplicate", now)},
+				OutboxMessages: []OutboxMessage{testAtomicOutbox("outbox_concurrent_duplicate", now)},
+				StockReservations: []QuotaReservation{
+					{Type: QuotaStock, Scope: QuotaScopeActivity, ScopeKey: "REWARD_A", Amount: "1"},
+				},
+			})
+			results <- err
+		}()
+	}
+	wg.Wait()
+	close(results)
+
+	var success, conflicts int
+	for err := range results {
+		switch {
+		case err == nil:
+			success++
+		case errors.Is(err, ErrIdempotencyConflict):
+			conflicts++
+		default:
+			t.Fatalf("unexpected concurrent duplicate error: %v", err)
+		}
+	}
+	if success != 1 || conflicts != attempts-1 {
+		t.Fatalf("expected one success and %d conflicts, got success=%d conflicts=%d", attempts-1, success, conflicts)
+	}
+	if len(repo.participations) != 1 || len(repo.grantOrders) != 1 || len(repo.outboxMessages) != 1 {
+		t.Fatalf("expected one persisted grant chain, participations=%d grants=%d outbox=%d", len(repo.participations), len(repo.grantOrders), len(repo.outboxMessages))
+	}
+	assertMemoryQuotaUsed(t, repo, activityID, QuotaBudget, QuotaScopeActivity, "TOTAL", "10.0000")
+	assertMemoryQuotaUsed(t, repo, activityID, QuotaStock, QuotaScopeActivity, "REWARD_A", "1.0000")
+}
+
+func TestMemoryConcurrentQuotaCompetitionDoesNotOverReserve(t *testing.T) {
+	repo := NewMemoryRepository()
+	now := time.Now().UTC()
+	activityID := "act_concurrent_quota"
+	repo.quotas = []Quota{
+		{ID: "quota_budget", ActivityID: activityID, Type: QuotaBudget, Scope: QuotaScopeActivity, ScopeKey: "TOTAL", TotalValue: "1", UsedValue: "0", FrozenValue: "0", Version: 1, CreatedAt: now, UpdatedAt: now},
+		{ID: "quota_stock", ActivityID: activityID, Type: QuotaStock, Scope: QuotaScopeActivity, ScopeKey: "REWARD_A", TotalValue: "1", UsedValue: "0", FrozenValue: "0", Version: 1, CreatedAt: now, UpdatedAt: now},
+	}
+
+	const attempts = 24
+	var wg sync.WaitGroup
+	results := make(chan error, attempts)
+	for i := 0; i < attempts; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			suffix := strings.ReplaceAll(time.Unix(0, int64(i)).Format("150405.000000000"), ".", "_")
+			_, err := repo.CreateParticipationGrantOutboxesWithQuota(context.Background(), AtomicGrantCommand{
+				Participation:  testAtomicParticipation("part_quota_"+suffix, activityID, "part_idem_quota_"+suffix, now),
+				BudgetAmount:   "1",
+				GrantOrders:    []GrantOrder{testAtomicGrant("grant_quota_"+suffix, activityID, "part_quota_"+suffix, "grant_idem_quota_"+suffix, now)},
+				OutboxMessages: []OutboxMessage{testAtomicOutbox("outbox_quota_"+suffix, now)},
+				StockReservations: []QuotaReservation{
+					{Type: QuotaStock, Scope: QuotaScopeActivity, ScopeKey: "REWARD_A", Amount: "1"},
+				},
+			})
+			results <- err
+		}(i)
+	}
+	wg.Wait()
+	close(results)
+
+	var success, quotaExceeded int
+	for err := range results {
+		switch {
+		case err == nil:
+			success++
+		case errors.Is(err, ErrQuotaExceeded):
+			quotaExceeded++
+		default:
+			t.Fatalf("unexpected concurrent quota error: %v", err)
+		}
+	}
+	if success != 1 || quotaExceeded != attempts-1 {
+		t.Fatalf("expected one success and %d quota failures, got success=%d quotaExceeded=%d", attempts-1, success, quotaExceeded)
+	}
+	if len(repo.participations) != 1 || len(repo.grantOrders) != 1 || len(repo.outboxMessages) != 1 {
+		t.Fatalf("expected one persisted grant chain, participations=%d grants=%d outbox=%d", len(repo.participations), len(repo.grantOrders), len(repo.outboxMessages))
+	}
+	assertMemoryQuotaUsed(t, repo, activityID, QuotaBudget, QuotaScopeActivity, "TOTAL", "1.0000")
+	assertMemoryQuotaUsed(t, repo, activityID, QuotaStock, QuotaScopeActivity, "REWARD_A", "1.0000")
+}
+
 func TestMemoryCreateInboxDetectsDuplicateAndConflict(t *testing.T) {
 	repo := NewMemoryRepository()
 	now := time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
@@ -171,4 +314,66 @@ func jsonNumber(value string) any {
 		panic(err)
 	}
 	return out
+}
+
+func testAtomicParticipation(id string, activityID string, idempotencyKey string, now time.Time) Participation {
+	return Participation{
+		ID:             id,
+		TenantID:       "site_001",
+		ActivityID:     activityID,
+		EventInboxID:   "inbox_" + id,
+		Subject:        EventSubject{Type: "USER", ID: "user_1"},
+		Biz:            EventBiz{BizType: "DEPOSIT", BizID: "pay_" + id},
+		Status:         ParticipationRewardable,
+		Snapshot:       []byte(`{}`),
+		IdempotencyKey: idempotencyKey,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+}
+
+func testAtomicGrant(id string, activityID string, participationID string, idempotencyKey string, now time.Time) GrantOrder {
+	return GrantOrder{
+		ID:              id,
+		TenantID:        "site_001",
+		ActivityID:      activityID,
+		ParticipationID: participationID,
+		Subject:         EventSubject{Type: "USER", ID: "user_1"},
+		RewardType:      RewardBonus,
+		RewardAmount:    "1",
+		RewardPayload:   []byte(`{}`),
+		BillNo:          "cmd_" + id,
+		GrantStatus:     GrantPending,
+		GrantChannel:    GrantHTTP,
+		IdempotencyKey:  idempotencyKey,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+}
+
+func testAtomicOutbox(id string, now time.Time) OutboxMessage {
+	return OutboxMessage{
+		ID:            id,
+		TenantID:      "site_001",
+		MessageType:   "REWARD_COMMAND",
+		TargetChannel: GrantHTTP,
+		TargetRef:     "https://reward.example.com",
+		Payload:       []byte(`{}`),
+		SendStatus:    OutboxPending,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+}
+
+func assertMemoryQuotaUsed(t *testing.T, repo *MemoryRepository, activityID string, quotaType QuotaType, scope QuotaScope, scopeKey string, want string) {
+	t.Helper()
+	for _, quota := range repo.quotas {
+		if quota.ActivityID == activityID && quota.Type == quotaType && quota.Scope == scope && quota.ScopeKey == scopeKey {
+			if quota.UsedValue != want {
+				t.Fatalf("expected quota %s/%s/%s used %s, got %s", quotaType, scope, scopeKey, want, quota.UsedValue)
+			}
+			return
+		}
+	}
+	t.Fatalf("quota not found: %s/%s/%s", quotaType, scope, scopeKey)
 }

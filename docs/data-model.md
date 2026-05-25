@@ -231,7 +231,7 @@ FAILED
 | `biz_id` | 业务 ID |
 | `status` | 参与状态 |
 | `reject_reason` | 拒绝原因 |
-| `snapshot_json` | 命中时活动配置快照 |
+| `snapshot_json` | 命中时活动、事件、规则结果和奖励计算摘要快照 |
 | `idempotency_key` | 参与幂等键，唯一 |
 | `created_at` | 创建时间 |
 | `updated_at` | 更新时间 |
@@ -246,6 +246,25 @@ REWARDABLE
 GRANTED
 FAILED
 ```
+
+参与幂等键固定格式：
+
+```text
+tenantId + ":" + activityId + ":" + eventInbox.idempotency_key
+```
+
+其中 `eventInbox.idempotency_key` 固定为 `tenantId:sourceSystem:eventType:bizType:bizId`。因此同一标准事件命中同一活动只能生成一条 participation，不依赖数据库自增 ID、当前时间或随机数。
+
+`snapshot_json` 固定包含：
+
+```text
+activity     活动 ID、activityCode、activityType、version、互斥叠加字段、config、rules、rewards
+event        inboxId、eventId、eventType、sourceSystem、tenantId、subject、biz、occurredAt、attributes、idempotencyKey
+ruleResult   MATCH / QUALIFY / REWARD / RISK_LIMIT_BUDGET 执行摘要
+rewards      rewardCode、rewardType、calculateType、grantChannel、amount、currency、skipped、reasonCode、reason
+```
+
+规则拒绝时写 `REJECTED` participation 和 `reject_reason`，不生成 grant_order/outbox，不扣 quota。规则通过但全部奖励为 `0.0000` 时写 `QUALIFIED` participation，并在 `reject_reason` 中记录 `ZERO_REWARD_SKIPPED: no payable reward`；不写 `REWARDABLE`，不生成 grant_order/outbox，不扣 quota。
 
 ## marketing_grant_order
 
@@ -280,6 +299,27 @@ SUCCESS
 FAILED
 RETRY
 CLOSED
+```
+
+发奖单幂等键固定格式：
+
+```text
+participation.idempotency_key + ":" + rewardCode
+```
+
+因此同一 participation 的同一奖励配置只能生成一张 grant_order。
+
+`reward_payload_json` 固定包含发奖和对账所需解释字段：
+
+```text
+rewardCode
+rewardType
+calculateType
+currency
+flowMultiple
+targetRef
+source / amount / reasonCode
+奖励计算方式对应的解释字段，例如 baseField、baseAmount、rate、maxAmount、capped
 ```
 
 ## marketing_quota

@@ -139,6 +139,123 @@ func TestPostgresCreateInboxDetectsDuplicateAndConflict(t *testing.T) {
 	}
 }
 
+func TestPostgresParticipationAndGrantIdempotencyUniqueConstraints(t *testing.T) {
+	databaseURL := os.Getenv("EX_MARKETING_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("EX_MARKETING_DATABASE_URL is not set")
+	}
+	ctx := context.Background()
+	repo, err := NewRepository(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("connect postgres: %v", err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+
+	prefix := "pg_part_grant_idem"
+	cleanupPostgresAtomicTest(t, repo, prefix)
+	t.Cleanup(func() { cleanupPostgresAtomicTest(t, repo, prefix) })
+
+	now := time.Now().UTC()
+	participation := testPostgresParticipation(prefix+"_part_1", prefix+"_act", prefix+"_part_idem", now)
+	if _, err := repo.CreateParticipation(ctx, participation); err != nil {
+		t.Fatalf("create participation: %v", err)
+	}
+	participation.ID = prefix + "_part_2"
+	if _, err := repo.CreateParticipation(ctx, participation); err == nil {
+		t.Fatal("expected duplicate participation idempotency key to fail")
+	}
+	assertPostgresCount(t, repo, `SELECT COUNT(*) FROM marketing_participation WHERE idempotency_key = $1`, prefix+"_part_idem", 1)
+
+	order := testPostgresGrant(prefix+"_grant_1", prefix+"_act", prefix+"_part_1", prefix+"_grant_idem", now)
+	if _, err := repo.CreateGrantOrder(ctx, order); err != nil {
+		t.Fatalf("create grant order: %v", err)
+	}
+	order.ID = prefix + "_grant_2"
+	order.BillNo = prefix + "_cmd_2"
+	if _, err := repo.CreateGrantOrder(ctx, order); err == nil {
+		t.Fatal("expected duplicate grant order idempotency key to fail")
+	}
+	assertPostgresCount(t, repo, `SELECT COUNT(*) FROM marketing_grant_order WHERE idempotency_key = $1`, prefix+"_grant_idem", 1)
+}
+
+func TestPostgresAtomicGrantRollsBackWhenGrantOrderCreateFails(t *testing.T) {
+	databaseURL := os.Getenv("EX_MARKETING_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("EX_MARKETING_DATABASE_URL is not set")
+	}
+	ctx := context.Background()
+	repo, err := NewRepository(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("connect postgres: %v", err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+
+	prefix := "pg_grant_insert_rollback"
+	cleanupPostgresAtomicTest(t, repo, prefix)
+	t.Cleanup(func() { cleanupPostgresAtomicTest(t, repo, prefix) })
+
+	now := time.Now().UTC()
+	activityID := prefix + "_act"
+	createPostgresAtomicQuotas(t, repo, activityID, prefix, now)
+
+	_, err = repo.CreateParticipationGrantOutboxesWithQuota(ctx, marketing.AtomicGrantCommand{
+		Participation:  testPostgresParticipation(prefix+"_part", activityID, prefix+"_part_idem", now),
+		BudgetAmount:   "2",
+		GrantOrders:    []marketing.GrantOrder{testPostgresGrant(prefix+"_grant_1", activityID, prefix+"_part", prefix+"_grant_idem", now), testPostgresGrant(prefix+"_grant_2", activityID, prefix+"_part", prefix+"_grant_idem", now)},
+		OutboxMessages: []marketing.OutboxMessage{testPostgresOutbox(prefix+"_outbox_1", now)},
+		StockReservations: []marketing.QuotaReservation{
+			{Type: marketing.QuotaStock, Scope: marketing.QuotaScopeActivity, ScopeKey: "REWARD_A", Amount: "1"},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected duplicate grant order idempotency key to fail atomic grant")
+	}
+	assertPostgresCount(t, repo, `SELECT COUNT(*) FROM marketing_participation WHERE id LIKE $1`, prefix+"_%", 0)
+	assertPostgresCount(t, repo, `SELECT COUNT(*) FROM marketing_grant_order WHERE id LIKE $1`, prefix+"_%", 0)
+	assertPostgresCount(t, repo, `SELECT COUNT(*) FROM marketing_outbox WHERE id LIKE $1`, prefix+"_%", 0)
+	assertPostgresCount(t, repo, `SELECT COUNT(*) FROM marketing_quota WHERE activity_id = $1 AND used_value <> 0`, activityID, 0)
+}
+
+func TestPostgresAtomicGrantRollsBackWhenOutboxCreateFails(t *testing.T) {
+	databaseURL := os.Getenv("EX_MARKETING_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("EX_MARKETING_DATABASE_URL is not set")
+	}
+	ctx := context.Background()
+	repo, err := NewRepository(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("connect postgres: %v", err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+
+	prefix := "pg_outbox_insert_rollback"
+	cleanupPostgresAtomicTest(t, repo, prefix)
+	t.Cleanup(func() { cleanupPostgresAtomicTest(t, repo, prefix) })
+
+	now := time.Now().UTC()
+	activityID := prefix + "_act"
+	createPostgresAtomicQuotas(t, repo, activityID, prefix, now)
+	badOutbox := testPostgresOutbox(prefix+"_outbox_1", now)
+	badOutbox.Payload = []byte(`{`)
+
+	_, err = repo.CreateParticipationGrantOutboxesWithQuota(ctx, marketing.AtomicGrantCommand{
+		Participation:  testPostgresParticipation(prefix+"_part", activityID, prefix+"_part_idem", now),
+		BudgetAmount:   "2",
+		GrantOrders:    []marketing.GrantOrder{testPostgresGrant(prefix+"_grant_1", activityID, prefix+"_part", prefix+"_grant_idem", now)},
+		OutboxMessages: []marketing.OutboxMessage{badOutbox},
+		StockReservations: []marketing.QuotaReservation{
+			{Type: marketing.QuotaStock, Scope: marketing.QuotaScopeActivity, ScopeKey: "REWARD_A", Amount: "1"},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected invalid outbox payload to fail atomic grant")
+	}
+	assertPostgresCount(t, repo, `SELECT COUNT(*) FROM marketing_participation WHERE id LIKE $1`, prefix+"_%", 0)
+	assertPostgresCount(t, repo, `SELECT COUNT(*) FROM marketing_grant_order WHERE id LIKE $1`, prefix+"_%", 0)
+	assertPostgresCount(t, repo, `SELECT COUNT(*) FROM marketing_outbox WHERE id LIKE $1`, prefix+"_%", 0)
+	assertPostgresCount(t, repo, `SELECT COUNT(*) FROM marketing_quota WHERE activity_id = $1 AND used_value <> 0`, activityID, 0)
+}
+
 func cleanupPostgresAtomicTest(t *testing.T, repo *Repository, prefix string) {
 	t.Helper()
 	ctx := context.Background()
@@ -179,5 +296,67 @@ func assertPostgresCount(t *testing.T, repo *Repository, query string, arg any, 
 	}
 	if got != want {
 		t.Fatalf("expected count %d, got %d for %s", want, got, query)
+	}
+}
+
+func createPostgresAtomicQuotas(t *testing.T, repo *Repository, activityID string, prefix string, now time.Time) {
+	t.Helper()
+	ctx := context.Background()
+	for _, quota := range []marketing.Quota{
+		{ID: prefix + "_budget", ActivityID: activityID, Type: marketing.QuotaBudget, Scope: marketing.QuotaScopeActivity, ScopeKey: "TOTAL", TotalValue: "100", UsedValue: "0", FrozenValue: "0", Version: 1, CreatedAt: now, UpdatedAt: now},
+		{ID: prefix + "_stock", ActivityID: activityID, Type: marketing.QuotaStock, Scope: marketing.QuotaScopeActivity, ScopeKey: "REWARD_A", TotalValue: "100", UsedValue: "0", FrozenValue: "0", Version: 1, CreatedAt: now, UpdatedAt: now},
+	} {
+		if _, err := repo.CreateQuota(ctx, quota); err != nil {
+			t.Fatalf("create quota %s: %v", quota.ID, err)
+		}
+	}
+}
+
+func testPostgresParticipation(id string, activityID string, idempotencyKey string, now time.Time) marketing.Participation {
+	return marketing.Participation{
+		ID:             id,
+		TenantID:       "site_001",
+		ActivityID:     activityID,
+		EventInboxID:   id + "_inbox",
+		Subject:        marketing.EventSubject{Type: "USER", ID: "user_1"},
+		Biz:            marketing.EventBiz{BizType: "DEPOSIT", BizID: id + "_pay"},
+		Status:         marketing.ParticipationRewardable,
+		Snapshot:       []byte(`{}`),
+		IdempotencyKey: idempotencyKey,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+}
+
+func testPostgresGrant(id string, activityID string, participationID string, idempotencyKey string, now time.Time) marketing.GrantOrder {
+	return marketing.GrantOrder{
+		ID:              id,
+		TenantID:        "site_001",
+		ActivityID:      activityID,
+		ParticipationID: participationID,
+		Subject:         marketing.EventSubject{Type: "USER", ID: "user_1"},
+		RewardType:      marketing.RewardBonus,
+		RewardAmount:    "1",
+		RewardPayload:   []byte(`{}`),
+		BillNo:          id + "_cmd",
+		GrantStatus:     marketing.GrantPending,
+		GrantChannel:    marketing.GrantHTTP,
+		IdempotencyKey:  idempotencyKey,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+}
+
+func testPostgresOutbox(id string, now time.Time) marketing.OutboxMessage {
+	return marketing.OutboxMessage{
+		ID:            id,
+		TenantID:      "site_001",
+		MessageType:   "REWARD_COMMAND",
+		TargetChannel: marketing.GrantHTTP,
+		TargetRef:     "https://reward.example.com",
+		Payload:       []byte(`{}`),
+		SendStatus:    marketing.OutboxPending,
+		CreatedAt:     now,
+		UpdatedAt:     now,
 	}
 }

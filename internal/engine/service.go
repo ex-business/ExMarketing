@@ -198,7 +198,6 @@ func (s *Service) ApplyRewardCallback(ctx context.Context, callback marketing.Re
 
 func (s *Service) evaluateActivity(ctx context.Context, inbox marketing.EventInbox, activity marketing.Activity) (marketing.Participation, []marketing.GrantOrder, []marketing.OutboxMessage, marketing.ActivityRuleResult, bool, error) {
 	now := s.now()
-	snapshot, _ := json.Marshal(activity)
 	participation := marketing.Participation{
 		ID:             marketingID("part"),
 		TenantID:       activity.TenantID,
@@ -207,8 +206,7 @@ func (s *Service) evaluateActivity(ctx context.Context, inbox marketing.EventInb
 		Subject:        inbox.Event.Subject,
 		Biz:            inbox.Event.Biz,
 		Status:         marketing.ParticipationInit,
-		Snapshot:       snapshot,
-		IdempotencyKey: activity.TenantID + ":" + activity.ID + ":" + inbox.Event.Subject.Type + ":" + inbox.Event.Subject.ID + ":" + inbox.Event.Biz.BizID,
+		IdempotencyKey: participationIdempotencyKey(activity, inbox.Event),
 		CreatedAt:      now,
 		UpdatedAt:      now,
 	}
@@ -217,6 +215,7 @@ func (s *Service) evaluateActivity(ctx context.Context, inbox marketing.EventInb
 	if ruleResult.Decision != marketing.RuleDecisionPassed {
 		participation.Status = marketing.ParticipationRejected
 		participation.RejectReason = ruleResult.ReasonCode + ": " + ruleResult.Reason
+		participation.Snapshot = participationSnapshot(activity, inbox, ruleResult, nil)
 		participation.UpdatedAt = now
 		created, err := s.repository.CreateParticipation(ctx, participation)
 		return created, nil, nil, ruleResult, false, err
@@ -225,6 +224,7 @@ func (s *Service) evaluateActivity(ctx context.Context, inbox marketing.EventInb
 	var orders []marketing.GrantOrder
 	var messages []marketing.OutboxMessage
 	var stockReservations []marketing.QuotaReservation
+	var rewardSummaries []map[string]any
 	totalRewardAmount := decimal.Zero()
 	participation.Status = marketing.ParticipationRewardable
 	participation.UpdatedAt = now
@@ -243,11 +243,13 @@ func (s *Service) evaluateActivity(ctx context.Context, inbox marketing.EventInb
 			return participation, orders, messages, ruleResult, true, err
 		}
 		if rewardResult.Skipped {
+			rewardSummaries = append(rewardSummaries, rewardSnapshot(configuredReward, rewardResult, true))
 			continue
 		}
 
 		commandID := marketingID("cmd")
-		payload, _ := json.Marshal(rewardResult.Payload)
+		rewardPayload := grantRewardPayload(configuredReward, rewardResult)
+		payload, _ := json.Marshal(rewardPayload)
 		order := marketing.GrantOrder{
 			ID:              marketingID("grant"),
 			TenantID:        activity.TenantID,
@@ -270,7 +272,7 @@ func (s *Service) evaluateActivity(ctx context.Context, inbox marketing.EventInb
 			ActivityID:      activity.ID,
 			ParticipationID: participation.ID,
 			Subject:         inbox.Event.Subject,
-			Reward:          rewardResult.Payload,
+			Reward:          rewardPayload,
 			Reason: map[string]any{
 				"eventId":   inbox.Event.EventID,
 				"eventType": inbox.Event.EventType,
@@ -297,6 +299,7 @@ func (s *Service) evaluateActivity(ctx context.Context, inbox marketing.EventInb
 		totalRewardAmount = totalRewardAmount.Add(amount)
 		orders = append(orders, order)
 		messages = append(messages, message)
+		rewardSummaries = append(rewardSummaries, rewardSnapshot(configuredReward, rewardResult, false))
 		stockReservations = append(stockReservations, marketing.QuotaReservation{
 			Type:     marketing.QuotaStock,
 			Scope:    marketing.QuotaScopeActivity,
@@ -308,9 +311,11 @@ func (s *Service) evaluateActivity(ctx context.Context, inbox marketing.EventInb
 	if len(orders) == 0 {
 		participation.Status = marketing.ParticipationQualified
 		participation.RejectReason = reward.ReasonZeroRewardSkipped + ": no payable reward"
+		participation.Snapshot = participationSnapshot(activity, inbox, ruleResult, rewardSummaries)
 		createdParticipation, err := s.repository.CreateParticipation(ctx, participation)
 		return createdParticipation, nil, nil, ruleResult, true, err
 	}
+	participation.Snapshot = participationSnapshot(activity, inbox, ruleResult, rewardSummaries)
 	atomicResult, err := s.repository.CreateParticipationGrantOutboxesWithQuota(ctx, marketing.AtomicGrantCommand{
 		Participation:     participation,
 		BudgetAmount:      totalRewardAmount.String(),
@@ -354,7 +359,7 @@ func (s *Service) simulateActivity(event marketing.ActivityEvent, activity marke
 		Subject:        event.Subject,
 		Biz:            event.Biz,
 		Status:         marketing.ParticipationRewardable,
-		IdempotencyKey: activity.TenantID + ":" + activity.ID + ":" + event.Subject.Type + ":" + event.Subject.ID + ":" + event.Biz.BizID,
+		IdempotencyKey: participationIdempotencyKey(activity, event),
 		CreatedAt:      now,
 		UpdatedAt:      now,
 	}
@@ -386,7 +391,8 @@ func (s *Service) simulateActivity(event marketing.ActivityEvent, activity marke
 			continue
 		}
 		commandID := marketingID("sim_cmd")
-		payload, _ := json.Marshal(rewardResult.Payload)
+		rewardPayload := grantRewardPayload(configuredReward, rewardResult)
+		payload, _ := json.Marshal(rewardPayload)
 		order := marketing.GrantOrder{
 			ID:              marketingID("sim_grant"),
 			TenantID:        activity.TenantID,
@@ -410,7 +416,7 @@ func (s *Service) simulateActivity(event marketing.ActivityEvent, activity marke
 			ActivityID:      activity.ID,
 			ParticipationID: participation.ID,
 			Subject:         event.Subject,
-			Reward:          rewardResult.Payload,
+			Reward:          rewardPayload,
 			Reason: map[string]any{
 				"eventId":   event.EventID,
 				"eventType": event.EventType,
@@ -557,4 +563,79 @@ func targetRefFromReward(configuredReward marketing.Reward) string {
 		return config.TargetRef
 	}
 	return string(configuredReward.GrantChannel)
+}
+
+func participationIdempotencyKey(activity marketing.Activity, event marketing.ActivityEvent) string {
+	return activity.TenantID + ":" + activity.ID + ":" + event.IdempotencyKey()
+}
+
+func participationSnapshot(activity marketing.Activity, inbox marketing.EventInbox, ruleResult marketing.ActivityRuleResult, rewardSummaries []map[string]any) json.RawMessage {
+	snapshot := map[string]any{
+		"activity": map[string]any{
+			"id":             activity.ID,
+			"activityCode":   activity.Code,
+			"activityType":   activity.Type,
+			"version":        activity.Version,
+			"priority":       activity.Priority,
+			"exclusiveGroup": activity.ExclusiveGroup,
+			"stackable":      activity.Stackable,
+			"config":         rawJSONValue(activity.Config),
+			"rules":          activity.Rules,
+			"rewards":        activity.Rewards,
+		},
+		"event": map[string]any{
+			"inboxId":        inbox.ID,
+			"eventId":        inbox.Event.EventID,
+			"eventType":      inbox.Event.EventType,
+			"sourceSystem":   inbox.Event.SourceSystem,
+			"tenantId":       inbox.Event.TenantID,
+			"subject":        inbox.Event.Subject,
+			"biz":            inbox.Event.Biz,
+			"occurredAt":     inbox.Event.OccurredAt,
+			"attributes":     inbox.Event.Attributes,
+			"idempotencyKey": inbox.IdempotencyKey,
+		},
+		"ruleResult": ruleResult,
+		"rewards":    rewardSummaries,
+	}
+	bytes, _ := json.Marshal(snapshot)
+	return bytes
+}
+
+func rewardSnapshot(configuredReward marketing.Reward, result reward.Result, skipped bool) map[string]any {
+	return map[string]any{
+		"rewardCode":    configuredReward.Code,
+		"rewardType":    result.Type,
+		"calculateType": configuredReward.CalculateType,
+		"grantChannel":  configuredReward.GrantChannel,
+		"amount":        result.Amount,
+		"currency":      result.Currency,
+		"skipped":       skipped,
+		"reasonCode":    result.ReasonCode,
+		"reason":        result.Reason,
+	}
+}
+
+func grantRewardPayload(configuredReward marketing.Reward, result reward.Result) map[string]any {
+	payload := map[string]any{}
+	for key, value := range result.Payload {
+		payload[key] = value
+	}
+	payload["rewardCode"] = configuredReward.Code
+	payload["rewardType"] = result.Type
+	payload["calculateType"] = configuredReward.CalculateType
+	payload["grantChannel"] = configuredReward.GrantChannel
+	payload["targetRef"] = targetRefFromReward(configuredReward)
+	return payload
+}
+
+func rawJSONValue(raw json.RawMessage) any {
+	if len(raw) == 0 {
+		return nil
+	}
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return string(raw)
+	}
+	return value
 }

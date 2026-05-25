@@ -92,7 +92,7 @@ func TestCreateActivityRejectsInvalidConfigAndRuleSchema(t *testing.T) {
 
 func TestActivityEventCreatesGrantCommand(t *testing.T) {
 	handler := newTestHandler()
-	createActivity(t, handler)
+	activityID := createActivity(t, handler)
 
 	event := `{
 		"eventId": "evt_20260524_000001",
@@ -127,6 +127,36 @@ func TestActivityEventCreatesGrantCommand(t *testing.T) {
 	}
 	if !strings.Contains(body, `"outboxMessages"`) {
 		t.Fatalf("expected outbox message, got: %s", body)
+	}
+
+	var result marketing.ProcessEventResult
+	if err := json.Unmarshal(rec.Body.Bytes(), &result); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(result.Participations) != 1 || len(result.GrantOrders) != 1 {
+		t.Fatalf("expected one participation and grant, got participations=%d grants=%d", len(result.Participations), len(result.GrantOrders))
+	}
+	expectedParticipationKey := "site_001:" + activityID + ":site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:pay_123"
+	if result.Participations[0].IdempotencyKey != expectedParticipationKey {
+		t.Fatalf("unexpected participation idempotency key: %s", result.Participations[0].IdempotencyKey)
+	}
+	var snapshot map[string]any
+	if err := json.Unmarshal(result.Participations[0].Snapshot, &snapshot); err != nil {
+		t.Fatalf("decode participation snapshot: %v", err)
+	}
+	for _, key := range []string{"activity", "event", "ruleResult", "rewards"} {
+		if _, ok := snapshot[key]; !ok {
+			t.Fatalf("expected snapshot key %s, got: %s", key, string(result.Participations[0].Snapshot))
+		}
+	}
+	var rewardPayload map[string]any
+	if err := json.Unmarshal(result.GrantOrders[0].RewardPayload, &rewardPayload); err != nil {
+		t.Fatalf("decode reward payload: %v", err)
+	}
+	for _, key := range []string{"rewardCode", "rewardType", "calculateType", "currency", "flowMultiple", "targetRef"} {
+		if _, ok := rewardPayload[key]; !ok {
+			t.Fatalf("expected reward payload key %s, got: %s", key, string(result.GrantOrders[0].RewardPayload))
+		}
 	}
 }
 

@@ -104,6 +104,11 @@ func (r *MemoryRepository) CreateParticipation(ctx context.Context, participatio
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	for _, existing := range r.participations {
+		if existing.IdempotencyKey != "" && existing.IdempotencyKey == participation.IdempotencyKey {
+			return Participation{}, ErrIdempotencyConflict
+		}
+	}
 	r.participations = append(r.participations, participation)
 	return participation, nil
 }
@@ -114,6 +119,11 @@ func (r *MemoryRepository) CreateGrantOrder(ctx context.Context, order GrantOrde
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	for _, existing := range r.grantOrders {
+		if existing.IdempotencyKey != "" && existing.IdempotencyKey == order.IdempotencyKey {
+			return GrantOrder{}, ErrIdempotencyConflict
+		}
+	}
 	r.grantOrders = append(r.grantOrders, order)
 	return order, nil
 }
@@ -140,6 +150,25 @@ func (r *MemoryRepository) CreateParticipationGrantOutboxesWithQuota(ctx context
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	if participationIdempotencyExists(r.participations, cmd.Participation.IdempotencyKey) {
+		return AtomicGrantResult{}, ErrIdempotencyConflict
+	}
+	for _, order := range cmd.GrantOrders {
+		if grantOrderIdempotencyExists(r.grantOrders, order.IdempotencyKey) {
+			return AtomicGrantResult{}, ErrIdempotencyConflict
+		}
+	}
+	seenOrderKeys := map[string]struct{}{}
+	for _, order := range cmd.GrantOrders {
+		if order.IdempotencyKey == "" {
+			continue
+		}
+		if _, ok := seenOrderKeys[order.IdempotencyKey]; ok {
+			return AtomicGrantResult{}, ErrIdempotencyConflict
+		}
+		seenOrderKeys[order.IdempotencyKey] = struct{}{}
+	}
 
 	nextQuotas := slices.Clone(r.quotas)
 	if !reserveQuotaIn(nextQuotas, cmd.Participation.ActivityID, QuotaBudget, QuotaScopeActivity, "TOTAL", cmd.BudgetAmount) {
@@ -325,6 +354,30 @@ func reserveQuotaIn(quotas []Quota, activityID string, quotaType QuotaType, scop
 		return true
 	}
 	return true
+}
+
+func participationIdempotencyExists(participations []Participation, key string) bool {
+	if key == "" {
+		return false
+	}
+	for _, existing := range participations {
+		if existing.IdempotencyKey == key {
+			return true
+		}
+	}
+	return false
+}
+
+func grantOrderIdempotencyExists(orders []GrantOrder, key string) bool {
+	if key == "" {
+		return false
+	}
+	for _, existing := range orders {
+		if existing.IdempotencyKey == key {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *MemoryRepository) releaseQuotaLocked(activityID string, quotaType QuotaType, scope QuotaScope, scopeKey string, amount string) {

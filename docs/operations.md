@@ -215,6 +215,30 @@ WHERE activity_id = '<activity_id>';
 tenantId:sourceSystem:eventType:bizType:bizId
 ```
 
+### OpenAPI Event API auth and size limit
+
+生产环境必须开启事件接入鉴权：
+
+```bash
+export EX_MARKETING_REQUIRE_OPENAPI_AUTH=true
+export EX_MARKETING_OPENAPI_TOKENS='token-a:site_001:payment'
+```
+
+`EX_MARKETING_OPENAPI_TOKENS` 格式：
+
+```text
+token:tenantId[,tenantId...]:sourceSystem[,sourceSystem...];token2:tenantId2:sourceSystem2
+```
+
+规则：
+
+- `EX_MARKETING_REQUIRE_OPENAPI_AUTH=true` 且未配置有效 token 时服务启动失败。
+- `POST /openapi/v1/events` 必须携带 `Authorization: Bearer <token>`。
+- token 只允许上报配置内的 `tenantId` 和 `sourceSystem`。
+- 未设置或为 `false` 时仅用于本地开发，服务启动日志会提示 OpenAPI Event auth disabled。
+- `EX_MARKETING_EVENT_MAX_BODY_BYTES` 可覆盖默认 1 MiB 请求体限制。
+- 日志和错误响应不得记录完整 token 或完整 Authorization header。
+
 ### fact endpoint host is not allowlisted
 
 含义：

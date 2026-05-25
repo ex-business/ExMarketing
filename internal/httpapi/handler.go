@@ -4,6 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -16,13 +20,108 @@ import (
 	"github.com/ex-stack/ExMarketing/internal/workflow"
 )
 
+const defaultEventMaxBodyBytes int64 = 1 << 20
+
+type OpenAPIEventConfig struct {
+	RequireAuth  bool
+	Credentials  map[string]OpenAPIEventCredential
+	MaxBodyBytes int64
+}
+
+type OpenAPIEventCredential struct {
+	TenantIDs     map[string]struct{}
+	SourceSystems map[string]struct{}
+}
+
 type Handler struct {
-	engine *engine.Service
-	facts  *fact.Client
+	engine          *engine.Service
+	facts           *fact.Client
+	openAPIEventCfg OpenAPIEventConfig
 }
 
 func NewHandler(engine *engine.Service) *Handler {
-	return &Handler{engine: engine, facts: fact.NewClient()}
+	return NewHandlerWithOpenAPIEventConfig(engine, OpenAPIEventConfig{MaxBodyBytes: defaultEventMaxBodyBytes})
+}
+
+func NewHandlerWithOpenAPIEventConfig(engine *engine.Service, cfg OpenAPIEventConfig) *Handler {
+	if cfg.MaxBodyBytes <= 0 {
+		cfg.MaxBodyBytes = defaultEventMaxBodyBytes
+	}
+	return &Handler{engine: engine, facts: fact.NewClient(), openAPIEventCfg: cfg}
+}
+
+func LoadOpenAPIEventConfigFromEnv(logger *slog.Logger) (OpenAPIEventConfig, error) {
+	cfg := OpenAPIEventConfig{
+		RequireAuth:  strings.EqualFold(strings.TrimSpace(os.Getenv("EX_MARKETING_REQUIRE_OPENAPI_AUTH")), "true"),
+		MaxBodyBytes: defaultEventMaxBodyBytes,
+		Credentials:  map[string]OpenAPIEventCredential{},
+	}
+	if rawMax := strings.TrimSpace(os.Getenv("EX_MARKETING_EVENT_MAX_BODY_BYTES")); rawMax != "" {
+		max, err := strconv.ParseInt(rawMax, 10, 64)
+		if err != nil || max <= 0 {
+			return OpenAPIEventConfig{}, fmt.Errorf("EX_MARKETING_EVENT_MAX_BODY_BYTES must be a positive integer")
+		}
+		cfg.MaxBodyBytes = max
+	}
+	credentials, err := parseOpenAPIEventTokens(os.Getenv("EX_MARKETING_OPENAPI_TOKENS"))
+	if err != nil {
+		return OpenAPIEventConfig{}, err
+	}
+	cfg.Credentials = credentials
+	if cfg.RequireAuth && len(cfg.Credentials) == 0 {
+		return OpenAPIEventConfig{}, fmt.Errorf("EX_MARKETING_REQUIRE_OPENAPI_AUTH=true requires at least one valid EX_MARKETING_OPENAPI_TOKENS entry")
+	}
+	if !cfg.RequireAuth && logger != nil {
+		logger.Warn("openapi event auth disabled for development mode")
+	}
+	return cfg, nil
+}
+
+func parseOpenAPIEventTokens(raw string) (map[string]OpenAPIEventCredential, error) {
+	credentials := map[string]OpenAPIEventCredential{}
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return credentials, nil
+	}
+	for _, entry := range strings.Split(raw, ";") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		parts := strings.Split(entry, ":")
+		if len(parts) != 3 {
+			return nil, fmt.Errorf("invalid EX_MARKETING_OPENAPI_TOKENS entry")
+		}
+		token := strings.TrimSpace(parts[0])
+		if token == "" {
+			return nil, fmt.Errorf("EX_MARKETING_OPENAPI_TOKENS token cannot be empty")
+		}
+		tenants, err := parseNonEmptyCSVSet(parts[1], "tenantId")
+		if err != nil {
+			return nil, err
+		}
+		sources, err := parseNonEmptyCSVSet(parts[2], "sourceSystem")
+		if err != nil {
+			return nil, err
+		}
+		credentials[token] = OpenAPIEventCredential{TenantIDs: tenants, SourceSystems: sources}
+	}
+	return credentials, nil
+}
+
+func parseNonEmptyCSVSet(raw string, name string) (map[string]struct{}, error) {
+	values := map[string]struct{}{}
+	for _, part := range strings.Split(raw, ",") {
+		value := strings.TrimSpace(part)
+		if value == "" {
+			return nil, fmt.Errorf("EX_MARKETING_OPENAPI_TOKENS %s cannot be empty", name)
+		}
+		values[value] = struct{}{}
+	}
+	if len(values) == 0 {
+		return nil, fmt.Errorf("EX_MARKETING_OPENAPI_TOKENS %s cannot be empty", name)
+	}
+	return values, nil
 }
 
 func (h *Handler) Routes() http.Handler {
@@ -231,37 +330,87 @@ func (h *Handler) simulate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) createEvent(w http.ResponseWriter, r *http.Request) {
+	if !isJSONContentType(r.Header.Get("Content-Type")) {
+		writeEventError(w, http.StatusUnsupportedMediaType, "UNSUPPORTED_MEDIA_TYPE", "unsupported media type")
+		return
+	}
+
+	token := ""
+	if h.openAPIEventCfg.RequireAuth {
+		var ok bool
+		token, ok = bearerToken(r.Header.Get("Authorization"))
+		if !ok {
+			writeEventError(w, http.StatusUnauthorized, "UNAUTHORIZED", "unauthorized")
+			return
+		}
+		if _, ok := h.openAPIEventCfg.Credentials[token]; !ok {
+			writeEventError(w, http.StatusUnauthorized, "UNAUTHORIZED", "unauthorized")
+			return
+		}
+	}
+
 	var event marketing.ActivityEvent
-	decoder := json.NewDecoder(r.Body)
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, h.openAPIEventCfg.MaxBodyBytes))
 	decoder.UseNumber()
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&event); err != nil {
-		writeErrorCode(w, http.StatusBadRequest, "INVALID_EVENT", err.Error())
+		if isRequestTooLarge(err) {
+			writeEventError(w, http.StatusRequestEntityTooLarge, "REQUEST_TOO_LARGE", "request body too large")
+			return
+		}
+		if isJSONSyntaxError(err) {
+			writeEventError(w, http.StatusBadRequest, "INVALID_JSON", "invalid json")
+			return
+		}
+		writeEventError(w, http.StatusBadRequest, "INVALID_EVENT", err.Error())
 		return
 	}
 
 	key := r.Header.Get("Idempotency-Key")
 	if key == "" {
-		writeErrorCode(w, http.StatusBadRequest, "INVALID_IDEMPOTENCY_KEY", "Idempotency-Key is required")
+		writeEventError(w, http.StatusBadRequest, "INVALID_IDEMPOTENCY_KEY", "Idempotency-Key is required")
 		return
 	}
 	if err := event.Validate(); err != nil {
-		writeErrorCode(w, http.StatusBadRequest, "INVALID_EVENT", err.Error())
+		writeEventError(w, http.StatusBadRequest, "INVALID_EVENT", err.Error())
+		return
+	}
+	if h.openAPIEventCfg.RequireAuth {
+		credential := h.openAPIEventCfg.Credentials[token]
+		if _, ok := credential.TenantIDs[event.TenantID]; !ok {
+			writeEventError(w, http.StatusForbidden, "TENANT_FORBIDDEN", "tenant forbidden")
+			return
+		}
+		if _, ok := credential.SourceSystems[event.SourceSystem]; !ok {
+			writeEventError(w, http.StatusForbidden, "SOURCE_FORBIDDEN", "source forbidden")
+			return
+		}
+	}
+	if err := ensureSingleJSONValue(decoder); err != nil {
+		if isRequestTooLarge(err) {
+			writeEventError(w, http.StatusRequestEntityTooLarge, "REQUEST_TOO_LARGE", "request body too large")
+			return
+		}
+		if isJSONSyntaxError(err) {
+			writeEventError(w, http.StatusBadRequest, "INVALID_JSON", "invalid json")
+			return
+		}
+		writeEventError(w, http.StatusBadRequest, "INVALID_EVENT", err.Error())
 		return
 	}
 	if key != event.IdempotencyKey() {
-		writeErrorCode(w, http.StatusBadRequest, "INVALID_IDEMPOTENCY_KEY", "Idempotency-Key does not match event payload")
+		writeEventError(w, http.StatusBadRequest, "INVALID_IDEMPOTENCY_KEY", "Idempotency-Key does not match event payload")
 		return
 	}
 
 	result, err := h.engine.ProcessEvent(r.Context(), event)
 	if err != nil {
 		if errors.Is(err, marketing.ErrInvalidEvent) {
-			writeErrorCode(w, http.StatusBadRequest, "INVALID_EVENT", err.Error())
+			writeEventError(w, http.StatusBadRequest, "INVALID_EVENT", err.Error())
 			return
 		}
 		if errors.Is(err, marketing.ErrIdempotencyConflict) {
-			writeErrorCode(w, http.StatusBadRequest, "INVALID_IDEMPOTENCY_KEY", err.Error())
+			writeEventError(w, http.StatusBadRequest, "INVALID_IDEMPOTENCY_KEY", err.Error())
 			return
 		}
 		if errors.Is(err, marketing.ErrQuotaExceeded) {
@@ -441,6 +590,53 @@ func writeError(w http.ResponseWriter, status int, message string) {
 
 func writeErrorCode(w http.ResponseWriter, status int, code string, message string) {
 	writeJSON(w, status, map[string]string{"code": code, "error": message})
+}
+
+func writeEventError(w http.ResponseWriter, status int, code string, message string) {
+	writeJSON(w, status, map[string]string{
+		"errorCode": code,
+		"message":   message,
+		"code":      code,
+		"error":     message,
+	})
+}
+
+func isJSONContentType(contentType string) bool {
+	if strings.TrimSpace(contentType) == "" {
+		return false
+	}
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	return err == nil && strings.EqualFold(mediaType, "application/json")
+}
+
+func bearerToken(header string) (string, bool) {
+	fields := strings.Fields(header)
+	if len(fields) != 2 || !strings.EqualFold(fields[0], "Bearer") || fields[1] == "" {
+		return "", false
+	}
+	return fields[1], true
+}
+
+func ensureSingleJSONValue(decoder *json.Decoder) error {
+	var extra any
+	err := decoder.Decode(&extra)
+	if errors.Is(err, io.EOF) {
+		return nil
+	}
+	if err == nil {
+		return fmt.Errorf("request body must contain a single json object")
+	}
+	return err
+}
+
+func isRequestTooLarge(err error) bool {
+	var maxBytesErr *http.MaxBytesError
+	return errors.As(err, &maxBytesErr)
+}
+
+func isJSONSyntaxError(err error) bool {
+	var syntaxErr *json.SyntaxError
+	return errors.As(err, &syntaxErr) || errors.Is(err, io.ErrUnexpectedEOF)
 }
 
 func writeQuotaError(w http.ResponseWriter, err error) {

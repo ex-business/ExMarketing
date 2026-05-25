@@ -27,7 +27,12 @@ func main() {
 	defer closeRepository()
 
 	service := engine.NewService(repository)
-	handler := httpapi.NewHandler(service)
+	openAPIEventConfig, err := httpapi.LoadOpenAPIEventConfigFromEnv(logger)
+	if err != nil {
+		logger.Error("openapi event config invalid", "error", err)
+		os.Exit(1)
+	}
+	handler := httpapi.NewHandlerWithOpenAPIEventConfig(service, openAPIEventConfig)
 	if env("EX_MARKETING_OUTBOX_WORKER", "false") == "true" {
 		go worker.NewOutboxWorker(repository, logger).Run(ctx)
 		logger.Info("outbox worker enabled")

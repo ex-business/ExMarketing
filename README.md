@@ -129,6 +129,7 @@ Submit event example:
 ```bash
 curl -X POST http://localhost:8080/openapi/v1/events \
   -H 'content-type: application/json' \
+  -H 'Authorization: Bearer dev-token' \
   -H 'Idempotency-Key: site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:pay_123' \
   -d '{
     "eventId": "evt_20260524_000001",
@@ -153,6 +154,15 @@ eventId, eventType, sourceSystem, tenantId, subject, biz, occurredAt, attributes
 ```
 
 `Idempotency-Key` is required and must equal `tenantId:sourceSystem:eventType:bizType:bizId`. Reposting the same payload with the same key returns `200 OK` with `duplicate=true` and does not create another participation, grant order, or outbox message. Reusing the same key for a different payload returns `400 INVALID_IDEMPOTENCY_KEY`.
+
+For production, require OpenAPI event auth:
+
+```bash
+export EX_MARKETING_REQUIRE_OPENAPI_AUTH=true
+export EX_MARKETING_OPENAPI_TOKENS='dev-token:site_001:payment'
+```
+
+`EX_MARKETING_OPENAPI_TOKENS` uses `token:tenantId[,tenantId...]:sourceSystem[,sourceSystem...]` entries separated by `;`. `EX_MARKETING_EVENT_MAX_BODY_BYTES` optionally overrides the default 1 MiB event request body limit.
 
 ## Layout
 

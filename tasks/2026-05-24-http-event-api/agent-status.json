@@ -1,30 +1,53 @@
 {
   "requirementId": "2026-05-24-http-event-api",
-  "updatedAt": "2026-05-24T11:39:29.021695Z",
+  "updatedAt": "2026-05-25T15:20:03.522191Z",
   "agents": {
     "analysis": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-http-event-api/analysis.md"
+      "status": "DONE",
+      "startedAt": "2026-05-25T15:05:48.088889Z",
+      "finishedAt": "2026-05-25T15:08:51.818734Z",
+      "output": "tasks/2026-05-24-http-event-api/analysis.md",
+      "log": "tasks/2026-05-24-http-event-api/runs/20260525T150548Z-analysis.log",
+      "nextStatus": "REVIEW_READY"
     },
     "commit": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-http-event-api/commit.md"
+      "status": "RUNNING",
+      "startedAt": "2026-05-25T15:20:03.52205Z",
+      "output": "tasks/2026-05-24-http-event-api/commit.md",
+      "log": "tasks/2026-05-24-http-event-api/runs/20260525T152003Z-commit.log",
+      "pid": 95201
     },
     "dev": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-http-event-api/implementation.md"
+      "status": "DONE",
+      "startedAt": "2026-05-25T15:13:17.942625Z",
+      "finishedAt": "2026-05-25T15:18:28.618584Z",
+      "output": "tasks/2026-05-24-http-event-api/implementation.md",
+      "log": "tasks/2026-05-24-http-event-api/runs/20260525T151317Z-dev.log",
+      "nextStatus": "REVIEW_PASS"
     },
     "review": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-http-event-api/review.md"
+      "status": "DONE",
+      "startedAt": "2026-05-25T15:12:38.868258Z",
+      "finishedAt": "2026-05-25T15:13:17.622928Z",
+      "output": "tasks/2026-05-24-http-event-api/review.md",
+      "log": "tasks/2026-05-24-http-event-api/runs/20260525T151238Z-review.log",
+      "nextStatus": "REVIEW_PASS"
     },
     "test": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-http-event-api/test.md"
+      "status": "DONE",
+      "startedAt": "2026-05-25T15:18:28.659228Z",
+      "finishedAt": "2026-05-25T15:20:03.494638Z",
+      "output": "tasks/2026-05-24-http-event-api/test.md",
+      "log": "tasks/2026-05-24-http-event-api/runs/20260525T151828Z-test.log",
+      "nextStatus": "COMMIT_READY"
     },
     "test-plan": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-http-event-api/test-plan.md"
+      "status": "DONE",
+      "startedAt": "2026-05-25T15:13:17.976493Z",
+      "finishedAt": "2026-05-25T15:15:11.945947Z",
+      "output": "tasks/2026-05-24-http-event-api/test-plan.md",
+      "log": "tasks/2026-05-24-http-event-api/runs/20260525T151317Z-test-plan.log",
+      "nextStatus": "REVIEW_PASS"
     }
   }
 }

@@ -19,6 +19,24 @@ func newTestHandler() *Handler {
 	return NewHandler(engine.NewService(marketing.NewMemoryRepository()))
 }
 
+func newAuthTestHandler(token string, tenantIDs []string, sourceSystems []string, maxBodyBytes int64) *Handler {
+	credential := OpenAPIEventCredential{
+		TenantIDs:     map[string]struct{}{},
+		SourceSystems: map[string]struct{}{},
+	}
+	for _, tenantID := range tenantIDs {
+		credential.TenantIDs[tenantID] = struct{}{}
+	}
+	for _, sourceSystem := range sourceSystems {
+		credential.SourceSystems[sourceSystem] = struct{}{}
+	}
+	return NewHandlerWithOpenAPIEventConfig(engine.NewService(marketing.NewMemoryRepository()), OpenAPIEventConfig{
+		RequireAuth:  true,
+		Credentials:  map[string]OpenAPIEventCredential{token: credential},
+		MaxBodyBytes: maxBodyBytes,
+	})
+}
+
 func TestHealth(t *testing.T) {
 	handler := newTestHandler()
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
@@ -141,6 +159,7 @@ func TestActivityEventCreatesGrantCommand(t *testing.T) {
 		}
 	}`
 	req := httptest.NewRequest(http.MethodPost, "/openapi/v1/events", strings.NewReader(event))
+	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Idempotency-Key", "site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:pay_123")
 	rec := httptest.NewRecorder()
 
@@ -188,6 +207,131 @@ func TestActivityEventCreatesGrantCommand(t *testing.T) {
 		if _, ok := rewardPayload[key]; !ok {
 			t.Fatalf("expected reward payload key %s, got: %s", key, string(result.GrantOrders[0].RewardPayload))
 		}
+	}
+}
+
+func TestActivityEventOpenAPIAuthRejectsUnauthorizedBeforeInboxWrite(t *testing.T) {
+	handler := newAuthTestHandler("secret-token", []string{"site_001"}, []string{"payment"}, defaultEventMaxBodyBytes)
+	event := depositEventJSON("evt_auth_missing", "pay_auth_missing", `"amount":"299.00","vipLevel":3,"isFirstDeposit":true`)
+	key := "site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:pay_auth_missing"
+
+	tests := []struct {
+		name          string
+		authorization string
+	}{
+		{name: "missing"},
+		{name: "basic", authorization: "Basic secret-token"},
+		{name: "empty bearer", authorization: "Bearer "},
+		{name: "unknown bearer", authorization: "Bearer wrong-token"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := eventRequest(event, key)
+			if tt.authorization != "" {
+				req.Header.Set("Authorization", tt.authorization)
+			}
+			rec := httptest.NewRecorder()
+			handler.Routes().ServeHTTP(rec, req)
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("expected status %d, got %d: %s", http.StatusUnauthorized, rec.Code, rec.Body.String())
+			}
+			body := rec.Body.String()
+			if !strings.Contains(body, `"errorCode":"UNAUTHORIZED"`) || !strings.Contains(body, `"message":"unauthorized"`) {
+				t.Fatalf("expected unauthorized error body, got: %s", body)
+			}
+			if strings.Contains(body, "secret-token") || strings.Contains(body, "Authorization") {
+				t.Fatalf("error body leaked sensitive auth data: %s", body)
+			}
+		})
+	}
+
+	valid := eventRequest(event, key)
+	valid.Header.Set("Authorization", "Bearer secret-token")
+	rec := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(rec, valid)
+	if rec.Code != http.StatusAccepted || strings.Contains(rec.Body.String(), `"duplicate":true`) {
+		t.Fatalf("expected valid request accepted after auth failures without duplicate, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestActivityEventOpenAPIAuthTenantAndSourceAuthorization(t *testing.T) {
+	handler := newAuthTestHandler("secret-token", []string{"site_001"}, []string{"payment"}, defaultEventMaxBodyBytes)
+
+	tenantEvent := strings.Replace(depositEventJSON("evt_tenant_forbidden", "pay_tenant_forbidden", `{}`), `"tenantId": "site_001"`, `"tenantId": "site_002"`, 1)
+	rec := postAuthorizedRawEvent(t, handler, tenantEvent, "site_002:payment:DEPOSIT_SUCCESS:DEPOSIT:pay_tenant_forbidden", "secret-token")
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"errorCode":"TENANT_FORBIDDEN"`) {
+		t.Fatalf("expected tenant forbidden, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	sourceEvent := strings.Replace(depositEventJSON("evt_source_forbidden", "pay_source_forbidden", `{}`), `"sourceSystem": "payment"`, `"sourceSystem": "order"`, 1)
+	rec = postAuthorizedRawEvent(t, handler, sourceEvent, "site_001:order:DEPOSIT_SUCCESS:DEPOSIT:pay_source_forbidden", "secret-token")
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"errorCode":"SOURCE_FORBIDDEN"`) {
+		t.Fatalf("expected source forbidden, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestActivityEventContentTypeInvalidJSONAndBodyLimit(t *testing.T) {
+	handler := newTestHandler()
+	event := depositEventJSON("evt_media", "pay_media", `{}`)
+	key := "site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:pay_media"
+
+	req := eventRequest(event, key)
+	req.Header.Del("Content-Type")
+	rec := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnsupportedMediaType || !strings.Contains(rec.Body.String(), `"errorCode":"UNSUPPORTED_MEDIA_TYPE"`) {
+		t.Fatalf("expected unsupported media type for missing content-type, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	req = eventRequest(event, key)
+	req.Header.Set("Content-Type", "text/plain")
+	rec = httptest.NewRecorder()
+	handler.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnsupportedMediaType || !strings.Contains(rec.Body.String(), `"errorCode":"UNSUPPORTED_MEDIA_TYPE"`) {
+		t.Fatalf("expected unsupported media type for text/plain, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	req = eventRequest(`{"eventId":`, key)
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+	rec = httptest.NewRecorder()
+	handler.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), `"errorCode":"INVALID_JSON"`) {
+		t.Fatalf("expected invalid json, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	limited := newAuthTestHandler("secret-token", []string{"site_001"}, []string{"payment"}, 64)
+	req = eventRequest(event, key)
+	req.Header.Set("Authorization", "Bearer secret-token")
+	rec = httptest.NewRecorder()
+	limited.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusRequestEntityTooLarge || !strings.Contains(rec.Body.String(), `"errorCode":"REQUEST_TOO_LARGE"`) {
+		t.Fatalf("expected request too large, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestOpenAPIEventConfigFromEnv(t *testing.T) {
+	t.Setenv("EX_MARKETING_REQUIRE_OPENAPI_AUTH", "true")
+	t.Setenv("EX_MARKETING_OPENAPI_TOKENS", "token-a:site_001,site_002:payment,order")
+	t.Setenv("EX_MARKETING_EVENT_MAX_BODY_BYTES", "2048")
+
+	cfg, err := LoadOpenAPIEventConfigFromEnv(nil)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if !cfg.RequireAuth || cfg.MaxBodyBytes != 2048 {
+		t.Fatalf("unexpected config: %+v", cfg)
+	}
+	credential := cfg.Credentials["token-a"]
+	if _, ok := credential.TenantIDs["site_002"]; !ok {
+		t.Fatalf("expected site_002 tenant authorization: %+v", credential)
+	}
+	if _, ok := credential.SourceSystems["order"]; !ok {
+		t.Fatalf("expected order source authorization: %+v", credential)
+	}
+
+	t.Setenv("EX_MARKETING_OPENAPI_TOKENS", "")
+	if _, err := LoadOpenAPIEventConfigFromEnv(nil); err == nil {
+		t.Fatal("expected require-auth config without tokens to fail")
 	}
 }
 
@@ -676,6 +820,7 @@ func TestActivityEventBudgetExceededReturnsConflictAndAudit(t *testing.T) {
 		}
 	}`
 	req := httptest.NewRequest(http.MethodPost, "/openapi/v1/events", strings.NewReader(event))
+	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Idempotency-Key", "site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:pay_124")
 	rec := httptest.NewRecorder()
 
@@ -1570,13 +1715,28 @@ func depositEventJSON(eventID string, bizID string, attributesJSON string) strin
 
 func postRawEvent(t *testing.T, handler *Handler, event string, idempotencyKey string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, "/openapi/v1/events", strings.NewReader(event))
-	if idempotencyKey != "" {
-		req.Header.Set("Idempotency-Key", idempotencyKey)
-	}
+	req := eventRequest(event, idempotencyKey)
 	rec := httptest.NewRecorder()
 	handler.Routes().ServeHTTP(rec, req)
 	return rec
+}
+
+func postAuthorizedRawEvent(t *testing.T, handler *Handler, event string, idempotencyKey string, token string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := eventRequest(event, idempotencyKey)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(rec, req)
+	return rec
+}
+
+func eventRequest(event string, idempotencyKey string) *http.Request {
+	req := httptest.NewRequest(http.MethodPost, "/openapi/v1/events", strings.NewReader(event))
+	req.Header.Set("Content-Type", "application/json")
+	if idempotencyKey != "" {
+		req.Header.Set("Idempotency-Key", idempotencyKey)
+	}
+	return req
 }
 
 func postRewardCallback(t *testing.T, handler *Handler, body string) *httptest.ResponseRecorder {

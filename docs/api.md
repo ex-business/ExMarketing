@@ -488,8 +488,18 @@ GET /admin/v1/reward/reconciliation?tenantId=site_001&idempotencyKey=site_001:pa
 
 ```http
 POST /openapi/v1/events
+Authorization: Bearer <token>
+Content-Type: application/json
 Idempotency-Key: site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:pay_123
 ```
+
+Production deployments must set `EX_MARKETING_REQUIRE_OPENAPI_AUTH=true` and configure at least one valid `EX_MARKETING_OPENAPI_TOKENS` entry. Token entries use:
+
+```text
+token:tenantId[,tenantId...]:sourceSystem[,sourceSystem...];token2:tenantId2:sourceSystem2
+```
+
+If auth is required, missing Authorization, non-Bearer Authorization, empty Bearer token, or unknown token returns `401 UNAUTHORIZED`. A valid token that is not authorized for the event `tenantId` returns `403 TENANT_FORBIDDEN`; one that is not authorized for the event `sourceSystem` returns `403 SOURCE_FORBIDDEN`. The endpoint requires `Content-Type: application/json` and accepts media type parameters such as `application/json; charset=utf-8`. Event request bodies default to a 1 MiB limit and can be overridden with `EX_MARKETING_EVENT_MAX_BODY_BYTES`.
 
 `Idempotency-Key` 为必填 Header，必须等于：
 
@@ -540,6 +550,7 @@ tenantId + ":" + sourceSystem + ":" + eventType + ":" + biz.bizType + ":" + biz.
 ```bash
 curl -X POST http://localhost:8080/openapi/v1/events \
   -H 'content-type: application/json' \
+  -H 'Authorization: Bearer dev-token' \
   -H 'Idempotency-Key: site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:pay_123' \
   -d '{
     "eventId": "evt_20260524_000001",
@@ -576,9 +587,17 @@ curl -X POST http://localhost:8080/openapi/v1/events \
 ```text
 400  INVALID_EVENT: 事件格式错误、缺少必填字段或未知字段
 400  INVALID_IDEMPOTENCY_KEY: 缺少 Idempotency-Key、Header 与 payload 不匹配，或同一 key 的 payload 不一致
+400  INVALID_JSON: JSON 不可解析
+401  UNAUTHORIZED: 缺少、格式错误、空或未知 Bearer token
+403  TENANT_FORBIDDEN: token 无权上报该 tenantId
+403  SOURCE_FORBIDDEN: token 无权上报该 sourceSystem
+413  REQUEST_TOO_LARGE: 请求 body 超过 1 MiB 或 EX_MARKETING_EVENT_MAX_BODY_BYTES
+415  UNSUPPORTED_MEDIA_TYPE: 缺少 Content-Type 或不是 application/json
 409  QUOTA_EXCEEDED: <quotaType>: <scope>: <scopeKey>
 500  非预期内部错误
 ```
+
+OpenAPI Event API 失败响应包含稳定的 `errorCode` 和 `message` 字段，且不得包含完整 token、完整 Authorization header、内部配置或敏感 payload。
 
 重复事件响应：
 

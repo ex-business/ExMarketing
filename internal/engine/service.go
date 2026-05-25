@@ -175,10 +175,18 @@ func (s *Service) CloseOutboxDLQ(ctx context.Context, id string, cmd marketing.D
 }
 
 func (s *Service) ProcessEvent(ctx context.Context, event marketing.ActivityEvent) (marketing.ProcessEventResult, error) {
+	return s.ProcessEventFrom(ctx, event, "openapi")
+}
+
+func (s *Service) ProcessEventFrom(ctx context.Context, event marketing.ActivityEvent, actor string) (marketing.ProcessEventResult, error) {
 	if err := event.Validate(); err != nil {
 		return marketing.ProcessEventResult{}, err
 	}
 	event = event.Normalized()
+	actor = strings.TrimSpace(actor)
+	if actor == "" {
+		actor = "system"
+	}
 
 	now := s.now()
 	inbox := marketing.EventInbox{
@@ -196,7 +204,7 @@ func (s *Service) ProcessEvent(ctx context.Context, event marketing.ActivityEven
 	if duplicate {
 		return marketing.ProcessEventResult{Inbox: inbox, Duplicate: true}, nil
 	}
-	_ = s.audit(ctx, event.TenantID, "openapi", "EVENT_IN", "event_inbox", inbox.ID, auditSnapshot(nil, event, map[string]any{
+	_ = s.audit(ctx, event.TenantID, actor, "EVENT_IN", "event_inbox", inbox.ID, auditSnapshot(nil, event, map[string]any{
 		"eventId":        event.EventID,
 		"idempotencyKey": event.IdempotencyKey(),
 	}))

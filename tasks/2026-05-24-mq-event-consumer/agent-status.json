@@ -1,30 +1,53 @@
 {
   "requirementId": "2026-05-24-mq-event-consumer",
-  "updatedAt": "2026-05-24T11:39:29.022377Z",
+  "updatedAt": "2026-05-25T15:31:46.242908Z",
   "agents": {
     "analysis": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-mq-event-consumer/analysis.md"
+      "status": "DONE",
+      "startedAt": "2026-05-25T15:22:09.480157Z",
+      "finishedAt": "2026-05-25T15:24:04.855264Z",
+      "output": "tasks/2026-05-24-mq-event-consumer/analysis.md",
+      "log": "tasks/2026-05-24-mq-event-consumer/runs/20260525T152209Z-analysis.log",
+      "nextStatus": "REVIEW_READY"
     },
     "commit": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-mq-event-consumer/commit.md"
+      "status": "RUNNING",
+      "startedAt": "2026-05-25T15:31:46.242904Z",
+      "output": "tasks/2026-05-24-mq-event-consumer/commit.md",
+      "log": "tasks/2026-05-24-mq-event-consumer/runs/20260525T153146Z-commit.log",
+      "pid": 1590
     },
     "dev": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-mq-event-consumer/implementation.md"
+      "status": "DONE",
+      "startedAt": "2026-05-25T15:25:02.65961Z",
+      "finishedAt": "2026-05-25T15:30:12.4596Z",
+      "output": "tasks/2026-05-24-mq-event-consumer/implementation.md",
+      "log": "tasks/2026-05-24-mq-event-consumer/runs/20260525T152502Z-dev.log",
+      "nextStatus": "REVIEW_PASS"
     },
     "review": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-mq-event-consumer/review.md"
+      "status": "DONE",
+      "startedAt": "2026-05-25T15:24:05.215151Z",
+      "finishedAt": "2026-05-25T15:25:02.655854Z",
+      "output": "tasks/2026-05-24-mq-event-consumer/review.md",
+      "log": "tasks/2026-05-24-mq-event-consumer/runs/20260525T152405Z-review.log",
+      "nextStatus": "REVIEW_PASS"
     },
     "test": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-mq-event-consumer/test.md"
+      "status": "DONE",
+      "startedAt": "2026-05-25T15:30:12.493296Z",
+      "finishedAt": "2026-05-25T15:31:46.215699Z",
+      "output": "tasks/2026-05-24-mq-event-consumer/test.md",
+      "log": "tasks/2026-05-24-mq-event-consumer/runs/20260525T153012Z-test.log",
+      "nextStatus": "COMMIT_READY"
     },
     "test-plan": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-mq-event-consumer/test-plan.md"
+      "status": "DONE",
+      "startedAt": "2026-05-25T15:25:02.684491Z",
+      "finishedAt": "2026-05-25T15:26:26.83458Z",
+      "output": "tasks/2026-05-24-mq-event-consumer/test-plan.md",
+      "log": "tasks/2026-05-24-mq-event-consumer/runs/20260525T152502Z-test-plan.log",
+      "nextStatus": "REVIEW_PASS"
     }
   }
 }

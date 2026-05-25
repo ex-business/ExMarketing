@@ -501,6 +501,8 @@ func (e QuotaExceededError) Unwrap() error {
 }
 
 type CreateQuotaCommand struct {
+	Operator   string     `json:"operator,omitempty"`
+	TenantID   string     `json:"tenantId,omitempty"`
 	ActivityID string     `json:"activityId"`
 	Type       QuotaType  `json:"quotaType"`
 	Scope      QuotaScope `json:"scope"`
@@ -517,6 +519,18 @@ type AuditRecord struct {
 	ResourceID string          `json:"resourceId"`
 	Payload    json.RawMessage `json:"payload"`
 	CreatedAt  time.Time       `json:"createdAt"`
+}
+
+type AuditQuery struct {
+	TenantID   string
+	Actor      string
+	Action     string
+	Resource   string
+	ResourceID string
+	ActivityID string
+	EventID    string
+	CommandID  string
+	Limit      int
 }
 
 type FactProvider struct {
@@ -671,15 +685,25 @@ type RewardReconciliationItem struct {
 	FinishedAt          *time.Time          `json:"finishedAt,omitempty"`
 	ServerUpdatedAt     time.Time           `json:"serverUpdatedAt"`
 	Reservations        []QuotaReservation  `json:"quotaReservations"`
+	EventInbox          *EventInbox         `json:"eventInbox,omitempty"`
+	OutboxMessages      []OutboxMessage     `json:"outboxMessages,omitempty"`
+	AuditTimeline       []AuditRecord       `json:"auditTimeline,omitempty"`
 }
 
 type RewardReconciliationQuery struct {
-	TenantID  string
-	CommandID string
-	Limit     int
+	TenantID       string
+	CommandID      string
+	GrantOrderID   string
+	ActivityID     string
+	SubjectType    string
+	SubjectID      string
+	EventID        string
+	IdempotencyKey string
+	Limit          int
 }
 
 type CreateActivityCommand struct {
+	Operator       string          `json:"operator,omitempty"`
 	TenantID       string          `json:"tenantId"`
 	Code           string          `json:"activityCode"`
 	Name           string          `json:"activityName"`

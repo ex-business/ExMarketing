@@ -9,6 +9,12 @@ CREATE TABLE IF NOT EXISTS marketing_audit (
   created_at TIMESTAMP NOT NULL
 );
 
+CREATE INDEX IF NOT EXISTS idx_marketing_audit_tenant_created
+  ON marketing_audit (tenant_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_marketing_audit_resource
+  ON marketing_audit (tenant_id, resource, resource_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS marketing_fact_provider (
   fact_code VARCHAR(64) PRIMARY KEY,
   provider VARCHAR(32) NOT NULL,
@@ -25,4 +31,3 @@ CREATE INDEX IF NOT EXISTS idx_marketing_outbox_pending
 
 CREATE UNIQUE INDEX IF NOT EXISTS uk_marketing_quota_scope
   ON marketing_quota (activity_id, quota_type, scope, scope_key);
-

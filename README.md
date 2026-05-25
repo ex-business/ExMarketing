@@ -65,6 +65,7 @@ GET  /admin/v1/activities
 POST /admin/v1/activities
 POST /admin/v1/quotas
 GET  /admin/v1/audit
+GET  /admin/v1/reward/reconciliation
 POST /admin/v1/simulate
 GET  /admin/v1/workflow/requirements
 GET  /admin/v1/workflow/requirements/{id}

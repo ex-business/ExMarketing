@@ -34,5 +34,5 @@ type Repository interface {
 	CloseOutboxDLQ(ctx context.Context, tenantID string, id string, operator string, reason string, closedAt time.Time) (OutboxMessage, error)
 
 	CreateAudit(ctx context.Context, record AuditRecord) error
-	ListAudit(ctx context.Context, limit int) ([]AuditRecord, error)
+	ListAudit(ctx context.Context, query AuditQuery) ([]AuditRecord, error)
 }

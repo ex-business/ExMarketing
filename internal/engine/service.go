@@ -73,7 +73,7 @@ func (s *Service) CreateActivity(ctx context.Context, cmd marketing.CreateActivi
 	if err != nil {
 		return marketing.Activity{}, err
 	}
-	_ = s.audit(ctx, created.TenantID, "system", "CREATE_ACTIVITY", "activity", created.ID, created)
+	_ = s.audit(ctx, created.TenantID, actorOrSystem(cmd.Operator), "CREATE_ACTIVITY", "activity", created.ID, auditSnapshot(nil, created, nil))
 	return created, nil
 }
 
@@ -93,7 +93,7 @@ func (s *Service) ValidatePrelaunch(ctx context.Context, req marketing.Prelaunch
 	if actor == "" {
 		actor = "system"
 	}
-	_ = s.audit(ctx, req.Activity.TenantID, actor, "PRELAUNCH_VALIDATE", "activity", req.Activity.Code, result.AuditSummary)
+	_ = s.audit(ctx, req.Activity.TenantID, actor, "PRELAUNCH_VALIDATE", "activity", req.Activity.Code, auditSnapshot(nil, result.AuditSummary, nil))
 	return result, nil
 }
 
@@ -137,12 +137,13 @@ func (s *Service) CreateQuota(ctx context.Context, cmd marketing.CreateQuotaComm
 	if err != nil {
 		return marketing.Quota{}, err
 	}
-	_ = s.audit(ctx, "", "system", "CREATE_QUOTA", "quota", created.ID, created)
+	details := map[string]any{"activityId": created.ActivityID}
+	_ = s.audit(ctx, strings.TrimSpace(cmd.TenantID), actorOrSystem(cmd.Operator), "CREATE_QUOTA", "quota", created.ID, auditSnapshot(nil, created, details))
 	return created, nil
 }
 
-func (s *Service) ListAudit(ctx context.Context, limit int) ([]marketing.AuditRecord, error) {
-	return s.repository.ListAudit(ctx, limit)
+func (s *Service) ListAudit(ctx context.Context, query marketing.AuditQuery) ([]marketing.AuditRecord, error) {
+	return s.repository.ListAudit(ctx, query)
 }
 
 func (s *Service) ListOutboxDLQ(ctx context.Context, tenantID string, includeClosed bool, limit int) ([]marketing.OutboxMessage, error) {
@@ -152,6 +153,9 @@ func (s *Service) ListOutboxDLQ(ctx context.Context, tenantID string, includeClo
 func (s *Service) ListRewardReconciliation(ctx context.Context, query marketing.RewardReconciliationQuery) ([]marketing.RewardReconciliationItem, error) {
 	if strings.TrimSpace(query.TenantID) == "" {
 		return nil, errors.New("tenantId is required")
+	}
+	if strings.TrimSpace(query.SubjectID) != "" && strings.TrimSpace(query.SubjectType) == "" {
+		return nil, errors.New("subjectType is required when subjectId is provided")
 	}
 	return s.repository.ListRewardReconciliation(ctx, query)
 }
@@ -192,7 +196,10 @@ func (s *Service) ProcessEvent(ctx context.Context, event marketing.ActivityEven
 	if duplicate {
 		return marketing.ProcessEventResult{Inbox: inbox, Duplicate: true}, nil
 	}
-	_ = s.audit(ctx, event.TenantID, "openapi", "EVENT_IN", "event_inbox", inbox.ID, event)
+	_ = s.audit(ctx, event.TenantID, "openapi", "EVENT_IN", "event_inbox", inbox.ID, auditSnapshot(nil, event, map[string]any{
+		"eventId":        event.EventID,
+		"idempotencyKey": event.IdempotencyKey(),
+	}))
 
 	activities, err := s.repository.FindMatchingActivities(ctx, event.TenantID, event.EventType)
 	if err != nil {
@@ -318,6 +325,10 @@ func (s *Service) SimulateEvent(ctx context.Context, event marketing.ActivityEve
 	}
 	result.Summary.MatchedCount = len(result.MatchedActivities)
 	result.Summary.UnmatchedCount = len(result.UnmatchedActivities)
+	_ = s.audit(ctx, event.TenantID, "system", "SIMULATION_RUN", "simulation", event.IdempotencyKey(), auditSnapshot(nil, result.Summary, map[string]any{
+		"eventId":        event.EventID,
+		"idempotencyKey": event.IdempotencyKey(),
+	}))
 	return result, nil
 }
 
@@ -494,7 +505,7 @@ func (s *Service) evaluateActivity(ctx context.Context, inbox marketing.EventInb
 				payload["scopeKey"] = quotaErr.ScopeKey
 				payload["amount"] = quotaErr.Amount
 			}
-			_ = s.audit(ctx, activity.TenantID, "engine", "QUOTA_EXCEEDED", "event_inbox", inbox.ID, payload)
+			_ = s.audit(ctx, activity.TenantID, "engine", "QUOTA_EXCEEDED", "event_inbox", inbox.ID, auditSnapshot(nil, nil, payload))
 		}
 		return participation, orders, messages, ruleResult, true, err
 	}
@@ -939,6 +950,25 @@ func (s *Service) audit(ctx context.Context, tenantID, actor, action, resource, 
 		Payload:    bytes,
 		CreatedAt:  now,
 	})
+}
+
+func actorOrSystem(actor string) string {
+	actor = strings.TrimSpace(actor)
+	if actor == "" {
+		return "system"
+	}
+	return actor
+}
+
+func auditSnapshot(before any, after any, details map[string]any) map[string]any {
+	payload := map[string]any{
+		"beforeSnapshot": before,
+		"afterSnapshot":  after,
+	}
+	for key, value := range details {
+		payload[key] = value
+	}
+	return payload
 }
 
 func normalizeActivityStatus(status marketing.ActivityStatus, now, start, end time.Time) marketing.ActivityStatus {

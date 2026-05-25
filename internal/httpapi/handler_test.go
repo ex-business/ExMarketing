@@ -56,6 +56,36 @@ func TestCreateActivityReturnsUnifiedConfigVersions(t *testing.T) {
 	}
 }
 
+func TestAuditQueryFiltersAndSnapshots(t *testing.T) {
+	handler := newTestHandler()
+	body := strings.Replace(validActivityBody(), "{", `{"operator":"ops-a",`, 1)
+	rec := postActivity(t, handler, body)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusCreated, rec.Code, rec.Body.String())
+	}
+	var activity marketing.Activity
+	if err := json.NewDecoder(rec.Body).Decode(&activity); err != nil {
+		t.Fatalf("decode activity: %v", err)
+	}
+
+	auditRec := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(auditRec, httptest.NewRequest(http.MethodGet, "/admin/v1/audit?tenantId=site_001&action=CREATE_ACTIVITY&actor=ops-a&activityId="+activity.ID, nil))
+	if auditRec.Code != http.StatusOK {
+		t.Fatalf("expected audit status %d, got %d: %s", http.StatusOK, auditRec.Code, auditRec.Body.String())
+	}
+	for _, want := range []string{`"actor":"ops-a"`, `"action":"CREATE_ACTIVITY"`, `"resource":"activity"`, `"resourceId":"` + activity.ID + `"`, `"beforeSnapshot":null`, `"afterSnapshot":{`} {
+		if !strings.Contains(auditRec.Body.String(), want) {
+			t.Fatalf("expected audit %s, got: %s", want, auditRec.Body.String())
+		}
+	}
+
+	otherTenant := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(otherTenant, httptest.NewRequest(http.MethodGet, "/admin/v1/audit?tenantId=other&action=CREATE_ACTIVITY", nil))
+	if otherTenant.Code != http.StatusOK || strings.Contains(otherTenant.Body.String(), activity.ID) {
+		t.Fatalf("expected tenant-scoped audit filter, got %d: %s", otherTenant.Code, otherTenant.Body.String())
+	}
+}
+
 func TestCreateActivityRejectsUnsupportedRewardDelivery(t *testing.T) {
 	handler := newTestHandler()
 	for name, body := range map[string]string{
@@ -246,6 +276,12 @@ func TestSimulateEventReturnsActivityAndQuotaPreviewsWithoutPersistence(t *testi
 	accepted := postRawEvent(t, handler, event, "site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:pay_sim_success")
 	if accepted.Code != http.StatusAccepted {
 		t.Fatalf("expected formal event after simulation to be accepted, got %d: %s", accepted.Code, accepted.Body.String())
+	}
+
+	auditRec := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(auditRec, httptest.NewRequest(http.MethodGet, "/admin/v1/audit?tenantId=site_001&action=SIMULATION_RUN&eventId=evt_sim_success", nil))
+	if auditRec.Code != http.StatusOK || !strings.Contains(auditRec.Body.String(), `"action":"SIMULATION_RUN"`) {
+		t.Fatalf("expected simulation audit, got %d: %s", auditRec.Code, auditRec.Body.String())
 	}
 }
 
@@ -644,6 +680,48 @@ func TestRewardCallbackSuccessConfirmsQuotaAndIsIdempotent(t *testing.T) {
 		if !strings.Contains(reconcile.Body.String(), want) {
 			t.Fatalf("expected reconciliation %s, got: %s", want, reconcile.Body.String())
 		}
+	}
+}
+
+func TestRewardReconciliationSupportsActivitySubjectAndEventQueries(t *testing.T) {
+	handler := newTestHandler()
+	activityID := createActivity(t, handler)
+	createQuota(t, handler, activityID, marketing.QuotaBudget, marketing.QuotaScopeActivity, "TOTAL", "100")
+	createQuota(t, handler, activityID, marketing.QuotaStock, marketing.QuotaScopeActivity, "FIRST_DEPOSIT_RATIO", "10")
+	createQuota(t, handler, activityID, marketing.QuotaUserLimit, marketing.QuotaScopeUser, "10001", "1")
+
+	eventRec := postDepositEvent(t, handler, "evt_reconcile_dims", "pay_reconcile_dims")
+	if eventRec.Code != http.StatusAccepted {
+		t.Fatalf("expected event accepted, got %d: %s", eventRec.Code, eventRec.Body.String())
+	}
+	var result marketing.ProcessEventResult
+	if err := json.Unmarshal(eventRec.Body.Bytes(), &result); err != nil {
+		t.Fatalf("decode event result: %v", err)
+	}
+	commandID := result.GrantOrders[0].BillNo
+
+	for _, path := range []string{
+		"/admin/v1/reward/reconciliation?tenantId=site_001&activityId=" + activityID,
+		"/admin/v1/reward/reconciliation?tenantId=site_001&subjectType=USER&subjectId=10001",
+		"/admin/v1/reward/reconciliation?tenantId=site_001&eventId=evt_reconcile_dims",
+		"/admin/v1/reward/reconciliation?tenantId=site_001&idempotencyKey=site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:pay_reconcile_dims",
+	} {
+		rec := httptest.NewRecorder()
+		handler.Routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected reconciliation OK for %s, got %d: %s", path, rec.Code, rec.Body.String())
+		}
+		for _, want := range []string{`"commandId":"` + commandID + `"`, `"eventInbox":{`, `"eventId":"evt_reconcile_dims"`, `"outboxMessages":[{`, `"quotaReservations":[{`, `"auditTimeline":[`} {
+			if !strings.Contains(rec.Body.String(), want) {
+				t.Fatalf("expected reconciliation %s for %s, got: %s", want, path, rec.Body.String())
+			}
+		}
+	}
+
+	otherTenant := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(otherTenant, httptest.NewRequest(http.MethodGet, "/admin/v1/reward/reconciliation?tenantId=other&commandId="+commandID, nil))
+	if otherTenant.Code != http.StatusOK || strings.Contains(otherTenant.Body.String(), commandID) {
+		t.Fatalf("expected tenant-scoped reconciliation, got %d: %s", otherTenant.Code, otherTenant.Body.String())
 	}
 }
 

@@ -374,13 +374,22 @@ func (r *Repository) ListRewardReconciliation(ctx context.Context, query marketi
 		SELECT go.id, go.tenant_id, go.activity_id, go.participation_id, go.subject_type, go.subject_id,
 		       go.reward_type, go.reward_amount::text, go.bill_no, go.grant_status,
 		       COALESCE(go.error_message, ''), COALESCE(go.external_grant_id, ''), go.finished_at, go.updated_at,
-		       p.status
+		       p.status,
+		       ei.id, ei.payload_json, ei.idempotency_key, ei.process_status, COALESCE(ei.error_message, ''), ei.created_at, ei.updated_at
 		FROM marketing_grant_order go
 		JOIN marketing_participation p ON p.id = go.participation_id
-		WHERE go.tenant_id = $1 AND ($2 = '' OR go.bill_no = $2)
+		JOIN marketing_event_inbox ei ON ei.id = p.event_inbox_id
+		WHERE go.tenant_id = $1
+		  AND ($2 = '' OR go.bill_no = $2)
+		  AND ($3 = '' OR go.id = $3)
+		  AND ($4 = '' OR go.activity_id = $4)
+		  AND ($5 = '' OR go.subject_type = $5)
+		  AND ($6 = '' OR go.subject_id = $6)
+		  AND ($7 = '' OR ei.event_id = $7)
+		  AND ($8 = '' OR ei.idempotency_key = $8)
 		ORDER BY go.updated_at DESC
-		LIMIT $3
-	`, query.TenantID, query.CommandID, query.Limit)
+		LIMIT $9
+	`, query.TenantID, query.CommandID, query.GrantOrderID, query.ActivityID, query.SubjectType, query.SubjectID, query.EventID, query.IdempotencyKey, query.Limit)
 	if err != nil {
 		return nil, err
 	}
@@ -390,16 +399,31 @@ func (r *Repository) ListRewardReconciliation(ctx context.Context, query marketi
 	for rows.Next() {
 		var item marketing.RewardReconciliationItem
 		var finishedAt sql.NullTime
+		var inbox marketing.EventInbox
+		var eventPayload []byte
 		if err := rows.Scan(&item.GrantOrderID, &item.TenantID, &item.ActivityID, &item.ParticipationID,
 			&item.Subject.Type, &item.Subject.ID, &item.RewardType, &item.RewardAmount,
 			&item.CommandID, &item.GrantStatus, &item.CallbackMessage, &item.ExternalGrantID,
-			&finishedAt, &item.ServerUpdatedAt, &item.ParticipationStatus); err != nil {
+			&finishedAt, &item.ServerUpdatedAt, &item.ParticipationStatus,
+			&inbox.ID, &eventPayload, &inbox.IdempotencyKey, &inbox.ProcessStatus, &inbox.ErrorMessage, &inbox.CreatedAt, &inbox.UpdatedAt); err != nil {
 			return nil, err
 		}
 		if finishedAt.Valid {
 			item.FinishedAt = &finishedAt.Time
 		}
+		if err := json.Unmarshal(eventPayload, &inbox.Event); err != nil {
+			return nil, err
+		}
+		item.EventInbox = &inbox
 		item.Reservations, err = quotaReservationsForOrder(ctx, r.db, item.GrantOrderID)
+		if err != nil {
+			return nil, err
+		}
+		item.OutboxMessages, err = r.outboxesForReward(ctx, item.TenantID, item.CommandID, item.ParticipationID)
+		if err != nil {
+			return nil, err
+		}
+		item.AuditTimeline, err = r.auditTimeline(ctx, item.TenantID, []string{item.GrantOrderID, item.CommandID, item.ParticipationID, item.ActivityID, inbox.ID, inbox.Event.EventID, inbox.IdempotencyKey})
 		if err != nil {
 			return nil, err
 		}
@@ -773,16 +797,25 @@ func (r *Repository) CreateAudit(ctx context.Context, record marketing.AuditReco
 	return err
 }
 
-func (r *Repository) ListAudit(ctx context.Context, limit int) ([]marketing.AuditRecord, error) {
-	if limit <= 0 {
-		limit = 100
+func (r *Repository) ListAudit(ctx context.Context, query marketing.AuditQuery) ([]marketing.AuditRecord, error) {
+	if query.Limit <= 0 {
+		query.Limit = 100
 	}
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, tenant_id, actor, action, resource, resource_id, payload_json, created_at
 		FROM marketing_audit
+		WHERE ($1 = '' OR tenant_id = $1)
+		  AND ($2 = '' OR actor = $2)
+		  AND ($3 = '' OR action = $3)
+		  AND ($4 = '' OR resource = $4)
+		  AND ($5 = '' OR resource_id = $5)
+		  AND ($6 = '' OR resource_id = $6 OR payload_json::text LIKE '%' || $6 || '%')
+		  AND ($7 = '' OR resource_id = $7 OR payload_json::text LIKE '%' || $7 || '%')
+		  AND ($8 = '' OR resource_id = $8 OR payload_json::text LIKE '%' || $8 || '%')
 		ORDER BY created_at DESC
-		LIMIT $1
-	`, limit)
+		LIMIT $9
+	`, query.TenantID, query.Actor, query.Action, query.Resource, query.ResourceID,
+		query.ActivityID, query.EventID, query.CommandID, query.Limit)
 	if err != nil {
 		return nil, err
 	}
@@ -798,6 +831,77 @@ func (r *Repository) ListAudit(ctx context.Context, limit int) ([]marketing.Audi
 		records = append(records, record)
 	}
 	return records, rows.Err()
+}
+
+func (r *Repository) outboxesForReward(ctx context.Context, tenantID string, commandID string, participationID string) ([]marketing.OutboxMessage, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, tenant_id, message_type, target_channel, target_ref, payload_json,
+		       send_status, retry_count, next_retry_at, COALESCE(error_message, ''), created_at, updated_at
+		FROM marketing_outbox
+		WHERE tenant_id = $1
+		  AND (payload_json ->> 'commandId' = $2 OR payload_json ->> 'participationId' = $3)
+		ORDER BY created_at ASC
+	`, tenantID, commandID, participationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var messages []marketing.OutboxMessage
+	for rows.Next() {
+		message, err := scanOutbox(rows)
+		if err != nil {
+			return nil, err
+		}
+		messages = append(messages, message)
+	}
+	return messages, rows.Err()
+}
+
+func (r *Repository) auditTimeline(ctx context.Context, tenantID string, relatedIDs []string) ([]marketing.AuditRecord, error) {
+	var records []marketing.AuditRecord
+	for _, relatedID := range relatedIDs {
+		if relatedID == "" {
+			continue
+		}
+		items, err := r.ListAudit(ctx, marketing.AuditQuery{
+			TenantID:   tenantID,
+			ResourceID: relatedID,
+			Limit:      100,
+		})
+		if err != nil {
+			return nil, err
+		}
+		records = appendUniqueAudit(records, items)
+		items, err = r.ListAudit(ctx, marketing.AuditQuery{
+			TenantID:   tenantID,
+			ActivityID: relatedID,
+			Limit:      100,
+		})
+		if err != nil {
+			return nil, err
+		}
+		records = appendUniqueAudit(records, items)
+	}
+	slices.SortFunc(records, func(a, b marketing.AuditRecord) int {
+		return a.CreatedAt.Compare(b.CreatedAt)
+	})
+	return records, nil
+}
+
+func appendUniqueAudit(records []marketing.AuditRecord, items []marketing.AuditRecord) []marketing.AuditRecord {
+	seen := make(map[string]struct{}, len(records))
+	for _, record := range records {
+		seen[record.ID] = struct{}{}
+	}
+	for _, item := range items {
+		if _, ok := seen[item.ID]; ok {
+			continue
+		}
+		records = append(records, item)
+		seen[item.ID] = struct{}{}
+	}
+	return records
 }
 
 func (r *Repository) rulesForActivity(ctx context.Context, activityID string) ([]marketing.Rule, error) {

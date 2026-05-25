@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -250,6 +251,26 @@ func (r *MemoryRepository) ListRewardReconciliation(ctx context.Context, query R
 		if query.CommandID != "" && order.BillNo != query.CommandID {
 			continue
 		}
+		if query.GrantOrderID != "" && order.ID != query.GrantOrderID {
+			continue
+		}
+		if query.ActivityID != "" && order.ActivityID != query.ActivityID {
+			continue
+		}
+		if query.SubjectType != "" && order.Subject.Type != query.SubjectType {
+			continue
+		}
+		if query.SubjectID != "" && order.Subject.ID != query.SubjectID {
+			continue
+		}
+		participation := r.participationLocked(order.ParticipationID)
+		inbox := r.inboxByIDLocked(participation.EventInboxID)
+		if query.EventID != "" && inbox.Event.EventID != query.EventID {
+			continue
+		}
+		if query.IdempotencyKey != "" && inbox.IdempotencyKey != query.IdempotencyKey {
+			continue
+		}
 		item := RewardReconciliationItem{
 			TenantID:        order.TenantID,
 			CommandID:       order.BillNo,
@@ -266,7 +287,12 @@ func (r *MemoryRepository) ListRewardReconciliation(ctx context.Context, query R
 			ServerUpdatedAt: order.UpdatedAt,
 			Reservations:    r.reservationsForGrantOrderLocked(order.ID),
 		}
-		item.ParticipationStatus = r.participationStatusLocked(order.ParticipationID)
+		item.ParticipationStatus = participation.Status
+		if inbox.ID != "" {
+			item.EventInbox = &inbox
+		}
+		item.OutboxMessages = r.outboxesForRewardLocked(order.BillNo, order.ParticipationID)
+		item.AuditTimeline = r.auditTimelineLocked(order.TenantID, []string{order.ID, order.BillNo, order.ParticipationID, order.ActivityID, inbox.ID, inbox.Event.EventID, inbox.IdempotencyKey})
 		out = append(out, item)
 	}
 	return out, nil
@@ -529,16 +555,26 @@ func (r *MemoryRepository) CreateAudit(ctx context.Context, record AuditRecord) 
 	return nil
 }
 
-func (r *MemoryRepository) ListAudit(ctx context.Context, limit int) ([]AuditRecord, error) {
+func (r *MemoryRepository) ListAudit(ctx context.Context, query AuditQuery) ([]AuditRecord, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	limit := query.Limit
 	if limit <= 0 || limit > len(r.auditRecords) {
 		limit = len(r.auditRecords)
 	}
-	out := slices.Clone(r.auditRecords[:limit])
+	var out []AuditRecord
+	for _, record := range r.auditRecords {
+		if len(out) >= limit {
+			break
+		}
+		if !auditRecordMatches(record, query) {
+			continue
+		}
+		out = append(out, record)
+	}
 	return out, nil
 }
 
@@ -715,6 +751,85 @@ func (r *MemoryRepository) participationStatusLocked(participationID string) Par
 		}
 	}
 	return ""
+}
+
+func (r *MemoryRepository) participationLocked(participationID string) Participation {
+	for _, participation := range r.participations {
+		if participation.ID == participationID {
+			return participation
+		}
+	}
+	return Participation{}
+}
+
+func (r *MemoryRepository) inboxByIDLocked(inboxID string) EventInbox {
+	for _, inbox := range r.inboxByIdempotency {
+		if inbox.ID == inboxID {
+			return inbox
+		}
+	}
+	return EventInbox{}
+}
+
+func (r *MemoryRepository) outboxesForRewardLocked(commandID string, participationID string) []OutboxMessage {
+	var out []OutboxMessage
+	for _, message := range r.outboxMessages {
+		if rawJSONContains(message.Payload, commandID) || rawJSONContains(message.Payload, participationID) {
+			out = append(out, message)
+		}
+	}
+	return out
+}
+
+func (r *MemoryRepository) auditTimelineLocked(tenantID string, relatedIDs []string) []AuditRecord {
+	var out []AuditRecord
+	for _, record := range r.auditRecords {
+		if tenantID != "" && record.TenantID != "" && record.TenantID != tenantID {
+			continue
+		}
+		for _, id := range relatedIDs {
+			if id == "" {
+				continue
+			}
+			if record.ResourceID == id || rawJSONContains(record.Payload, id) {
+				out = append(out, record)
+				break
+			}
+		}
+	}
+	return out
+}
+
+func auditRecordMatches(record AuditRecord, query AuditQuery) bool {
+	if query.TenantID != "" && record.TenantID != query.TenantID {
+		return false
+	}
+	if query.Actor != "" && record.Actor != query.Actor {
+		return false
+	}
+	if query.Action != "" && record.Action != query.Action {
+		return false
+	}
+	if query.Resource != "" && record.Resource != query.Resource {
+		return false
+	}
+	if query.ResourceID != "" && record.ResourceID != query.ResourceID {
+		return false
+	}
+	if query.ActivityID != "" && record.ResourceID != query.ActivityID && !rawJSONContains(record.Payload, query.ActivityID) {
+		return false
+	}
+	if query.EventID != "" && record.ResourceID != query.EventID && !rawJSONContains(record.Payload, query.EventID) {
+		return false
+	}
+	if query.CommandID != "" && record.ResourceID != query.CommandID && !rawJSONContains(record.Payload, query.CommandID) {
+		return false
+	}
+	return true
+}
+
+func rawJSONContains(payload json.RawMessage, value string) bool {
+	return value != "" && strings.Contains(string(payload), value)
 }
 
 func outboxOperationAudit(tenantID string, operator string, action string, outboxID string, reason string, before OutboxStatus, after OutboxStatus, at time.Time) AuditRecord {

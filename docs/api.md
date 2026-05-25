@@ -467,9 +467,22 @@ POST /openapi/v1/reward/callback
 
 ```http
 GET /admin/v1/reward/reconciliation?tenantId=site_001&commandId=cmd_xxx
+GET /admin/v1/reward/reconciliation?tenantId=site_001&activityId=act_xxx
+GET /admin/v1/reward/reconciliation?tenantId=site_001&subjectType=USER&subjectId=10001
+GET /admin/v1/reward/reconciliation?tenantId=site_001&eventId=evt_xxx
+GET /admin/v1/reward/reconciliation?tenantId=site_001&idempotencyKey=site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:pay_xxx
 ```
 
-返回 grant_order、participation 状态、回调信息以及该单关联的 quota reservations，供排查长期冻结悬挂和回调异常。
+支持参数：
+
+- `tenantId` 必填，所有查询按租户隔离。
+- `commandId` / `grantOrderId`：按发奖单查询。
+- `activityId`：按活动查询。
+- `subjectType + subjectId`：按用户或主体查询。
+- `eventId` / `idempotencyKey`：按事件或标准幂等键查询。
+- `limit`：分页上限，默认 100。
+
+返回 grant_order、participation 状态、event inbox、outbox、回调信息、quota reservations 以及相关审计时间线，供排查长期冻结悬挂、回调异常、活动/用户/事件维度链路。
 
 ## 上报标准事件
 
@@ -639,7 +652,7 @@ curl -X POST http://localhost:8080/openapi/v1/reward/callback \
 ## 审计查询
 
 ```http
-GET /admin/v1/audit?limit=100
+GET /admin/v1/audit?tenantId=site_001&limit=100
 ```
 
 当前记录：
@@ -648,7 +661,10 @@ GET /admin/v1/audit?limit=100
 CREATE_ACTIVITY
 CREATE_QUOTA
 EVENT_IN
+SIMULATION_RUN
 QUOTA_EXCEEDED
+OUTBOX_DLQ_REPLAY
+OUTBOX_DLQ_CLOSE
 ```
 
-`QUOTA_EXCEEDED` payload 包含 `activityId`、`eventInboxId`、`subject`、`biz`、`quotaType`、`scope`、`scopeKey`、`amount`、`reason` 和 `error`，用于排查预算、库存或次数不足导致的发奖回滚。
+支持按 `tenantId`、`actor`、`action`、`resource`、`resourceId`、`activityId`、`eventId`、`commandId` 和 `limit` 过滤。创建和模拟类审计 payload 包含 `beforeSnapshot` / `afterSnapshot`；失败类审计在 payload 中记录错误上下文。`QUOTA_EXCEEDED` payload 包含 `activityId`、`eventInboxId`、`subject`、`biz`、`quotaType`、`scope`、`scopeKey`、`amount`、`reason` 和 `error`，用于排查预算、库存或次数不足导致的发奖回滚。

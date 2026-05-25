@@ -260,6 +260,6 @@ func (r *workerTestRepo) CloseOutboxDLQ(context.Context, string, string, string,
 func (r *workerTestRepo) CreateAudit(context.Context, marketing.AuditRecord) error {
 	panic("not implemented")
 }
-func (r *workerTestRepo) ListAudit(context.Context, int) ([]marketing.AuditRecord, error) {
+func (r *workerTestRepo) ListAudit(context.Context, marketing.AuditQuery) ([]marketing.AuditRecord, error) {
 	panic("not implemented")
 }

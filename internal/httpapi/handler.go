@@ -132,7 +132,17 @@ func (h *Handler) createQuota(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) listAudit(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	records, err := h.engine.ListAudit(r.Context(), limit)
+	records, err := h.engine.ListAudit(r.Context(), marketing.AuditQuery{
+		TenantID:   r.URL.Query().Get("tenantId"),
+		Actor:      r.URL.Query().Get("actor"),
+		Action:     r.URL.Query().Get("action"),
+		Resource:   r.URL.Query().Get("resource"),
+		ResourceID: r.URL.Query().Get("resourceId"),
+		ActivityID: r.URL.Query().Get("activityId"),
+		EventID:    r.URL.Query().Get("eventId"),
+		CommandID:  r.URL.Query().Get("commandId"),
+		Limit:      limit,
+	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -162,9 +172,15 @@ func (h *Handler) closeOutboxDLQ(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) listRewardReconciliation(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	items, err := h.engine.ListRewardReconciliation(r.Context(), marketing.RewardReconciliationQuery{
-		TenantID:  r.URL.Query().Get("tenantId"),
-		CommandID: r.URL.Query().Get("commandId"),
-		Limit:     limit,
+		TenantID:       r.URL.Query().Get("tenantId"),
+		CommandID:      r.URL.Query().Get("commandId"),
+		GrantOrderID:   r.URL.Query().Get("grantOrderId"),
+		ActivityID:     r.URL.Query().Get("activityId"),
+		SubjectType:    r.URL.Query().Get("subjectType"),
+		SubjectID:      r.URL.Query().Get("subjectId"),
+		EventID:        r.URL.Query().Get("eventId"),
+		IdempotencyKey: r.URL.Query().Get("idempotencyKey"),
+		Limit:          limit,
 	})
 	if err != nil {
 		writeErrorCode(w, http.StatusBadRequest, "INVALID_RECONCILIATION_REQUEST", err.Error())

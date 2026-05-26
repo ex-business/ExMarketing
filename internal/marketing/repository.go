@@ -9,6 +9,8 @@ type Repository interface {
 	CreateActivity(ctx context.Context, activity Activity) (Activity, error)
 	ListActivities(ctx context.Context) ([]Activity, error)
 	FindMatchingActivities(ctx context.Context, tenantID string, eventType string) ([]Activity, error)
+	SaveFactProvider(ctx context.Context, provider FactProvider) (FactProvider, error)
+	FindEnabledFactProvider(ctx context.Context, tenantID string, factCode string) (FactProvider, error)
 
 	CreateInbox(ctx context.Context, inbox EventInbox) (EventInbox, bool, error)
 	UpdateInbox(ctx context.Context, inbox EventInbox) error

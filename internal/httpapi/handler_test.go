@@ -19,6 +19,10 @@ func newTestHandler() *Handler {
 	return NewHandler(engine.NewService(marketing.NewMemoryRepository()))
 }
 
+func newTestHandlerWithRepository(repo *marketing.MemoryRepository) *Handler {
+	return NewHandler(engine.NewService(repo))
+}
+
 func newAuthTestHandler(token string, tenantIDs []string, sourceSystems []string, maxBodyBytes int64) *Handler {
 	credential := OpenAPIEventCredential{
 		TenantIDs:     map[string]struct{}{},
@@ -136,6 +140,81 @@ func TestCreateActivityRejectsInvalidConfigAndRuleSchema(t *testing.T) {
 				t.Fatalf("expected status %d, got %d: %s", http.StatusBadRequest, rec.Code, rec.Body.String())
 			}
 		})
+	}
+}
+
+func TestCreateActivityValidatesFactProviderReferences(t *testing.T) {
+	missing := strings.Replace(validActivityBody(), `"attributes.vipLevel"`, `"facts.USER_PROFILE.vipLevel"`, 1)
+	rec := postActivity(t, newTestHandler(), missing)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "USER_PROFILE") {
+		t.Fatalf("expected missing fact provider rejection, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	repo := marketing.NewMemoryRepository()
+	_, err := repo.SaveFactProvider(context.Background(), marketing.FactProvider{
+		TenantID:     "site_001",
+		FactCode:     "USER_PROFILE",
+		ProviderType: "HTTP",
+		Endpoint:     "https://example.com/profile",
+		Method:       "POST",
+		Mapping:      map[string]marketing.FactMapping{"vipLevel": {Source: "$.data.vipLevel", Type: "number"}},
+		Enabled:      true,
+		TimeoutMS:    5000,
+		UpdatedAt:    time.Date(2026, 5, 24, 0, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("save provider: %v", err)
+	}
+	rec = postActivity(t, newTestHandlerWithRepository(repo), missing)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected activity with configured provider, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestFactQueryRejectsInlineProviderAndUsesRegistry(t *testing.T) {
+	handler := newTestHandler()
+	inlineBody := `{
+		"tenantId": "site_001",
+		"factCode": "USER_PROFILE",
+		"provider": {"endpoint": "https://example.com/profile"}
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/openapi/v1/facts/query", strings.NewReader(inlineBody))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected inline provider to be rejected, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	body := `{
+		"tenantId": "site_001",
+		"factCode": "USER_PROFILE",
+		"subject": {"type": "USER", "id": "10001"},
+		"biz": {"bizType": "DEPOSIT", "bizId": "pay_1"},
+		"attributes": {"amount": "100"},
+		"traceId": "trace_1"
+	}`
+	req = httptest.NewRequest(http.MethodPost, "/openapi/v1/facts/query", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	handler.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "FACT_PROVIDER_NOT_CONFIGURED") {
+		t.Fatalf("expected registry lookup failure, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestPrelaunchValidationBlocksMissingFactProvider(t *testing.T) {
+	activity := strings.Replace(validActivityBody(), `"attributes.vipLevel"`, `"facts.USER_PROFILE.vipLevel"`, 1)
+	body := `{"activity":` + activity + `,"targetAction":"GO_LIVE"}`
+	req := httptest.NewRequest(http.MethodPost, "/admin/v1/activities/prelaunch-validation", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	newTestHandler().Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status OK, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"conclusion":"BLOCK"`) || !strings.Contains(rec.Body.String(), "FACT_PROVIDER_NOT_CONFIGURED") {
+		t.Fatalf("expected prelaunch fact provider block, got: %s", rec.Body.String())
 	}
 }
 

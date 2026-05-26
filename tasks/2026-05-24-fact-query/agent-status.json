@@ -1,6 +1,6 @@
 {
   "requirementId": "2026-05-24-fact-query",
-  "updatedAt": "2026-05-25T15:05:40.46876Z",
+  "updatedAt": "2026-05-26T07:20:52.897227Z",
   "agents": {
     "analysis": {
       "status": "INTERRUPTED",
@@ -12,12 +12,19 @@
       "error": "agent stopped by user: pid 80067"
     },
     "commit": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-fact-query/commit.md"
+      "status": "RUNNING",
+      "startedAt": "2026-05-26T07:20:52.897224Z",
+      "output": "tasks/2026-05-24-fact-query/commit.md",
+      "log": "tasks/2026-05-24-fact-query/runs/20260526T072052Z-commit.log",
+      "pid": 67829
     },
     "dev": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-fact-query/implementation.md"
+      "status": "DONE",
+      "startedAt": "2026-05-26T07:09:47.208732Z",
+      "finishedAt": "2026-05-26T07:18:43.591941Z",
+      "output": "tasks/2026-05-24-fact-query/implementation.md",
+      "log": "tasks/2026-05-24-fact-query/runs/20260526T070947Z-dev.log",
+      "nextStatus": "REVIEW_PASS"
     },
     "review": {
       "status": "DONE",
@@ -25,16 +32,23 @@
       "finishedAt": "2026-05-25T15:05:40.468568Z",
       "output": "tasks/2026-05-24-fact-query/review.md",
       "log": "tasks/2026-05-24-fact-query/runs/20260525T150445Z-review.log",
-      "exitCode": 0,
       "nextStatus": "REVIEW_PASS"
     },
     "test": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-fact-query/test.md"
+      "status": "DONE",
+      "startedAt": "2026-05-26T07:18:43.642521Z",
+      "finishedAt": "2026-05-26T07:20:52.868878Z",
+      "output": "tasks/2026-05-24-fact-query/test.md",
+      "log": "tasks/2026-05-24-fact-query/runs/20260526T071843Z-test.log",
+      "nextStatus": "COMMIT_READY"
     },
     "test-plan": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-fact-query/test-plan.md"
+      "status": "DONE",
+      "startedAt": "2026-05-26T07:09:47.272126Z",
+      "finishedAt": "2026-05-26T07:11:26.972911Z",
+      "output": "tasks/2026-05-24-fact-query/test-plan.md",
+      "log": "tasks/2026-05-24-fact-query/runs/20260526T070947Z-test-plan.log",
+      "nextStatus": "REVIEW_PASS"
     }
   }
 }

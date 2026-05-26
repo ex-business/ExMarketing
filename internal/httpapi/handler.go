@@ -15,7 +15,6 @@ import (
 	"strings"
 
 	"github.com/ex-stack/ExMarketing/internal/engine"
-	"github.com/ex-stack/ExMarketing/internal/fact"
 	"github.com/ex-stack/ExMarketing/internal/marketing"
 	"github.com/ex-stack/ExMarketing/internal/workflow"
 )
@@ -35,7 +34,6 @@ type OpenAPIEventCredential struct {
 
 type Handler struct {
 	engine          *engine.Service
-	facts           *fact.Client
 	openAPIEventCfg OpenAPIEventConfig
 }
 
@@ -47,7 +45,7 @@ func NewHandlerWithOpenAPIEventConfig(engine *engine.Service, cfg OpenAPIEventCo
 	if cfg.MaxBodyBytes <= 0 {
 		cfg.MaxBodyBytes = defaultEventMaxBodyBytes
 	}
-	return &Handler{engine: engine, facts: fact.NewClient(), openAPIEventCfg: cfg}
+	return &Handler{engine: engine, openAPIEventCfg: cfg}
 }
 
 func LoadOpenAPIEventConfigFromEnv(logger *slog.Logger) (OpenAPIEventConfig, error) {
@@ -481,9 +479,13 @@ func (h *Handler) queryFacts(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid json body")
 		return
 	}
-	response, err := h.facts.Query(r.Context(), request)
+	response, err := h.engine.QueryFacts(r.Context(), request)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !response.Success {
+		writeJSON(w, http.StatusBadRequest, response)
 		return
 	}
 	writeJSON(w, http.StatusOK, response)

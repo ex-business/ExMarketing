@@ -168,6 +168,71 @@ func (r *Repository) FindMatchingActivities(ctx context.Context, tenantID string
 	return activities, rows.Err()
 }
 
+func (r *Repository) SaveFactProvider(ctx context.Context, provider marketing.FactProvider) (marketing.FactProvider, error) {
+	if err := provider.Validate(); err != nil {
+		return marketing.FactProvider{}, err
+	}
+	if provider.CreatedAt.IsZero() {
+		provider.CreatedAt = time.Now().UTC()
+	}
+	if provider.UpdatedAt.IsZero() {
+		provider.UpdatedAt = time.Now().UTC()
+	}
+	mapping, err := json.Marshal(provider.Mapping)
+	if err != nil {
+		return marketing.FactProvider{}, err
+	}
+	_, err = r.db.ExecContext(ctx, `
+		INSERT INTO marketing_fact_provider (
+			tenant_id, fact_code, provider_type, endpoint, method, auth_ref,
+			mapping_json, cache_ttl_seconds, enabled, timeout_ms, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		ON CONFLICT (tenant_id, fact_code) DO UPDATE SET
+			provider_type = EXCLUDED.provider_type,
+			endpoint = EXCLUDED.endpoint,
+			method = EXCLUDED.method,
+			auth_ref = EXCLUDED.auth_ref,
+			mapping_json = EXCLUDED.mapping_json,
+			cache_ttl_seconds = EXCLUDED.cache_ttl_seconds,
+			enabled = EXCLUDED.enabled,
+			timeout_ms = EXCLUDED.timeout_ms,
+			updated_at = EXCLUDED.updated_at
+	`, provider.TenantID, provider.FactCode, provider.ProviderType, provider.Endpoint, provider.Method, nullString(provider.AuthRef),
+		mapping, provider.CacheTTLSeconds, provider.Enabled, provider.TimeoutMS, provider.CreatedAt, provider.UpdatedAt)
+	if err != nil {
+		return marketing.FactProvider{}, err
+	}
+	return provider, nil
+}
+
+func (r *Repository) FindEnabledFactProvider(ctx context.Context, tenantID string, factCode string) (marketing.FactProvider, error) {
+	var provider marketing.FactProvider
+	var mapping []byte
+	var authRef sql.NullString
+	err := r.db.QueryRowContext(ctx, `
+		SELECT tenant_id, fact_code, provider_type, endpoint, method, auth_ref,
+		       mapping_json, cache_ttl_seconds, enabled, timeout_ms, created_at, updated_at
+		FROM marketing_fact_provider
+		WHERE tenant_id = $1 AND fact_code = $2 AND enabled = TRUE
+	`, tenantID, factCode).Scan(&provider.TenantID, &provider.FactCode, &provider.ProviderType, &provider.Endpoint,
+		&provider.Method, &authRef, &mapping, &provider.CacheTTLSeconds, &provider.Enabled, &provider.TimeoutMS,
+		&provider.CreatedAt, &provider.UpdatedAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return marketing.FactProvider{}, marketing.ErrNotFound
+		}
+		return marketing.FactProvider{}, err
+	}
+	provider.AuthRef = authRef.String
+	if err := json.Unmarshal(mapping, &provider.Mapping); err != nil {
+		return marketing.FactProvider{}, err
+	}
+	if err := provider.Validate(); err != nil {
+		return marketing.FactProvider{}, err
+	}
+	return provider, nil
+}
+
 func (r *Repository) CreateInbox(ctx context.Context, inbox marketing.EventInbox) (marketing.EventInbox, bool, error) {
 	inbox.Event = inbox.Event.Normalized()
 	payload, err := json.Marshal(inbox.Event)

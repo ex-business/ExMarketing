@@ -666,6 +666,8 @@ POST /openapi/v1/facts/query
 
 Fact Query 是可选能力。能通过事件 `attributes` 携带的数据，不要实时查询外部系统。
 
+`/openapi/v1/facts/query` 只接受 registry key 和事件上下文。服务端按 `tenantId + factCode` 查找 enabled Fact Provider，禁止在请求中传 inline endpoint、auth、mapping 或 provider 配置。
+
 必须配置：
 
 ```bash
@@ -687,28 +689,33 @@ endpoint host 必须在 allowlist 内
 curl -X POST http://localhost:8080/openapi/v1/facts/query \
   -H 'content-type: application/json' \
   -d '{
-    "provider": {
-      "factCode": "USER_PROFILE",
-      "provider": "HTTP",
-      "endpoint": "https://member.example.com/openapi/user/profile",
-      "method": "POST",
-      "headers": {
-        "Authorization": "Bearer example"
-      },
-      "cacheTtlSeconds": 300
-    },
-    "event": {
-      "eventId": "evt_1",
-      "eventType": "DEPOSIT_SUCCESS",
-      "sourceSystem": "payment",
-      "tenantId": "site_001",
-      "subject": {"type": "USER", "id": "10001"},
-      "biz": {"bizType": "DEPOSIT", "bizId": "pay_123"},
-      "occurredAt": "2026-05-24T12:00:00Z",
-      "attributes": {}
-    }
+    "tenantId": "site_001",
+    "factCode": "USER_PROFILE",
+    "subject": {"type": "USER", "id": "10001"},
+    "biz": {"bizType": "DEPOSIT", "bizId": "pay_123"},
+    "attributes": {},
+    "traceId": "trace_1"
   }'
 ```
+
+成功响应：
+
+```json
+{
+  "tenantId": "site_001",
+  "factCode": "USER_PROFILE",
+  "success": true,
+  "cached": false,
+  "facts": {
+    "USER_PROFILE": {
+      "vipLevel": "VIP3"
+    }
+  },
+  "providerStatus": "200 OK"
+}
+```
+
+失败响应会返回稳定 `errorCode`，例如 `FACT_PROVIDER_NOT_CONFIGURED`、`FACT_PROVIDER_DISABLED`、`FACT_PROVIDER_HTTP_FAILED`、`FACT_PROVIDER_TIMEOUT`、`FACT_MAPPING_FAILED`。
 
 ## 发奖回调
 

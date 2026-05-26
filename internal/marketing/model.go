@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/url"
 	"reflect"
+	"regexp"
 	"strings"
 	"time"
 
@@ -616,22 +617,43 @@ type AuditQuery struct {
 }
 
 type FactProvider struct {
-	Code            string            `json:"factCode"`
-	Provider        string            `json:"provider"`
-	Endpoint        string            `json:"endpoint"`
-	Method          string            `json:"method"`
-	Headers         map[string]string `json:"headers,omitempty"`
-	CacheTTLSeconds int               `json:"cacheTtlSeconds"`
+	TenantID        string                 `json:"tenantId"`
+	FactCode        string                 `json:"factCode"`
+	ProviderType    string                 `json:"providerType"`
+	Endpoint        string                 `json:"endpoint"`
+	Method          string                 `json:"method"`
+	AuthRef         string                 `json:"authRef,omitempty"`
+	Mapping         map[string]FactMapping `json:"mapping"`
+	CacheTTLSeconds int                    `json:"cacheTtlSeconds"`
+	Enabled         bool                   `json:"enabled"`
+	TimeoutMS       int                    `json:"timeoutMs"`
+	CreatedAt       time.Time              `json:"createdAt"`
+	UpdatedAt       time.Time              `json:"updatedAt"`
+}
+
+type FactMapping struct {
+	Source string `json:"source"`
+	Type   string `json:"type"`
 }
 
 type FactQueryRequest struct {
-	Provider FactProvider  `json:"provider"`
-	Event    ActivityEvent `json:"event"`
+	TenantID   string         `json:"tenantId"`
+	FactCode   string         `json:"factCode"`
+	Subject    EventSubject   `json:"subject"`
+	Biz        EventBiz       `json:"biz"`
+	Attributes map[string]any `json:"attributes,omitempty"`
+	TraceID    string         `json:"traceId,omitempty"`
 }
 
 type FactQueryResponse struct {
-	FactCode string         `json:"factCode"`
-	Data     map[string]any `json:"data"`
+	TenantID       string         `json:"tenantId"`
+	FactCode       string         `json:"factCode"`
+	Success        bool           `json:"success"`
+	Cached         bool           `json:"cached"`
+	Facts          map[string]any `json:"facts,omitempty"`
+	ErrorCode      string         `json:"errorCode,omitempty"`
+	Error          string         `json:"error,omitempty"`
+	ProviderStatus string         `json:"providerStatus,omitempty"`
 }
 
 type SimulationResult struct {
@@ -808,6 +830,7 @@ type CreateActivityCommand struct {
 var (
 	ErrInvalidActivity          = errors.New("invalid activity")
 	ErrInvalidEvent             = errors.New("invalid event")
+	ErrInvalidFactProvider      = errors.New("invalid fact provider")
 	ErrDuplicateEvent           = errors.New("duplicate event")
 	ErrIdempotencyConflict      = errors.New("idempotency key payload conflict")
 	ErrNotFound                 = errors.New("not found")
@@ -820,6 +843,89 @@ var (
 	ErrQuotaReservationConflict = errors.New("quota reservation conflict")
 	ErrQuotaAggregateConflict   = errors.New("quota aggregate conflict")
 )
+
+const MaxFactCacheTTLSeconds = 3600
+
+var factCodePattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]{1,63}$`)
+
+func (provider FactProvider) Validate() error {
+	if strings.TrimSpace(provider.TenantID) == "" {
+		return errors.Join(ErrInvalidFactProvider, errors.New("tenantId is required"))
+	}
+	if !factCodePattern.MatchString(strings.TrimSpace(provider.FactCode)) {
+		return errors.Join(ErrInvalidFactProvider, errors.New("factCode is invalid"))
+	}
+	if strings.ToUpper(strings.TrimSpace(provider.ProviderType)) != "HTTP" {
+		return errors.Join(ErrInvalidFactProvider, errors.New("providerType must be HTTP"))
+	}
+	if err := validateHTTPURL("endpoint", provider.Endpoint, true); err != nil {
+		return errors.Join(ErrInvalidFactProvider, err)
+	}
+	switch strings.ToUpper(strings.TrimSpace(provider.Method)) {
+	case "GET", "POST":
+	default:
+		return errors.Join(ErrInvalidFactProvider, errors.New("method must be GET or POST"))
+	}
+	if provider.CacheTTLSeconds < 0 || provider.CacheTTLSeconds > MaxFactCacheTTLSeconds {
+		return errors.Join(ErrInvalidFactProvider, errors.New("FACT_CACHE_TTL_INVALID: cacheTtlSeconds must be between 0 and 3600"))
+	}
+	if provider.TimeoutMS < 0 {
+		return errors.Join(ErrInvalidFactProvider, errors.New("timeoutMs must be non-negative"))
+	}
+	if len(provider.Mapping) == 0 {
+		return errors.Join(ErrInvalidFactProvider, errors.New("mapping is required"))
+	}
+	for outputPath, mapping := range provider.Mapping {
+		if strings.TrimSpace(outputPath) == "" || strings.HasPrefix(outputPath, ".") || strings.Contains(outputPath, "..") {
+			return errors.Join(ErrInvalidFactProvider, fmt.Errorf("mapping path %q is invalid", outputPath))
+		}
+		if !strings.HasPrefix(strings.TrimSpace(mapping.Source), "$.") {
+			return errors.Join(ErrInvalidFactProvider, fmt.Errorf("mapping %s source is invalid", outputPath))
+		}
+		switch strings.ToLower(strings.TrimSpace(mapping.Type)) {
+		case "string", "number", "boolean", "array", "object":
+		default:
+			return errors.Join(ErrInvalidFactProvider, fmt.Errorf("mapping %s type is invalid", outputPath))
+		}
+	}
+	return nil
+}
+
+func ExtractFactReferences(rules []Rule) map[string]map[string]struct{} {
+	refs := map[string]map[string]struct{}{}
+	for _, rule := range rules {
+		if rule.Type != RuleTypeCondition || emptyOrNullJSON(rule.Config) {
+			continue
+		}
+		var cfg ConditionRuleConfig
+		if err := json.Unmarshal(rule.Config, &cfg); err != nil {
+			continue
+		}
+		for _, condition := range cfg.Conditions {
+			factCode, path, ok := splitFactField(condition.Field)
+			if !ok {
+				continue
+			}
+			if refs[factCode] == nil {
+				refs[factCode] = map[string]struct{}{}
+			}
+			refs[factCode][path] = struct{}{}
+		}
+	}
+	return refs
+}
+
+func splitFactField(field string) (string, string, bool) {
+	if !strings.HasPrefix(field, "facts.") {
+		return "", "", false
+	}
+	rest := strings.TrimPrefix(field, "facts.")
+	parts := strings.SplitN(rest, ".", 2)
+	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+		return "", "", false
+	}
+	return parts[0], parts[1], true
+}
 
 func (cmd CreateActivityCommand) Validate(now time.Time) error {
 	if strings.TrimSpace(cmd.TenantID) == "" {

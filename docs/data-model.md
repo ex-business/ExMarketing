@@ -449,15 +449,19 @@ QUOTA_EXCEEDED
 
 ## marketing_fact_provider
 
-Fact Provider 元数据表，当前只建表，运行时还没有从表加载 provider。
+Fact Provider registry。运行时 Fact Query 和活动规则校验只按 `tenant_id + fact_code` 读取 enabled provider，不接受 inline provider 配置。
 
 | 字段 | 说明 |
 |---|---|
+| `tenant_id` | 租户 ID，和 `fact_code` 组成主键 |
 | `fact_code` | Fact 编码 |
-| `provider` | Provider 类型 |
+| `provider_type` | Provider 类型，当前只支持 `HTTP` |
 | `endpoint` | HTTP endpoint |
-| `method` | HTTP method |
-| `headers_json` | 请求头配置 |
-| `cache_ttl_seconds` | 缓存 TTL |
+| `method` | HTTP method，当前支持 `GET` / `POST` |
+| `auth_ref` | 鉴权配置引用，不存放明文密钥 |
+| `mapping_json` | 外部 JSON 响应到 `facts.<factCode>.*` 的显式字段映射 |
+| `cache_ttl_seconds` | 缓存 TTL，`0` 不缓存，`1..3600` 启用缓存 |
+| `enabled` | 是否允许规则引用和 Fact Query 执行 |
+| `timeout_ms` | Provider 请求超时配置 |
 | `created_at` | 创建时间 |
 | `updated_at` | 更新时间 |

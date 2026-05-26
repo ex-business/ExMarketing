@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/ex-stack/ExMarketing/internal/decimal"
+	"github.com/ex-stack/ExMarketing/internal/fact"
 	"github.com/ex-stack/ExMarketing/internal/marketing"
 	activityplugin "github.com/ex-stack/ExMarketing/internal/plugin"
 	"github.com/ex-stack/ExMarketing/internal/reward"
@@ -20,6 +22,7 @@ type Service struct {
 	ruleRegistry     *rule.Registry
 	pluginRegistry   *activityplugin.Registry
 	rewardCalculator reward.Calculator
+	factClient       *fact.Client
 	now              func() time.Time
 }
 
@@ -29,8 +32,30 @@ func NewService(repository marketing.Repository) *Service {
 		ruleRegistry:     rule.NewRegistry(),
 		pluginRegistry:   activityplugin.NewRegistry(),
 		rewardCalculator: reward.ConfigCalculator{},
+		factClient:       fact.NewClient(),
 		now:              func() time.Time { return time.Now().UTC() },
 	}
+}
+
+func (s *Service) SaveFactProvider(ctx context.Context, provider marketing.FactProvider) (marketing.FactProvider, error) {
+	return s.repository.SaveFactProvider(ctx, provider)
+}
+
+func (s *Service) QueryFacts(ctx context.Context, request marketing.FactQueryRequest) (marketing.FactQueryResponse, error) {
+	provider, err := s.repository.FindEnabledFactProvider(ctx, request.TenantID, request.FactCode)
+	if err != nil {
+		if errors.Is(err, marketing.ErrNotFound) {
+			return marketing.FactQueryResponse{
+				TenantID:  request.TenantID,
+				FactCode:  request.FactCode,
+				Success:   false,
+				ErrorCode: fact.CodeProviderNotConfigured,
+				Error:     "fact provider is not configured or enabled",
+			}, nil
+		}
+		return marketing.FactQueryResponse{}, err
+	}
+	return s.factClient.Query(ctx, provider, request), nil
 }
 
 func (s *Service) RegisterActivityPlugin(plugin activityplugin.ActivityPlugin) error {
@@ -43,6 +68,9 @@ func (s *Service) CreateActivity(ctx context.Context, cmd marketing.CreateActivi
 		return marketing.Activity{}, err
 	}
 	if err := s.validateActivityPluginConfig(cmd); err != nil {
+		return marketing.Activity{}, err
+	}
+	if err := s.validateActivityFactReferences(ctx, cmd.TenantID, cmd.Rules); err != nil {
 		return marketing.Activity{}, err
 	}
 
@@ -77,6 +105,27 @@ func (s *Service) CreateActivity(ctx context.Context, cmd marketing.CreateActivi
 	return created, nil
 }
 
+func (s *Service) validateActivityFactReferences(ctx context.Context, tenantID string, rules []marketing.Rule) error {
+	for factCode, fields := range marketing.ExtractFactReferences(rules) {
+		provider, err := s.repository.FindEnabledFactProvider(ctx, tenantID, factCode)
+		if err != nil {
+			if errors.Is(err, marketing.ErrNotFound) {
+				return errors.Join(marketing.ErrInvalidActivity, fmt.Errorf("FACT_PROVIDER_NOT_CONFIGURED: fact provider %s is missing or disabled", factCode))
+			}
+			return err
+		}
+		if err := provider.Validate(); err != nil {
+			return errors.Join(marketing.ErrInvalidActivity, err)
+		}
+		for field := range fields {
+			if _, ok := provider.Mapping[field]; !ok {
+				return errors.Join(marketing.ErrInvalidActivity, fmt.Errorf("FACT_FIELD_MISSING: fact provider %s mapping missing %s", factCode, field))
+			}
+		}
+	}
+	return nil
+}
+
 func (s *Service) ListActivities(ctx context.Context) ([]marketing.Activity, error) {
 	return s.repository.ListActivities(ctx)
 }
@@ -89,6 +138,22 @@ func (s *Service) ValidatePrelaunch(ctx context.Context, req marketing.Prelaunch
 		req.RegisteredPlugins = s.pluginRegistry.Registrations()
 	}
 	result := marketing.ValidatePrelaunch(req, s.now())
+	if err := s.validateActivityFactReferences(ctx, req.Activity.TenantID, req.Activity.Rules); err != nil {
+		result.Items = append(result.Items, marketing.PrelaunchItem{
+			Code:       "FACT_PROVIDER_REFERENCE",
+			Name:       "Fact provider reference validation",
+			Severity:   marketing.PrelaunchError,
+			Result:     marketing.PrelaunchItemFailed,
+			Reason:     err.Error(),
+			Fields:     []string{"activity.rules"},
+			Suggestion: "configure an enabled HTTP fact provider with mapping for every facts.<factCode> field before saving or go-live validation",
+		})
+		result.Conclusion = marketing.PrelaunchBlock
+		result.AllowGoLive = false
+		result.AuditSummary.Conclusion = result.Conclusion
+		result.AuditSummary.AllowGoLive = false
+		result.AuditSummary.ItemCount = len(result.Items)
+	}
 	actor := strings.TrimSpace(req.Actor)
 	if actor == "" {
 		actor = "system"
@@ -283,7 +348,7 @@ func (s *Service) SimulateEvent(ctx context.Context, event marketing.ActivityEve
 			continue
 		}
 
-		participation, grants, outbox, ruleResult, pluginSnapshot, rewardPreviews, stockReservations, totalRewardAmount := s.simulateActivity(event, activity)
+		participation, grants, outbox, ruleResult, pluginSnapshot, rewardPreviews, stockReservations, totalRewardAmount := s.simulateActivity(ctx, event, activity)
 		activityResult := simulationActivityBase(activity, &ruleResult)
 		activityResult.Decision = ruleResult.Decision
 		activityResult.DecisionReasonCode = ruleResult.ReasonCode
@@ -376,7 +441,13 @@ func (s *Service) evaluateActivity(ctx context.Context, inbox marketing.EventInb
 		return created, nil, nil, pluginRuleResult, false, err
 	}
 
-	ruleResult := s.executeRulesWithState(inbox.Event, activity, state)
+	facts, factFailure := s.queryActivityFacts(ctx, inbox.Event, activity)
+	ruleResult := s.executeRulesWithState(inbox.Event, activity, state, facts)
+	if factFailure != nil {
+		ruleResult.Decision = marketing.RuleDecisionRejected
+		ruleResult.ReasonCode = factFailure.ErrorCode
+		ruleResult.Reason = factFailure.Error
+	}
 	if ruleResult.Decision != marketing.RuleDecisionPassed {
 		participation.Status = marketing.ParticipationRejected
 		participation.RejectReason = ruleResult.ReasonCode + ": " + ruleResult.Reason
@@ -520,7 +591,7 @@ func (s *Service) evaluateActivity(ctx context.Context, inbox marketing.EventInb
 	return atomicResult.Participation, atomicResult.GrantOrders, atomicResult.OutboxMessages, ruleResult, true, nil
 }
 
-func (s *Service) simulateActivity(event marketing.ActivityEvent, activity marketing.Activity) (marketing.Participation, []marketing.GrantOrder, []marketing.OutboxMessage, marketing.ActivityRuleResult, *marketing.ActivityPluginSnapshot, []marketing.RewardPreview, []marketing.QuotaReservation, decimal.Decimal) {
+func (s *Service) simulateActivity(ctx context.Context, event marketing.ActivityEvent, activity marketing.Activity) (marketing.Participation, []marketing.GrantOrder, []marketing.OutboxMessage, marketing.ActivityRuleResult, *marketing.ActivityPluginSnapshot, []marketing.RewardPreview, []marketing.QuotaReservation, decimal.Decimal) {
 	now := s.now()
 	participation := marketing.Participation{
 		ID:             marketingID("sim_part"),
@@ -546,7 +617,13 @@ func (s *Service) simulateActivity(event marketing.ActivityEvent, activity marke
 		participation.RejectReason = pluginRuleResult.ReasonCode + ": " + pluginRuleResult.Reason
 		return participation, nil, nil, pluginRuleResult, pluginSnapshot, nil, nil, decimal.Zero()
 	}
-	ruleResult := s.executeRulesWithState(event, activity, state)
+	facts, factFailure := s.queryActivityFacts(ctx, event, activity)
+	ruleResult := s.executeRulesWithState(event, activity, state, facts)
+	if factFailure != nil {
+		ruleResult.Decision = marketing.RuleDecisionRejected
+		ruleResult.ReasonCode = factFailure.ErrorCode
+		ruleResult.Reason = factFailure.Error
+	}
 	if ruleResult.Decision != marketing.RuleDecisionPassed {
 		participation.Status = marketing.ParticipationRejected
 		participation.RejectReason = ruleResult.ReasonCode + ": " + ruleResult.Reason
@@ -776,18 +853,48 @@ func quotaUnavailablePreview(preview marketing.QuotaImpactPreview, reason string
 }
 
 func (s *Service) executeRules(event marketing.ActivityEvent, activity marketing.Activity) marketing.ActivityRuleResult {
-	return s.executeRulesWithState(event, activity, activityState(activity, s.now()))
+	return s.executeRulesWithState(event, activity, activityState(activity, s.now()), nil)
 }
 
-func (s *Service) executeRulesWithState(event marketing.ActivityEvent, activity marketing.Activity, state map[string]any) marketing.ActivityRuleResult {
+func (s *Service) executeRulesWithState(event marketing.ActivityEvent, activity marketing.Activity, state map[string]any, facts map[string]any) marketing.ActivityRuleResult {
 	result := rule.Execute(rule.Context{
 		Event: event,
 		State: state,
+		Facts: facts,
 	}, activity.Rules, s.ruleRegistry)
 	result.ActivityID = activity.ID
 	result.ActivityCode = activity.Code
 	result.ActivityVersion = activity.Version
 	return result
+}
+
+func (s *Service) queryActivityFacts(ctx context.Context, event marketing.ActivityEvent, activity marketing.Activity) (map[string]any, *marketing.FactQueryResponse) {
+	refs := marketing.ExtractFactReferences(activity.Rules)
+	if len(refs) == 0 {
+		return nil, nil
+	}
+	facts := map[string]any{}
+	for factCode := range refs {
+		response, err := s.QueryFacts(ctx, marketing.FactQueryRequest{
+			TenantID:   activity.TenantID,
+			FactCode:   factCode,
+			Subject:    event.Subject,
+			Biz:        event.Biz,
+			Attributes: event.Attributes,
+			TraceID:    event.EventID,
+		})
+		if err != nil {
+			failure := marketing.FactQueryResponse{TenantID: activity.TenantID, FactCode: factCode, Success: false, ErrorCode: fact.CodeProviderHTTPFailed, Error: err.Error()}
+			return facts, &failure
+		}
+		if !response.Success {
+			return facts, &response
+		}
+		if value, ok := response.Facts[factCode]; ok {
+			facts[factCode] = value
+		}
+	}
+	return facts, nil
 }
 
 func (s *Service) preparePlugin(ctx context.Context, activity marketing.Activity, event marketing.ActivityEvent) (*marketing.ActivityPluginSnapshot, map[string]any, bool, marketing.ActivityRuleResult, error) {

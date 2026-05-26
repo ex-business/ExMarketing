@@ -15,6 +15,7 @@ import (
 type MemoryRepository struct {
 	mu                 sync.RWMutex
 	activities         []Activity
+	factProviders      map[string]FactProvider
 	inboxByIdempotency map[string]EventInbox
 	participations     []Participation
 	grantOrders        []GrantOrder
@@ -27,6 +28,7 @@ type MemoryRepository struct {
 func NewMemoryRepository() *MemoryRepository {
 	return &MemoryRepository{
 		inboxByIdempotency: make(map[string]EventInbox),
+		factProviders:      make(map[string]FactProvider),
 	}
 }
 
@@ -71,6 +73,48 @@ func (r *MemoryRepository) FindMatchingActivities(ctx context.Context, tenantID 
 		return b.Priority - a.Priority
 	})
 	return out, nil
+}
+
+func (r *MemoryRepository) SaveFactProvider(ctx context.Context, provider FactProvider) (FactProvider, error) {
+	if err := ctx.Err(); err != nil {
+		return FactProvider{}, err
+	}
+	if err := provider.Validate(); err != nil {
+		return FactProvider{}, err
+	}
+	now := time.Now().UTC()
+	if provider.CreatedAt.IsZero() {
+		provider.CreatedAt = now
+	}
+	if provider.UpdatedAt.IsZero() {
+		provider.UpdatedAt = now
+	}
+	provider.ProviderType = strings.ToUpper(strings.TrimSpace(provider.ProviderType))
+	provider.Method = strings.ToUpper(strings.TrimSpace(provider.Method))
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.factProviders[factProviderKey(provider.TenantID, provider.FactCode)] = provider
+	return provider, nil
+}
+
+func (r *MemoryRepository) FindEnabledFactProvider(ctx context.Context, tenantID string, factCode string) (FactProvider, error) {
+	if err := ctx.Err(); err != nil {
+		return FactProvider{}, err
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	provider, ok := r.factProviders[factProviderKey(tenantID, factCode)]
+	if !ok || !provider.Enabled {
+		return FactProvider{}, ErrNotFound
+	}
+	if err := provider.Validate(); err != nil {
+		return FactProvider{}, err
+	}
+	return provider, nil
+}
+
+func factProviderKey(tenantID string, factCode string) string {
+	return strings.TrimSpace(tenantID) + "\x00" + strings.TrimSpace(factCode)
 }
 
 func (r *MemoryRepository) CreateInbox(ctx context.Context, inbox EventInbox) (EventInbox, bool, error) {

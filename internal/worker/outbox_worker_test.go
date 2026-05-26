@@ -212,6 +212,12 @@ func (r *workerTestRepo) ListActivities(context.Context) ([]marketing.Activity, 
 func (r *workerTestRepo) FindMatchingActivities(context.Context, string, string) ([]marketing.Activity, error) {
 	panic("not implemented")
 }
+func (r *workerTestRepo) SaveFactProvider(context.Context, marketing.FactProvider) (marketing.FactProvider, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) FindEnabledFactProvider(context.Context, string, string) (marketing.FactProvider, error) {
+	panic("not implemented")
+}
 func (r *workerTestRepo) CreateInbox(context.Context, marketing.EventInbox) (marketing.EventInbox, bool, error) {
 	panic("not implemented")
 }

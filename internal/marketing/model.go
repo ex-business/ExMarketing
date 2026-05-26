@@ -990,7 +990,7 @@ func (cmd CreateActivityCommand) Validate(now time.Time) error {
 	if cmd.Version > 1 {
 		return invalidActivityf("version must be 0 or 1")
 	}
-	if err := validateActivityConfig(cmd.ConfigPayload()); err != nil {
+	if err := validateActivityConfig(cmd.ConfigPayload(), cmd.TenantID); err != nil {
 		return err
 	}
 	for i, rule := range cmd.Rules {
@@ -1063,7 +1063,7 @@ func (cmd UpdateActivityCommand) ApplyTo(activity Activity, now time.Time) (Acti
 		activity.Stackable = *cmd.Stackable
 	}
 	if config, ok := cmd.ConfigPayloadIfSet(); ok {
-		if err := validateActivityConfig(config); err != nil {
+		if err := validateActivityConfig(config, activity.TenantID); err != nil {
 			return Activity{}, err
 		}
 		activity.Config = config
@@ -1112,19 +1112,27 @@ type activityConfig struct {
 }
 
 type entryConfig struct {
-	Channels      []string `json:"channels,omitempty"`
-	EntranceCodes []string `json:"entranceCodes,omitempty"`
-	LandingURL    string   `json:"landingUrl,omitempty"`
+	Enabled       *bool                `json:"enabled,omitempty"`
+	EntryCodes    []string             `json:"entryCodes,omitempty"`
+	Channels      []string             `json:"channels,omitempty"`
+	SourceSystems []string             `json:"sourceSystems,omitempty"`
+	TenantIDs     []string             `json:"tenantIds,omitempty"`
+	Audience      *entryAudienceConfig `json:"audience,omitempty"`
+	EntranceCodes []string             `json:"entranceCodes,omitempty"`
+	LandingURL    string               `json:"landingUrl,omitempty"`
 }
 
 type displayConfig struct {
-	Title       string `json:"title,omitempty"`
-	Subtitle    string `json:"subtitle,omitempty"`
-	BannerURL   string `json:"bannerUrl,omitempty"`
-	TermsURL    string `json:"termsUrl,omitempty"`
-	VisibleFrom string `json:"visibleFrom,omitempty"`
-	VisibleTo   string `json:"visibleTo,omitempty"`
-	Sort        *int   `json:"sort,omitempty"`
+	Visible     *bool    `json:"visible,omitempty"`
+	Title       string   `json:"title,omitempty"`
+	Subtitle    string   `json:"subtitle,omitempty"`
+	Description string   `json:"description,omitempty"`
+	BannerURL   string   `json:"bannerUrl,omitempty"`
+	Tags        []string `json:"tags,omitempty"`
+	TermsURL    string   `json:"termsUrl,omitempty"`
+	VisibleFrom string   `json:"visibleFrom,omitempty"`
+	VisibleTo   string   `json:"visibleTo,omitempty"`
+	Sort        *int     `json:"sort,omitempty"`
 }
 
 type audienceConfig struct {
@@ -1133,7 +1141,13 @@ type audienceConfig struct {
 	Countries    []string `json:"countries,omitempty"`
 }
 
-func validateActivityConfig(raw json.RawMessage) error {
+type entryAudienceConfig struct {
+	SubjectTypes []string `json:"subjectTypes,omitempty"`
+	Segments     []string `json:"segments,omitempty"`
+	RiskLevels   []string `json:"riskLevels,omitempty"`
+}
+
+func validateActivityConfig(raw json.RawMessage, tenantID string) error {
 	if emptyOrNullJSON(raw) {
 		return nil
 	}
@@ -1142,8 +1156,33 @@ func validateActivityConfig(raw json.RawMessage) error {
 		return invalidActivityf("config is invalid: %v", err)
 	}
 	if cfg.Entry != nil {
+		if err := validateStringSlice("config.entry.entryCodes", cfg.Entry.EntryCodes); err != nil {
+			return err
+		}
 		if err := validateStringSlice("config.entry.channels", cfg.Entry.Channels); err != nil {
 			return err
+		}
+		if err := validateStringSlice("config.entry.sourceSystems", cfg.Entry.SourceSystems); err != nil {
+			return err
+		}
+		if err := validateStringSlice("config.entry.tenantIds", cfg.Entry.TenantIDs); err != nil {
+			return err
+		}
+		for i, entryTenantID := range cfg.Entry.TenantIDs {
+			if strings.TrimSpace(entryTenantID) != strings.TrimSpace(tenantID) {
+				return invalidActivityf("config.entry.tenantIds[%d] must match activity tenantId", i)
+			}
+		}
+		if cfg.Entry.Audience != nil {
+			if err := validateStringSlice("config.entry.audience.subjectTypes", cfg.Entry.Audience.SubjectTypes); err != nil {
+				return err
+			}
+			if err := validateStringSlice("config.entry.audience.segments", cfg.Entry.Audience.Segments); err != nil {
+				return err
+			}
+			if err := validateStringSlice("config.entry.audience.riskLevels", cfg.Entry.Audience.RiskLevels); err != nil {
+				return err
+			}
 		}
 		if err := validateStringSlice("config.entry.entranceCodes", cfg.Entry.EntranceCodes); err != nil {
 			return err
@@ -1157,6 +1196,9 @@ func validateActivityConfig(raw json.RawMessage) error {
 			return err
 		}
 		if err := validateHTTPURL("config.display.termsUrl", cfg.Display.TermsURL, false); err != nil {
+			return err
+		}
+		if err := validateStringSlice("config.display.tags", cfg.Display.Tags); err != nil {
 			return err
 		}
 		from, fromOK, err := parseOptionalTime("config.display.visibleFrom", cfg.Display.VisibleFrom)
@@ -1475,10 +1517,16 @@ func emptyOrNullJSON(raw json.RawMessage) bool {
 }
 
 func validateStringSlice(name string, values []string) error {
+	seen := map[string]struct{}{}
 	for i, value := range values {
-		if strings.TrimSpace(value) == "" {
+		value = strings.TrimSpace(value)
+		if value == "" {
 			return invalidActivityf("%s[%d] is required", name, i)
 		}
+		if _, ok := seen[value]; ok {
+			return invalidActivityf("%s[%d] is duplicated", name, i)
+		}
+		seen[value] = struct{}{}
 	}
 	return nil
 }

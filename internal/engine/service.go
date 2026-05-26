@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -314,6 +315,10 @@ func (s *Service) ProcessEventFrom(ctx context.Context, event marketing.Activity
 		if !activityRunnable(activity, now) {
 			continue
 		}
+		if entryAllowed, entryRuleResult := activityEntryAllowed(activity, event); !entryAllowed {
+			result.RuleResults = append(result.RuleResults, entryRuleResult)
+			continue
+		}
 		if activity.ExclusiveGroup != "" && matchedExclusive[activity.ExclusiveGroup] && !activity.Stackable {
 			continue
 		}
@@ -373,6 +378,15 @@ func (s *Service) SimulateEvent(ctx context.Context, event marketing.ActivityEve
 			activityResult.Decision = marketing.RuleDecisionRejected
 			activityResult.DecisionReasonCode = "EXCLUSIVE_GROUP_REJECTED"
 			activityResult.DecisionReason = "another activity in the exclusive group already matched"
+			result.UnmatchedActivities = append(result.UnmatchedActivities, activityResult)
+			continue
+		}
+		if entryAllowed, entryRuleResult := activityEntryAllowed(activity, event); !entryAllowed {
+			activityResult := simulationActivityBase(activity, &entryRuleResult)
+			activityResult.Decision = marketing.RuleDecisionRejected
+			activityResult.DecisionReasonCode = entryRuleResult.ReasonCode
+			activityResult.DecisionReason = entryRuleResult.Reason
+			result.RuleResults = append(result.RuleResults, entryRuleResult)
 			result.UnmatchedActivities = append(result.UnmatchedActivities, activityResult)
 			continue
 		}
@@ -440,6 +454,138 @@ func (s *Service) ApplyRewardCallback(ctx context.Context, callback marketing.Re
 	}
 	callback.FinishedAt = callback.FinishedAt.UTC()
 	return s.repository.ApplyRewardCallback(ctx, callback)
+}
+
+type activityEntryConfig struct {
+	Entry *struct {
+		Enabled       *bool    `json:"enabled,omitempty"`
+		Channels      []string `json:"channels,omitempty"`
+		SourceSystems []string `json:"sourceSystems,omitempty"`
+		TenantIDs     []string `json:"tenantIds,omitempty"`
+		Audience      *struct {
+			SubjectTypes []string `json:"subjectTypes,omitempty"`
+			Segments     []string `json:"segments,omitempty"`
+			RiskLevels   []string `json:"riskLevels,omitempty"`
+		} `json:"audience,omitempty"`
+	} `json:"entry,omitempty"`
+}
+
+func activityEntryAllowed(activity marketing.Activity, event marketing.ActivityEvent) (bool, marketing.ActivityRuleResult) {
+	if len(bytes.TrimSpace(activity.Config)) == 0 || bytes.Equal(bytes.TrimSpace(activity.Config), []byte("null")) {
+		return true, marketing.ActivityRuleResult{}
+	}
+	var cfg activityEntryConfig
+	decoder := json.NewDecoder(bytes.NewReader(activity.Config))
+	if err := decoder.Decode(&cfg); err != nil {
+		return false, entryRejected(activity, "ENTRY_CONFIG_INVALID", "activity entry config is invalid")
+	}
+	if cfg.Entry == nil {
+		return true, marketing.ActivityRuleResult{}
+	}
+	entry := cfg.Entry
+	if entry.Enabled != nil && !*entry.Enabled {
+		return false, entryRejected(activity, "ENTRY_DISABLED", "activity entry is disabled")
+	}
+	if len(entry.TenantIDs) > 0 && !containsString(entry.TenantIDs, event.TenantID) {
+		return false, entryRejected(activity, "ENTRY_TENANT_NOT_ALLOWED", "event tenantId is not allowed by activity entry")
+	}
+	if len(entry.SourceSystems) > 0 && !containsString(entry.SourceSystems, event.SourceSystem) {
+		return false, entryRejected(activity, "ENTRY_SOURCE_SYSTEM_NOT_ALLOWED", "event sourceSystem is not allowed by activity entry")
+	}
+	if len(entry.Channels) > 0 && !containsString(entry.Channels, attributeString(event.Attributes, "channel")) {
+		return false, entryRejected(activity, "ENTRY_CHANNEL_NOT_ALLOWED", "event channel is not allowed by activity entry")
+	}
+	if entry.Audience != nil {
+		if len(entry.Audience.SubjectTypes) > 0 && !containsString(entry.Audience.SubjectTypes, event.Subject.Type) {
+			return false, entryRejected(activity, "ENTRY_SUBJECT_TYPE_NOT_ALLOWED", "event subject.type is not allowed by activity entry audience")
+		}
+		if len(entry.Audience.Segments) > 0 && !intersectsString(entry.Audience.Segments, attributeStrings(event.Attributes, "segments", "segment")) {
+			return false, entryRejected(activity, "ENTRY_SEGMENT_NOT_ALLOWED", "event segment is not allowed by activity entry audience")
+		}
+		if len(entry.Audience.RiskLevels) > 0 && !containsString(entry.Audience.RiskLevels, attributeString(event.Attributes, "riskLevel")) {
+			return false, entryRejected(activity, "ENTRY_RISK_LEVEL_NOT_ALLOWED", "event riskLevel is not allowed by activity entry audience")
+		}
+	}
+	return true, marketing.ActivityRuleResult{}
+}
+
+func entryRejected(activity marketing.Activity, code string, reason string) marketing.ActivityRuleResult {
+	return marketing.ActivityRuleResult{
+		ActivityID:      activity.ID,
+		ActivityCode:    activity.Code,
+		ActivityVersion: activity.Version,
+		Decision:        marketing.RuleDecisionRejected,
+		FailedStage:     marketing.RuleStageMatch,
+		ReasonCode:      code,
+		Reason:          reason,
+		CanReward:       false,
+		CanReserveQuota: false,
+		StageResults: []marketing.RuleStageResult{{
+			Stage:      marketing.RuleStageMatch,
+			Status:     marketing.RuleDecisionRejected,
+			ReasonCode: code,
+			Reason:     reason,
+		}},
+	}
+}
+
+func containsString(values []string, target string) bool {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return false
+	}
+	for _, value := range values {
+		if strings.TrimSpace(value) == target {
+			return true
+		}
+	}
+	return false
+}
+
+func intersectsString(allowed []string, actual []string) bool {
+	for _, value := range actual {
+		if containsString(allowed, value) {
+			return true
+		}
+	}
+	return false
+}
+
+func attributeString(attributes map[string]any, key string) string {
+	value, ok := attributes[key]
+	if !ok {
+		return ""
+	}
+	text, ok := value.(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(text)
+}
+
+func attributeStrings(attributes map[string]any, keys ...string) []string {
+	var values []string
+	for _, key := range keys {
+		value, ok := attributes[key]
+		if !ok {
+			continue
+		}
+		switch typed := value.(type) {
+		case string:
+			if strings.TrimSpace(typed) != "" {
+				values = append(values, typed)
+			}
+		case []any:
+			for _, item := range typed {
+				if text, ok := item.(string); ok && strings.TrimSpace(text) != "" {
+					values = append(values, text)
+				}
+			}
+		case []string:
+			values = append(values, typed...)
+		}
+	}
+	return values
 }
 
 func (s *Service) evaluateActivity(ctx context.Context, inbox marketing.EventInbox, activity marketing.Activity) (marketing.Participation, []marketing.GrantOrder, []marketing.OutboxMessage, marketing.ActivityRuleResult, bool, error) {

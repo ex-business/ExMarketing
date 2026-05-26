@@ -245,6 +245,46 @@ rules             活动规则
 rewards           奖励配置
 ```
 
+`config` / `configJson` / `config_json` 仅允许通用活动扩展字段，不承载具体业务页面模型。当前允许的一层字段为 `entry`、`display`、`audience`、`metadata`；未知一层字段返回 `400 Bad Request`。
+
+展示与入口配置示例：
+
+```json
+{
+  "display": {
+    "visible": true,
+    "title": "首存赠送",
+    "subtitle": "首笔充值享奖励",
+    "description": "活动说明",
+    "bannerUrl": "https://example.com/banner.png",
+    "sort": 100,
+    "tags": ["new_user", "deposit"]
+  },
+  "entry": {
+    "enabled": true,
+    "entryCodes": ["HOME_BANNER", "PROMOTION_CENTER"],
+    "channels": ["APP", "WEB"],
+    "sourceSystems": ["payment"],
+    "tenantIds": ["site_001"],
+    "audience": {
+      "subjectTypes": ["USER"],
+      "segments": ["new_user"],
+      "riskLevels": ["NORMAL"]
+    }
+  }
+}
+```
+
+字段语义：
+
+- `display.visible=false` 只表示不对展示入口可见，不会让内部事件处理或模拟运行失效。
+- `entry.enabled=false` 会在 MATCH 阶段拒绝该活动候选，并返回 `ENTRY_DISABLED`。
+- `entry.channels` 读取标准事件 `attributes.channel`；非空且不命中时返回 `ENTRY_CHANNEL_NOT_ALLOWED`。
+- `entry.sourceSystems` 读取标准事件 `sourceSystem`；非空且不命中时返回 `ENTRY_SOURCE_SYSTEM_NOT_ALLOWED`。
+- `entry.tenantIds` 只能为空或包含活动自身 `tenantId`，不能扩大租户边界；运行时非空且不命中返回 `ENTRY_TENANT_NOT_ALLOWED`。
+- `entry.audience.subjectTypes` 读取 `subject.type`，`segments` 读取 `attributes.segments` 或 `attributes.segment`，`riskLevels` 读取 `attributes.riskLevel`。
+- 旧配置字段 `entry.entranceCodes`、`entry.landingUrl`、顶层 `audience.segmentCodes/tags/countries` 仍可保存和读回；新入口匹配只依赖通用 `entry.*` 与标准事件字段。
+
 创建阶段会进行基础 Schema 校验。`tenantId + activityCode` 在同一租户内唯一，重复创建返回 `409 Conflict`；不同租户可以复用同一 `activityCode`。`startTime` / `endTime` 必须是带时区偏移的 RFC3339 时间，且 `startTime < endTime`；`timezone` 必须是可识别的 IANA 时区名或 `UTC`。当前普通活动只允许 `CONDITION` 规则、`FIXED` / `RATIO` / `LADDER` / `RANDOM` / `PROBABILITY` / `POOL_SPLIT` 奖励计算、`AUTO` 发奖模式，以及 `HTTP` / `WEBHOOK` 发奖通道；`rewardConfig.targetRef` 对可执行发奖必填且必须是 `http` 或 `https` URL。`MQ`、`MANUAL_EXPORT`、`MANUAL`、未知配置字段、非法版本或不可解析 Decimal 会返回 `400 Bad Request`。配置 `pluginCode` 时必须命中服务内注册的 ActivityPlugin，且与 `activityType` 兼容；未知插件会在创建或上线前校验阶段拒绝。
 
 奖励计算使用 Decimal 语义并输出 4 位小数。`RATIO` 支持 `maxAmount` 封顶，`LADDER` 使用闭区间且拒绝重叠阶梯，`RANDOM` / `PROBABILITY` 使用 tenant、activity、rewardCode、幂等键、配置版本和 `seedSalt` 形成稳定 seed，`POOL_SPLIT` 只支持事件即时 `COUNT` / `WEIGHT` 分摊。计算结果为 0 时不会生成发奖单、outbox 或 quota 扣减。

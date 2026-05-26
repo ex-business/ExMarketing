@@ -229,6 +229,48 @@ func TestCreateActivityRejectsInvalidConfigAndRuleSchema(t *testing.T) {
 	}
 }
 
+func TestCreateActivityValidatesDisplayEntryAudienceConfig(t *testing.T) {
+	handler := newTestHandler()
+	valid := strings.Replace(validActivityBody(), `"entranceCodes": ["deposit_page"],
+				"landingUrl": "https://example.com/promo/first-deposit"`, `"enabled": true,
+				"entryCodes": ["HOME_BANNER", "PROMOTION_CENTER"],
+				"channels": ["APP", "WEB"],
+				"sourceSystems": ["payment"],
+				"tenantIds": ["site_001"],
+				"audience": {
+					"subjectTypes": ["USER"],
+					"segments": ["new_user"],
+					"riskLevels": ["NORMAL"]
+				}`, 1)
+	valid = strings.Replace(valid, `"title": "First Deposit Bonus",`, `"visible": false,
+				"title": "First Deposit Bonus",
+				"description": "activity description",
+				"tags": ["new_user", "deposit"],`, 1)
+
+	rec := postActivity(t, handler, valid)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected valid display/entry config, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"visible":false`) || !strings.Contains(rec.Body.String(), `"entryCodes"`) || !strings.Contains(rec.Body.String(), `"subjectTypes"`) {
+		t.Fatalf("expected config to round-trip, got: %s", rec.Body.String())
+	}
+
+	for name, body := range map[string]string{
+		"display object": strings.Replace(validActivityBody(), `"display": {`, `"display": "bad"`, 1),
+		"enabled bool":   strings.Replace(validActivityBody(), `"entry": {`, `"entry": {"enabled": "yes",`, 1),
+		"entry array":    strings.Replace(validActivityBody(), `"channels": ["APP", "WEB"]`, `"channels": "APP"`, 1),
+		"tenant scope":   strings.Replace(validActivityBody(), `"channels": ["APP", "WEB"]`, `"channels": ["APP", "WEB"], "tenantIds": ["site_002"]`, 1),
+		"banner url":     strings.Replace(validActivityBody(), `"bannerUrl": "https://example.com/banner.png"`, `"bannerUrl": "ftp://example.com/banner.png"`, 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec := postActivity(t, handler, body)
+			if rec.Code != http.StatusBadRequest {
+				t.Fatalf("expected status %d, got %d: %s", http.StatusBadRequest, rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
 func TestCreateActivityValidatesFactProviderReferences(t *testing.T) {
 	missing := strings.Replace(validActivityBody(), `"attributes.vipLevel"`, `"facts.USER_PROFILE.vipLevel"`, 1)
 	rec := postActivity(t, newTestHandler(), missing)
@@ -317,6 +359,7 @@ func TestActivityEventCreatesGrantCommand(t *testing.T) {
 		"biz": {"bizType": "DEPOSIT", "bizId": "pay_123"},
 		"occurredAt": "2026-05-24T12:00:00Z",
 		"attributes": {
+			"channel": "APP",
 			"amount": "299.00",
 			"currency": "CNY",
 			"vipLevel": 3,
@@ -545,6 +588,95 @@ func TestSimulateEventReturnsRuleExplainWithoutPersistence(t *testing.T) {
 	}
 	if strings.Contains(body, `"grantOrders":[{`) || strings.Contains(body, `"outboxMessages":[{`) {
 		t.Fatalf("expected no simulated grants after rejection, got: %s", body)
+	}
+}
+
+func TestEntryConfigFiltersSimulationAndProcessEvent(t *testing.T) {
+	handler := newTestHandler()
+	disabledBody := strings.Replace(validActivityBody(), `"entry": {`, `"entry": {"enabled": false,`, 1)
+	rec := postActivity(t, handler, disabledBody)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected activity create, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	event := depositEventJSON("evt_entry_disabled", "pay_entry_disabled", `"amount":"299.00","vipLevel":3,"isFirstDeposit":true`)
+	simRec := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(simRec, httptest.NewRequest(http.MethodPost, "/admin/v1/simulate", strings.NewReader(event)))
+	if simRec.Code != http.StatusOK {
+		t.Fatalf("expected simulation status %d, got %d: %s", http.StatusOK, simRec.Code, simRec.Body.String())
+	}
+	if !strings.Contains(simRec.Body.String(), `"decisionReasonCode":"ENTRY_DISABLED"`) || strings.Contains(simRec.Body.String(), `"grantOrderPreviews":[{`) {
+		t.Fatalf("expected entry disabled rejection without grant preview, got: %s", simRec.Body.String())
+	}
+
+	eventRec := postRawEvent(t, handler, event, "site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:pay_entry_disabled")
+	if eventRec.Code != http.StatusAccepted {
+		t.Fatalf("expected event status %d, got %d: %s", http.StatusAccepted, eventRec.Code, eventRec.Body.String())
+	}
+	if !strings.Contains(eventRec.Body.String(), `"reasonCode":"ENTRY_DISABLED"`) || strings.Contains(eventRec.Body.String(), `"participations":[{`) || strings.Contains(eventRec.Body.String(), `"grantOrders":[{`) {
+		t.Fatalf("expected process event entry rejection without side effects, got: %s", eventRec.Body.String())
+	}
+}
+
+func TestEntryConfigMismatchReasons(t *testing.T) {
+	tests := []struct {
+		name   string
+		body   string
+		event  string
+		reason string
+	}{
+		{
+			name:   "channel",
+			body:   validActivityBody(),
+			event:  depositEventJSON("evt_entry_channel", "pay_entry_channel", `"channel":"KIOSK","amount":"299.00","vipLevel":3,"isFirstDeposit":true`),
+			reason: "ENTRY_CHANNEL_NOT_ALLOWED",
+		},
+		{
+			name:   "source system",
+			body:   strings.Replace(validActivityBody(), `"channels": ["APP", "WEB"]`, `"channels": ["APP", "WEB"], "sourceSystems": ["wallet"]`, 1),
+			event:  depositEventJSON("evt_entry_source", "pay_entry_source", `"amount":"299.00","vipLevel":3,"isFirstDeposit":true`),
+			reason: "ENTRY_SOURCE_SYSTEM_NOT_ALLOWED",
+		},
+		{
+			name:   "subject type",
+			body:   strings.Replace(validActivityBody(), `"channels": ["APP", "WEB"]`, `"channels": ["APP", "WEB"], "audience": {"subjectTypes": ["ACCOUNT"]}`, 1),
+			event:  depositEventJSON("evt_entry_subject", "pay_entry_subject", `"amount":"299.00","vipLevel":3,"isFirstDeposit":true`),
+			reason: "ENTRY_SUBJECT_TYPE_NOT_ALLOWED",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handler := newTestHandler()
+			rec := postActivity(t, handler, tt.body)
+			if rec.Code != http.StatusCreated {
+				t.Fatalf("expected activity create, got %d: %s", rec.Code, rec.Body.String())
+			}
+			simRec := httptest.NewRecorder()
+			handler.Routes().ServeHTTP(simRec, httptest.NewRequest(http.MethodPost, "/admin/v1/simulate", strings.NewReader(tt.event)))
+			if simRec.Code != http.StatusOK {
+				t.Fatalf("expected simulation status %d, got %d: %s", http.StatusOK, simRec.Code, simRec.Body.String())
+			}
+			if !strings.Contains(simRec.Body.String(), `"decisionReasonCode":"`+tt.reason+`"`) || strings.Contains(simRec.Body.String(), `"grantOrderPreviews":[{`) {
+				t.Fatalf("expected %s rejection without grant preview, got: %s", tt.reason, simRec.Body.String())
+			}
+		})
+	}
+}
+
+func TestDisplayVisibleFalseDoesNotBlockEntryMatching(t *testing.T) {
+	handler := newTestHandler()
+	body := strings.Replace(validActivityBody(), `"display": {`, `"display": {"visible": false,`, 1)
+	rec := postActivity(t, handler, body)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected activity create, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	rec = postDepositEvent(t, handler, "evt_display_hidden", "pay_display_hidden")
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected event status %d, got %d: %s", http.StatusAccepted, rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"grantOrders":[{`) || strings.Contains(rec.Body.String(), "ENTRY_DISABLED") {
+		t.Fatalf("expected hidden display to keep reward path available, got: %s", rec.Body.String())
 	}
 }
 
@@ -812,6 +944,7 @@ func TestActivityEventDuplicateAndConflict(t *testing.T) {
 		"biz": {"bizId": "pay_duplicate", "bizType": "DEPOSIT"},
 		"occurredAt": "2026-05-24T12:00:00Z",
 		"attributes": {
+			"channel": "APP",
 			"isFirstDeposit": true,
 			"vipLevel": 3.0,
 			"currency": "CNY",
@@ -978,6 +1111,7 @@ func TestActivityEventBudgetExceededReturnsConflictAndAudit(t *testing.T) {
 		"biz": {"bizType": "DEPOSIT", "bizId": "pay_124"},
 		"occurredAt": "2026-05-24T12:00:00Z",
 		"attributes": {
+			"channel": "APP",
 			"amount": "299.00",
 			"currency": "CNY",
 			"vipLevel": 3,
@@ -1951,6 +2085,14 @@ func depositEventJSON(eventID string, bizID string, attributesJSON string) strin
 	trimmedAttributes := strings.TrimSpace(attributesJSON)
 	if attributesJSON != "null" && !strings.HasPrefix(trimmedAttributes, "{") && !strings.HasPrefix(trimmedAttributes, "[") {
 		attributesJSON = "{" + attributesJSON + "}"
+	}
+	trimmedAttributes = strings.TrimSpace(attributesJSON)
+	if strings.HasPrefix(trimmedAttributes, "{") && !strings.Contains(trimmedAttributes, `"channel"`) {
+		if trimmedAttributes == "{}" {
+			attributesJSON = `{"channel":"APP"}`
+		} else {
+			attributesJSON = strings.Replace(attributesJSON, "{", `{"channel":"APP",`, 1)
+		}
 	}
 	return `{
 		"eventId": "` + eventID + `",

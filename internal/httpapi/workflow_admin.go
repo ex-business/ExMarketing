@@ -552,10 +552,6 @@ func runRequirementPipeline(backlog *workflow.Backlog, item *workflow.Requiremen
 	runs := make([]workflow.AgentRun, 0, request.MaxSteps)
 	message := "自动流水线运行完成。"
 	for step := 0; step < request.MaxSteps; step++ {
-		if needsHumanRequirementInput(item.Status) {
-			message = "需求需要人工补充或重新细化，已停止自动继续执行。"
-			break
-		}
 		if item.Status == workflow.StatusReviewPass {
 			parallelRuns, nextStatus, err := runReviewPassParallel(*item, request.Command)
 			runs = append(runs, parallelRuns...)
@@ -618,10 +614,6 @@ func runRequirementPipeline(backlog *workflow.Backlog, item *workflow.Requiremen
 		if err := workflow.Save(workflowBacklogPath, *backlog); err != nil {
 			return runs, message, &pipelineError{StatusCode: http.StatusInternalServerError, Message: err.Error()}
 		}
-		if needsHumanRequirementInput(item.Status) {
-			message = "需求需要人工补充或重新细化，已停止自动继续执行。"
-			break
-		}
 		if item.Status == workflow.StatusCommitted {
 			break
 		}
@@ -670,9 +662,6 @@ func isRunnableRequirement(item workflow.Requirement) bool {
 	if item.TaskDir == "" {
 		return false
 	}
-	if needsHumanRequirementInput(item.Status) {
-		return false
-	}
 	if _, err := workflow.ResolveAgent(item.Status, workflow.AgentAuto); err != nil {
 		return false
 	}
@@ -686,10 +675,6 @@ func isRunnableRequirement(item workflow.Requirement) bool {
 		}
 	}
 	return true
-}
-
-func needsHumanRequirementInput(status string) bool {
-	return status == workflow.StatusAnalysisFail || status == workflow.StatusReviewBlock
 }
 
 func runReviewPassParallel(item workflow.Requirement, command string) ([]workflow.AgentRun, string, error) {

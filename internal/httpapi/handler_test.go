@@ -1614,6 +1614,92 @@ EOF`
 	}
 }
 
+func TestRunWorkflowPipelineRetriesAnalysisAfterBlock(t *testing.T) {
+	t.Chdir(t.TempDir())
+	now := time.Now().UTC()
+	req := workflow.Requirement{
+		ID:          "2026-05-24-test",
+		Title:       "test requirement",
+		Description: "verify analysis retry",
+		Status:      workflow.StatusAnalysisReady,
+		Risk:        "中",
+		TaskDir:     workflow.TaskDirFor("2026-05-24-test"),
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	if err := workflow.CreateTaskFiles(req); err != nil {
+		t.Fatalf("create task files: %v", err)
+	}
+	if err := workflow.Save("requirements/backlog.json", workflow.Backlog{Items: []workflow.Requirement{req}}); err != nil {
+		t.Fatalf("save backlog: %v", err)
+	}
+	command := `cat >/dev/null
+count_file="$EX_MARKETING_TASK_DIR/.analysis-count"
+count=0
+if [ -f "$count_file" ]; then count=$(cat "$count_file"); fi
+count=$((count + 1))
+printf "%s" "$count" > "$count_file"
+if [ "$count" -eq 1 ]; then
+cat > "$EX_MARKETING_TASK_DIR/analysis.md" <<'EOF'
+# Analysis
+
+## Score
+
+~~~text
+60
+~~~
+
+## Decision
+
+~~~text
+BLOCK
+~~~
+
+缺少验收标准。
+EOF
+else
+cat > "$EX_MARKETING_TASK_DIR/analysis.md" <<'EOF'
+# Analysis
+
+## Review 反馈处理
+
+已根据上一轮拒绝原因补充验收标准。
+
+## Score
+
+~~~text
+88
+~~~
+
+## Decision
+
+~~~text
+PASS
+~~~
+EOF
+fi`
+	body := `{"maxSteps":2,"command":` + quoteJSON(command) + `}`
+	reqHTTP := httptest.NewRequest(http.MethodPost, "/admin/v1/workflow/requirements/2026-05-24-test/run-pipeline", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	handler := newTestHandler()
+	handler.Routes().ServeHTTP(rec, reqHTTP)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"status":"REVIEW_READY"`) {
+		t.Fatalf("expected retry to reach review ready, got: %s", rec.Body.String())
+	}
+	count, err := os.ReadFile("tasks/2026-05-24-test/.analysis-count")
+	if err != nil {
+		t.Fatalf("read retry count: %v", err)
+	}
+	if string(count) != "2" {
+		t.Fatalf("expected analysis to run twice, got %q", string(count))
+	}
+}
+
 func quoteJSON(s string) string {
 	replacer := strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`)
 	return `"` + replacer.Replace(s) + `"`

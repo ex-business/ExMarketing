@@ -202,12 +202,12 @@
       "id": "2026-05-24-event-inbox",
       "title": "Event Inbox 幂等处理",
       "description": "来源：22-独立活动营销中台设计。实现 marketing_event_inbox 的 idempotency_key 唯一约束，推荐格式 tenantId + sourceSystem + eventType + bizType + bizId。验收：重复事件不会重复参与、不会重复发奖、不会重复扣减预算；重复请求返回稳定结果。",
-      "status": "ANALYSIS_READY",
+      "status": "COMMIT_READY",
       "risk": "高",
-      "score": 0,
+      "score": 93,
       "taskDir": "tasks/2026-05-24-event-inbox",
       "createdAt": "2026-05-24T11:39:29.019103Z",
-      "updatedAt": "2026-05-24T11:39:29.019103Z"
+      "updatedAt": "2026-05-26T07:30:49.32689Z"
     },
     {
       "id": "2026-05-24-113929",

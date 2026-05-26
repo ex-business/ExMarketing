@@ -437,13 +437,14 @@ func (s *Service) SimulateEvent(ctx context.Context, event marketing.ActivityEve
 			continue
 		}
 
-		participation, grants, outbox, ruleResult, pluginSnapshot, rewardPreviews, stockReservations, totalRewardAmount := s.simulateActivity(ctx, event, activity)
+		participation, grants, outbox, ruleResult, pluginSnapshot, factQueryResults, rewardPreviews, stockReservations, totalRewardAmount := s.simulateActivity(ctx, event, activity)
 		activityResult := simulationActivityBase(activity, &ruleResult)
 		activityResult.Decision = ruleResult.Decision
 		activityResult.DecisionReasonCode = ruleResult.ReasonCode
 		activityResult.DecisionReason = ruleResult.Reason
 		normalizeMatchRuleDecision(&activityResult)
 		activityResult.Plugin = pluginSnapshot
+		activityResult.FactQueryResults = factQueryResults
 		activityResult.RewardPreviews = rewardPreviews
 		activityResult.ParticipationPreview = &participation
 		activityResult.GrantOrderPreviews = grants
@@ -861,7 +862,7 @@ func (s *Service) evaluateActivity(ctx context.Context, inbox marketing.EventInb
 		return created, nil, nil, pluginRuleResult, false, err
 	}
 
-	facts, factFailure := s.queryActivityFacts(ctx, inbox.Event, activity)
+	facts, factFailure, _ := s.queryActivityFacts(ctx, inbox.Event, activity)
 	ruleResult := s.executeRulesWithState(inbox.Event, activity, state, facts)
 	if factFailure != nil {
 		ruleResult.Decision = marketing.RuleDecisionRejected
@@ -1013,7 +1014,7 @@ func (s *Service) evaluateActivity(ctx context.Context, inbox marketing.EventInb
 	return atomicResult.Participation, atomicResult.GrantOrders, atomicResult.OutboxMessages, ruleResult, true, nil
 }
 
-func (s *Service) simulateActivity(ctx context.Context, event marketing.ActivityEvent, activity marketing.Activity) (marketing.Participation, []marketing.GrantOrder, []marketing.OutboxMessage, marketing.ActivityRuleResult, *marketing.ActivityPluginSnapshot, []marketing.RewardPreview, []marketing.QuotaReservation, decimal.Decimal) {
+func (s *Service) simulateActivity(ctx context.Context, event marketing.ActivityEvent, activity marketing.Activity) (marketing.Participation, []marketing.GrantOrder, []marketing.OutboxMessage, marketing.ActivityRuleResult, *marketing.ActivityPluginSnapshot, []marketing.FactQuerySimulation, []marketing.RewardPreview, []marketing.QuotaReservation, decimal.Decimal) {
 	now := s.now()
 	participation := marketing.Participation{
 		ID:             marketingID("sim_part"),
@@ -1032,24 +1033,24 @@ func (s *Service) simulateActivity(ctx context.Context, event marketing.Activity
 		pluginRuleResult = pluginErrorRuleResult(activity, activityplugin.ReasonPluginContextError, err.Error())
 		participation.Status = marketing.ParticipationRejected
 		participation.RejectReason = pluginRuleResult.ReasonCode + ": " + pluginRuleResult.Reason
-		return participation, nil, nil, pluginRuleResult, pluginSnapshot, nil, nil, decimal.Zero()
+		return participation, nil, nil, pluginRuleResult, pluginSnapshot, nil, nil, nil, decimal.Zero()
 	}
 	if pluginRejected {
 		participation.Status = marketing.ParticipationRejected
 		participation.RejectReason = pluginRuleResult.ReasonCode + ": " + pluginRuleResult.Reason
-		return participation, nil, nil, pluginRuleResult, pluginSnapshot, nil, nil, decimal.Zero()
+		return participation, nil, nil, pluginRuleResult, pluginSnapshot, nil, nil, nil, decimal.Zero()
 	}
-	facts, factFailure := s.queryActivityFacts(ctx, event, activity)
+	facts, factFailure, factQueryResults := s.queryActivityFacts(ctx, event, activity)
 	ruleResult := s.executeRulesWithState(event, activity, state, facts)
 	if factFailure != nil {
 		ruleResult.Decision = marketing.RuleDecisionRejected
-		ruleResult.ReasonCode = factFailure.ErrorCode
+		ruleResult.ReasonCode = simulationFactReasonCode(factFailure)
 		ruleResult.Reason = factFailure.Error
 	}
 	if ruleResult.Decision != marketing.RuleDecisionPassed {
 		participation.Status = marketing.ParticipationRejected
 		participation.RejectReason = ruleResult.ReasonCode + ": " + ruleResult.Reason
-		return participation, nil, nil, ruleResult, pluginSnapshot, nil, nil, decimal.Zero()
+		return participation, nil, nil, ruleResult, pluginSnapshot, factQueryResults, nil, nil, decimal.Zero()
 	}
 
 	var orders []marketing.GrantOrder
@@ -1069,7 +1070,7 @@ func (s *Service) simulateActivity(ctx context.Context, event marketing.Activity
 			participation.Status = marketing.ParticipationFailed
 			participation.RejectReason = err.Error()
 			rewardPreviews = append(rewardPreviews, rewardErrorPreview(configuredReward, err))
-			return participation, orders, outbox, ruleResult, pluginSnapshot, rewardPreviews, stockReservations, totalRewardAmount
+			return participation, orders, outbox, ruleResult, pluginSnapshot, factQueryResults, rewardPreviews, stockReservations, totalRewardAmount
 		}
 		rewardPreviews = append(rewardPreviews, rewardPreview(configuredReward, rewardResult))
 		if rewardResult.Skipped {
@@ -1079,7 +1080,7 @@ func (s *Service) simulateActivity(ctx context.Context, event marketing.Activity
 		if err != nil {
 			participation.Status = marketing.ParticipationFailed
 			participation.RejectReason = err.Error()
-			return participation, orders, outbox, ruleResult, pluginSnapshot, rewardPreviews, stockReservations, totalRewardAmount
+			return participation, orders, outbox, ruleResult, pluginSnapshot, factQueryResults, rewardPreviews, stockReservations, totalRewardAmount
 		}
 		totalRewardAmount = totalRewardAmount.Add(amount)
 		commandID := marketingID("sim_cmd")
@@ -1143,7 +1144,7 @@ func (s *Service) simulateActivity(ctx context.Context, event marketing.Activity
 		participation.Status = marketing.ParticipationFailed
 		participation.RejectReason = err.Error()
 	}
-	return participation, orders, outbox, ruleResult, pluginSnapshot, rewardPreviews, stockReservations, totalRewardAmount
+	return participation, orders, outbox, ruleResult, pluginSnapshot, factQueryResults, rewardPreviews, stockReservations, totalRewardAmount
 }
 
 func simulationActivityBase(activity marketing.Activity, ruleResult *marketing.ActivityRuleResult) marketing.SimulationActivityResult {
@@ -1291,13 +1292,20 @@ func (s *Service) executeRulesWithState(event marketing.ActivityEvent, activity 
 	return result
 }
 
-func (s *Service) queryActivityFacts(ctx context.Context, event marketing.ActivityEvent, activity marketing.Activity) (map[string]any, *marketing.FactQueryResponse) {
+func (s *Service) queryActivityFacts(ctx context.Context, event marketing.ActivityEvent, activity marketing.Activity) (map[string]any, *marketing.FactQueryResponse, []marketing.FactQuerySimulation) {
 	refs := marketing.ExtractFactReferences(activity.Rules)
 	if len(refs) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	facts := map[string]any{}
+	requiredBy := factRequiredBy(activity.Rules)
+	factCodes := make([]string, 0, len(refs))
 	for factCode := range refs {
+		factCodes = append(factCodes, factCode)
+	}
+	slices.Sort(factCodes)
+	var simulations []marketing.FactQuerySimulation
+	for _, factCode := range factCodes {
 		response, err := s.QueryFacts(ctx, marketing.FactQueryRequest{
 			EventID:      event.EventID,
 			EventType:    event.EventType,
@@ -1312,16 +1320,127 @@ func (s *Service) queryActivityFacts(ctx context.Context, event marketing.Activi
 		})
 		if err != nil {
 			failure := marketing.FactQueryResponse{TenantID: activity.TenantID, FactCode: factCode, Success: false, ErrorCode: fact.CodeProviderHTTPFailed, Error: err.Error()}
-			return facts, &failure
+			simulations = append(simulations, factQuerySimulation(failure, refs[factCode], requiredBy[factCode], facts))
+			return facts, &failure, simulations
 		}
+		simulations = append(simulations, factQuerySimulation(response, refs[factCode], requiredBy[factCode], facts))
 		if !response.Success {
-			return facts, &response
+			return facts, &response, simulations
 		}
 		if value, ok := response.Facts[factCode]; ok {
 			facts[factCode] = value
+			simulations[len(simulations)-1] = factQuerySimulation(response, refs[factCode], requiredBy[factCode], facts)
 		}
 	}
-	return facts, nil
+	return facts, nil, simulations
+}
+
+func factRequiredBy(rules []marketing.Rule) map[string][]string {
+	out := map[string][]string{}
+	for _, activityRule := range rules {
+		if activityRule.Type != marketing.RuleTypeCondition || len(activityRule.Config) == 0 {
+			continue
+		}
+		var cfg marketing.ConditionRuleConfig
+		if err := json.Unmarshal(activityRule.Config, &cfg); err != nil {
+			continue
+		}
+		seen := map[string]struct{}{}
+		for _, condition := range cfg.Conditions {
+			factCode, _, ok := splitFactField(condition.Field)
+			if !ok {
+				continue
+			}
+			if _, exists := seen[factCode]; exists {
+				continue
+			}
+			seen[factCode] = struct{}{}
+			out[factCode] = append(out[factCode], activityRule.Code)
+		}
+	}
+	for factCode := range out {
+		slices.Sort(out[factCode])
+	}
+	return out
+}
+
+func factQuerySimulation(response marketing.FactQueryResponse, fields map[string]struct{}, requiredBy []string, facts map[string]any) marketing.FactQuerySimulation {
+	status := marketing.RuleDecisionPassed
+	reasonCode := "FACT_QUERY_PASSED"
+	reason := "fact query passed"
+	if !response.Success {
+		status = marketing.RuleDecisionRejected
+		reasonCode = simulationFactReasonCode(&response)
+		reason = response.Error
+		if response.Reason != "" {
+			reason = response.Reason + ": " + response.Error
+		}
+	}
+	return marketing.FactQuerySimulation{
+		FactCode:   response.FactCode,
+		RequiredBy: requiredBy,
+		Queried:    true,
+		Cached:     response.Cached,
+		Status:     status,
+		ReasonCode: reasonCode,
+		Reason:     reason,
+		Fields:     factQueryFieldResults(response.FactCode, fields, facts),
+	}
+}
+
+func factQueryFieldResults(factCode string, fields map[string]struct{}, facts map[string]any) []marketing.FactQueryFieldResult {
+	paths := make([]string, 0, len(fields))
+	for field := range fields {
+		paths = append(paths, field)
+	}
+	slices.Sort(paths)
+	out := make([]marketing.FactQueryFieldResult, 0, len(paths))
+	for _, path := range paths {
+		_, available := nestedValue(facts, append([]string{factCode}, strings.Split(path, ".")...))
+		out = append(out, marketing.FactQueryFieldResult{
+			Path:      path,
+			FullPath:  "facts." + factCode + "." + path,
+			Available: available,
+		})
+	}
+	return out
+}
+
+func nestedValue(root map[string]any, parts []string) (any, bool) {
+	var current any = root
+	for _, part := range parts {
+		object, ok := current.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		current, ok = object[part]
+		if !ok {
+			return nil, false
+		}
+	}
+	return current, true
+}
+
+func simulationFactReasonCode(response *marketing.FactQueryResponse) string {
+	if response == nil {
+		return ""
+	}
+	if response.ErrorCode == fact.CodeMappingFailed {
+		return fact.CodeMappingFailed
+	}
+	return "FACT_QUERY_FAILED"
+}
+
+func splitFactField(field string) (string, string, bool) {
+	if !strings.HasPrefix(field, "facts.") {
+		return "", "", false
+	}
+	rest := strings.TrimPrefix(field, "facts.")
+	parts := strings.SplitN(rest, ".", 2)
+	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+		return "", "", false
+	}
+	return parts[0], parts[1], true
 }
 
 func (s *Service) preparePlugin(ctx context.Context, activity marketing.Activity, event marketing.ActivityEvent) (*marketing.ActivityPluginSnapshot, map[string]any, bool, marketing.ActivityRuleResult, error) {

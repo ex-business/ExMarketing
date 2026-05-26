@@ -441,6 +441,7 @@ summary.candidateCount / matchedCount / unmatchedCount
 summary.hasRewardableActivity / hasQuotaRisk
 每个活动的 decision / decisionReasonCode / decisionReason
 ruleResult 规则阶段与规则级解释
+factQueryResults 活动规则引用 facts.* 时的只读 Fact Query 查询、缓存、失败原因和字段可用性
 rewardPreviews 奖励计算预览和计算明细
 quotaImpactPreviews 预算、库存、用户次数影响预览
 participationPreview
@@ -449,7 +450,18 @@ outboxCommandPreviews
 plugin.pluginCode / plugin.pluginContext / plugin.precheckResult / plugin.stateChangeIntents
 ```
 
-模拟结果只表示按当前配置和当前 quota 快照的预览，不代表 quota 已锁定、奖励已发放、插件状态已消费或发奖指令已投递。若 quota 预览 `wouldExceed=true`，该活动会返回 `QUOTA_EXCEEDED` 风险原因，并且不会展示可执行的 grant order / outbox command 预览。缺少对应 quota 行时按无限制展示为 `unlimited=true`。
+活动级 `decision` 和规则级 `status` 的机器枚举均为：
+
+```text
+PASSED
+REJECTED
+SKIPPED
+ERROR
+```
+
+模拟结果只表示按当前配置、当前 quota 快照和当前只读 Fact Query 结果的预览，不代表 quota 已锁定、奖励已发放、插件状态已消费或发奖指令已投递。若活动规则实际引用 `facts.*`，模拟运行会复用正式链路同等的 provider registry、标准事件上下文、mapping、安全边界和成功缓存执行只读 Fact Query；provider 查询失败归类为 `FACT_QUERY_FAILED`，mapping 失败为 `FACT_MAPPING_FAILED`，查询成功但字段不可用为 `FACT_FIELD_MISSING`。
+
+若 quota 预览 `wouldExceed=true`，该活动会返回 `QUOTA_EXCEEDED` 风险原因，并且不会展示可执行的 grant order / outbox command 预览。缺少对应 quota 行时按无限制展示为 `unlimited=true`。模拟运行允许写一条脱敏 `SIMULATION_RUN` 审计，但审计不得记录 secret、token、完整 Authorization、Fact Provider 明文密钥、完整敏感 attributes 或完整 provider 响应。
 
 ## Outbox DLQ
 

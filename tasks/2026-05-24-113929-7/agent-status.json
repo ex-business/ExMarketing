@@ -1,39 +1,53 @@
 {
   "requirementId": "2026-05-24-113929-7",
-  "updatedAt": "2026-05-26T15:55:10.151956Z",
+  "updatedAt": "2026-05-26T17:12:13.032906Z",
   "agents": {
     "analysis": {
-      "status": "INTERRUPTED",
-      "startedAt": "2026-05-26T15:54:13.845116Z",
-      "finishedAt": "2026-05-26T15:55:09.332743Z",
+      "status": "DONE",
+      "startedAt": "2026-05-26T16:03:13.177502Z",
+      "finishedAt": "2026-05-26T17:04:23.658238Z",
       "output": "tasks/2026-05-24-113929-7/analysis.md",
-      "log": "tasks/2026-05-24-113929-7/runs/20260526T155413Z-analysis.log",
-      "exitCode": -1,
-      "error": "agent stopped by user: pid 44686"
+      "log": "tasks/2026-05-24-113929-7/runs/20260526T160313Z-analysis.log",
+      "nextStatus": "REVIEW_READY"
     },
     "commit": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-113929-7/commit.md"
+      "status": "RUNNING",
+      "startedAt": "2026-05-26T17:12:13.032901Z",
+      "output": "tasks/2026-05-24-113929-7/commit.md",
+      "log": "tasks/2026-05-24-113929-7/runs/20260526T171213Z-commit.log",
+      "pid": 72278
     },
     "dev": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-113929-7/implementation.md"
+      "status": "DONE",
+      "startedAt": "2026-05-26T17:05:30.885327Z",
+      "finishedAt": "2026-05-26T17:11:04.09943Z",
+      "output": "tasks/2026-05-24-113929-7/implementation.md",
+      "log": "tasks/2026-05-24-113929-7/runs/20260526T170530Z-dev.log",
+      "nextStatus": "REVIEW_PASS"
     },
     "review": {
       "status": "DONE",
-      "startedAt": "2026-05-26T15:53:00.344692Z",
-      "finishedAt": "2026-05-26T15:54:13.8139Z",
+      "startedAt": "2026-05-26T17:04:23.684636Z",
+      "finishedAt": "2026-05-26T17:05:30.880537Z",
       "output": "tasks/2026-05-24-113929-7/review.md",
-      "log": "tasks/2026-05-24-113929-7/runs/20260526T155300Z-review.log",
-      "nextStatus": "REVIEW_BLOCK"
+      "log": "tasks/2026-05-24-113929-7/runs/20260526T170423Z-review.log",
+      "nextStatus": "REVIEW_PASS"
     },
     "test": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-113929-7/test.md"
+      "status": "DONE",
+      "startedAt": "2026-05-26T17:11:04.134639Z",
+      "finishedAt": "2026-05-26T17:12:13.004627Z",
+      "output": "tasks/2026-05-24-113929-7/test.md",
+      "log": "tasks/2026-05-24-113929-7/runs/20260526T171104Z-test.log",
+      "nextStatus": "COMMIT_READY"
     },
     "test-plan": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-113929-7/test-plan.md"
+      "status": "DONE",
+      "startedAt": "2026-05-26T17:05:30.909522Z",
+      "finishedAt": "2026-05-26T17:07:07.012989Z",
+      "output": "tasks/2026-05-24-113929-7/test-plan.md",
+      "log": "tasks/2026-05-24-113929-7/runs/20260526T170530Z-test-plan.log",
+      "nextStatus": "REVIEW_PASS"
     }
   }
 }

@@ -3,11 +3,22 @@ package engine
 import (
 	"context"
 	"errors"
+	"io"
+	"net/http"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/ex-stack/ExMarketing/internal/fact"
 	"github.com/ex-stack/ExMarketing/internal/marketing"
 )
+
+type engineRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f engineRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
 
 func TestSimulateEventMatchFiltersAndReasons(t *testing.T) {
 	ctx := context.Background()
@@ -246,6 +257,130 @@ func TestSimulateEventExclusiveGroupSelection(t *testing.T) {
 	reasons := unmatchedReasons(result.UnmatchedActivities)
 	if !reasons["EXCLUSIVE_GROUP_LOST"] {
 		t.Fatalf("expected exclusive rejection, got %+v", result.UnmatchedActivities)
+	}
+}
+
+func TestSimulateEventQueriesFactsAndReportsCache(t *testing.T) {
+	t.Setenv("EX_MARKETING_FACT_ALLOWLIST", "example.com")
+	ctx := context.Background()
+	base := time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
+	repo := marketing.NewMemoryRepository()
+	if _, err := repo.SaveFactProvider(ctx, marketing.FactProvider{
+		TenantID:        "site_001",
+		FactCode:        "USER_PROFILE",
+		ProviderType:    "HTTP",
+		Endpoint:        "https://example.com/profile",
+		Method:          "POST",
+		Mapping:         map[string]marketing.FactMapping{"vipLevel": {Source: "$.data.vipLevel", Type: "string"}},
+		CacheTTLSeconds: 300,
+		Enabled:         true,
+		TimeoutMS:       5000,
+		UpdatedAt:       base,
+	}); err != nil {
+		t.Fatalf("seed provider: %v", err)
+	}
+	activity := matchTestActivity("fact_match", "FACT_MATCH", marketing.ActivityActive, base, 1)
+	activity.Rules = []marketing.Rule{{
+		ID:      "rule_fact",
+		Code:    "FACT_VIP",
+		Phase:   marketing.RulePhaseQualify,
+		Type:    marketing.RuleTypeCondition,
+		Config:  []byte(`{"logic":"AND","conditions":[{"field":"facts.USER_PROFILE.vipLevel","op":"=","value":"VIP3"}]}`),
+		Enabled: true,
+		Version: 1,
+	}}
+	activity.Rewards = []marketing.Reward{fixedBonusReward("REWARD_A", `{"amount":"10.00","currency":"USD","targetRef":"https://wallet.example.com/reward"}`)}
+	if _, err := repo.CreateActivity(ctx, activity); err != nil {
+		t.Fatalf("seed activity: %v", err)
+	}
+
+	var calls int32
+	service := NewService(repo)
+	service.factClient = fact.NewClientWithHTTPClient(&http.Client{Transport: engineRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		atomic.AddInt32(&calls, 1)
+		body, err := io.ReadAll(req.Body)
+		if err != nil {
+			t.Fatalf("read fact request: %v", err)
+		}
+		if strings.Contains(string(body), "traceId") || !strings.Contains(string(body), "DEPOSIT_SUCCESS") {
+			t.Fatalf("fact query should use standard event context without traceId, got %s", string(body))
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Body:       io.NopCloser(strings.NewReader(`{"data":{"vipLevel":"VIP3"}}`)),
+			Header:     http.Header{},
+		}, nil
+	})})
+
+	first, err := service.SimulateEvent(ctx, matchTestEvent(base))
+	if err != nil {
+		t.Fatalf("first simulate: %v", err)
+	}
+	if len(first.MatchedActivities) != 1 {
+		t.Fatalf("expected fact-backed activity to match, got %+v", first)
+	}
+	firstFact := first.MatchedActivities[0].FactQueryResults
+	if len(firstFact) != 1 || firstFact[0].FactCode != "USER_PROFILE" || firstFact[0].Status != marketing.RuleDecisionPassed || firstFact[0].Cached {
+		t.Fatalf("unexpected first fact query result: %+v", firstFact)
+	}
+	if len(firstFact[0].Fields) != 1 || !firstFact[0].Fields[0].Available || firstFact[0].Fields[0].FullPath != "facts.USER_PROFILE.vipLevel" {
+		t.Fatalf("unexpected fact fields: %+v", firstFact[0].Fields)
+	}
+
+	second, err := service.SimulateEvent(ctx, matchTestEvent(base))
+	if err != nil {
+		t.Fatalf("second simulate: %v", err)
+	}
+	secondFact := second.MatchedActivities[0].FactQueryResults
+	if len(secondFact) != 1 || !secondFact[0].Cached {
+		t.Fatalf("expected second fact query to hit cache, got %+v", secondFact)
+	}
+	if atomic.LoadInt32(&calls) != 1 {
+		t.Fatalf("provider calls=%d, want 1", calls)
+	}
+}
+
+func TestSimulateEventFactQueryFailureIsExplainedAndIsolated(t *testing.T) {
+	ctx := context.Background()
+	base := time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
+	repo := marketing.NewMemoryRepository()
+	factActivity := matchTestActivity("fact_missing", "FACT_MISSING", marketing.ActivityActive, base, 10)
+	factActivity.Rules = []marketing.Rule{{
+		ID:      "rule_fact_missing",
+		Code:    "FACT_VIP",
+		Phase:   marketing.RulePhaseQualify,
+		Type:    marketing.RuleTypeCondition,
+		Config:  []byte(`{"logic":"AND","conditions":[{"field":"facts.USER_PROFILE.vipLevel","op":"=","value":"VIP3"}]}`),
+		Enabled: true,
+		Version: 1,
+	}}
+	plainActivity := matchTestActivity("plain", "PLAIN", marketing.ActivityActive, base, 1)
+	for _, activity := range []marketing.Activity{factActivity, plainActivity} {
+		if _, err := repo.CreateActivity(ctx, activity); err != nil {
+			t.Fatalf("seed activity %s: %v", activity.Code, err)
+		}
+	}
+
+	result, err := NewService(repo).SimulateEvent(ctx, matchTestEvent(base))
+	if err != nil {
+		t.Fatalf("simulate: %v", err)
+	}
+	if len(result.MatchedActivities) != 1 || result.MatchedActivities[0].ActivityCode != "PLAIN" {
+		t.Fatalf("non-fact activity should still match, got %+v", result.MatchedActivities)
+	}
+	if len(result.UnmatchedActivities) != 1 {
+		t.Fatalf("expected fact activity to be unmatched, got %+v", result.UnmatchedActivities)
+	}
+	got := result.UnmatchedActivities[0]
+	if got.DecisionReasonCode != "FACT_QUERY_FAILED" {
+		t.Fatalf("expected FACT_QUERY_FAILED, got %+v", got)
+	}
+	if len(got.FactQueryResults) != 1 || got.FactQueryResults[0].ReasonCode != "FACT_QUERY_FAILED" || got.FactQueryResults[0].Status != marketing.RuleDecisionRejected {
+		t.Fatalf("expected explained fact query failure, got %+v", got.FactQueryResults)
+	}
+	if len(got.FactQueryResults[0].Fields) != 1 || got.FactQueryResults[0].Fields[0].Available {
+		t.Fatalf("expected unavailable fact field, got %+v", got.FactQueryResults[0].Fields)
 	}
 }
 

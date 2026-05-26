@@ -833,6 +833,7 @@ type SimulationActivityResult struct {
 	DecisionReasonCode     string                  `json:"decisionReasonCode,omitempty"`
 	DecisionReason         string                  `json:"decisionReason,omitempty"`
 	RuleResult             ActivityRuleResult      `json:"ruleResult"`
+	FactQueryResults       []FactQuerySimulation   `json:"factQueryResults,omitempty"`
 	Plugin                 *ActivityPluginSnapshot `json:"plugin,omitempty"`
 	RewardPreviews         []RewardPreview         `json:"rewardPreviews,omitempty"`
 	QuotaImpactPreviews    []QuotaImpactPreview    `json:"quotaImpactPreviews,omitempty"`
@@ -840,6 +841,23 @@ type SimulationActivityResult struct {
 	GrantOrderPreviews     []GrantOrder            `json:"grantOrderPreviews,omitempty"`
 	OutboxCommandPreviews  []OutboxMessage         `json:"outboxCommandPreviews,omitempty"`
 	WouldCreateGrantOrders bool                    `json:"wouldCreateGrantOrders"`
+}
+
+type FactQuerySimulation struct {
+	FactCode   string                 `json:"factCode"`
+	RequiredBy []string               `json:"requiredBy,omitempty"`
+	Queried    bool                   `json:"queried"`
+	Cached     bool                   `json:"cached"`
+	Status     RuleDecision           `json:"status"`
+	ReasonCode string                 `json:"reasonCode,omitempty"`
+	Reason     string                 `json:"reason,omitempty"`
+	Fields     []FactQueryFieldResult `json:"fields,omitempty"`
+}
+
+type FactQueryFieldResult struct {
+	Path      string `json:"path"`
+	FullPath  string `json:"fullPath"`
+	Available bool   `json:"available"`
 }
 
 type RewardPreview struct {

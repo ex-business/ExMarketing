@@ -127,6 +127,8 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /healthz", h.health)
 	mux.HandleFunc("GET /admin/v1/activities", h.listActivities)
 	mux.HandleFunc("POST /admin/v1/activities", h.createActivity)
+	mux.HandleFunc("GET /admin/v1/activities/{id}", h.getActivity)
+	mux.HandleFunc("PUT /admin/v1/activities/{id}", h.updateActivity)
 	mux.HandleFunc("POST /admin/v1/activities/prelaunch-validation", h.validatePrelaunch)
 	mux.HandleFunc("POST /admin/v1/quotas", h.createQuota)
 	mux.HandleFunc("GET /admin/v1/audit", h.listAudit)
@@ -188,11 +190,67 @@ func (h *Handler) createActivity(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
+		if errors.Is(err, marketing.ErrActivityConflict) {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
 	writeJSON(w, http.StatusCreated, activity)
+}
+
+func (h *Handler) getActivity(w http.ResponseWriter, r *http.Request) {
+	activity, err := h.engine.GetActivity(r.Context(), r.PathValue("id"))
+	if err != nil {
+		if errors.Is(err, marketing.ErrNotFound) {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, activity)
+}
+
+func (h *Handler) updateActivity(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	if err := rejectActivityIdentityFields(body); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	var cmd marketing.UpdateActivityCommand
+	decoder := json.NewDecoder(strings.NewReader(string(body)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&cmd); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+
+	activity, err := h.engine.UpdateActivity(r.Context(), r.PathValue("id"), cmd)
+	if err != nil {
+		if errors.Is(err, marketing.ErrNotFound) {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		if errors.Is(err, marketing.ErrInvalidActivity) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if errors.Is(err, marketing.ErrActivityConflict) {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, activity)
 }
 
 func (h *Handler) validatePrelaunch(w http.ResponseWriter, r *http.Request) {
@@ -592,6 +650,19 @@ func writeError(w http.ResponseWriter, status int, message string) {
 
 func writeErrorCode(w http.ResponseWriter, status int, code string, message string) {
 	writeJSON(w, status, map[string]string{"code": code, "error": message})
+}
+
+func rejectActivityIdentityFields(body []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(body, &fields); err != nil {
+		return errors.New("invalid json body")
+	}
+	for _, name := range []string{"id", "tenantId", "activityCode", "activityType"} {
+		if _, ok := fields[name]; ok {
+			return fmt.Errorf("%s cannot be updated", name)
+		}
+	}
+	return nil
 }
 
 func writeEventError(w http.ResponseWriter, status int, code string, message string) {

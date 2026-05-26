@@ -78,6 +78,92 @@ func TestCreateActivityReturnsUnifiedConfigVersions(t *testing.T) {
 	}
 }
 
+func TestCreateActivityRejectsDuplicateCodeInSameTenant(t *testing.T) {
+	handler := newTestHandler()
+	rec := postActivity(t, handler, validActivityBody())
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected first create status %d, got %d: %s", http.StatusCreated, rec.Code, rec.Body.String())
+	}
+	rec = postActivity(t, handler, validActivityBody())
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected duplicate status %d, got %d: %s", http.StatusConflict, rec.Code, rec.Body.String())
+	}
+}
+
+func TestGetAndUpdateActivityMainConfig(t *testing.T) {
+	handler := newTestHandler()
+	rec := postActivity(t, handler, validActivityBody())
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected create status %d, got %d: %s", http.StatusCreated, rec.Code, rec.Body.String())
+	}
+	var created marketing.Activity
+	if err := json.NewDecoder(rec.Body).Decode(&created); err != nil {
+		t.Fatalf("decode created activity: %v", err)
+	}
+
+	getRec := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(getRec, httptest.NewRequest(http.MethodGet, "/admin/v1/activities/"+created.ID, nil))
+	if getRec.Code != http.StatusOK || !strings.Contains(getRec.Body.String(), `"activityCode":"FIRST_DEPOSIT_BONUS"`) {
+		t.Fatalf("expected activity detail, got %d: %s", getRec.Code, getRec.Body.String())
+	}
+
+	updateBody := `{
+		"activityName": "Updated Activity",
+		"status": "PAUSED",
+		"startTime": "2026-05-02T00:00:00Z",
+		"endTime": "2026-06-02T00:00:00Z",
+		"timezone": "Asia/Shanghai",
+		"priority": 9,
+		"exclusiveGroup": "updated_group",
+		"stackable": true,
+		"configJson": {"metadata": {"owner": "retention"}}
+	}`
+	updateRec := httptest.NewRecorder()
+	updateReq := httptest.NewRequest(http.MethodPut, "/admin/v1/activities/"+created.ID, strings.NewReader(updateBody))
+	handler.Routes().ServeHTTP(updateRec, updateReq)
+	if updateRec.Code != http.StatusOK {
+		t.Fatalf("expected update status %d, got %d: %s", http.StatusOK, updateRec.Code, updateRec.Body.String())
+	}
+	var updated marketing.Activity
+	if err := json.NewDecoder(updateRec.Body).Decode(&updated); err != nil {
+		t.Fatalf("decode updated activity: %v", err)
+	}
+	if updated.ID != created.ID || updated.TenantID != created.TenantID || updated.Code != created.Code || updated.Type != created.Type {
+		t.Fatalf("identity fields drifted: created=%+v updated=%+v", created, updated)
+	}
+	if updated.Name != "Updated Activity" || updated.Status != marketing.ActivityPaused || updated.Timezone != "Asia/Shanghai" || updated.Priority != 9 || !updated.Stackable || updated.Version != created.Version+1 {
+		t.Fatalf("unexpected updated activity: %+v", updated)
+	}
+	if !strings.Contains(string(updated.Config), `"retention"`) {
+		t.Fatalf("expected configJson update, got: %s", string(updated.Config))
+	}
+}
+
+func TestUpdateActivityRejectsIdentityFieldsAndMissingActivity(t *testing.T) {
+	handler := newTestHandler()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/admin/v1/activities/act_missing", strings.NewReader(`{"activityName":"Updated"}`))
+	handler.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected missing update status %d, got %d: %s", http.StatusNotFound, rec.Code, rec.Body.String())
+	}
+
+	activityID := createActivity(t, handler)
+	for _, body := range []string{
+		`{"tenantId":"other"}`,
+		`{"activityCode":"OTHER"}`,
+		`{"activityType":"OTHER"}`,
+		`{"id":"other"}`,
+	} {
+		rec = httptest.NewRecorder()
+		req = httptest.NewRequest(http.MethodPut, "/admin/v1/activities/"+activityID, strings.NewReader(body))
+		handler.Routes().ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("expected identity update status %d, got %d: %s", http.StatusBadRequest, rec.Code, rec.Body.String())
+		}
+	}
+}
+
 func TestAuditQueryFiltersAndSnapshots(t *testing.T) {
 	handler := newTestHandler()
 	body := strings.Replace(validActivityBody(), "{", `{"operator":"ops-a",`, 1)

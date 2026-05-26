@@ -16,7 +16,8 @@ CREATE TABLE marketing_activity (
   version INT NOT NULL DEFAULT 1,
   config_json JSON,
   created_at TIMESTAMP NOT NULL,
-  updated_at TIMESTAMP NOT NULL
+  updated_at TIMESTAMP NOT NULL,
+  CONSTRAINT marketing_activity_tenant_code_key UNIQUE (tenant_id, activity_code)
 );
 
 CREATE TABLE marketing_rule (

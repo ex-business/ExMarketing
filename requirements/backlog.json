@@ -92,12 +92,12 @@
       "id": "2026-05-24-fact-query",
       "title": "Fact Query 可选事实查询",
       "description": "来源：22-独立活动营销中台设计。实现标准 Fact Provider 配置、HTTP 查询、字段 mapping、cacheTtlSeconds、facts.* 规则字段读取。Fact Query 必须是可选能力，未配置 provider 时后台不允许配置依赖该事实源的规则。验收：事件 attributes 可独立完成判断；facts 查询失败有降级和错误原因。",
-      "status": "COMMIT_READY",
+      "status": "COMMITTED",
       "risk": "中",
       "score": 94,
       "taskDir": "tasks/2026-05-24-fact-query",
       "createdAt": "2026-05-24T11:34:00.355875Z",
-      "updatedAt": "2026-05-26T07:20:52.869093Z"
+      "updatedAt": "2026-05-26T07:22:47.871252Z"
     },
     {
       "id": "2026-05-24-113400-7",
@@ -202,23 +202,23 @@
       "id": "2026-05-24-event-inbox",
       "title": "Event Inbox 幂等处理",
       "description": "来源：22-独立活动营销中台设计。实现 marketing_event_inbox 的 idempotency_key 唯一约束，推荐格式 tenantId + sourceSystem + eventType + bizType + bizId。验收：重复事件不会重复参与、不会重复发奖、不会重复扣减预算；重复请求返回稳定结果。",
-      "status": "COMMIT_READY",
+      "status": "COMMITTED",
       "risk": "高",
       "score": 93,
       "taskDir": "tasks/2026-05-24-event-inbox",
       "createdAt": "2026-05-24T11:39:29.019103Z",
-      "updatedAt": "2026-05-26T07:30:49.32689Z"
+      "updatedAt": "2026-05-26T07:32:52.171544Z"
     },
     {
       "id": "2026-05-24-113929",
       "title": "活动主配置模型",
       "description": "来源：22-独立活动营销中台设计。完善 marketing_activity，覆盖 tenant_id、activity_code、activity_name、activity_type、status、start_time、end_time、timezone、priority、exclusive_group、stackable、version、config_json。验收：活动基础配置可创建、查询、更新，时间和 timezone 校验明确。",
-      "status": "ANALYSIS_READY",
+      "status": "COMMIT_READY",
       "risk": "中",
-      "score": 0,
+      "score": 92,
       "taskDir": "tasks/2026-05-24-113929",
       "createdAt": "2026-05-24T11:39:29.019103Z",
-      "updatedAt": "2026-05-24T11:39:29.019103Z"
+      "updatedAt": "2026-05-26T07:59:08.944091Z"
     },
     {
       "id": "2026-05-24-113929-2",

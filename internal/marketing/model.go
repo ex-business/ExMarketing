@@ -823,8 +823,25 @@ type CreateActivityCommand struct {
 	PluginCode     string          `json:"pluginCode,omitempty"`
 	Version        int             `json:"version"`
 	Config         json.RawMessage `json:"config,omitempty"`
+	ConfigJSON     json.RawMessage `json:"configJson,omitempty"`
+	ConfigSnake    json.RawMessage `json:"config_json,omitempty"`
 	Rules          []Rule          `json:"rules"`
 	Rewards        []Reward        `json:"rewards"`
+}
+
+type UpdateActivityCommand struct {
+	Operator       string          `json:"operator,omitempty"`
+	Name           *string         `json:"activityName,omitempty"`
+	Status         *ActivityStatus `json:"status,omitempty"`
+	StartTime      *time.Time      `json:"startTime,omitempty"`
+	EndTime        *time.Time      `json:"endTime,omitempty"`
+	Timezone       *string         `json:"timezone,omitempty"`
+	Priority       *int            `json:"priority,omitempty"`
+	ExclusiveGroup *string         `json:"exclusiveGroup,omitempty"`
+	Stackable      *bool           `json:"stackable,omitempty"`
+	Config         json.RawMessage `json:"config,omitempty"`
+	ConfigJSON     json.RawMessage `json:"configJson,omitempty"`
+	ConfigSnake    json.RawMessage `json:"config_json,omitempty"`
 }
 
 var (
@@ -842,6 +859,7 @@ var (
 	ErrQuotaReservationMissing  = errors.New("quota reservation missing")
 	ErrQuotaReservationConflict = errors.New("quota reservation conflict")
 	ErrQuotaAggregateConflict   = errors.New("quota aggregate conflict")
+	ErrActivityConflict         = errors.New("activity conflict")
 )
 
 const MaxFactCacheTTLSeconds = 3600
@@ -972,7 +990,7 @@ func (cmd CreateActivityCommand) Validate(now time.Time) error {
 	if cmd.Version > 1 {
 		return invalidActivityf("version must be 0 or 1")
 	}
-	if err := validateActivityConfig(cmd.Config); err != nil {
+	if err := validateActivityConfig(cmd.ConfigPayload()); err != nil {
 		return err
 	}
 	for i, rule := range cmd.Rules {
@@ -994,6 +1012,81 @@ func (cmd CreateActivityCommand) Validate(now time.Time) error {
 	}
 	if enabledRewards == 0 {
 		return errors.Join(ErrInvalidActivity, errors.New("at least one enabled reward is required"))
+	}
+	return nil
+}
+
+func (cmd CreateActivityCommand) ConfigPayload() json.RawMessage {
+	return firstRawMessage(cmd.Config, cmd.ConfigJSON, cmd.ConfigSnake)
+}
+
+func (cmd UpdateActivityCommand) ApplyTo(activity Activity, now time.Time) (Activity, error) {
+	if cmd.Name != nil {
+		name := strings.TrimSpace(*cmd.Name)
+		if name == "" {
+			return Activity{}, invalidActivityf("activityName is required")
+		}
+		activity.Name = name
+	}
+	if cmd.Status != nil {
+		if !validActivityStatus(*cmd.Status) {
+			return Activity{}, invalidActivityf("status is invalid")
+		}
+		activity.Status = *cmd.Status
+	}
+	if cmd.StartTime != nil {
+		activity.StartTime = *cmd.StartTime
+	}
+	if cmd.EndTime != nil {
+		activity.EndTime = *cmd.EndTime
+	}
+	if activity.StartTime.IsZero() || activity.EndTime.IsZero() || !activity.EndTime.After(activity.StartTime) {
+		return Activity{}, invalidActivityf("valid startTime and endTime are required")
+	}
+	if cmd.Timezone != nil {
+		timezone := strings.TrimSpace(*cmd.Timezone)
+		if timezone == "" {
+			return Activity{}, invalidActivityf("timezone is required")
+		}
+		if _, err := time.LoadLocation(timezone); err != nil {
+			return Activity{}, invalidActivityf("timezone is invalid")
+		}
+		activity.Timezone = timezone
+	}
+	if cmd.Priority != nil {
+		activity.Priority = *cmd.Priority
+	}
+	if cmd.ExclusiveGroup != nil {
+		activity.ExclusiveGroup = strings.TrimSpace(*cmd.ExclusiveGroup)
+	}
+	if cmd.Stackable != nil {
+		activity.Stackable = *cmd.Stackable
+	}
+	if config, ok := cmd.ConfigPayloadIfSet(); ok {
+		if err := validateActivityConfig(config); err != nil {
+			return Activity{}, err
+		}
+		activity.Config = config
+	}
+	activity.Version++
+	activity.UpdatedAt = now
+	return activity, nil
+}
+
+func (cmd UpdateActivityCommand) ConfigPayloadIfSet() (json.RawMessage, bool) {
+	for _, raw := range []json.RawMessage{cmd.Config, cmd.ConfigJSON, cmd.ConfigSnake} {
+		if raw != nil {
+			return raw, true
+		}
+	}
+	return nil, false
+}
+
+func firstRawMessage(values ...json.RawMessage) json.RawMessage {
+	for _, value := range values {
+		if len(value) > 0 {
+			return value
+		}
 	}
 	return nil
 }

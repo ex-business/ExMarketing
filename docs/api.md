@@ -240,11 +240,12 @@ timezone          活动时区，必须显式填写
 exclusiveGroup    互斥组，同组默认只命中一个
 stackable         是否允许叠加命中
 pluginCode        可选 ActivityPlugin 编码；普通满减、首存、续存不需要配置
+config/configJson 活动主配置扩展 JSON object
 rules             活动规则
 rewards           奖励配置
 ```
 
-创建阶段会进行基础 Schema 校验。当前普通活动只允许 `CONDITION` 规则、`FIXED` / `RATIO` / `LADDER` / `RANDOM` / `PROBABILITY` / `POOL_SPLIT` 奖励计算、`AUTO` 发奖模式，以及 `HTTP` / `WEBHOOK` 发奖通道；`rewardConfig.targetRef` 对可执行发奖必填且必须是 `http` 或 `https` URL。`MQ`、`MANUAL_EXPORT`、`MANUAL`、未知配置字段、非法版本或不可解析 Decimal 会返回 `400 Bad Request`。配置 `pluginCode` 时必须命中服务内注册的 ActivityPlugin，且与 `activityType` 兼容；未知插件会在创建或上线前校验阶段拒绝。
+创建阶段会进行基础 Schema 校验。`tenantId + activityCode` 在同一租户内唯一，重复创建返回 `409 Conflict`；不同租户可以复用同一 `activityCode`。`startTime` / `endTime` 必须是带时区偏移的 RFC3339 时间，且 `startTime < endTime`；`timezone` 必须是可识别的 IANA 时区名或 `UTC`。当前普通活动只允许 `CONDITION` 规则、`FIXED` / `RATIO` / `LADDER` / `RANDOM` / `PROBABILITY` / `POOL_SPLIT` 奖励计算、`AUTO` 发奖模式，以及 `HTTP` / `WEBHOOK` 发奖通道；`rewardConfig.targetRef` 对可执行发奖必填且必须是 `http` 或 `https` URL。`MQ`、`MANUAL_EXPORT`、`MANUAL`、未知配置字段、非法版本或不可解析 Decimal 会返回 `400 Bad Request`。配置 `pluginCode` 时必须命中服务内注册的 ActivityPlugin，且与 `activityType` 兼容；未知插件会在创建或上线前校验阶段拒绝。
 
 奖励计算使用 Decimal 语义并输出 4 位小数。`RATIO` 支持 `maxAmount` 封顶，`LADDER` 使用闭区间且拒绝重叠阶梯，`RANDOM` / `PROBABILITY` 使用 tenant、activity、rewardCode、幂等键、配置版本和 `seedSalt` 形成稳定 seed，`POOL_SPLIT` 只支持事件即时 `COUNT` / `WEIGHT` 分摊。计算结果为 0 时不会生成发奖单、outbox 或 quota 扣减。
 
@@ -269,6 +270,22 @@ GET /admin/v1/activities
   "items": []
 }
 ```
+
+详情查询：
+
+```http
+GET /admin/v1/activities/{id}
+```
+
+不存在的活动返回 `404 Not Found`。
+
+## 更新活动主配置
+
+```http
+PUT /admin/v1/activities/{id}
+```
+
+允许更新 `activityName`、`status`、`startTime`、`endTime`、`timezone`、`priority`、`exclusiveGroup`、`stackable`、`config` / `configJson` / `config_json`。每次成功更新会递增 `version` 并刷新 `updatedAt`。`id`、`tenantId`、`activityCode`、`activityType` 是身份字段，出现在更新请求中会返回 `400 Bad Request`；不存在的活动返回 `404 Not Found`。
 
 ## 创建 Quota
 

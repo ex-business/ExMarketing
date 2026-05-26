@@ -38,18 +38,55 @@ func (r *MemoryRepository) CreateActivity(ctx context.Context, activity Activity
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	for _, existing := range r.activities {
+		if sameActivityCode(existing, activity) {
+			return Activity{}, ErrActivityConflict
+		}
+	}
 	r.activities = append(r.activities, activity)
 	return activity, nil
+}
+
+func (r *MemoryRepository) GetActivity(ctx context.Context, id string) (Activity, error) {
+	if err := ctx.Err(); err != nil {
+		return Activity{}, err
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, activity := range r.activities {
+		if activity.ID == id {
+			return activity, nil
+		}
+	}
+	return Activity{}, ErrNotFound
 }
 
 func (r *MemoryRepository) ListActivities(ctx context.Context) ([]Activity, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	out := slices.Clone(r.activities)
 	return out, nil
+}
+
+func (r *MemoryRepository) UpdateActivity(ctx context.Context, activity Activity) (Activity, error) {
+	if err := ctx.Err(); err != nil {
+		return Activity{}, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.activities {
+		if r.activities[i].ID == activity.ID {
+			if r.activities[i].TenantID != activity.TenantID || r.activities[i].Code != activity.Code || r.activities[i].Type != activity.Type {
+				return Activity{}, ErrInvalidActivity
+			}
+			r.activities[i] = activity
+			return activity, nil
+		}
+	}
+	return Activity{}, ErrNotFound
 }
 
 func (r *MemoryRepository) FindMatchingActivities(ctx context.Context, tenantID string, eventType string) ([]Activity, error) {
@@ -73,6 +110,11 @@ func (r *MemoryRepository) FindMatchingActivities(ctx context.Context, tenantID 
 		return b.Priority - a.Priority
 	})
 	return out, nil
+}
+
+func sameActivityCode(a Activity, b Activity) bool {
+	return strings.TrimSpace(a.TenantID) == strings.TrimSpace(b.TenantID) &&
+		strings.TrimSpace(a.Code) == strings.TrimSpace(b.Code)
 }
 
 func (r *MemoryRepository) SaveFactProvider(ctx context.Context, provider FactProvider) (FactProvider, error) {

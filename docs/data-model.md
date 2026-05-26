@@ -44,6 +44,8 @@ marketing_fact_provider
 | `created_at` | 创建时间 |
 | `updated_at` | 更新时间 |
 
+约束：`tenant_id + activity_code` 在 `marketing_activity_tenant_code_key` 下唯一，同一租户不能重复创建相同活动编码，不同租户可复用编码。
+
 活动状态：
 
 ```text

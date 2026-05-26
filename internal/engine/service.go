@@ -90,7 +90,7 @@ func (s *Service) CreateActivity(ctx context.Context, cmd marketing.CreateActivi
 		Stackable:      cmd.Stackable,
 		PluginCode:     strings.TrimSpace(cmd.PluginCode),
 		Version:        1,
-		Config:         cmd.Config,
+		Config:         cmd.ConfigPayload(),
 		Rules:          normalizeRules(cmd.Rules, now),
 		Rewards:        normalizeRewards(cmd.Rewards, now),
 		CreatedAt:      now,
@@ -128,6 +128,35 @@ func (s *Service) validateActivityFactReferences(ctx context.Context, tenantID s
 
 func (s *Service) ListActivities(ctx context.Context) ([]marketing.Activity, error) {
 	return s.repository.ListActivities(ctx)
+}
+
+func (s *Service) GetActivity(ctx context.Context, id string) (marketing.Activity, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return marketing.Activity{}, marketing.ErrNotFound
+	}
+	return s.repository.GetActivity(ctx, id)
+}
+
+func (s *Service) UpdateActivity(ctx context.Context, id string, cmd marketing.UpdateActivityCommand) (marketing.Activity, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return marketing.Activity{}, marketing.ErrNotFound
+	}
+	before, err := s.repository.GetActivity(ctx, id)
+	if err != nil {
+		return marketing.Activity{}, err
+	}
+	updated, err := cmd.ApplyTo(before, s.now())
+	if err != nil {
+		return marketing.Activity{}, err
+	}
+	saved, err := s.repository.UpdateActivity(ctx, updated)
+	if err != nil {
+		return marketing.Activity{}, err
+	}
+	_ = s.audit(ctx, saved.TenantID, actorOrSystem(cmd.Operator), "UPDATE_ACTIVITY", "activity", saved.ID, auditSnapshot(before, saved, nil))
+	return saved, nil
 }
 
 func (s *Service) ValidatePrelaunch(ctx context.Context, req marketing.PrelaunchValidationRequest) (marketing.PrelaunchValidationResult, error) {
@@ -174,7 +203,7 @@ func (s *Service) validateActivityPluginConfig(cmd marketing.CreateActivityComma
 	if !s.pluginRegistry.IsCompatible(pluginCode, cmd.Type) {
 		return errors.Join(marketing.ErrInvalidActivity, errors.New(activityplugin.ReasonPluginIncompatible+": pluginCode is not compatible with activityType"))
 	}
-	if err := plugin.ValidateConfig(cmd.Config); err != nil {
+	if err := plugin.ValidateConfig(cmd.ConfigPayload()); err != nil {
 		return errors.Join(marketing.ErrInvalidActivity, err)
 	}
 	return nil

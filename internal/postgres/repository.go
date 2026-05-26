@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ex-stack/ExMarketing/internal/marketing"
+	"github.com/jackc/pgx/v5/pgconn"
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
@@ -30,6 +31,10 @@ func NewRepository(ctx context.Context, databaseURL string) (*Repository, error)
 		_ = db.Close()
 		return nil, err
 	}
+	if err := ensureActivityUniqueConstraint(ctx, db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	return &Repository{db: db}, nil
 }
 
@@ -40,7 +45,7 @@ func (r *Repository) Close() error {
 func (r *Repository) CreateActivity(ctx context.Context, activity marketing.Activity) (marketing.Activity, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
-		return marketing.Activity{}, err
+		return marketing.Activity{}, mapPostgresActivityError(err)
 	}
 	defer rollback(tx)
 
@@ -63,7 +68,7 @@ func (r *Repository) CreateActivity(ctx context.Context, activity marketing.Acti
 		triggerEvents, activity.StartTime, activity.EndTime, activity.Timezone, activity.Priority, activity.ExclusiveGroup,
 		activity.Stackable, activity.PluginCode, activity.Version, nullJSON(activity.Config), activity.CreatedAt, activity.UpdatedAt)
 	if err != nil {
-		return marketing.Activity{}, err
+		return marketing.Activity{}, mapPostgresActivityError(err)
 	}
 
 	for _, rule := range activity.Rules {
@@ -93,6 +98,22 @@ func (r *Repository) CreateActivity(ctx context.Context, activity marketing.Acti
 	}
 
 	if err := tx.Commit(); err != nil {
+		return marketing.Activity{}, err
+	}
+	return activity, nil
+}
+
+func (r *Repository) GetActivity(ctx context.Context, id string) (marketing.Activity, error) {
+	activity, err := r.activityByID(ctx, r.db, id)
+	if err != nil {
+		return marketing.Activity{}, err
+	}
+	activity.Rules, err = r.rulesForActivity(ctx, activity.ID)
+	if err != nil {
+		return marketing.Activity{}, err
+	}
+	activity.Rewards, err = r.rewardsForActivity(ctx, activity.ID)
+	if err != nil {
 		return marketing.Activity{}, err
 	}
 	return activity, nil
@@ -128,6 +149,38 @@ func (r *Repository) ListActivities(ctx context.Context) ([]marketing.Activity, 
 		activities = append(activities, activity)
 	}
 	return activities, rows.Err()
+}
+
+func (r *Repository) UpdateActivity(ctx context.Context, activity marketing.Activity) (marketing.Activity, error) {
+	row := r.db.QueryRowContext(ctx, `
+		UPDATE marketing_activity
+		SET activity_name = $2,
+		    status = $3,
+		    start_time = $4,
+		    end_time = $5,
+		    timezone = $6,
+		    priority = $7,
+		    exclusive_group = $8,
+		    stackable = $9,
+		    version = $10,
+		    config_json = $11,
+		    updated_at = $12
+		WHERE id = $1
+		RETURNING id, tenant_id, activity_code, activity_name, activity_type, status,
+		          trigger_events, start_time, end_time, timezone, priority, exclusive_group,
+		          stackable, plugin_code, version, config_json, created_at, updated_at
+	`, activity.ID, activity.Name, activity.Status, activity.StartTime, activity.EndTime, activity.Timezone,
+		activity.Priority, activity.ExclusiveGroup, activity.Stackable, activity.Version, nullJSON(activity.Config), activity.UpdatedAt)
+	updated, err := scanActivity(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return marketing.Activity{}, marketing.ErrNotFound
+		}
+		return marketing.Activity{}, mapPostgresActivityError(err)
+	}
+	updated.Rules = activity.Rules
+	updated.Rewards = activity.Rewards
+	return updated, nil
 }
 
 func (r *Repository) FindMatchingActivities(ctx context.Context, tenantID string, eventType string) ([]marketing.Activity, error) {
@@ -1018,6 +1071,24 @@ func (r *Repository) rewardsForActivity(ctx context.Context, activityID string) 
 	return rewards, rows.Err()
 }
 
+func (r *Repository) activityByID(ctx context.Context, db activityQuerier, id string) (marketing.Activity, error) {
+	row := db.QueryRowContext(ctx, `
+		SELECT id, tenant_id, activity_code, activity_name, activity_type, status,
+		       trigger_events, start_time, end_time, timezone, priority, exclusive_group,
+		       stackable, plugin_code, version, config_json, created_at, updated_at
+		FROM marketing_activity
+		WHERE id = $1
+	`, id)
+	activity, err := scanActivity(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return marketing.Activity{}, marketing.ErrNotFound
+		}
+		return marketing.Activity{}, err
+	}
+	return activity, nil
+}
+
 func (r *Repository) inboxByIdempotency(ctx context.Context, key string) (marketing.EventInbox, error) {
 	var inbox marketing.EventInbox
 	var payload []byte
@@ -1040,6 +1111,10 @@ func (r *Repository) inboxByIdempotency(ctx context.Context, key string) (market
 
 type activityScanner interface {
 	Scan(dest ...any) error
+}
+
+type activityQuerier interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
 type outboxScanner interface {
@@ -1084,6 +1159,34 @@ func scanOutbox(scanner outboxScanner) (marketing.OutboxMessage, error) {
 
 func rollback(tx *sql.Tx) {
 	_ = tx.Rollback()
+}
+
+func ensureActivityUniqueConstraint(ctx context.Context, db *sql.DB) error {
+	_, err := db.ExecContext(ctx, `
+		DO $$
+		BEGIN
+			IF NOT EXISTS (
+				SELECT 1
+				FROM pg_constraint c
+				JOIN pg_class t ON t.oid = c.conrelid
+				WHERE t.relname = 'marketing_activity'
+				  AND c.conname = 'marketing_activity_tenant_code_key'
+			) THEN
+				ALTER TABLE marketing_activity
+				ADD CONSTRAINT marketing_activity_tenant_code_key UNIQUE (tenant_id, activity_code);
+			END IF;
+		END
+		$$;
+	`)
+	return err
+}
+
+func mapPostgresActivityError(err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "marketing_activity_tenant_code_key" {
+		return marketing.ErrActivityConflict
+	}
+	return err
 }
 
 func nullJSON(value json.RawMessage) any {

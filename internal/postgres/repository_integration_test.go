@@ -139,6 +139,57 @@ func TestPostgresCreateInboxDetectsDuplicateAndConflict(t *testing.T) {
 	}
 }
 
+func TestPostgresActivityUniqueDetailAndUpdate(t *testing.T) {
+	databaseURL := os.Getenv("EX_MARKETING_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("EX_MARKETING_DATABASE_URL is not set")
+	}
+	ctx := context.Background()
+	repo, err := NewRepository(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("connect postgres: %v", err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+
+	prefix := "pg_activity_main"
+	cleanupPostgresActivityTest(t, repo, prefix)
+	t.Cleanup(func() { cleanupPostgresActivityTest(t, repo, prefix) })
+
+	now := time.Now().UTC()
+	activity := testPostgresActivity(prefix+"_act_1", "tenant_a", prefix+"_code", now)
+	if _, err := repo.CreateActivity(ctx, activity); err != nil {
+		t.Fatalf("create activity: %v", err)
+	}
+	duplicate := testPostgresActivity(prefix+"_act_2", "tenant_a", prefix+"_code", now)
+	if _, err := repo.CreateActivity(ctx, duplicate); !errors.Is(err, marketing.ErrActivityConflict) {
+		t.Fatalf("expected activity conflict, got %v", err)
+	}
+	otherTenant := testPostgresActivity(prefix+"_act_3", "tenant_b", prefix+"_code", now)
+	if _, err := repo.CreateActivity(ctx, otherTenant); err != nil {
+		t.Fatalf("expected same code in different tenant to succeed: %v", err)
+	}
+
+	got, err := repo.GetActivity(ctx, activity.ID)
+	if err != nil {
+		t.Fatalf("get activity: %v", err)
+	}
+	got.Name = "Updated"
+	got.Status = marketing.ActivityPaused
+	got.Timezone = "Asia/Shanghai"
+	got.Priority = 7
+	got.Stackable = true
+	got.Version++
+	got.Config = []byte(`{"metadata":{"owner":"qa"}}`)
+	got.UpdatedAt = now.Add(time.Second)
+	updated, err := repo.UpdateActivity(ctx, got)
+	if err != nil {
+		t.Fatalf("update activity: %v", err)
+	}
+	if updated.Version != 2 || updated.Name != "Updated" || updated.Timezone != "Asia/Shanghai" || !strings.Contains(string(updated.Config), `"qa"`) {
+		t.Fatalf("unexpected updated activity: %+v config=%s", updated, string(updated.Config))
+	}
+}
+
 func TestPostgresParticipationAndGrantIdempotencyUniqueConstraints(t *testing.T) {
 	databaseURL := os.Getenv("EX_MARKETING_DATABASE_URL")
 	if databaseURL == "" {
@@ -278,6 +329,20 @@ func cleanupPostgresInboxTest(t *testing.T, repo *Repository, prefix string) {
 	}
 }
 
+func cleanupPostgresActivityTest(t *testing.T, repo *Repository, prefix string) {
+	t.Helper()
+	ctx := context.Background()
+	for _, stmt := range []string{
+		`DELETE FROM marketing_reward WHERE activity_id LIKE $1`,
+		`DELETE FROM marketing_rule WHERE activity_id LIKE $1`,
+		`DELETE FROM marketing_activity WHERE id LIKE $1 OR activity_code LIKE $1`,
+	} {
+		if _, err := repo.db.ExecContext(ctx, stmt, prefix+"_%"); err != nil {
+			t.Fatalf("cleanup activity %q: %v", stmt, err)
+		}
+	}
+}
+
 func jsonNumber(value string) any {
 	decoder := json.NewDecoder(strings.NewReader(value))
 	decoder.UseNumber()
@@ -309,6 +374,28 @@ func createPostgresAtomicQuotas(t *testing.T, repo *Repository, activityID strin
 		if _, err := repo.CreateQuota(ctx, quota); err != nil {
 			t.Fatalf("create quota %s: %v", quota.ID, err)
 		}
+	}
+}
+
+func testPostgresActivity(id string, tenantID string, code string, now time.Time) marketing.Activity {
+	return marketing.Activity{
+		ID:             id,
+		TenantID:       tenantID,
+		Code:           code,
+		Name:           "Postgres Activity",
+		Type:           "MAIN_CONFIG",
+		Status:         marketing.ActivityActive,
+		TriggerEvents:  []string{"DEPOSIT_SUCCESS"},
+		StartTime:      now.Add(time.Hour),
+		EndTime:        now.Add(2 * time.Hour),
+		Timezone:       "UTC",
+		Priority:       1,
+		ExclusiveGroup: "pg_group",
+		Stackable:      false,
+		Version:        1,
+		Config:         []byte(`{"metadata":{"owner":"pg"}}`),
+		CreatedAt:      now,
+		UpdatedAt:      now,
 	}
 }
 

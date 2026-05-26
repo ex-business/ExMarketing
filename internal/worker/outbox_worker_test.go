@@ -206,7 +206,13 @@ func (r *workerTestRepo) update(id string, update func(*marketing.OutboxMessage)
 func (r *workerTestRepo) CreateActivity(context.Context, marketing.Activity) (marketing.Activity, error) {
 	panic("not implemented")
 }
+func (r *workerTestRepo) GetActivity(context.Context, string) (marketing.Activity, error) {
+	panic("not implemented")
+}
 func (r *workerTestRepo) ListActivities(context.Context) ([]marketing.Activity, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) UpdateActivity(context.Context, marketing.Activity) (marketing.Activity, error) {
 	panic("not implemented")
 }
 func (r *workerTestRepo) FindMatchingActivities(context.Context, string, string) ([]marketing.Activity, error) {

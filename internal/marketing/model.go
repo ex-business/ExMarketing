@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -334,6 +335,10 @@ func (r *Reward) UnmarshalJSON(data []byte) error {
 
 type RewardConfig struct {
 	Amount                string            `json:"amount,omitempty"`
+	Points                string            `json:"points,omitempty"`
+	Quantity              string            `json:"quantity,omitempty"`
+	ChanceCount           string            `json:"chanceCount,omitempty"`
+	DurationDays          string            `json:"durationDays,omitempty"`
 	BaseField             string            `json:"baseField,omitempty"`
 	Rate                  string            `json:"rate,omitempty"`
 	MaxAmount             string            `json:"maxAmount,omitempty"`
@@ -345,10 +350,27 @@ type RewardConfig struct {
 	Items                 []ProbabilityItem `json:"items,omitempty"`
 	PoolAmount            string            `json:"poolAmount,omitempty"`
 	SplitBy               string            `json:"splitBy,omitempty"`
+	SplitMode             string            `json:"splitMode,omitempty"`
 	ParticipantCountField string            `json:"participantCountField,omitempty"`
 	WeightField           string            `json:"weightField,omitempty"`
 	TotalWeightField      string            `json:"totalWeightField,omitempty"`
 	Currency              string            `json:"currency,omitempty"`
+	Unit                  string            `json:"unit,omitempty"`
+	PointType             string            `json:"pointType,omitempty"`
+	CouponTemplateID      string            `json:"couponTemplateId,omitempty"`
+	CouponType            string            `json:"couponType,omitempty"`
+	FaceValue             string            `json:"faceValue,omitempty"`
+	DiscountRate          string            `json:"discountRate,omitempty"`
+	GiftSkuID             string            `json:"giftSkuId,omitempty"`
+	GiftCode              string            `json:"giftCode,omitempty"`
+	DeliveryMode          string            `json:"deliveryMode,omitempty"`
+	DrawPoolCode          string            `json:"drawPoolCode,omitempty"`
+	LotteryCode           string            `json:"lotteryCode,omitempty"`
+	MembershipTier        string            `json:"membershipTier,omitempty"`
+	MembershipPlanID      string            `json:"membershipPlanId,omitempty"`
+	BenefitPackageID      string            `json:"benefitPackageId,omitempty"`
+	DurationType          string            `json:"durationType,omitempty"`
+	ValuationAmount       string            `json:"valuationAmount,omitempty"`
 	ExpireAt              string            `json:"expireAt,omitempty"`
 	FlowMultiple          string            `json:"flowMultiple,omitempty"`
 	TargetRef             string            `json:"targetRef,omitempty"`
@@ -1466,7 +1488,7 @@ func validateReward(index int, reward Reward, pluginCode string) error {
 		return invalidActivityf("rewards[%d].rewardCode is required", index)
 	}
 	switch reward.Type {
-	case RewardBonus, RewardCash, RewardPoint:
+	case RewardBonus, RewardCash, RewardCoupon, RewardPoint, RewardGift, RewardDrawChance, RewardMembership:
 	default:
 		return invalidActivityf("rewards[%d].rewardType is unsupported", index)
 	}
@@ -1492,17 +1514,29 @@ func validateReward(index int, reward Reward, pluginCode string) error {
 	if (reward.Type == RewardBonus || reward.Type == RewardCash) && strings.TrimSpace(cfg.Currency) == "" {
 		return invalidActivityf("rewards[%d].rewardConfig.currency is required", index)
 	}
+	if err := validateRewardTypeSchema(index, reward.Type, cfg); err != nil {
+		return err
+	}
 	if reward.FlowMultiple != "" && cfg.FlowMultiple != "" && reward.FlowMultiple != cfg.FlowMultiple {
 		return invalidActivityf("rewards[%d].flowMultiple conflicts with rewardConfig.flowMultiple", index)
 	}
 	if reward.FlowMultiple != "" {
-		if _, err := decimal.Parse(reward.FlowMultiple); err != nil {
+		parsed, err := decimal.Parse(reward.FlowMultiple)
+		if err != nil || parsed.IsNegative() {
 			return invalidActivityf("rewards[%d].flowMultiple must be decimal", index)
 		}
 	}
 	if cfg.FlowMultiple != "" {
-		if _, err := decimal.Parse(cfg.FlowMultiple); err != nil {
+		parsed, err := decimal.Parse(cfg.FlowMultiple)
+		if err != nil || parsed.IsNegative() {
 			return invalidActivityf("rewards[%d].rewardConfig.flowMultiple must be decimal", index)
+		}
+	}
+	flowMultiple := firstNonEmptyString(reward.FlowMultiple, cfg.FlowMultiple)
+	if reward.Type != RewardBonus && strings.TrimSpace(flowMultiple) != "" {
+		parsed, _ := decimal.Parse(flowMultiple)
+		if !parsed.IsZero() {
+			return invalidActivityf("rewards[%d].flowMultiple is only supported for BONUS rewards", index)
 		}
 	}
 	return validateRewardConfigByCalculateType(index, reward, cfg, pluginCode)
@@ -1518,9 +1552,12 @@ func validRewardCalculateType(calculateType CalculateType) bool {
 }
 
 func validateRewardConfigByCalculateType(index int, reward Reward, cfg RewardConfig, pluginCode string) error {
+	if !supportedRewardCalculateCombo(reward.Type, reward.CalculateType) {
+		return invalidActivityf("rewards[%d].calculateType is unsupported for rewardType", index)
+	}
 	switch reward.CalculateType {
 	case CalculateFixed:
-		return validateNonNegativeDecimal(fmt.Sprintf("rewards[%d].rewardConfig.amount", index), cfg.Amount)
+		return validateFixedRewardConfig(index, reward.Type, cfg)
 	case CalculateRatio:
 		return validateRatioRewardConfig(index, cfg, pluginCode)
 	case CalculateLadder:
@@ -1533,6 +1570,182 @@ func validateRewardConfigByCalculateType(index int, reward Reward, cfg RewardCon
 		return validatePoolSplitRewardConfig(index, cfg, pluginCode)
 	default:
 		return invalidActivityf("rewards[%d].calculateType is unsupported", index)
+	}
+}
+
+func validateRewardTypeSchema(index int, rewardType RewardType, cfg RewardConfig) error {
+	switch rewardType {
+	case RewardBonus, RewardCash:
+		return rejectRewardFields(index, cfg, map[string]string{
+			"points": "points", "quantity": "quantity", "chanceCount": "chanceCount", "durationDays": "durationDays",
+			"unit": "unit", "pointType": "pointType", "couponTemplateId": "couponTemplateId", "couponType": "couponType",
+			"giftSkuId": "giftSkuId", "giftCode": "giftCode", "deliveryMode": "deliveryMode", "drawPoolCode": "drawPoolCode",
+			"lotteryCode": "lotteryCode", "membershipTier": "membershipTier", "membershipPlanId": "membershipPlanId",
+			"benefitPackageId": "benefitPackageId", "durationType": "durationType", "valuationAmount": "valuationAmount",
+		})
+	case RewardPoint:
+		if err := rejectRewardFields(index, cfg, map[string]string{
+			"amount": "amount", "quantity": "quantity", "chanceCount": "chanceCount", "durationDays": "durationDays",
+			"couponTemplateId": "couponTemplateId", "giftSkuId": "giftSkuId", "giftCode": "giftCode", "drawPoolCode": "drawPoolCode",
+			"lotteryCode": "lotteryCode", "couponType": "couponType", "faceValue": "faceValue", "discountRate": "discountRate",
+			"deliveryMode": "deliveryMode", "membershipTier": "membershipTier", "membershipPlanId": "membershipPlanId",
+			"benefitPackageId": "benefitPackageId", "valuationAmount": "valuationAmount",
+		}); err != nil {
+			return err
+		}
+		if strings.TrimSpace(cfg.Currency) != "" {
+			return invalidActivityf("rewards[%d].rewardConfig.currency is not supported for POINT", index)
+		}
+		if strings.TrimSpace(firstNonEmptyString(cfg.Unit, cfg.PointType)) == "" {
+			return invalidActivityf("rewards[%d].rewardConfig.unit is required for POINT", index)
+		}
+	case RewardCoupon:
+		if err := rejectRewardFields(index, cfg, map[string]string{
+			"amount": "amount", "points": "points", "chanceCount": "chanceCount", "durationDays": "durationDays",
+			"unit": "unit", "pointType": "pointType", "giftSkuId": "giftSkuId", "giftCode": "giftCode",
+			"drawPoolCode": "drawPoolCode", "lotteryCode": "lotteryCode", "membershipTier": "membershipTier",
+			"membershipPlanId": "membershipPlanId", "benefitPackageId": "benefitPackageId", "durationType": "durationType",
+			"valuationAmount": "valuationAmount",
+		}); err != nil {
+			return err
+		}
+		if strings.TrimSpace(cfg.CouponTemplateID) == "" {
+			return invalidActivityf("rewards[%d].rewardConfig.couponTemplateId is required", index)
+		}
+		if cfg.FaceValue != "" && cfg.DiscountRate != "" {
+			return invalidActivityf("rewards[%d].rewardConfig.faceValue and discountRate cannot both be set", index)
+		}
+		if cfg.FaceValue != "" {
+			if err := validateNonNegativeDecimal(fmt.Sprintf("rewards[%d].rewardConfig.faceValue", index), cfg.FaceValue); err != nil {
+				return err
+			}
+			if strings.TrimSpace(cfg.Currency) == "" {
+				return invalidActivityf("rewards[%d].rewardConfig.currency is required with faceValue", index)
+			}
+		}
+		if cfg.DiscountRate != "" {
+			if err := validateNonNegativeDecimal(fmt.Sprintf("rewards[%d].rewardConfig.discountRate", index), cfg.DiscountRate); err != nil {
+				return err
+			}
+		}
+	case RewardGift:
+		if err := rejectRewardFields(index, cfg, map[string]string{
+			"amount": "amount", "points": "points", "chanceCount": "chanceCount", "durationDays": "durationDays",
+			"unit": "unit", "pointType": "pointType", "couponTemplateId": "couponTemplateId", "couponType": "couponType",
+			"faceValue": "faceValue", "discountRate": "discountRate", "drawPoolCode": "drawPoolCode",
+			"lotteryCode": "lotteryCode", "membershipTier": "membershipTier", "membershipPlanId": "membershipPlanId",
+			"benefitPackageId": "benefitPackageId", "durationType": "durationType",
+		}); err != nil {
+			return err
+		}
+		if strings.TrimSpace(firstNonEmptyString(cfg.GiftSkuID, cfg.GiftCode)) == "" {
+			return invalidActivityf("rewards[%d].rewardConfig.giftSkuId or giftCode is required", index)
+		}
+		if cfg.ValuationAmount != "" {
+			if err := validateNonNegativeDecimal(fmt.Sprintf("rewards[%d].rewardConfig.valuationAmount", index), cfg.ValuationAmount); err != nil {
+				return err
+			}
+			if strings.TrimSpace(cfg.Currency) == "" {
+				return invalidActivityf("rewards[%d].rewardConfig.currency is required with valuationAmount", index)
+			}
+		}
+	case RewardDrawChance:
+		if err := rejectRewardFields(index, cfg, map[string]string{
+			"amount": "amount", "points": "points", "quantity": "quantity", "durationDays": "durationDays",
+			"unit": "unit", "pointType": "pointType", "couponTemplateId": "couponTemplateId", "couponType": "couponType",
+			"faceValue": "faceValue", "discountRate": "discountRate", "giftSkuId": "giftSkuId", "giftCode": "giftCode",
+			"deliveryMode": "deliveryMode", "membershipTier": "membershipTier", "membershipPlanId": "membershipPlanId",
+			"benefitPackageId": "benefitPackageId", "durationType": "durationType", "valuationAmount": "valuationAmount",
+		}); err != nil {
+			return err
+		}
+		if strings.TrimSpace(firstNonEmptyString(cfg.DrawPoolCode, cfg.LotteryCode)) == "" {
+			return invalidActivityf("rewards[%d].rewardConfig.drawPoolCode or lotteryCode is required", index)
+		}
+		if strings.TrimSpace(cfg.Currency) != "" {
+			return invalidActivityf("rewards[%d].rewardConfig.currency is not supported for DRAW_CHANCE", index)
+		}
+	case RewardMembership:
+		if err := rejectRewardFields(index, cfg, map[string]string{
+			"amount": "amount", "points": "points", "quantity": "quantity", "chanceCount": "chanceCount",
+			"unit": "unit", "pointType": "pointType", "couponTemplateId": "couponTemplateId", "couponType": "couponType",
+			"faceValue": "faceValue", "discountRate": "discountRate", "giftSkuId": "giftSkuId", "giftCode": "giftCode",
+			"deliveryMode": "deliveryMode", "drawPoolCode": "drawPoolCode", "lotteryCode": "lotteryCode",
+		}); err != nil {
+			return err
+		}
+		if strings.TrimSpace(firstNonEmptyString(cfg.MembershipTier, cfg.MembershipPlanID, cfg.BenefitPackageID)) == "" {
+			return invalidActivityf("rewards[%d].rewardConfig.membershipTier, membershipPlanId, or benefitPackageId is required", index)
+		}
+		if cfg.ValuationAmount != "" {
+			if err := validateNonNegativeDecimal(fmt.Sprintf("rewards[%d].rewardConfig.valuationAmount", index), cfg.ValuationAmount); err != nil {
+				return err
+			}
+			if strings.TrimSpace(cfg.Currency) == "" {
+				return invalidActivityf("rewards[%d].rewardConfig.currency is required with valuationAmount", index)
+			}
+		} else if strings.TrimSpace(cfg.Currency) != "" {
+			return invalidActivityf("rewards[%d].rewardConfig.currency is only supported with valuationAmount for MEMBERSHIP", index)
+		}
+	}
+	return nil
+}
+
+func rejectRewardFields(index int, cfg RewardConfig, fields map[string]string) error {
+	values := map[string]string{
+		"amount": cfg.Amount, "points": cfg.Points, "quantity": cfg.Quantity, "chanceCount": cfg.ChanceCount,
+		"durationDays": cfg.DurationDays, "unit": cfg.Unit, "pointType": cfg.PointType,
+		"couponTemplateId": cfg.CouponTemplateID, "couponType": cfg.CouponType, "faceValue": cfg.FaceValue,
+		"discountRate": cfg.DiscountRate, "giftSkuId": cfg.GiftSkuID, "giftCode": cfg.GiftCode,
+		"deliveryMode": cfg.DeliveryMode, "drawPoolCode": cfg.DrawPoolCode, "lotteryCode": cfg.LotteryCode,
+		"membershipTier": cfg.MembershipTier, "membershipPlanId": cfg.MembershipPlanID,
+		"benefitPackageId": cfg.BenefitPackageID, "durationType": cfg.DurationType,
+		"valuationAmount": cfg.ValuationAmount,
+	}
+	for key, field := range fields {
+		if strings.TrimSpace(values[key]) != "" {
+			return invalidActivityf("rewards[%d].rewardConfig.%s is not supported for rewardType", index, field)
+		}
+	}
+	return nil
+}
+
+func supportedRewardCalculateCombo(rewardType RewardType, calculateType CalculateType) bool {
+	switch rewardType {
+	case RewardBonus, RewardCash:
+		return true
+	case RewardPoint:
+		return calculateType == CalculateFixed
+	case RewardCoupon:
+		return calculateType == CalculateFixed
+	case RewardGift:
+		return calculateType == CalculateFixed
+	case RewardDrawChance:
+		return calculateType == CalculateFixed
+	case RewardMembership:
+		return calculateType == CalculateFixed
+	default:
+		return false
+	}
+}
+
+func validateFixedRewardConfig(index int, rewardType RewardType, cfg RewardConfig) error {
+	switch rewardType {
+	case RewardBonus, RewardCash:
+		return validateNonNegativeDecimal(fmt.Sprintf("rewards[%d].rewardConfig.amount", index), cfg.Amount)
+	case RewardPoint:
+		return validatePositiveIntConfig(fmt.Sprintf("rewards[%d].rewardConfig.points", index), cfg.Points)
+	case RewardCoupon, RewardGift:
+		return validatePositiveIntConfig(fmt.Sprintf("rewards[%d].rewardConfig.quantity", index), cfg.Quantity)
+	case RewardDrawChance:
+		return validatePositiveIntConfig(fmt.Sprintf("rewards[%d].rewardConfig.chanceCount", index), cfg.ChanceCount)
+	case RewardMembership:
+		if strings.ToUpper(strings.TrimSpace(cfg.DurationType)) == "PERMANENT" {
+			return nil
+		}
+		return validatePositiveIntConfig(fmt.Sprintf("rewards[%d].rewardConfig.durationDays", index), cfg.DurationDays)
+	default:
+		return invalidActivityf("rewards[%d].rewardType is unsupported", index)
 	}
 }
 
@@ -1645,10 +1858,8 @@ func validateProbabilityRewardConfig(index int, reward Reward, cfg RewardConfig)
 			return err
 		}
 		if item.RewardType != "" {
-			switch item.RewardType {
-			case RewardBonus, RewardCash, RewardPoint:
-			default:
-				return invalidActivityf("rewards[%d].rewardConfig.items[%d].rewardType is unsupported", index, i)
+			if item.RewardType != reward.Type {
+				return invalidActivityf("rewards[%d].rewardConfig.items[%d].rewardType must match rewardType", index, i)
 			}
 		}
 		if item.Currency != "" && cfg.Currency != "" && item.Currency != cfg.Currency {
@@ -1668,7 +1879,11 @@ func validatePoolSplitRewardConfig(index int, cfg RewardConfig, pluginCode strin
 	if err := validateNonNegativeDecimal(fmt.Sprintf("rewards[%d].rewardConfig.poolAmount", index), cfg.PoolAmount); err != nil {
 		return err
 	}
-	switch strings.ToUpper(strings.TrimSpace(cfg.SplitBy)) {
+	splitBy := firstNonEmptyString(cfg.SplitBy, cfg.SplitMode)
+	if cfg.SplitBy != "" && cfg.SplitMode != "" && !strings.EqualFold(cfg.SplitBy, cfg.SplitMode) {
+		return invalidActivityf("rewards[%d].rewardConfig.splitBy conflicts with splitMode", index)
+	}
+	switch strings.ToUpper(strings.TrimSpace(splitBy)) {
 	case "COUNT":
 		if strings.TrimSpace(cfg.ParticipantCountField) == "" {
 			return invalidActivityf("rewards[%d].rewardConfig.participantCountField is required", index)
@@ -1687,6 +1902,27 @@ func validatePoolSplitRewardConfig(index int, cfg RewardConfig, pluginCode strin
 		return invalidActivityf("rewards[%d].rewardConfig.splitBy is unsupported", index)
 	}
 	return nil
+}
+
+func validatePositiveIntConfig(field string, value string) error {
+	text := strings.TrimSpace(value)
+	if text == "" {
+		return invalidActivityf("%s is required", field)
+	}
+	parsed, err := strconv.Atoi(text)
+	if err != nil || parsed <= 0 {
+		return invalidActivityf("%s must be positive integer", field)
+	}
+	return nil
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func decodeStrict(raw json.RawMessage, dst any) error {

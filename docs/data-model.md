@@ -164,7 +164,11 @@ NOT_IN
 ```text
 BONUS
 CASH
+COUPON
 POINT
+GIFT
+DRAW_CHANCE
+MEMBERSHIP
 ```
 
 当前已实现计算方式：
@@ -178,13 +182,6 @@ PROBABILITY
 POOL_SPLIT
 ```
 
-设计目标中的待实现计算方式：
-
-```text
-DRAW_CHANCE
-GIFT
-```
-
 当前可执行发奖边界：
 
 ```text
@@ -195,9 +192,21 @@ targetRef     reward_config_json 内必填，且必须是 http(s) URL
 
 `MQ`、`MANUAL_EXPORT` 和 `MANUAL` 发奖模式尚无完整 sender、导出或人工状态机，创建活动时会被拒绝。
 
-奖励计算统一使用 Decimal 语义，输出金额保留 4 位小数。`FIXED` 使用 `amount`；`RATIO` 使用 `baseField * rate` 并支持 `maxAmount` 封顶；`LADDER` 使用 `field` 和闭区间 `ladders`；`RANDOM` 使用 `minAmount/maxAmount/step` 和稳定 seed；`PROBABILITY` 使用 `items[].weight` 抽取奖项；`POOL_SPLIT` 支持 `COUNT` 和 `WEIGHT` 两种即时分摊。金额类 `BONUS` / `CASH` 必须配置 `currency`，`AUTO + HTTP/WEBHOOK` 必须配置 http(s) `targetRef`。
+奖励计算统一使用 Decimal 语义，输出金额保留 4 位小数。金额类 `BONUS` / `CASH` 支持 `FIXED`、`RATIO`、`LADDER`、`RANDOM`、`PROBABILITY`、`POOL_SPLIT`：`FIXED` 使用 `amount`；`RATIO` 使用 `baseField * rate` 并支持 `maxAmount` 封顶；`LADDER` 使用 `field` 和闭区间 `ladders`；`RANDOM` 使用 `minAmount/maxAmount/step` 和稳定 seed；`PROBABILITY` 使用 `items[].weight` 抽取奖项；`POOL_SPLIT` 支持 `splitBy` 或兼容别名 `splitMode` 的 `COUNT` / `WEIGHT` 即时分摊。非金额类当前最小可上线口径只支持 `FIXED`，并通过标准 payload 发给外部系统：
 
-计算结果为 `0.0000` 时按无实际奖励处理，不生成 grant_order/outbox，不扣 BUDGET/STOCK/USER_LIMIT；`POOL_SPLIT` 是事件即时分摊模型，不表示活动结束后整池只扣一次。
+| rewardType | 必填配置 |
+|---|---|
+| `POINT` | `points` 正整数，`unit` 或 `pointType` |
+| `COUPON` | `couponTemplateId`，`quantity` 正整数 |
+| `GIFT` | `giftSkuId` 或 `giftCode`，`quantity` 正整数 |
+| `DRAW_CHANCE` | `drawPoolCode` 或 `lotteryCode`，`chanceCount` 正整数 |
+| `MEMBERSHIP` | `membershipTier`、`membershipPlanId` 或 `benefitPackageId`，并配置 `durationDays` 正整数或 `durationType=PERMANENT` |
+
+金额类 `BONUS` / `CASH` 必须配置 `currency`。`POINT`、`DRAW_CHANCE` 不允许 `currency`；`COUPON` 只有 `faceValue` 需要 `currency`；`GIFT` / `MEMBERSHIP` 只有 `valuationAmount` 需要 `currency`。`flow_multiple > 0` 只允许 `BONUS`，其他奖励类型必须为 `0` 或不传。
+
+非金额 reward 的 `marketing_grant_order.reward_amount` 固定为 `0.0000`，不表示现金金额；实际权益数量、外部引用和可选估值写入 `reward_payload_json`。`valuationAmount` 只用于预算暴露预估，不得当作实际发奖金额。
+
+金额计算结果为 `0.0000` 时按无实际奖励处理，不生成 grant_order/outbox，不扣 BUDGET/STOCK/USER_LIMIT；非金额 reward 只要数量类字段为正整数，即使 `reward_amount=0.0000` 也会生成 grant_order/outbox。`POOL_SPLIT` 是事件即时分摊模型，不表示活动结束后整池只扣一次。
 
 ## marketing_event_inbox
 
@@ -333,10 +342,12 @@ rewardCode
 rewardType
 calculateType
 currency
+unit
 flowMultiple
 targetRef
 source / amount / reasonCode
 奖励计算方式对应的解释字段，例如 baseField、baseAmount、rate、maxAmount、capped
+非金额权益字段，例如 points、quantity、chanceCount、durationDays、couponTemplateId、giftSkuId、drawPoolCode、membershipPlanId、valuationAmount
 ```
 
 ## marketing_quota

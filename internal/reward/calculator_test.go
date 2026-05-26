@@ -20,6 +20,27 @@ func TestConfigCalculatorFixedReward(t *testing.T) {
 	}
 }
 
+func TestConfigCalculatorFixedNonAmountRewardCreatesPayablePayload(t *testing.T) {
+	cfg := rewardConfig(marketing.CalculateFixed, `{
+		"couponTemplateId":"WELCOME_10",
+		"quantity":"2",
+		"couponType":"CASH_OFF",
+		"targetRef":"https://coupon.example.com/grant"
+	}`)
+	cfg.Type = marketing.RewardCoupon
+
+	result, err := ConfigCalculator{}.Calculate(baseContext(), cfg)
+	if err != nil {
+		t.Fatalf("calculate fixed coupon: %v", err)
+	}
+	if result.Skipped || result.Amount != "0.0000" || result.Type != marketing.RewardCoupon {
+		t.Fatalf("expected payable non-amount reward with zero accounting amount, got %+v", result)
+	}
+	if result.Payload["quantity"] != 2 || result.Payload["couponTemplateId"] != "WELCOME_10" {
+		t.Fatalf("unexpected non-amount payload: %#v", result.Payload)
+	}
+}
+
 func TestConfigCalculatorRatioUsesAttributesBaseFieldAndCap(t *testing.T) {
 	ctx := baseContext()
 	ctx.Event.Attributes["amount"] = "1000.00"

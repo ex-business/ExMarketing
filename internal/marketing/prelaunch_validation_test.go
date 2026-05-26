@@ -272,6 +272,88 @@ func TestCreateActivityCommandRejectsUnregisteredRuleEvaluatorsAfterSchemaValida
 	}
 }
 
+func TestCreateActivityCommandValidatesRewardSchemaBoundaries(t *testing.T) {
+	now := time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
+	validConfigs := map[RewardType]string{
+		RewardBonus:      `{"amount":"10.00","currency":"USD","targetRef":"https://wallet.example.com/reward"}`,
+		RewardCash:       `{"amount":"10.00","currency":"USD","targetRef":"https://wallet.example.com/reward"}`,
+		RewardPoint:      `{"points":"10","unit":"POINT","targetRef":"https://points.example.com/reward"}`,
+		RewardCoupon:     `{"couponTemplateId":"WELCOME_10","quantity":"1","targetRef":"https://coupon.example.com/reward"}`,
+		RewardGift:       `{"giftSkuId":"SKU_1","quantity":"1","targetRef":"https://gift.example.com/reward"}`,
+		RewardDrawChance: `{"drawPoolCode":"POOL_1","chanceCount":"1","targetRef":"https://draw.example.com/reward"}`,
+		RewardMembership: `{"membershipPlanId":"VIP_30","durationDays":"30","targetRef":"https://member.example.com/reward"}`,
+	}
+	for rewardType, config := range validConfigs {
+		t.Run(string(rewardType), func(t *testing.T) {
+			cmd := validPrelaunchActivity()
+			cmd.Rewards[0] = Reward{
+				Code:          string(rewardType) + "_FIXED",
+				Type:          rewardType,
+				CalculateType: CalculateFixed,
+				Config:        []byte(config),
+				GrantMode:     GrantAuto,
+				GrantChannel:  GrantHTTP,
+				Enabled:       true,
+				Version:       1,
+			}
+			if err := cmd.Validate(now); err != nil {
+				t.Fatalf("expected %s reward schema to validate: %v", rewardType, err)
+			}
+		})
+	}
+
+	for name, mutate := range map[string]func(*CreateActivityCommand){
+		"cash flow multiple": func(cmd *CreateActivityCommand) {
+			cmd.Rewards[0].Type = RewardCash
+			cmd.Rewards[0].CalculateType = CalculateFixed
+			cmd.Rewards[0].Config = []byte(`{"amount":"10.00","currency":"USD","targetRef":"https://wallet.example.com/reward"}`)
+			cmd.Rewards[0].FlowMultiple = "1"
+		},
+		"point currency": func(cmd *CreateActivityCommand) {
+			cmd.Rewards[0].Type = RewardPoint
+			cmd.Rewards[0].CalculateType = CalculateFixed
+			cmd.Rewards[0].Config = []byte(`{"points":"10","unit":"POINT","currency":"USD","targetRef":"https://points.example.com/reward"}`)
+		},
+		"coupon missing template": func(cmd *CreateActivityCommand) {
+			cmd.Rewards[0].Type = RewardCoupon
+			cmd.Rewards[0].CalculateType = CalculateFixed
+			cmd.Rewards[0].Config = []byte(`{"quantity":"1","targetRef":"https://coupon.example.com/reward"}`)
+		},
+		"gift fractional quantity": func(cmd *CreateActivityCommand) {
+			cmd.Rewards[0].Type = RewardGift
+			cmd.Rewards[0].CalculateType = CalculateFixed
+			cmd.Rewards[0].Config = []byte(`{"giftSkuId":"SKU_1","quantity":"1.5","targetRef":"https://gift.example.com/reward"}`)
+		},
+		"membership missing duration": func(cmd *CreateActivityCommand) {
+			cmd.Rewards[0].Type = RewardMembership
+			cmd.Rewards[0].CalculateType = CalculateFixed
+			cmd.Rewards[0].Config = []byte(`{"membershipPlanId":"VIP","targetRef":"https://member.example.com/reward"}`)
+		},
+		"non amount unsupported calculate type": func(cmd *CreateActivityCommand) {
+			cmd.Rewards[0].Type = RewardCoupon
+			cmd.Rewards[0].CalculateType = CalculateRatio
+			cmd.Rewards[0].Config = []byte(`{"couponTemplateId":"WELCOME_10","quantity":"1","baseField":"attributes.amount","rate":"1","targetRef":"https://coupon.example.com/reward"}`)
+		},
+		"probability item mixed reward type": func(cmd *CreateActivityCommand) {
+			cmd.Rewards[0].Type = RewardBonus
+			cmd.Rewards[0].CalculateType = CalculateProbability
+			cmd.Rewards[0].Config = []byte(`{"currency":"USD","targetRef":"https://wallet.example.com/reward","items":[{"itemCode":"A","weight":"1","rewardType":"POINT","amount":"10"}]}`)
+		},
+		"pool split alias conflict": func(cmd *CreateActivityCommand) {
+			cmd.Rewards[0].CalculateType = CalculatePoolSplit
+			cmd.Rewards[0].Config = []byte(`{"poolAmount":"100","splitBy":"COUNT","splitMode":"WEIGHT","participantCountField":"attributes.amount","currency":"USD","targetRef":"https://wallet.example.com/reward"}`)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cmd := validPrelaunchActivity()
+			mutate(&cmd)
+			if err := cmd.Validate(now); err == nil {
+				t.Fatal("expected reward schema validation error")
+			}
+		})
+	}
+}
+
 func validPrelaunchActivity() CreateActivityCommand {
 	return CreateActivityCommand{
 		TenantID:       "site_001",

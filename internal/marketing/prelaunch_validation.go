@@ -449,6 +449,13 @@ func maxRewardExposureOne(reward Reward) (decimal.Decimal, bool) {
 	if err := json.Unmarshal(reward.Config, &cfg); err != nil {
 		return decimal.Zero(), false
 	}
+	if reward.Type != RewardBonus && reward.Type != RewardCash {
+		if strings.TrimSpace(cfg.ValuationAmount) == "" {
+			return decimal.Zero(), true
+		}
+		value, err := decimal.Parse(cfg.ValuationAmount)
+		return value, err == nil
+	}
 	switch reward.CalculateType {
 	case CalculateFixed:
 		value, err := decimal.Parse(cfg.Amount)

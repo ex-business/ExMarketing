@@ -180,7 +180,7 @@ internal/httpapi      HTTP handlers and routing
 internal/engine       event processing pipeline
 internal/marketing    domain model and repository contracts
 internal/rule         condition rule evaluator
-internal/reward       fixed and ratio reward calculator
+internal/reward       reward calculator and reward schema validation helpers
 internal/decimal      decimal money helper, no float64 for amount math
 internal/worker       outbox HTTP/Webhook sender with retry and DLQ
 internal/fact         HTTP fact provider client

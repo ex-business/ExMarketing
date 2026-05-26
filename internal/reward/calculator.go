@@ -81,6 +81,7 @@ type amountResult struct {
 	amount     decimal.Decimal
 	rewardType marketing.RewardType
 	payload    map[string]any
+	payable    bool
 }
 
 func (c ConfigCalculator) Calculate(ctx Context, configuredReward marketing.Reward) (Result, error) {
@@ -130,7 +131,7 @@ func (c ConfigCalculator) Calculate(ctx Context, configuredReward marketing.Rewa
 		ReasonCode: ReasonOK,
 		Reason:     "reward calculated",
 	}
-	if calculated.amount.IsZero() {
+	if calculated.amount.IsZero() && !calculated.payable {
 		result.Skipped = true
 		result.ReasonCode = ReasonZeroRewardSkipped
 		result.Reason = "reward amount is zero"
@@ -164,7 +165,7 @@ func validateCurrency(rewardType marketing.RewardType, currency string) error {
 func calculateAmount(ctx Context, configuredReward marketing.Reward, config marketing.RewardConfig) (amountResult, error) {
 	switch configuredReward.CalculateType {
 	case marketing.CalculateFixed:
-		return calculateFixed(config)
+		return calculateFixed(configuredReward.Type, config)
 	case marketing.CalculateRatio:
 		return calculateRatio(ctx, config)
 	case marketing.CalculateLadder:
@@ -180,12 +181,73 @@ func calculateAmount(ctx Context, configuredReward marketing.Reward, config mark
 	}
 }
 
-func calculateFixed(config marketing.RewardConfig) (amountResult, error) {
+func calculateFixed(rewardType marketing.RewardType, config marketing.RewardConfig) (amountResult, error) {
+	if result, ok, err := calculateFixedNonAmount(rewardType, config); ok || err != nil {
+		return result, err
+	}
 	amount, err := parseConfigDecimal(config.Amount, "rewardConfig.amount", ReasonNegativeAmount)
 	if err != nil {
 		return amountResult{}, err
 	}
-	return amountResult{amount: amount, payload: map[string]any{}}, nil
+	return amountResult{amount: amount, payload: map[string]any{}, payable: amount.IsPositive()}, nil
+}
+
+func calculateFixedNonAmount(rewardType marketing.RewardType, config marketing.RewardConfig) (amountResult, bool, error) {
+	if rewardType == marketing.RewardPoint {
+		points, err := parsePositiveInt(config.Points, "rewardConfig.points")
+		if err != nil {
+			return amountResult{}, true, err
+		}
+		return amountResult{amount: decimal.Zero(), payload: map[string]any{
+			"points":    points,
+			"unit":      firstNonEmpty(config.Unit, config.PointType),
+			"pointType": firstNonEmpty(config.PointType, config.Unit),
+		}, payable: true}, true, nil
+	}
+	if rewardType == marketing.RewardCoupon || rewardType == marketing.RewardGift {
+		quantity, err := parsePositiveInt(config.Quantity, "rewardConfig.quantity")
+		if err != nil {
+			return amountResult{}, true, err
+		}
+		payload := map[string]any{"quantity": quantity}
+		copyIfNotEmpty(payload, "couponTemplateId", config.CouponTemplateID)
+		copyIfNotEmpty(payload, "couponType", config.CouponType)
+		copyIfNotEmpty(payload, "faceValue", config.FaceValue)
+		copyIfNotEmpty(payload, "discountRate", config.DiscountRate)
+		copyIfNotEmpty(payload, "giftSkuId", config.GiftSkuID)
+		copyIfNotEmpty(payload, "giftCode", config.GiftCode)
+		copyIfNotEmpty(payload, "deliveryMode", config.DeliveryMode)
+		copyIfNotEmpty(payload, "valuationAmount", config.ValuationAmount)
+		return amountResult{amount: decimal.Zero(), payload: payload, payable: true}, true, nil
+	}
+	if rewardType == marketing.RewardDrawChance {
+		chanceCount, err := parsePositiveInt(config.ChanceCount, "rewardConfig.chanceCount")
+		if err != nil {
+			return amountResult{}, true, err
+		}
+		payload := map[string]any{"chanceCount": chanceCount}
+		copyIfNotEmpty(payload, "drawPoolCode", config.DrawPoolCode)
+		copyIfNotEmpty(payload, "lotteryCode", config.LotteryCode)
+		return amountResult{amount: decimal.Zero(), payload: payload, payable: true}, true, nil
+	}
+	if rewardType == marketing.RewardMembership {
+		payload := map[string]any{}
+		if strings.EqualFold(strings.TrimSpace(config.DurationType), "PERMANENT") {
+			payload["durationType"] = "PERMANENT"
+		} else {
+			durationDays, err := parsePositiveInt(config.DurationDays, "rewardConfig.durationDays")
+			if err != nil {
+				return amountResult{}, true, err
+			}
+			payload["durationDays"] = durationDays
+		}
+		copyIfNotEmpty(payload, "membershipTier", config.MembershipTier)
+		copyIfNotEmpty(payload, "membershipPlanId", config.MembershipPlanID)
+		copyIfNotEmpty(payload, "benefitPackageId", config.BenefitPackageID)
+		copyIfNotEmpty(payload, "valuationAmount", config.ValuationAmount)
+		return amountResult{amount: decimal.Zero(), payload: payload, payable: true}, true, nil
+	}
+	return amountResult{}, false, nil
 }
 
 func calculateRatio(ctx Context, config marketing.RewardConfig) (amountResult, error) {
@@ -417,7 +479,7 @@ func calculatePoolSplit(ctx Context, config marketing.RewardConfig) (amountResul
 	if err != nil {
 		return amountResult{}, err
 	}
-	splitBy := strings.ToUpper(strings.TrimSpace(config.SplitBy))
+	splitBy := strings.ToUpper(strings.TrimSpace(firstNonEmpty(config.SplitBy, config.SplitMode)))
 	switch splitBy {
 	case "COUNT":
 		count, err := decimalFromField(ctx, config.ParticipantCountField, ReasonPoolParticipantInvalid)
@@ -573,6 +635,28 @@ func parsePositiveDecimal(value, field, reason string) (decimal.Decimal, error) 
 		return decimal.Decimal{}, rewardError(reason, "value must be positive", field)
 	}
 	return parsed, nil
+}
+
+func parsePositiveInt(value, field string) (int, error) {
+	parsed, err := parsePositiveDecimal(value, field, ReasonInvalidRewardConfig)
+	if err != nil {
+		return 0, err
+	}
+	asText := parsed.String()
+	if !strings.HasSuffix(asText, ".0000") {
+		return 0, rewardError(ReasonInvalidRewardConfig, "value must be positive integer", field)
+	}
+	var integer int
+	if _, err := fmt.Sscanf(asText, "%d.0000", &integer); err != nil || integer <= 0 {
+		return 0, rewardError(ReasonInvalidRewardConfig, "value must be positive integer", field)
+	}
+	return integer, nil
+}
+
+func copyIfNotEmpty(payload map[string]any, key string, value string) {
+	if strings.TrimSpace(value) != "" {
+		payload[key] = value
+	}
 }
 
 func skippedResult(configuredReward marketing.Reward, reasonCode, reason string, payload map[string]any) Result {

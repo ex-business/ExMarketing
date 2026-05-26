@@ -164,6 +164,14 @@ export EX_MARKETING_OPENAPI_TOKENS='dev-token:site_001:payment'
 
 `EX_MARKETING_OPENAPI_TOKENS` uses `token:tenantId[,tenantId...]:sourceSystem[,sourceSystem...]` entries separated by `;`. `EX_MARKETING_EVENT_MAX_BODY_BYTES` optionally overrides the default 1 MiB event request body limit.
 
+Webhook receivers can accept provider-specific JSON and map it into the same standard event chain:
+
+```bash
+export EX_MARKETING_WEBHOOK_RECEIVERS_JSON='[{"receiverCode":"payment-webhook","enabled":true,"secret":"receiver-secret","allowedTenantIds":["site_001"],"allowedSourceSystems":["payment"],"allowedIPs":[],"mapping":{"eventId":{"path":"$.id"},"eventType":{"const":"DEPOSIT_SUCCESS"},"sourceSystem":{"const":"payment"},"tenantId":{"const":"site_001"},"subject.type":{"const":"USER"},"subject.id":{"path":"$.user.id"},"biz.bizType":{"const":"DEPOSIT"},"biz.bizId":{"path":"$.payment.id"},"occurredAt":{"path":"$.createdAt"},"attributes":{"amount":{"path":"$.payment.amount"},"currency":{"path":"$.payment.currency"},"providerEventId":{"path":"$.id"}}}}]'
+```
+
+`POST /openapi/v1/webhooks/{receiverCode}` requires JSON plus `X-ExMarketing-Timestamp` and `X-ExMarketing-Signature`. The signature is lowercase hex `HMAC-SHA256(receiver.secret, "<timestamp>.<rawBody>")`. `Idempotency-Key` is optional for Webhook requests; when present it must equal the mapped standard event key.
+
 ## Layout
 
 ```text

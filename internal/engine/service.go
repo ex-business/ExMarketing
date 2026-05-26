@@ -241,6 +241,10 @@ func (s *Service) ListAudit(ctx context.Context, query marketing.AuditQuery) ([]
 	return s.repository.ListAudit(ctx, query)
 }
 
+func (s *Service) RecordAudit(ctx context.Context, tenantID, actor, action, resource, resourceID string, payload any) error {
+	return s.audit(ctx, tenantID, actor, action, resource, resourceID, payload)
+}
+
 func (s *Service) ListOutboxDLQ(ctx context.Context, tenantID string, includeClosed bool, limit int) ([]marketing.OutboxMessage, error) {
 	return s.repository.ListOutboxDLQ(ctx, tenantID, includeClosed, limit)
 }

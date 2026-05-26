@@ -191,12 +191,12 @@
       "id": "2026-05-24-webhook-receiver",
       "title": "Webhook Receiver 接入",
       "description": "来源：22-独立活动营销中台设计。实现 SaaS 化 Webhook Receiver 的接入模型，支持外部系统将事件推给活动系统，统一转换为标准事件。验收：Webhook payload 映射、签名/来源校验、失败响应和审计记录完整。",
-      "status": "ANALYSIS_FAIL",
+      "status": "COMMIT_READY",
       "risk": "中",
-      "score": 78,
+      "score": 91,
       "taskDir": "tasks/2026-05-24-webhook-receiver",
       "createdAt": "2026-05-24T11:39:29.019103Z",
-      "updatedAt": "2026-05-25T15:56:20.207277Z"
+      "updatedAt": "2026-05-26T09:15:42.580051Z"
     },
     {
       "id": "2026-05-24-event-inbox",
@@ -235,12 +235,12 @@
       "id": "2026-05-24-rule-schema",
       "title": "Rule 配置 Schema",
       "description": "来源：22-独立活动营销中台设计。完善 marketing_rule 的 rule_phase、rule_type、rule_config_json、sort、enabled、version，并定义 CONDITION/FORMULA/LIMIT/SCRIPT 的 JSON Schema。验收：非法字段、非法 op、非法 value 类型会被后台校验拒绝。",
-      "status": "COMMIT_READY",
+      "status": "COMMITTED",
       "risk": "中",
       "score": 94,
       "taskDir": "tasks/2026-05-24-rule-schema",
       "createdAt": "2026-05-24T11:39:29.019103Z",
-      "updatedAt": "2026-05-26T08:32:17.937555Z"
+      "updatedAt": "2026-05-26T08:35:04.325528Z"
     },
     {
       "id": "2026-05-24-reward-schema",

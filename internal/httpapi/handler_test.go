@@ -2,10 +2,14 @@ package httpapi
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -38,6 +42,13 @@ func newAuthTestHandler(token string, tenantIDs []string, sourceSystems []string
 		RequireAuth:  true,
 		Credentials:  map[string]OpenAPIEventCredential{token: credential},
 		MaxBodyBytes: maxBodyBytes,
+	})
+}
+
+func newWebhookTestHandler(repo *marketing.MemoryRepository, receivers map[string]WebhookReceiver) *Handler {
+	return NewHandlerWithConfigs(engine.NewService(repo), OpenAPIEventConfig{MaxBodyBytes: defaultEventMaxBodyBytes}, WebhookReceiverConfig{
+		MaxBodyBytes: defaultEventMaxBodyBytes,
+		Receivers:    receivers,
 	})
 }
 
@@ -1966,6 +1977,122 @@ func TestValidatePrelaunchEndpointReturnsItemizedApprovalRequired(t *testing.T) 
 	}
 }
 
+func TestWebhookReceiverMapsSignedPayloadIntoEventChain(t *testing.T) {
+	repo := marketing.NewMemoryRepository()
+	handler := newWebhookTestHandler(repo, map[string]WebhookReceiver{"payment-webhook": validWebhookReceiver(true)})
+	body := validWebhookPayload("provider_evt_001", "pay_001", "10001")
+
+	rec := postWebhook(t, handler, "payment-webhook", body, "")
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusAccepted, rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"duplicate":false`) || !strings.Contains(rec.Body.String(), `"idempotencyKey":"site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:pay_001"`) {
+		t.Fatalf("expected mapped event response, got: %s", rec.Body.String())
+	}
+
+	duplicate := postWebhook(t, handler, "payment-webhook", body, "")
+	if duplicate.Code != http.StatusOK || !strings.Contains(duplicate.Body.String(), `"duplicate":true`) {
+		t.Fatalf("expected duplicate response, got %d: %s", duplicate.Code, duplicate.Body.String())
+	}
+
+	audits, err := repo.ListAudit(context.Background(), marketing.AuditQuery{Resource: "WEBHOOK_RECEIVER", ResourceID: "payment-webhook"})
+	if err != nil {
+		t.Fatalf("list audit: %v", err)
+	}
+	if len(audits) < 2 {
+		t.Fatalf("expected webhook audits, got %+v", audits)
+	}
+	actions := []string{audits[0].Action, audits[1].Action}
+	if !slicesContains(actions, "WEBHOOK_RECEIVED") || !slicesContains(actions, "WEBHOOK_DUPLICATE") {
+		t.Fatalf("expected received and duplicate audits, got %+v", actions)
+	}
+	if strings.Contains(string(audits[0].Payload), "receiver-secret") || strings.Contains(string(audits[0].Payload), body) {
+		t.Fatalf("audit leaked secret or raw payload: %s", string(audits[0].Payload))
+	}
+}
+
+func TestWebhookReceiverRejectsSecurityAndMappingFailures(t *testing.T) {
+	body := validWebhookPayload("provider_evt_002", "pay_002", "10001")
+	for _, tc := range []struct {
+		name       string
+		receivers  map[string]WebhookReceiver
+		body       string
+		mutate     func(*http.Request)
+		wantStatus int
+		wantCode   string
+	}{
+		{
+			name:       "missing receiver",
+			receivers:  map[string]WebhookReceiver{},
+			wantStatus: http.StatusBadRequest,
+			wantCode:   "WEBHOOK_RECEIVER_NOT_FOUND",
+		},
+		{
+			name:       "disabled receiver",
+			receivers:  map[string]WebhookReceiver{"payment-webhook": validWebhookReceiver(false)},
+			wantStatus: http.StatusForbidden,
+			wantCode:   "WEBHOOK_RECEIVER_DISABLED",
+		},
+		{
+			name:      "missing signature",
+			receivers: map[string]WebhookReceiver{"payment-webhook": validWebhookReceiver(true)},
+			mutate: func(req *http.Request) {
+				req.Header.Del("X-ExMarketing-Signature")
+			},
+			wantStatus: http.StatusBadRequest,
+			wantCode:   "WEBHOOK_SIGNATURE_MISSING",
+		},
+		{
+			name:      "invalid signature",
+			receivers: map[string]WebhookReceiver{"payment-webhook": validWebhookReceiver(true)},
+			mutate: func(req *http.Request) {
+				req.Header.Set("X-ExMarketing-Signature", strings.Repeat("0", 64))
+			},
+			wantStatus: http.StatusUnauthorized,
+			wantCode:   "WEBHOOK_SIGNATURE_INVALID",
+		},
+		{
+			name:       "mapping failed",
+			receivers:  map[string]WebhookReceiver{"payment-webhook": validWebhookReceiver(true)},
+			body:       `{"id":"provider_evt_002","user":{"id":"10001"},"createdAt":"2026-05-24T12:00:00Z"}`,
+			wantStatus: http.StatusBadRequest,
+			wantCode:   "WEBHOOK_MAPPING_FAILED",
+		},
+		{
+			name: "source forbidden",
+			receivers: map[string]WebhookReceiver{"payment-webhook": func() WebhookReceiver {
+				receiver := validWebhookReceiver(true)
+				receiver.AllowedTenantIDs = []string{"site_002"}
+				return receiver
+			}()},
+			wantStatus: http.StatusForbidden,
+			wantCode:   "WEBHOOK_SOURCE_FORBIDDEN",
+		},
+		{
+			name:      "idempotency mismatch",
+			receivers: map[string]WebhookReceiver{"payment-webhook": validWebhookReceiver(true)},
+			mutate: func(req *http.Request) {
+				req.Header.Set("Idempotency-Key", "site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:other")
+			},
+			wantStatus: http.StatusBadRequest,
+			wantCode:   "INVALID_IDEMPOTENCY_KEY",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := marketing.NewMemoryRepository()
+			handler := newWebhookTestHandler(repo, tc.receivers)
+			payload := body
+			if tc.body != "" {
+				payload = tc.body
+			}
+			rec := postWebhookWithMutation(t, handler, "payment-webhook", payload, tc.mutate)
+			if rec.Code != tc.wantStatus || !strings.Contains(rec.Body.String(), `"errorCode":"`+tc.wantCode+`"`) {
+				t.Fatalf("expected %d %s, got %d: %s", tc.wantStatus, tc.wantCode, rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
 func validActivityBody() string {
 	return `{
 		"tenantId": "site_001",
@@ -2130,6 +2257,78 @@ func eventRequest(event string, idempotencyKey string) *http.Request {
 		req.Header.Set("Idempotency-Key", idempotencyKey)
 	}
 	return req
+}
+
+func validWebhookReceiver(enabled bool) WebhookReceiver {
+	return WebhookReceiver{
+		ReceiverCode:         "payment-webhook",
+		Enabled:              enabled,
+		Secret:               "receiver-secret",
+		AllowedTenantIDs:     []string{"site_001"},
+		AllowedSourceSystems: []string{"payment"},
+		AllowedIPs:           nil,
+		Mapping: WebhookMapping{
+			EventID:      WebhookMappingRule{Path: "$.id"},
+			EventType:    WebhookMappingRule{Const: "DEPOSIT_SUCCESS", HasConst: true},
+			SourceSystem: WebhookMappingRule{Const: "payment", HasConst: true},
+			TenantID:     WebhookMappingRule{Const: "site_001", HasConst: true},
+			SubjectType:  WebhookMappingRule{Const: "USER", HasConst: true},
+			SubjectID:    WebhookMappingRule{Path: "$.user.id"},
+			BizType:      WebhookMappingRule{Const: "DEPOSIT", HasConst: true},
+			BizID:        WebhookMappingRule{Path: "$.payment.id"},
+			OccurredAt:   WebhookMappingRule{Path: "$.createdAt"},
+			Attributes: map[string]WebhookMappingRule{
+				"amount":          {Path: "$.payment.amount"},
+				"currency":        {Path: "$.payment.currency"},
+				"providerEventId": {Path: "$.id"},
+			},
+		},
+	}
+}
+
+func validWebhookPayload(eventID string, paymentID string, userID string) string {
+	return `{"id":"` + eventID + `","user":{"id":"` + userID + `"},"payment":{"id":"` + paymentID + `","amount":100,"currency":"USD"},"createdAt":"2026-05-24T12:00:00Z"}`
+}
+
+func postWebhook(t *testing.T, handler *Handler, receiverCode string, body string, idempotencyKey string) *httptest.ResponseRecorder {
+	t.Helper()
+	return postWebhookWithMutation(t, handler, receiverCode, body, func(req *http.Request) {
+		if idempotencyKey != "" {
+			req.Header.Set("Idempotency-Key", idempotencyKey)
+		}
+	})
+}
+
+func postWebhookWithMutation(t *testing.T, handler *Handler, receiverCode string, body string, mutate func(*http.Request)) *httptest.ResponseRecorder {
+	t.Helper()
+	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
+	req := httptest.NewRequest(http.MethodPost, "/openapi/v1/webhooks/"+receiverCode, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-ExMarketing-Timestamp", timestamp)
+	req.Header.Set("X-ExMarketing-Signature", webhookTestSignature("receiver-secret", timestamp, body))
+	if mutate != nil {
+		mutate(req)
+	}
+	rec := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(rec, req)
+	return rec
+}
+
+func webhookTestSignature(secret string, timestamp string, body string) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(timestamp))
+	mac.Write([]byte("."))
+	mac.Write([]byte(body))
+	return hex.EncodeToString(mac.Sum(nil))
+}
+
+func slicesContains(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func postRewardCallback(t *testing.T, handler *Handler, body string) *httptest.ResponseRecorder {

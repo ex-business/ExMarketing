@@ -541,6 +541,49 @@ GET /admin/v1/reward/reconciliation?tenantId=site_001&idempotencyKey=site_001:pa
 
 返回 grant_order、participation 状态、event inbox、outbox、回调信息、quota reservations 以及相关审计时间线，供排查长期冻结悬挂、回调异常、活动/用户/事件维度链路。
 
+## Webhook Receiver
+
+```http
+POST /openapi/v1/webhooks/{receiverCode}
+Content-Type: application/json
+X-ExMarketing-Timestamp: <unix_seconds>
+X-ExMarketing-Signature: <lowercase_hex_hmac_sha256>
+Idempotency-Key: <optional>
+```
+
+Webhook receivers are configured at startup through `EX_MARKETING_WEBHOOK_RECEIVERS_JSON`. The receiver validates `receiverCode`, enabled status, optional source IP allowlist, timestamp replay window, and HMAC signature before parsing JSON or mapping fields.
+
+Signature input:
+
+```text
+<X-ExMarketing-Timestamp> + "." + <raw request body>
+```
+
+Signature algorithm:
+
+```text
+hex(HMAC-SHA256(receiver.secret, signingInput))
+```
+
+Example receiver config:
+
+```bash
+export EX_MARKETING_WEBHOOK_RECEIVERS_JSON='[{"receiverCode":"payment-webhook","enabled":true,"secret":"receiver-secret","allowedTenantIds":["site_001"],"allowedSourceSystems":["payment"],"allowedIPs":[],"mapping":{"eventId":{"path":"$.id"},"eventType":{"const":"DEPOSIT_SUCCESS"},"sourceSystem":{"const":"payment"},"tenantId":{"const":"site_001"},"subject.type":{"const":"USER"},"subject.id":{"path":"$.user.id"},"biz.bizType":{"const":"DEPOSIT"},"biz.bizId":{"path":"$.payment.id"},"occurredAt":{"path":"$.createdAt"},"attributes":{"amount":{"path":"$.payment.amount"},"currency":{"path":"$.payment.currency"},"providerEventId":{"path":"$.id"}}}}]'
+```
+
+Mapping supports only `const` or simple object field paths such as `$.payment.id`. It does not support scripts, filters, wildcard arrays, provider SDKs, external database reads, or implicit raw payload passthrough. The mapped event is processed by the same standard event chain as `POST /openapi/v1/events`; if `Idempotency-Key` is omitted, the internal key is derived from the mapped standard event.
+
+Stable error responses use:
+
+```json
+{
+  "errorCode": "WEBHOOK_SIGNATURE_INVALID",
+  "message": "webhook signature invalid"
+}
+```
+
+Webhook-specific error codes include `WEBHOOK_RECEIVER_NOT_FOUND`, `WEBHOOK_RECEIVER_DISABLED`, `WEBHOOK_SIGNATURE_MISSING`, `WEBHOOK_TIMESTAMP_INVALID`, `WEBHOOK_SIGNATURE_INVALID`, `WEBHOOK_SOURCE_FORBIDDEN`, `WEBHOOK_MAPPING_FAILED`, and `WEBHOOK_AUDIT_FAILED`. Standard event errors such as `INVALID_JSON`, `INVALID_EVENT`, `INVALID_IDEMPOTENCY_KEY`, `REQUEST_TOO_LARGE`, `UNSUPPORTED_MEDIA_TYPE`, and `QUOTA_EXCEEDED` are reused after the corresponding validation stage.
+
 ## 上报标准事件
 
 ```http

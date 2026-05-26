@@ -35,6 +35,7 @@ type OpenAPIEventCredential struct {
 type Handler struct {
 	engine          *engine.Service
 	openAPIEventCfg OpenAPIEventConfig
+	webhookCfg      WebhookReceiverConfig
 }
 
 func NewHandler(engine *engine.Service) *Handler {
@@ -42,10 +43,17 @@ func NewHandler(engine *engine.Service) *Handler {
 }
 
 func NewHandlerWithOpenAPIEventConfig(engine *engine.Service, cfg OpenAPIEventConfig) *Handler {
+	return NewHandlerWithConfigs(engine, cfg, WebhookReceiverConfig{})
+}
+
+func NewHandlerWithConfigs(engine *engine.Service, cfg OpenAPIEventConfig, webhookCfg WebhookReceiverConfig) *Handler {
 	if cfg.MaxBodyBytes <= 0 {
 		cfg.MaxBodyBytes = defaultEventMaxBodyBytes
 	}
-	return &Handler{engine: engine, openAPIEventCfg: cfg}
+	if webhookCfg.MaxBodyBytes <= 0 {
+		webhookCfg.MaxBodyBytes = defaultEventMaxBodyBytes
+	}
+	return &Handler{engine: engine, openAPIEventCfg: cfg, webhookCfg: webhookCfg}
 }
 
 func LoadOpenAPIEventConfigFromEnv(logger *slog.Logger) (OpenAPIEventConfig, error) {
@@ -156,6 +164,8 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /v1/campaigns", h.listActivities)
 	mux.HandleFunc("POST /v1/campaigns", h.createActivity)
 	mux.HandleFunc("POST /openapi/v1/events", h.createEvent)
+	mux.HandleFunc("POST /openapi/v1/webhooks/{receiverCode}", h.createWebhookEvent)
+	mux.HandleFunc("POST /openapi/v1/webhooks/", h.missingWebhookReceiver)
 	mux.HandleFunc("POST /openapi/v1/facts/query", h.queryFacts)
 	mux.HandleFunc("POST /openapi/v1/reward/callback", h.rewardCallback)
 	mux.Handle("GET /admin/", http.StripPrefix("/admin/", http.FileServer(http.Dir("web/admin"))))

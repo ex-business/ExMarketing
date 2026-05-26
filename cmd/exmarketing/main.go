@@ -32,7 +32,12 @@ func main() {
 		logger.Error("openapi event config invalid", "error", err)
 		os.Exit(1)
 	}
-	handler := httpapi.NewHandlerWithOpenAPIEventConfig(service, openAPIEventConfig)
+	webhookConfig, err := httpapi.LoadWebhookReceiverConfigFromEnv()
+	if err != nil {
+		logger.Error("webhook receiver config invalid", "error", err)
+		os.Exit(1)
+	}
+	handler := httpapi.NewHandlerWithConfigs(service, openAPIEventConfig, webhookConfig)
 	if env("EX_MARKETING_OUTBOX_WORKER", "false") == "true" {
 		go worker.NewOutboxWorker(repository, logger).Run(ctx)
 		logger.Info("outbox worker enabled")

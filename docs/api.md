@@ -282,7 +282,9 @@ rewards           奖励配置
 - `entry.channels` 读取标准事件 `attributes.channel`；非空且不命中时返回 `ENTRY_CHANNEL_NOT_ALLOWED`。
 - `entry.sourceSystems` 读取标准事件 `sourceSystem`；非空且不命中时返回 `ENTRY_SOURCE_SYSTEM_NOT_ALLOWED`。
 - `entry.tenantIds` 只能为空或包含活动自身 `tenantId`，不能扩大租户边界；运行时非空且不命中返回 `ENTRY_TENANT_NOT_ALLOWED`。
-- `entry.audience.subjectTypes` 读取 `subject.type`，`segments` 读取 `attributes.segments` 或 `attributes.segment`，`riskLevels` 读取 `attributes.riskLevel`。
+- `entry.audience.subjectTypes` 读取 `subject.type`，非空且不命中时返回 `AUDIENCE_SUBJECT_TYPE_NOT_ALLOWED`。
+- `entry.audience.segments` 读取 `attributes.segments` 或 `attributes.segment`，非空且无交集时返回 `AUDIENCE_SEGMENT_NOT_ALLOWED`。
+- `entry.audience.riskLevels` 读取 `attributes.riskLevel`，非空且不命中时返回 `AUDIENCE_RISK_LEVEL_NOT_ALLOWED`。
 - 旧配置字段 `entry.entranceCodes`、`entry.landingUrl`、顶层 `audience.segmentCodes/tags/countries` 仍可保存和读回；新入口匹配只依赖通用 `entry.*` 与标准事件字段。
 
 创建阶段会进行基础 Schema 校验。`tenantId + activityCode` 在同一租户内唯一，重复创建返回 `409 Conflict`；不同租户可以复用同一 `activityCode`。`startTime` / `endTime` 必须是带时区偏移的 RFC3339 时间，且 `startTime < endTime`；`timezone` 必须是可识别的 IANA 时区名或 `UTC`。当前普通活动只允许已注册 evaluator 的 `CONDITION` 规则；`FORMULA`、`LIMIT`、`SCRIPT` 只保留配置 Schema，未注册 evaluator 前即使结构合法也会返回 `400 Bad Request`。奖励类型允许 `BONUS` / `CASH` / `COUPON` / `POINT` / `GIFT` / `DRAW_CHANCE` / `MEMBERSHIP`。金额类 `BONUS` / `CASH` 允许 `FIXED` / `RATIO` / `LADDER` / `RANDOM` / `PROBABILITY` / `POOL_SPLIT`；非金额类当前最小可上线口径只允许 `FIXED`，其他组合返回 `400 Bad Request`。发奖模式允许 `AUTO`，发奖通道允许 `HTTP` / `WEBHOOK`；`rewardConfig.targetRef` 对可执行发奖必填且必须是 `http` 或 `https` URL。`MQ`、`MANUAL_EXPORT`、`MANUAL`、未知配置字段、非法版本或不可解析 Decimal 会返回 `400 Bad Request`。配置 `pluginCode` 时必须命中服务内注册的 ActivityPlugin，且与 `activityType` 兼容；未知插件会在创建或上线前校验阶段拒绝。

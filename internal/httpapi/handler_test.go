@@ -652,7 +652,7 @@ func TestEntryConfigMismatchReasons(t *testing.T) {
 			name:   "subject type",
 			body:   strings.Replace(validActivityBody(), `"channels": ["APP", "WEB"]`, `"channels": ["APP", "WEB"], "audience": {"subjectTypes": ["ACCOUNT"]}`, 1),
 			event:  depositEventJSON("evt_entry_subject", "pay_entry_subject", `"amount":"299.00","vipLevel":3,"isFirstDeposit":true`),
-			reason: "ENTRY_SUBJECT_TYPE_NOT_ALLOWED",
+			reason: "AUDIENCE_SUBJECT_TYPE_NOT_ALLOWED",
 		},
 	}
 	for _, tt := range tests {

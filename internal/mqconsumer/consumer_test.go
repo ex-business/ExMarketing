@@ -182,7 +182,7 @@ func TestConsumerClassifiesEngineSystemErrorAsRetryable(t *testing.T) {
 
 func createTestActivity(t *testing.T, service *engine.Service) marketing.Activity {
 	t.Helper()
-	now := time.Now().UTC()
+	eventTime := time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
 	activity, err := service.CreateActivity(context.Background(), marketing.CreateActivityCommand{
 		TenantID:      "site_001",
 		Code:          "FIRST_DEPOSIT_BONUS",
@@ -190,8 +190,8 @@ func createTestActivity(t *testing.T, service *engine.Service) marketing.Activit
 		Type:          "FIRST_DEPOSIT",
 		Status:        marketing.ActivityActive,
 		TriggerEvents: []string{"DEPOSIT_SUCCESS"},
-		StartTime:     now.Add(-24 * time.Hour),
-		EndTime:       now.Add(24 * time.Hour),
+		StartTime:     eventTime.Add(-24 * time.Hour),
+		EndTime:       eventTime.Add(96 * time.Hour),
 		Timezone:      "UTC",
 		Priority:      100,
 		Version:       1,

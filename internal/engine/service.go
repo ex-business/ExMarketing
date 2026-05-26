@@ -312,18 +312,20 @@ func (s *Service) ProcessEventFrom(ctx context.Context, event marketing.Activity
 	if err != nil {
 		return marketing.ProcessEventResult{}, err
 	}
+	sortActivitiesForMatch(activities)
+	exclusiveSingleSelect := exclusiveSingleSelectGroups(activities)
 
 	result := marketing.ProcessEventResult{Inbox: inbox}
 	matchedExclusive := map[string]bool{}
 	for _, activity := range activities {
-		if !activityRunnable(activity, now) {
+		if decision := matchWindowDecision(activity, event.OccurredAt); decision.Decision != marketing.RuleDecisionPassed {
 			continue
 		}
 		if entryAllowed, entryRuleResult := activityEntryAllowed(activity, event); !entryAllowed {
 			result.RuleResults = append(result.RuleResults, entryRuleResult)
 			continue
 		}
-		if activity.ExclusiveGroup != "" && matchedExclusive[activity.ExclusiveGroup] && !activity.Stackable {
+		if activity.ExclusiveGroup != "" && matchedExclusive[activity.ExclusiveGroup] && exclusiveSingleSelect[activity.ExclusiveGroup] {
 			continue
 		}
 
@@ -363,31 +365,24 @@ func (s *Service) SimulateEvent(ctx context.Context, event marketing.ActivityEve
 	if err != nil {
 		return marketing.SimulationResult{}, err
 	}
+	sortActivitiesForMatch(activities)
 
 	now := s.now()
 	result := marketing.SimulationResult{Event: event, SimulatedAt: now}
-	matchedExclusive := map[string]bool{}
+	var matchPassed []marketing.SimulationActivityResult
 	for _, activity := range activities {
 		result.Summary.CandidateCount++
-		if !activityRunnable(activity, now) {
+		if decision := matchWindowDecision(activity, event.OccurredAt); decision.Decision != marketing.RuleDecisionPassed {
 			activityResult := simulationActivityBase(activity, nil)
-			activityResult.Decision = marketing.RuleDecisionRejected
-			activityResult.DecisionReasonCode = "ACTIVITY_NOT_ACTIVE"
-			activityResult.DecisionReason = "activity is not active in current time window"
-			result.UnmatchedActivities = append(result.UnmatchedActivities, activityResult)
-			continue
-		}
-		if activity.ExclusiveGroup != "" && matchedExclusive[activity.ExclusiveGroup] && !activity.Stackable {
-			activityResult := simulationActivityBase(activity, nil)
-			activityResult.Decision = marketing.RuleDecisionRejected
-			activityResult.DecisionReasonCode = "EXCLUSIVE_GROUP_REJECTED"
-			activityResult.DecisionReason = "another activity in the exclusive group already matched"
+			activityResult.Decision = decision.Decision
+			activityResult.DecisionReasonCode = decision.ReasonCode
+			activityResult.DecisionReason = decision.Reason
 			result.UnmatchedActivities = append(result.UnmatchedActivities, activityResult)
 			continue
 		}
 		if entryAllowed, entryRuleResult := activityEntryAllowed(activity, event); !entryAllowed {
 			activityResult := simulationActivityBase(activity, &entryRuleResult)
-			activityResult.Decision = marketing.RuleDecisionRejected
+			activityResult.Decision = entryRuleResult.Decision
 			activityResult.DecisionReasonCode = entryRuleResult.ReasonCode
 			activityResult.DecisionReason = entryRuleResult.Reason
 			result.RuleResults = append(result.RuleResults, entryRuleResult)
@@ -400,6 +395,7 @@ func (s *Service) SimulateEvent(ctx context.Context, event marketing.ActivityEve
 		activityResult.Decision = ruleResult.Decision
 		activityResult.DecisionReasonCode = ruleResult.ReasonCode
 		activityResult.DecisionReason = ruleResult.Reason
+		normalizeMatchRuleDecision(&activityResult)
 		activityResult.Plugin = pluginSnapshot
 		activityResult.RewardPreviews = rewardPreviews
 		activityResult.ParticipationPreview = &participation
@@ -434,15 +430,15 @@ func (s *Service) SimulateEvent(ctx context.Context, event marketing.ActivityEve
 		result.OutboxMessages = append(result.OutboxMessages, outbox...)
 		result.RuleResults = append(result.RuleResults, ruleResult)
 		if activityResult.Decision == marketing.RuleDecisionPassed {
-			result.MatchedActivities = append(result.MatchedActivities, activityResult)
+			matchPassed = append(matchPassed, activityResult)
 			result.Summary.HasRewardableActivity = result.Summary.HasRewardableActivity || len(grants) > 0
-			if activity.ExclusiveGroup != "" {
-				matchedExclusive[activity.ExclusiveGroup] = true
-			}
 		} else {
 			result.UnmatchedActivities = append(result.UnmatchedActivities, activityResult)
 		}
 	}
+	matched, exclusiveRejected := applyExclusiveGroups(matchPassed)
+	result.MatchedActivities = matched
+	result.UnmatchedActivities = append(result.UnmatchedActivities, exclusiveRejected...)
 	result.Summary.MatchedCount = len(result.MatchedActivities)
 	result.Summary.UnmatchedCount = len(result.UnmatchedActivities)
 	_ = s.audit(ctx, event.TenantID, "system", "SIMULATION_RUN", "simulation", event.IdempotencyKey(), auditSnapshot(nil, result.Summary, map[string]any{
@@ -481,7 +477,7 @@ func activityEntryAllowed(activity marketing.Activity, event marketing.ActivityE
 	var cfg activityEntryConfig
 	decoder := json.NewDecoder(bytes.NewReader(activity.Config))
 	if err := decoder.Decode(&cfg); err != nil {
-		return false, entryRejected(activity, "ENTRY_CONFIG_INVALID", "activity entry config is invalid")
+		return false, entryError(activity, "INVALID_MATCH_CONFIG", "activity entry config is invalid")
 	}
 	if cfg.Entry == nil {
 		return true, marketing.ActivityRuleResult{}
@@ -501,13 +497,13 @@ func activityEntryAllowed(activity marketing.Activity, event marketing.ActivityE
 	}
 	if entry.Audience != nil {
 		if len(entry.Audience.SubjectTypes) > 0 && !containsString(entry.Audience.SubjectTypes, event.Subject.Type) {
-			return false, entryRejected(activity, "ENTRY_SUBJECT_TYPE_NOT_ALLOWED", "event subject.type is not allowed by activity entry audience")
+			return false, entryRejected(activity, "AUDIENCE_SUBJECT_TYPE_NOT_ALLOWED", "event subject.type is not allowed by activity entry audience")
 		}
 		if len(entry.Audience.Segments) > 0 && !intersectsString(entry.Audience.Segments, attributeStrings(event.Attributes, "segments", "segment")) {
-			return false, entryRejected(activity, "ENTRY_SEGMENT_NOT_ALLOWED", "event segment is not allowed by activity entry audience")
+			return false, entryRejected(activity, "AUDIENCE_SEGMENT_NOT_ALLOWED", "event segment is not allowed by activity entry audience")
 		}
 		if len(entry.Audience.RiskLevels) > 0 && !containsString(entry.Audience.RiskLevels, attributeString(event.Attributes, "riskLevel")) {
-			return false, entryRejected(activity, "ENTRY_RISK_LEVEL_NOT_ALLOWED", "event riskLevel is not allowed by activity entry audience")
+			return false, entryRejected(activity, "AUDIENCE_RISK_LEVEL_NOT_ALLOWED", "event riskLevel is not allowed by activity entry audience")
 		}
 	}
 	return true, marketing.ActivityRuleResult{}
@@ -531,6 +527,15 @@ func entryRejected(activity marketing.Activity, code string, reason string) mark
 			Reason:     reason,
 		}},
 	}
+}
+
+func entryError(activity marketing.Activity, code string, reason string) marketing.ActivityRuleResult {
+	result := entryRejected(activity, code, reason)
+	result.Decision = marketing.RuleDecisionError
+	if len(result.StageResults) > 0 {
+		result.StageResults[0].Status = marketing.RuleDecisionError
+	}
+	return result
 }
 
 func containsString(values []string, target string) bool {
@@ -590,6 +595,115 @@ func attributeStrings(attributes map[string]any, keys ...string) []string {
 		}
 	}
 	return values
+}
+
+type matchDecision struct {
+	Decision   marketing.RuleDecision
+	ReasonCode string
+	Reason     string
+}
+
+func matchWindowDecision(activity marketing.Activity, occurredAt time.Time) matchDecision {
+	if activity.Status != marketing.ActivityActive {
+		return matchDecision{
+			Decision:   marketing.RuleDecisionRejected,
+			ReasonCode: "ACTIVITY_NOT_ACTIVE",
+			Reason:     "activity status is not ACTIVE",
+		}
+	}
+	if activity.StartTime.IsZero() || activity.EndTime.IsZero() || !activity.StartTime.Before(activity.EndTime) {
+		return matchDecision{
+			Decision:   marketing.RuleDecisionError,
+			ReasonCode: "INVALID_MATCH_CONFIG",
+			Reason:     "activity time window is invalid",
+		}
+	}
+	if occurredAt.Before(activity.StartTime) {
+		return matchDecision{
+			Decision:   marketing.RuleDecisionRejected,
+			ReasonCode: "ACTIVITY_NOT_STARTED",
+			Reason:     "event occurred before activity startTime",
+		}
+	}
+	if !occurredAt.Before(activity.EndTime) {
+		return matchDecision{
+			Decision:   marketing.RuleDecisionRejected,
+			ReasonCode: "ACTIVITY_ENDED",
+			Reason:     "event occurred at or after activity endTime",
+		}
+	}
+	return matchDecision{Decision: marketing.RuleDecisionPassed}
+}
+
+func sortActivitiesForMatch(activities []marketing.Activity) {
+	slices.SortFunc(activities, func(a, b marketing.Activity) int {
+		if a.Priority != b.Priority {
+			return b.Priority - a.Priority
+		}
+		if !a.CreatedAt.Equal(b.CreatedAt) {
+			if a.CreatedAt.Before(b.CreatedAt) {
+				return -1
+			}
+			return 1
+		}
+		return strings.Compare(a.ID, b.ID)
+	})
+}
+
+func exclusiveSingleSelectGroups(activities []marketing.Activity) map[string]bool {
+	groups := map[string]bool{}
+	for _, activity := range activities {
+		if activity.ExclusiveGroup != "" && !activity.Stackable {
+			groups[activity.ExclusiveGroup] = true
+		}
+	}
+	return groups
+}
+
+func applyExclusiveGroups(candidates []marketing.SimulationActivityResult) ([]marketing.SimulationActivityResult, []marketing.SimulationActivityResult) {
+	singleSelect := map[string]bool{}
+	for _, candidate := range candidates {
+		if candidate.ExclusiveGroup != "" && !candidate.Stackable {
+			singleSelect[candidate.ExclusiveGroup] = true
+		}
+	}
+	groupMatched := map[string]string{}
+	matched := make([]marketing.SimulationActivityResult, 0, len(candidates))
+	var rejected []marketing.SimulationActivityResult
+	for _, candidate := range candidates {
+		group := candidate.ExclusiveGroup
+		if group == "" || !singleSelect[group] {
+			matched = append(matched, candidate)
+			continue
+		}
+		if winnerCode, ok := groupMatched[group]; ok {
+			candidate.Decision = marketing.RuleDecisionRejected
+			candidate.DecisionReasonCode = "EXCLUSIVE_GROUP_LOST"
+			candidate.DecisionReason = "activity lost exclusive group selection to " + winnerCode
+			rejected = append(rejected, candidate)
+			continue
+		}
+		groupMatched[group] = candidate.ActivityCode
+		matched = append(matched, candidate)
+	}
+	return matched, rejected
+}
+
+func normalizeMatchRuleDecision(activityResult *marketing.SimulationActivityResult) {
+	if activityResult.RuleResult.FailedStage != marketing.RuleStageMatch || activityResult.Decision == marketing.RuleDecisionPassed {
+		return
+	}
+	if activityResult.Decision == marketing.RuleDecisionError {
+		activityResult.DecisionReasonCode = "INVALID_MATCH_CONFIG"
+		if activityResult.DecisionReason == "" {
+			activityResult.DecisionReason = "MATCH rule config is invalid"
+		}
+		return
+	}
+	activityResult.DecisionReasonCode = "MATCH_RULE_REJECTED"
+	if activityResult.DecisionReason == "" {
+		activityResult.DecisionReason = "MATCH rule rejected activity"
+	}
 }
 
 func (s *Service) evaluateActivity(ctx context.Context, inbox marketing.EventInbox, activity marketing.Activity) (marketing.Participation, []marketing.GrantOrder, []marketing.OutboxMessage, marketing.ActivityRuleResult, bool, error) {
@@ -1032,7 +1146,7 @@ func quotaUnavailablePreview(preview marketing.QuotaImpactPreview, reason string
 }
 
 func (s *Service) executeRules(event marketing.ActivityEvent, activity marketing.Activity) marketing.ActivityRuleResult {
-	return s.executeRulesWithState(event, activity, activityState(activity, s.now()), nil)
+	return s.executeRulesWithState(event, activity, activityState(activity, event.OccurredAt), nil)
 }
 
 func (s *Service) executeRulesWithState(event marketing.ActivityEvent, activity marketing.Activity, state map[string]any, facts map[string]any) marketing.ActivityRuleResult {
@@ -1077,7 +1191,7 @@ func (s *Service) queryActivityFacts(ctx context.Context, event marketing.Activi
 }
 
 func (s *Service) preparePlugin(ctx context.Context, activity marketing.Activity, event marketing.ActivityEvent) (*marketing.ActivityPluginSnapshot, map[string]any, bool, marketing.ActivityRuleResult, error) {
-	state := activityState(activity, s.now())
+	state := activityState(activity, event.OccurredAt)
 	pluginCode := strings.TrimSpace(activity.PluginCode)
 	if pluginCode == "" {
 		return nil, state, false, marketing.ActivityRuleResult{}, nil

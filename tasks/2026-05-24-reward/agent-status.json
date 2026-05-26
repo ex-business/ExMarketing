@@ -1,30 +1,54 @@
 {
   "requirementId": "2026-05-24-reward",
-  "updatedAt": "2026-05-24T11:39:29.029009Z",
+  "updatedAt": "2026-05-26T10:13:06.954395Z",
   "agents": {
     "analysis": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-reward/analysis.md"
+      "status": "DONE",
+      "startedAt": "2026-05-26T10:02:41.020038Z",
+      "finishedAt": "2026-05-26T10:05:11.648863Z",
+      "output": "tasks/2026-05-24-reward/analysis.md",
+      "log": "tasks/2026-05-24-reward/runs/20260526T100241Z-analysis.log",
+      "nextStatus": "REVIEW_READY"
     },
     "commit": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-reward/commit.md"
+      "status": "DONE",
+      "startedAt": "2026-05-26T10:11:58.956802Z",
+      "finishedAt": "2026-05-26T10:13:06.954392Z",
+      "output": "tasks/2026-05-24-reward/commit.md",
+      "log": "tasks/2026-05-24-reward/runs/20260526T101158Z-commit.log",
+      "nextStatus": "COMMITTED"
     },
     "dev": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-reward/implementation.md"
+      "status": "DONE",
+      "startedAt": "2026-05-26T10:06:40.076574Z",
+      "finishedAt": "2026-05-26T10:11:01.54878Z",
+      "output": "tasks/2026-05-24-reward/implementation.md",
+      "log": "tasks/2026-05-24-reward/runs/20260526T100640Z-dev.log",
+      "nextStatus": "REVIEW_PASS"
     },
     "review": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-reward/review.md"
+      "status": "DONE",
+      "startedAt": "2026-05-26T10:05:12.002313Z",
+      "finishedAt": "2026-05-26T10:06:40.073094Z",
+      "output": "tasks/2026-05-24-reward/review.md",
+      "log": "tasks/2026-05-24-reward/runs/20260526T100512Z-review.log",
+      "nextStatus": "REVIEW_PASS"
     },
     "test": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-reward/test.md"
+      "status": "DONE",
+      "startedAt": "2026-05-26T10:11:01.600534Z",
+      "finishedAt": "2026-05-26T10:11:58.927844Z",
+      "output": "tasks/2026-05-24-reward/test.md",
+      "log": "tasks/2026-05-24-reward/runs/20260526T101101Z-test.log",
+      "nextStatus": "COMMIT_READY"
     },
     "test-plan": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-reward/test-plan.md"
+      "status": "DONE",
+      "startedAt": "2026-05-26T10:06:40.102044Z",
+      "finishedAt": "2026-05-26T10:07:55.671089Z",
+      "output": "tasks/2026-05-24-reward/test-plan.md",
+      "log": "tasks/2026-05-24-reward/runs/20260526T100640Z-test-plan.log",
+      "nextStatus": "REVIEW_PASS"
     }
   }
 }

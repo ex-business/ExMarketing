@@ -21,6 +21,7 @@ type Repository interface {
 	CreateGrantOrder(ctx context.Context, order GrantOrder) (GrantOrder, error)
 	UpdateGrantOrderByCommandID(ctx context.Context, tenantID string, commandID string, status GrantStatus, message string) error
 	ApplyRewardCallback(ctx context.Context, callback RewardCallback) (RewardCallbackResult, error)
+	ReleaseExpiredQuotaReservations(ctx context.Context, cmd QuotaTimeoutReleaseCommand) (QuotaTimeoutReleaseResult, error)
 	ListRewardReconciliation(ctx context.Context, query RewardReconciliationQuery) ([]RewardReconciliationItem, error)
 	CreateOutbox(ctx context.Context, message OutboxMessage) (OutboxMessage, error)
 	CreateParticipationGrantOutboxesWithQuota(ctx context.Context, cmd AtomicGrantCommand) (AtomicGrantResult, error)

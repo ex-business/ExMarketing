@@ -1,30 +1,54 @@
 {
   "requirementId": "2026-05-24-fact-provider",
-  "updatedAt": "2026-05-24T11:39:29.038456Z",
+  "updatedAt": "2026-05-26T15:14:35.406989Z",
   "agents": {
     "analysis": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-fact-provider/analysis.md"
+      "status": "DONE",
+      "startedAt": "2026-05-26T15:03:14.123896Z",
+      "finishedAt": "2026-05-26T15:07:02.469618Z",
+      "output": "tasks/2026-05-24-fact-provider/analysis.md",
+      "log": "tasks/2026-05-24-fact-provider/runs/20260526T150314Z-analysis.log",
+      "nextStatus": "REVIEW_READY"
     },
     "commit": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-fact-provider/commit.md"
+      "status": "DONE",
+      "startedAt": "2026-05-26T15:13:43.357435Z",
+      "finishedAt": "2026-05-26T15:14:35.406985Z",
+      "output": "tasks/2026-05-24-fact-provider/commit.md",
+      "log": "tasks/2026-05-24-fact-provider/runs/20260526T151343Z-commit.log",
+      "nextStatus": "COMMITTED"
     },
     "dev": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-fact-provider/implementation.md"
+      "status": "DONE",
+      "startedAt": "2026-05-26T15:07:52.958547Z",
+      "finishedAt": "2026-05-26T15:12:44.915056Z",
+      "output": "tasks/2026-05-24-fact-provider/implementation.md",
+      "log": "tasks/2026-05-24-fact-provider/runs/20260526T150752Z-dev.log",
+      "nextStatus": "REVIEW_PASS"
     },
     "review": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-fact-provider/review.md"
+      "status": "DONE",
+      "startedAt": "2026-05-26T15:07:02.499354Z",
+      "finishedAt": "2026-05-26T15:07:52.955415Z",
+      "output": "tasks/2026-05-24-fact-provider/review.md",
+      "log": "tasks/2026-05-24-fact-provider/runs/20260526T150702Z-review.log",
+      "nextStatus": "REVIEW_PASS"
     },
     "test": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-fact-provider/test.md"
+      "status": "DONE",
+      "startedAt": "2026-05-26T15:12:44.95253Z",
+      "finishedAt": "2026-05-26T15:13:43.330713Z",
+      "output": "tasks/2026-05-24-fact-provider/test.md",
+      "log": "tasks/2026-05-24-fact-provider/runs/20260526T151244Z-test.log",
+      "nextStatus": "COMMIT_READY"
     },
     "test-plan": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-fact-provider/test-plan.md"
+      "status": "DONE",
+      "startedAt": "2026-05-26T15:07:52.992003Z",
+      "finishedAt": "2026-05-26T15:09:58.831159Z",
+      "output": "tasks/2026-05-24-fact-provider/test-plan.md",
+      "log": "tasks/2026-05-24-fact-provider/runs/20260526T150752Z-test-plan.log",
+      "nextStatus": "REVIEW_PASS"
     }
   }
 }

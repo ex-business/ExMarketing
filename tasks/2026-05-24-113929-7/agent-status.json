@@ -1,10 +1,15 @@
 {
   "requirementId": "2026-05-24-113929-7",
-  "updatedAt": "2026-05-24T11:39:29.041543Z",
+  "updatedAt": "2026-05-26T15:55:10.151956Z",
   "agents": {
     "analysis": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-113929-7/analysis.md"
+      "status": "INTERRUPTED",
+      "startedAt": "2026-05-26T15:54:13.845116Z",
+      "finishedAt": "2026-05-26T15:55:09.332743Z",
+      "output": "tasks/2026-05-24-113929-7/analysis.md",
+      "log": "tasks/2026-05-24-113929-7/runs/20260526T155413Z-analysis.log",
+      "exitCode": -1,
+      "error": "agent stopped by user: pid 44686"
     },
     "commit": {
       "status": "WAITING",
@@ -15,8 +20,12 @@
       "output": "tasks/2026-05-24-113929-7/implementation.md"
     },
     "review": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-113929-7/review.md"
+      "status": "DONE",
+      "startedAt": "2026-05-26T15:53:00.344692Z",
+      "finishedAt": "2026-05-26T15:54:13.8139Z",
+      "output": "tasks/2026-05-24-113929-7/review.md",
+      "log": "tasks/2026-05-24-113929-7/runs/20260526T155300Z-review.log",
+      "nextStatus": "REVIEW_BLOCK"
     },
     "test": {
       "status": "WAITING",

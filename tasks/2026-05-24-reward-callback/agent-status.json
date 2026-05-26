@@ -1,30 +1,54 @@
 {
   "requirementId": "2026-05-24-reward-callback",
-  "updatedAt": "2026-05-24T11:39:29.03781Z",
+  "updatedAt": "2026-05-26T14:59:12.601894Z",
   "agents": {
     "analysis": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-reward-callback/analysis.md"
+      "status": "DONE",
+      "startedAt": "2026-05-26T14:46:15.59463Z",
+      "finishedAt": "2026-05-26T14:49:03.053248Z",
+      "output": "tasks/2026-05-24-reward-callback/analysis.md",
+      "log": "tasks/2026-05-24-reward-callback/runs/20260526T144615Z-analysis.log",
+      "nextStatus": "REVIEW_READY"
     },
     "commit": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-reward-callback/commit.md"
+      "status": "DONE",
+      "startedAt": "2026-05-26T14:57:43.954883Z",
+      "finishedAt": "2026-05-26T14:59:12.601891Z",
+      "output": "tasks/2026-05-24-reward-callback/commit.md",
+      "log": "tasks/2026-05-24-reward-callback/runs/20260526T145743Z-commit.log",
+      "nextStatus": "COMMITTED"
     },
     "dev": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-reward-callback/implementation.md"
+      "status": "DONE",
+      "startedAt": "2026-05-26T14:49:57.586201Z",
+      "finishedAt": "2026-05-26T14:56:32.786285Z",
+      "output": "tasks/2026-05-24-reward-callback/implementation.md",
+      "log": "tasks/2026-05-24-reward-callback/runs/20260526T144957Z-dev.log",
+      "nextStatus": "REVIEW_PASS"
     },
     "review": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-reward-callback/review.md"
+      "status": "DONE",
+      "startedAt": "2026-05-26T14:49:03.411465Z",
+      "finishedAt": "2026-05-26T14:49:57.582986Z",
+      "output": "tasks/2026-05-24-reward-callback/review.md",
+      "log": "tasks/2026-05-24-reward-callback/runs/20260526T144903Z-review.log",
+      "nextStatus": "REVIEW_PASS"
     },
     "test": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-reward-callback/test.md"
+      "status": "DONE",
+      "startedAt": "2026-05-26T14:56:32.84346Z",
+      "finishedAt": "2026-05-26T14:57:43.929798Z",
+      "output": "tasks/2026-05-24-reward-callback/test.md",
+      "log": "tasks/2026-05-24-reward-callback/runs/20260526T145632Z-test.log",
+      "nextStatus": "COMMIT_READY"
     },
     "test-plan": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-reward-callback/test-plan.md"
+      "status": "DONE",
+      "startedAt": "2026-05-26T14:49:57.610549Z",
+      "finishedAt": "2026-05-26T14:51:51.408804Z",
+      "output": "tasks/2026-05-24-reward-callback/test-plan.md",
+      "log": "tasks/2026-05-24-reward-callback/runs/20260526T144957Z-test-plan.log",
+      "nextStatus": "REVIEW_PASS"
     }
   }
 }

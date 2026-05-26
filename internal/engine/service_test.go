@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -127,6 +128,80 @@ func TestSimulateEventMatchRuleFailureUsesMatchReason(t *testing.T) {
 	}
 }
 
+func TestSimulateEventRewardConditionFailureDoesNotPreviewGrantOrOutbox(t *testing.T) {
+	ctx := context.Background()
+	base := time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
+	repo := marketing.NewMemoryRepository()
+	activity := matchTestActivity("reward_fail", "REWARD_FAIL", marketing.ActivityActive, base, 1)
+	activity.Rules = []marketing.Rule{rewardAmountRule("REWARD_AMOUNT", "100.00")}
+	activity.Rewards = []marketing.Reward{fixedBonusReward("REWARD_A", `{"amount":"10.00","currency":"USD","targetRef":"https://wallet.example.com/reward"}`)}
+	if _, err := repo.CreateActivity(ctx, activity); err != nil {
+		t.Fatalf("seed activity: %v", err)
+	}
+	event := matchTestEvent(base)
+	event.Attributes["amount"] = "99.99"
+
+	result, err := NewService(repo).SimulateEvent(ctx, event)
+	if err != nil {
+		t.Fatalf("simulate: %v", err)
+	}
+	if len(result.UnmatchedActivities) != 1 {
+		t.Fatalf("expected one unmatched activity, got %+v", result)
+	}
+	got := result.UnmatchedActivities[0]
+	if got.ParticipationPreview == nil || got.ParticipationPreview.Status != marketing.ParticipationRejected || got.RuleResult.FailedStage != marketing.RuleStageReward {
+		t.Fatalf("expected REWARD rejected participation, got %+v", got)
+	}
+	if got.WouldCreateGrantOrders || len(got.GrantOrderPreviews) != 0 || len(got.OutboxCommandPreviews) != 0 {
+		t.Fatalf("REWARD failure must not preview grants/outbox, got %+v", got)
+	}
+	ruleResult := got.RuleResult.StageResults[2].RuleResults[0]
+	if ruleResult.Field != "attributes.amount" || ruleResult.Actual != "99.99" {
+		t.Fatalf("expected REWARD amount explain, got %+v", ruleResult)
+	}
+}
+
+func TestProcessEventRewardConditionAllowsNonAmountRewardWithZeroAmount(t *testing.T) {
+	ctx := context.Background()
+	base := time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
+	repo := marketing.NewMemoryRepository()
+	activity := matchTestActivity("reward_coupon", "REWARD_COUPON", marketing.ActivityActive, base, 1)
+	activity.Rules = []marketing.Rule{rewardAmountRule("REWARD_AMOUNT", "100.00")}
+	activity.Rewards = []marketing.Reward{{
+		ID:            "reward_coupon",
+		Code:          "COUPON_A",
+		Type:          marketing.RewardCoupon,
+		CalculateType: marketing.CalculateFixed,
+		Config:        []byte(`{"couponTemplateId":"WELCOME_10","quantity":"1","targetRef":"https://coupon.example.com/grant"}`),
+		GrantMode:     marketing.GrantAuto,
+		GrantChannel:  marketing.GrantHTTP,
+		Enabled:       true,
+		Version:       1,
+	}}
+	if _, err := repo.CreateActivity(ctx, activity); err != nil {
+		t.Fatalf("seed activity: %v", err)
+	}
+	event := matchTestEvent(base)
+	event.Attributes["amount"] = "299.00"
+
+	result, err := NewService(repo).ProcessEvent(ctx, event)
+	if err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	if len(result.Participations) != 1 || result.Participations[0].Status != marketing.ParticipationRewardable {
+		t.Fatalf("expected rewardable participation, got %+v", result.Participations)
+	}
+	if len(result.GrantOrders) != 1 || len(result.OutboxMessages) != 1 {
+		t.Fatalf("expected coupon grant and outbox, got grants=%+v outbox=%+v", result.GrantOrders, result.OutboxMessages)
+	}
+	if result.GrantOrders[0].RewardType != marketing.RewardCoupon || result.GrantOrders[0].RewardAmount != "0.0000" {
+		t.Fatalf("expected non-amount coupon grant with zero accounting amount, got %+v", result.GrantOrders[0])
+	}
+	if result.RuleResults[0].FailedStage != "" || !result.RuleResults[0].CanReward {
+		t.Fatalf("expected REWARD rule pass before reward calculation, got %+v", result.RuleResults[0])
+	}
+}
+
 func TestSimulateEventExclusiveGroupSelection(t *testing.T) {
 	ctx := context.Background()
 	base := time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
@@ -171,6 +246,114 @@ func TestSimulateEventExclusiveGroupSelection(t *testing.T) {
 	reasons := unmatchedReasons(result.UnmatchedActivities)
 	if !reasons["EXCLUSIVE_GROUP_LOST"] {
 		t.Fatalf("expected exclusive rejection, got %+v", result.UnmatchedActivities)
+	}
+}
+
+func TestProcessEventExclusiveGroupLoserCreatesRejectedParticipation(t *testing.T) {
+	ctx := context.Background()
+	base := time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
+	repo := marketing.NewMemoryRepository()
+	winner := matchTestActivity("winner", "WINNER", marketing.ActivityActive, base, 100)
+	loser := matchTestActivity("loser", "LOSER", marketing.ActivityActive, base, 90)
+	winner.ExclusiveGroup = "deposit_bonus"
+	loser.ExclusiveGroup = "deposit_bonus"
+	winner.Stackable = false
+	loser.Stackable = false
+	for _, activity := range []marketing.Activity{winner, loser} {
+		if _, err := repo.CreateActivity(ctx, activity); err != nil {
+			t.Fatalf("seed activity %s: %v", activity.Code, err)
+		}
+	}
+
+	result, err := NewService(repo).ProcessEvent(ctx, matchTestEvent(base))
+	if err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	if len(result.Participations) != 2 {
+		t.Fatalf("expected winner and exclusive loser participations, got %+v", result.Participations)
+	}
+	var loserFound bool
+	for _, participation := range result.Participations {
+		if participation.ActivityID == "loser" {
+			loserFound = true
+			if participation.Status != marketing.ParticipationRejected || participation.RejectReason == "" {
+				t.Fatalf("expected rejected exclusive loser participation, got %+v", participation)
+			}
+		}
+	}
+	if !loserFound {
+		t.Fatalf("exclusive loser participation missing: %+v", result.Participations)
+	}
+}
+
+func TestProcessEventDailyLimitUsesActivityTimezone(t *testing.T) {
+	ctx := context.Background()
+	base := time.Date(2026, 5, 24, 22, 30, 0, 0, time.UTC)
+	repo := marketing.NewMemoryRepository()
+	activity := matchTestActivity("daily_limit", "DAILY_LIMIT", marketing.ActivityActive, base, 1)
+	activity.StartTime = base.Add(-time.Hour)
+	activity.EndTime = base.Add(3 * time.Hour)
+	activity.Timezone = "Asia/Shanghai"
+	activity.Rewards = []marketing.Reward{fixedBonusReward("REWARD_A", `{"amount":"1.00","currency":"USD","targetRef":"https://wallet.example.com/reward"}`)}
+	if _, err := repo.CreateActivity(ctx, activity); err != nil {
+		t.Fatalf("seed activity: %v", err)
+	}
+	if _, err := repo.CreateQuota(ctx, marketing.Quota{
+		ID:          "quota_daily",
+		ActivityID:  activity.ID,
+		Type:        marketing.QuotaDailyLimit,
+		Scope:       marketing.QuotaScopeUser,
+		ScopeKey:    "u1:2026-05-25",
+		TotalValue:  "1",
+		UsedValue:   "0",
+		FrozenValue: "0",
+		Version:     1,
+		CreatedAt:   base,
+		UpdatedAt:   base,
+	}); err != nil {
+		t.Fatalf("seed daily quota: %v", err)
+	}
+
+	service := NewService(repo)
+	event := matchTestEvent(base)
+	if _, err := service.ProcessEvent(ctx, event); err != nil {
+		t.Fatalf("first process should pass: %v", err)
+	}
+	event.EventID = "evt_match_2"
+	event.Biz.BizID = "b2"
+	_, err := service.ProcessEvent(ctx, event)
+	if err == nil {
+		t.Fatal("expected daily limit quota error")
+	}
+	var quotaErr marketing.QuotaExceededError
+	if !errors.As(err, &quotaErr) || quotaErr.Type != marketing.QuotaDailyLimit || quotaErr.ScopeKey != "u1:2026-05-25" {
+		t.Fatalf("expected DAILY_LIMIT for activity local date, got %T %[1]v", err)
+	}
+}
+
+func rewardAmountRule(code string, threshold string) marketing.Rule {
+	return marketing.Rule{
+		ID:      "rule_" + code,
+		Code:    code,
+		Phase:   marketing.RulePhaseReward,
+		Type:    marketing.RuleTypeCondition,
+		Config:  []byte(`{"logic":"AND","conditions":[{"field":"attributes.amount","op":">=","value":"` + threshold + `"}]}`),
+		Enabled: true,
+		Version: 1,
+	}
+}
+
+func fixedBonusReward(code string, config string) marketing.Reward {
+	return marketing.Reward{
+		ID:            "reward_" + code,
+		Code:          code,
+		Type:          marketing.RewardBonus,
+		CalculateType: marketing.CalculateFixed,
+		Config:        []byte(config),
+		GrantMode:     marketing.GrantAuto,
+		GrantChannel:  marketing.GrantHTTP,
+		Enabled:       true,
+		Version:       1,
 	}
 }
 

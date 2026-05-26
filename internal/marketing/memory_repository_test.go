@@ -64,6 +64,75 @@ func TestMemoryAtomicGrantRollsBackWhenSecondRewardStockExceeded(t *testing.T) {
 	}
 }
 
+func TestFactProviderValidateRejectsInvalidMappingContract(t *testing.T) {
+	base := FactProvider{
+		TenantID:        "site_001",
+		FactCode:        "USER_PROFILE",
+		ProviderType:    "HTTP",
+		Endpoint:        "https://example.com/profile",
+		Method:          "POST",
+		Mapping:         map[string]FactMapping{"vipLevel": {Source: "$.data.vipLevel", Type: "string"}},
+		CacheTTLSeconds: 0,
+		Enabled:         true,
+		TimeoutMS:       5000,
+	}
+	for name, mutate := range map[string]func(*FactProvider){
+		"facts prefix": func(p *FactProvider) {
+			p.Mapping = map[string]FactMapping{"facts.USER_PROFILE.vipLevel": {Source: "$.data.vipLevel", Type: "string"}}
+		},
+		"trailing dot": func(p *FactProvider) {
+			p.Mapping = map[string]FactMapping{"risk.": {Source: "$.risk", Type: "object"}}
+		},
+		"wildcard source": func(p *FactProvider) {
+			p.Mapping = map[string]FactMapping{"vipLevel": {Source: "$.data.*", Type: "string"}}
+		},
+		"filter source": func(p *FactProvider) {
+			p.Mapping = map[string]FactMapping{"vipLevel": {Source: "$.data[?(@.vip)]", Type: "string"}}
+		},
+		"invalid type": func(p *FactProvider) {
+			p.Mapping = map[string]FactMapping{"vipLevel": {Source: "$.data.vipLevel", Type: "decimal"}}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			provider := base
+			mutate(&provider)
+			if err := provider.Validate(); err == nil {
+				t.Fatal("expected invalid provider")
+			}
+		})
+	}
+	if err := base.Validate(); err != nil {
+		t.Fatalf("valid provider rejected: %v", err)
+	}
+}
+
+func TestExtractFactReferencesValidatedRejectsInvalidFactPaths(t *testing.T) {
+	for _, field := range []string{"facts", "facts.USER_PROFILE", "facts..vipLevel", "facts.USER_PROFILE.", "facts.user_profile.vipLevel"} {
+		t.Run(field, func(t *testing.T) {
+			_, err := ExtractFactReferencesValidated([]Rule{{
+				Type:   RuleTypeCondition,
+				Config: []byte(`{"logic":"AND","conditions":[{"field":"` + field + `","op":"=","value":"VIP3"}]}`),
+			}})
+			if err == nil || !strings.Contains(err.Error(), "FACT_FIELD_INVALID") {
+				t.Fatalf("expected FACT_FIELD_INVALID, got %v", err)
+			}
+		})
+	}
+}
+
+func TestExtractFactReferencesValidatedKeepsNestedFieldExact(t *testing.T) {
+	refs, err := ExtractFactReferencesValidated([]Rule{{
+		Type:   RuleTypeCondition,
+		Config: []byte(`{"logic":"AND","conditions":[{"field":"facts.USER_PROFILE.risk.score","op":">=","value":80}]}`),
+	}})
+	if err != nil {
+		t.Fatalf("extract refs: %v", err)
+	}
+	if _, ok := refs["USER_PROFILE"]["risk.score"]; !ok {
+		t.Fatalf("expected exact nested path, got %#v", refs)
+	}
+}
+
 func TestMemoryAtomicGrantDoesNotDoubleReserveOnDuplicateInbox(t *testing.T) {
 	repo := NewMemoryRepository()
 	now := time.Now().UTC()
@@ -100,6 +169,274 @@ func TestMemoryAtomicGrantDoesNotDoubleReserveOnDuplicateInbox(t *testing.T) {
 		if quota.Type == QuotaStock && quota.FrozenValue != "1.0000" {
 			t.Fatalf("expected stock frozen 1, got %s", quota.FrozenValue)
 		}
+	}
+}
+
+func TestMemoryCallbackFinalizesConfiguredLimitReservations(t *testing.T) {
+	repo := NewMemoryRepository()
+	now := time.Now().UTC()
+	activityID := "act_limit_callback"
+	repo.quotas = []Quota{
+		{ID: "quota_budget", ActivityID: activityID, Type: QuotaBudget, Scope: QuotaScopeActivity, ScopeKey: "TOTAL", TotalValue: "100", UsedValue: "0", FrozenValue: "0", Version: 1, CreatedAt: now, UpdatedAt: now},
+		{ID: "quota_user", ActivityID: activityID, Type: QuotaUserLimit, Scope: QuotaScopeUser, ScopeKey: "user_1", TotalValue: "1", UsedValue: "0", FrozenValue: "0", Version: 1, CreatedAt: now, UpdatedAt: now},
+		{ID: "quota_daily", ActivityID: activityID, Type: QuotaDailyLimit, Scope: QuotaScopeUser, ScopeKey: "user_1:2026-05-24", TotalValue: "1", UsedValue: "0", FrozenValue: "0", Version: 1, CreatedAt: now, UpdatedAt: now},
+	}
+	_, err := repo.CreateParticipationGrantOutboxesWithQuota(context.Background(), AtomicGrantCommand{
+		Participation:      testAtomicParticipation("part_limit_callback", activityID, "part_idem_limit_callback", now),
+		BudgetAmount:       "10",
+		ReserveUserLimit:   true,
+		UserScopeKey:       "user_1",
+		ReserveDailyLimit:  true,
+		DailyLimitScopeKey: "user_1:2026-05-24",
+		GrantOrders: []GrantOrder{func() GrantOrder {
+			order := testAtomicGrant("grant_limit_callback", activityID, "part_limit_callback", "grant_idem_limit_callback", now)
+			order.RewardAmount = "10"
+			return order
+		}()},
+		OutboxMessages: []OutboxMessage{testAtomicOutbox("outbox_limit_callback", now)},
+	})
+	if err != nil {
+		t.Fatalf("atomic grant: %v", err)
+	}
+	if len(repo.quotaReservations) != 3 {
+		t.Fatalf("expected budget, user and daily reservations, got %d", len(repo.quotaReservations))
+	}
+	if err := repo.UpdateGrantOrderByCommandID(context.Background(), "site_001", "cmd_grant_limit_callback", GrantSending, "sending"); err != nil {
+		t.Fatalf("mark sending: %v", err)
+	}
+	result, err := repo.ApplyRewardCallback(context.Background(), RewardCallback{
+		TenantID:        "site_001",
+		CommandID:       "cmd_grant_limit_callback",
+		Status:          GrantSuccess,
+		ExternalGrantID: "wallet_limit_callback",
+		FinishedAt:      now.Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("callback: %v", err)
+	}
+	if result.ParticipationStatus != ParticipationGranted {
+		t.Fatalf("expected participation granted, got %s", result.ParticipationStatus)
+	}
+	for _, reservation := range repo.quotaReservations {
+		if reservation.Status != QuotaReservationConfirmed {
+			t.Fatalf("expected reservation %s confirmed, got %s", reservation.Type, reservation.Status)
+		}
+	}
+	assertMemoryQuotaValues(t, repo, activityID, QuotaBudget, QuotaScopeActivity, "TOTAL", "10.0000", "0.0000")
+	assertMemoryQuotaValues(t, repo, activityID, QuotaUserLimit, QuotaScopeUser, "user_1", "1.0000", "0.0000")
+	assertMemoryQuotaValues(t, repo, activityID, QuotaDailyLimit, QuotaScopeUser, "user_1:2026-05-24", "1.0000", "0.0000")
+}
+
+func TestMemoryCallbackTreatsMissingReservationsAsUnlimitedWhenNoQuotaWasConfigured(t *testing.T) {
+	repo := NewMemoryRepository()
+	now := time.Now().UTC()
+	activityID := "act_unlimited_callback"
+	repo.participations = append(repo.participations, testAtomicParticipation("part_unlimited_callback", activityID, "part_idem_unlimited_callback", now))
+	repo.grantOrders = append(repo.grantOrders, func() GrantOrder {
+		order := testAtomicGrant("grant_unlimited_callback", activityID, "part_unlimited_callback", "grant_idem_unlimited_callback", now)
+		order.GrantStatus = GrantSending
+		return order
+	}())
+
+	result, err := repo.ApplyRewardCallback(context.Background(), RewardCallback{
+		TenantID:        "site_001",
+		CommandID:       "cmd_grant_unlimited_callback",
+		Status:          GrantSuccess,
+		ExternalGrantID: "wallet_unlimited",
+		FinishedAt:      now.Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("callback: %v", err)
+	}
+	if result.GrantStatus != GrantSuccess || result.ParticipationStatus != ParticipationGranted || len(result.Reservations) != 0 {
+		t.Fatalf("expected unlimited callback to succeed without reservations, got %+v", result)
+	}
+}
+
+func TestMemoryCloseOutboxDLQOnlyClosesOutbox(t *testing.T) {
+	repo := NewMemoryRepository()
+	now := time.Now().UTC()
+	activityID := "act_dlq_close"
+	repo.quotas = []Quota{
+		{ID: "quota_dlq_close_budget", ActivityID: activityID, Type: QuotaBudget, Scope: QuotaScopeActivity, ScopeKey: "TOTAL", TotalValue: "100", UsedValue: "0", FrozenValue: "0", Version: 1, CreatedAt: now, UpdatedAt: now},
+	}
+	_, err := repo.CreateParticipationGrantOutboxesWithQuota(context.Background(), AtomicGrantCommand{
+		Participation: testAtomicParticipation("part_dlq_close", activityID, "part_idem_dlq_close", now),
+		BudgetAmount:  "10",
+		GrantOrders: []GrantOrder{func() GrantOrder {
+			order := testAtomicGrant("grant_dlq_close", activityID, "part_dlq_close", "grant_idem_dlq_close", now)
+			order.RewardAmount = "10"
+			return order
+		}()},
+		OutboxMessages: []OutboxMessage{func() OutboxMessage {
+			message := testAtomicOutbox("outbox_dlq_close", now)
+			message.Payload = []byte(`{"commandId":"cmd_grant_dlq_close"}`)
+			return message
+		}()},
+	})
+	if err != nil {
+		t.Fatalf("atomic grant: %v", err)
+	}
+	if err := repo.UpdateGrantOrderByCommandID(context.Background(), "site_001", "cmd_grant_dlq_close", GrantSending, "sending"); err != nil {
+		t.Fatalf("mark sending: %v", err)
+	}
+	if err := repo.UpdateGrantOrderByCommandID(context.Background(), "site_001", "cmd_grant_dlq_close", GrantRetry, "target returned status 400"); err != nil {
+		t.Fatalf("mark retry: %v", err)
+	}
+	if err := repo.MarkOutboxDLQ(context.Background(), "outbox_dlq_close", 5, "target returned status 400"); err != nil {
+		t.Fatalf("mark outbox dlq: %v", err)
+	}
+
+	closed, err := repo.CloseOutboxDLQ(context.Background(), "site_001", "outbox_dlq_close", "ops", "business rejected", now.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("close dlq: %v", err)
+	}
+	if closed.SendStatus != OutboxDLQClosed {
+		t.Fatalf("expected DLQ_CLOSED, got %s", closed.SendStatus)
+	}
+	order := repo.grantOrderByCommandIDLocked("site_001", "cmd_grant_dlq_close")
+	if order == nil || order.GrantStatus != GrantRetry {
+		t.Fatalf("expected grant to remain RETRY, got %+v", order)
+	}
+	if got := repo.participationStatusLocked("part_dlq_close"); got != ParticipationRewardable {
+		t.Fatalf("expected participation to remain REWARDABLE, got %s", got)
+	}
+	for _, reservation := range repo.quotaReservations {
+		if reservation.Status != QuotaReservationFrozen {
+			t.Fatalf("expected reservation to remain frozen, got %+v", reservation)
+		}
+	}
+	assertMemoryQuotaValues(t, repo, activityID, QuotaBudget, QuotaScopeActivity, "TOTAL", "0", "10.0000")
+}
+
+func TestMemoryCallbackConfirmsParticipationLimitOnceWhenAnyGrantSucceeds(t *testing.T) {
+	repo := NewMemoryRepository()
+	now := time.Now().UTC()
+	activityID := "act_multi_grant_limit"
+	repo.quotas = []Quota{
+		{ID: "quota_budget", ActivityID: activityID, Type: QuotaBudget, Scope: QuotaScopeActivity, ScopeKey: "TOTAL", TotalValue: "100", UsedValue: "0", FrozenValue: "0", Version: 1, CreatedAt: now, UpdatedAt: now},
+		{ID: "quota_user", ActivityID: activityID, Type: QuotaUserLimit, Scope: QuotaScopeUser, ScopeKey: "user_1", TotalValue: "1", UsedValue: "0", FrozenValue: "0", Version: 1, CreatedAt: now, UpdatedAt: now},
+	}
+	_, err := repo.CreateParticipationGrantOutboxesWithQuota(context.Background(), AtomicGrantCommand{
+		Participation:    testAtomicParticipation("part_multi_grant_limit", activityID, "part_idem_multi_grant_limit", now),
+		BudgetAmount:     "20",
+		ReserveUserLimit: true,
+		UserScopeKey:     "user_1",
+		GrantOrders: []GrantOrder{
+			func() GrantOrder {
+				order := testAtomicGrant("grant_multi_success", activityID, "part_multi_grant_limit", "grant_idem_multi_success", now)
+				order.RewardAmount = "10"
+				return order
+			}(),
+			func() GrantOrder {
+				order := testAtomicGrant("grant_multi_failed", activityID, "part_multi_grant_limit", "grant_idem_multi_failed", now)
+				order.RewardAmount = "10"
+				return order
+			}(),
+		},
+		OutboxMessages: []OutboxMessage{testAtomicOutbox("outbox_multi_success", now), testAtomicOutbox("outbox_multi_failed", now)},
+	})
+	if err != nil {
+		t.Fatalf("atomic grant: %v", err)
+	}
+	for _, commandID := range []string{"cmd_grant_multi_success", "cmd_grant_multi_failed"} {
+		if err := repo.UpdateGrantOrderByCommandID(context.Background(), "site_001", commandID, GrantSending, "sending"); err != nil {
+			t.Fatalf("mark sending %s: %v", commandID, err)
+		}
+	}
+	if _, err := repo.ApplyRewardCallback(context.Background(), RewardCallback{
+		TenantID:        "site_001",
+		CommandID:       "cmd_grant_multi_success",
+		Status:          GrantSuccess,
+		ExternalGrantID: "wallet_multi_success",
+		FinishedAt:      now.Add(time.Minute),
+	}); err != nil {
+		t.Fatalf("success callback: %v", err)
+	}
+	result, err := repo.ApplyRewardCallback(context.Background(), RewardCallback{
+		TenantID:   "site_001",
+		CommandID:  "cmd_grant_multi_failed",
+		Status:     GrantFailed,
+		Message:    "provider rejected",
+		FinishedAt: now.Add(2 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("failed callback: %v", err)
+	}
+	if result.ParticipationStatus != ParticipationGranted {
+		t.Fatalf("expected participation granted because one grant succeeded, got %s", result.ParticipationStatus)
+	}
+	assertMemoryQuotaValues(t, repo, activityID, QuotaUserLimit, QuotaScopeUser, "user_1", "1.0000", "0.0000")
+}
+
+func TestMemoryTimeoutReleaseDryRunReleaseAndIdempotency(t *testing.T) {
+	repo := NewMemoryRepository()
+	old := time.Now().UTC().Add(-3 * time.Hour)
+	activityID := "act_timeout_release"
+	repo.quotas = []Quota{
+		{ID: "quota_budget", ActivityID: activityID, Type: QuotaBudget, Scope: QuotaScopeActivity, ScopeKey: "TOTAL", TotalValue: "100", UsedValue: "0", FrozenValue: "0", Version: 1, CreatedAt: old, UpdatedAt: old},
+	}
+	_, err := repo.CreateParticipationGrantOutboxesWithQuota(context.Background(), AtomicGrantCommand{
+		Participation: testAtomicParticipation("part_timeout_release", activityID, "part_idem_timeout_release", old),
+		BudgetAmount:  "10",
+		GrantOrders: []GrantOrder{func() GrantOrder {
+			order := testAtomicGrant("grant_timeout_release", activityID, "part_timeout_release", "grant_idem_timeout_release", old)
+			order.RewardAmount = "10"
+			return order
+		}()},
+		OutboxMessages: []OutboxMessage{testAtomicOutbox("outbox_timeout_release", old)},
+	})
+	if err != nil {
+		t.Fatalf("atomic grant: %v", err)
+	}
+	if err := repo.UpdateGrantOrderByCommandID(context.Background(), "site_001", "cmd_grant_timeout_release", GrantSending, "sending"); err != nil {
+		t.Fatalf("mark sending: %v", err)
+	}
+	repo.grantOrders[0].UpdatedAt = old
+
+	dryRun, err := repo.ReleaseExpiredQuotaReservations(context.Background(), QuotaTimeoutReleaseCommand{
+		TenantID:  "site_001",
+		OlderThan: time.Now().UTC().Add(-2 * time.Hour),
+		Limit:     10,
+		DryRun:    true,
+		Operator:  "ops",
+		Reason:    "provider timeout",
+	})
+	if err != nil {
+		t.Fatalf("dry run: %v", err)
+	}
+	if len(dryRun.Items) != 1 || dryRun.Items[0].Result != "DRY_RUN" {
+		t.Fatalf("expected one dry-run candidate, got %+v", dryRun)
+	}
+	assertMemoryQuotaValues(t, repo, activityID, QuotaBudget, QuotaScopeActivity, "TOTAL", "0", "10.0000")
+
+	released, err := repo.ReleaseExpiredQuotaReservations(context.Background(), QuotaTimeoutReleaseCommand{
+		TenantID:  "site_001",
+		OlderThan: time.Now().UTC().Add(-2 * time.Hour),
+		Limit:     10,
+		Operator:  "ops",
+		Reason:    "provider timeout",
+	})
+	if err != nil {
+		t.Fatalf("release: %v", err)
+	}
+	if len(released.Items) != 1 || released.Items[0].GrantStatus != GrantFailed || released.Items[0].Result != "RELEASED" {
+		t.Fatalf("expected released item, got %+v", released)
+	}
+	assertMemoryQuotaValues(t, repo, activityID, QuotaBudget, QuotaScopeActivity, "TOTAL", "0", "0.0000")
+
+	repeated, err := repo.ReleaseExpiredQuotaReservations(context.Background(), QuotaTimeoutReleaseCommand{
+		TenantID:  "site_001",
+		OlderThan: time.Now().UTC().Add(-2 * time.Hour),
+		Limit:     10,
+		Operator:  "ops",
+		Reason:    "provider timeout",
+	})
+	if err != nil {
+		t.Fatalf("repeat release: %v", err)
+	}
+	if len(repeated.Items) != 0 {
+		t.Fatalf("expected repeated release to be idempotent with no candidates, got %+v", repeated)
 	}
 }
 
@@ -371,6 +708,19 @@ func assertMemoryQuotaFrozen(t *testing.T, repo *MemoryRepository, activityID st
 		if quota.ActivityID == activityID && quota.Type == quotaType && quota.Scope == scope && quota.ScopeKey == scopeKey {
 			if quota.FrozenValue != want {
 				t.Fatalf("expected quota %s/%s/%s frozen %s, got %s", quotaType, scope, scopeKey, want, quota.FrozenValue)
+			}
+			return
+		}
+	}
+	t.Fatalf("quota not found: %s/%s/%s", quotaType, scope, scopeKey)
+}
+
+func assertMemoryQuotaValues(t *testing.T, repo *MemoryRepository, activityID string, quotaType QuotaType, scope QuotaScope, scopeKey string, wantUsed string, wantFrozen string) {
+	t.Helper()
+	for _, quota := range repo.quotas {
+		if quota.ActivityID == activityID && quota.Type == quotaType && quota.Scope == scope && quota.ScopeKey == scopeKey {
+			if quota.UsedValue != wantUsed || quota.FrozenValue != wantFrozen {
+				t.Fatalf("expected quota %s/%s/%s used=%s frozen=%s, got used=%s frozen=%s", quotaType, scope, scopeKey, wantUsed, wantFrozen, quota.UsedValue, quota.FrozenValue)
 			}
 			return
 		}

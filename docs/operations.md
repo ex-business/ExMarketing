@@ -28,6 +28,8 @@ go run ./cmd/exmarketing
 export EX_MARKETING_OUTBOX_WORKER=true
 ```
 
+MQ reward commands use `targetRef` values such as `kafka://reward.commands`, `rabbitmq://reward-exchange/reward.commands`, `rabbitmq:///reward.commands`, or `pulsar://tenant/rewards/commands`. Broker endpoints and credentials belong in runtime sender configuration, not in activity config, outbox payload, audit payload, or logs.
+
 配置 Fact Query allowlist：
 
 ```bash
@@ -130,6 +132,27 @@ Quota：
 SELECT activity_id, quota_type, scope, scope_key, total_value, used_value, frozen_value, version
 FROM marketing_quota
 ORDER BY updated_at DESC;
+```
+
+长期冻结排查：
+
+```sql
+SELECT tenant_id, command_id, activity_id, quota_type, scope, scope_key, reserved_amount, created_at
+FROM marketing_quota_reservation
+WHERE reservation_status = 'FROZEN'
+ORDER BY created_at ASC;
+```
+
+超时释放先 dry-run，再实际执行：
+
+```bash
+curl -X POST http://localhost:8080/admin/v1/quota-reservations/timeout-release \
+  -H 'Content-Type: application/json' \
+  -d '{"tenantId":"site_001","limit":100,"dryRun":true,"operator":"ops-a","reason":"provider timeout"}'
+
+curl -X POST http://localhost:8080/admin/v1/quota-reservations/timeout-release \
+  -H 'Content-Type: application/json' \
+  -d '{"tenantId":"site_001","limit":100,"operator":"ops-a","reason":"provider timeout"}'
 ```
 
 Outbox：
@@ -272,7 +295,7 @@ Fact endpoint 解析到了 private/local IP，被 SSRF 防护拦截。
 含义：
 
 ```text
-Outbox worker 投递 HTTP/Webhook 失败。
+Outbox worker 投递 HTTP/Webhook/MQ 失败。
 ```
 
 排查：

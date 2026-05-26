@@ -6,26 +6,65 @@
 
 风险: 中
 
-最终状态: ANALYSIS_FAIL
+最终状态: COMMITTED
 
-生成时间: 2026-05-26T09:00:44Z
+生成时间: 2026-05-26T09:17:23Z
 
-说明: 自动流水线在 analysis 失败: analysis agent is read-only and may only write tasks/2026-05-24-webhook-receiver/analysis.md; unexpected changed files: internal/workflow/agent.go, internal/workflow/taskfiles.go
+说明: 自动流水线运行完成。
 
 ## Agent 状态
 
 | Agent | Status | Output | Log | Next |
 | --- | --- | --- | --- | --- |
-| analysis | INTERRUPTED | tasks/2026-05-24-webhook-receiver/analysis.md | tasks/2026-05-24-webhook-receiver/runs/20260526T085701Z-analysis.log |  |
-| review | WAITING | tasks/2026-05-24-webhook-receiver/review.md |  |  |
-| test-plan | WAITING | tasks/2026-05-24-webhook-receiver/test-plan.md |  |  |
-| dev | WAITING | tasks/2026-05-24-webhook-receiver/implementation.md |  |  |
-| test | WAITING | tasks/2026-05-24-webhook-receiver/test.md |  |  |
-| commit | WAITING | tasks/2026-05-24-webhook-receiver/commit.md |  |  |
+| analysis | DONE | tasks/2026-05-24-webhook-receiver/analysis.md | tasks/2026-05-24-webhook-receiver/runs/20260526T090220Z-analysis.log | REVIEW_READY |
+| review | DONE | tasks/2026-05-24-webhook-receiver/review.md | tasks/2026-05-24-webhook-receiver/runs/20260526T090236Z-review.log | REVIEW_PASS |
+| test-plan | DONE | tasks/2026-05-24-webhook-receiver/test-plan.md | tasks/2026-05-24-webhook-receiver/runs/20260526T090402Z-test-plan.log | REVIEW_PASS |
+| dev | DONE | tasks/2026-05-24-webhook-receiver/implementation.md | tasks/2026-05-24-webhook-receiver/runs/20260526T090402Z-dev.log | REVIEW_PASS |
+| test | DONE | tasks/2026-05-24-webhook-receiver/test.md | tasks/2026-05-24-webhook-receiver/runs/20260526T091206Z-test.log | COMMIT_READY |
+| commit | DONE | tasks/2026-05-24-webhook-receiver/commit.md | tasks/2026-05-24-webhook-receiver/runs/20260526T091542Z-commit.log | COMMITTED |
 
 ## 本次运行
 
-没有 Agent 运行。
+### review
+
+- ExitCode: 0
+- NextStatus: REVIEW_PASS
+- Score: -1
+- Log: tasks/2026-05-24-webhook-receiver/runs/20260526T090236Z-review.log
+- Artifact: tasks/2026-05-24-webhook-receiver/review.md
+
+### test-plan
+
+- ExitCode: 0
+- NextStatus: REVIEW_PASS
+- Score: -1
+- Log: tasks/2026-05-24-webhook-receiver/runs/20260526T090402Z-test-plan.log
+- Artifact: tasks/2026-05-24-webhook-receiver/test-plan.md
+
+### dev
+
+- ExitCode: 0
+- NextStatus: REVIEW_PASS
+- Score: -1
+- Log: tasks/2026-05-24-webhook-receiver/runs/20260526T090402Z-dev.log
+- Artifact: tasks/2026-05-24-webhook-receiver/implementation.md
+
+### test
+
+- ExitCode: 0
+- NextStatus: COMMIT_READY
+- Score: -1
+- Log: tasks/2026-05-24-webhook-receiver/runs/20260526T091206Z-test.log
+- Artifact: tasks/2026-05-24-webhook-receiver/test.md
+
+### commit
+
+- ExitCode: 0
+- NextStatus: COMMITTED
+- Score: -1
+- Log: tasks/2026-05-24-webhook-receiver/runs/20260526T091542Z-commit.log
+- Artifact: tasks/2026-05-24-webhook-receiver/commit.md
+
 
 ## 产物文件
 

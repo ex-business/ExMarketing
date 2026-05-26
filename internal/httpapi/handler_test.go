@@ -52,6 +52,14 @@ func newWebhookTestHandler(repo *marketing.MemoryRepository, receivers map[strin
 	})
 }
 
+func newSignedCallbackTestHandler(repo *marketing.MemoryRepository) *Handler {
+	return NewHandlerWithRewardCallbackConfig(engine.NewService(repo), OpenAPIEventConfig{MaxBodyBytes: defaultEventMaxBodyBytes}, WebhookReceiverConfig{}, RewardCallbackConfig{
+		Secrets:      map[string]string{"site_001": "callback-secret"},
+		MaxSkew:      5 * time.Minute,
+		MaxBodyBytes: defaultEventMaxBodyBytes,
+	})
+}
+
 func TestHealth(t *testing.T) {
 	handler := newTestHandler()
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
@@ -310,6 +318,49 @@ func TestCreateActivityValidatesFactProviderReferences(t *testing.T) {
 	}
 }
 
+func TestCreateActivityRejectsDisabledAndMissingFactMapping(t *testing.T) {
+	activityBody := strings.Replace(validActivityBody(), `"attributes.vipLevel"`, `"facts.USER_PROFILE.risk.score"`, 1)
+	repo := marketing.NewMemoryRepository()
+	_, err := repo.SaveFactProvider(context.Background(), marketing.FactProvider{
+		TenantID:     "site_001",
+		FactCode:     "USER_PROFILE",
+		ProviderType: "HTTP",
+		Endpoint:     "https://example.com/profile",
+		Method:       "POST",
+		Mapping:      map[string]marketing.FactMapping{"risk": {Source: "$.risk", Type: "object"}},
+		Enabled:      true,
+		TimeoutMS:    5000,
+		UpdatedAt:    time.Date(2026, 5, 24, 0, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("save provider: %v", err)
+	}
+	rec := postActivity(t, newTestHandlerWithRepository(repo), activityBody)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "FACT_FIELD_MISSING") {
+		t.Fatalf("expected missing mapped field rejection, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	repo = marketing.NewMemoryRepository()
+	_, err = repo.SaveFactProvider(context.Background(), marketing.FactProvider{
+		TenantID:     "site_001",
+		FactCode:     "USER_PROFILE",
+		ProviderType: "HTTP",
+		Endpoint:     "https://example.com/profile",
+		Method:       "POST",
+		Mapping:      map[string]marketing.FactMapping{"risk.score": {Source: "$.risk.score", Type: "number"}},
+		Enabled:      false,
+		TimeoutMS:    5000,
+		UpdatedAt:    time.Date(2026, 5, 24, 0, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("save provider: %v", err)
+	}
+	rec = postActivity(t, newTestHandlerWithRepository(repo), activityBody)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "FACT_PROVIDER_DISABLED") {
+		t.Fatalf("expected disabled provider rejection, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestFactQueryRejectsInlineProviderAndUsesRegistry(t *testing.T) {
 	handler := newTestHandler()
 	inlineBody := `{
@@ -339,6 +390,38 @@ func TestFactQueryRejectsInlineProviderAndUsesRegistry(t *testing.T) {
 	handler.Routes().ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "FACT_PROVIDER_NOT_CONFIGURED") {
 		t.Fatalf("expected registry lookup failure, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestFactQueryReturnsDisabledProviderCode(t *testing.T) {
+	repo := marketing.NewMemoryRepository()
+	_, err := repo.SaveFactProvider(context.Background(), marketing.FactProvider{
+		TenantID:     "site_001",
+		FactCode:     "USER_PROFILE",
+		ProviderType: "HTTP",
+		Endpoint:     "https://example.com/profile",
+		Method:       "POST",
+		Mapping:      map[string]marketing.FactMapping{"vipLevel": {Source: "$.data.vipLevel", Type: "string"}},
+		Enabled:      false,
+		TimeoutMS:    5000,
+		UpdatedAt:    time.Date(2026, 5, 24, 0, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("save provider: %v", err)
+	}
+	body := `{
+		"tenantId": "site_001",
+		"factCode": "USER_PROFILE",
+		"subject": {"type": "USER", "id": "10001"},
+		"biz": {"bizType": "DEPOSIT", "bizId": "pay_1"},
+		"attributes": {}
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/openapi/v1/facts/query", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	newTestHandlerWithRepository(repo).Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "FACT_PROVIDER_DISABLED") {
+		t.Fatalf("expected disabled provider code, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -624,8 +707,18 @@ func TestEntryConfigFiltersSimulationAndProcessEvent(t *testing.T) {
 	if eventRec.Code != http.StatusAccepted {
 		t.Fatalf("expected event status %d, got %d: %s", http.StatusAccepted, eventRec.Code, eventRec.Body.String())
 	}
-	if !strings.Contains(eventRec.Body.String(), `"reasonCode":"ENTRY_DISABLED"`) || strings.Contains(eventRec.Body.String(), `"participations":[{`) || strings.Contains(eventRec.Body.String(), `"grantOrders":[{`) {
-		t.Fatalf("expected process event entry rejection without side effects, got: %s", eventRec.Body.String())
+	for _, want := range []string{
+		`"status":"REJECTED"`,
+		`"rejectReason":"ENTRY_DISABLED: activity entry is disabled"`,
+		`"reasonCode":"ENTRY_DISABLED"`,
+		`"snapshot":`,
+	} {
+		if !strings.Contains(eventRec.Body.String(), want) {
+			t.Fatalf("expected %s in process event entry rejection, got: %s", want, eventRec.Body.String())
+		}
+	}
+	if strings.Contains(eventRec.Body.String(), `"grantOrders":[{`) || strings.Contains(eventRec.Body.String(), `"outboxMessages":[{`) {
+		t.Fatalf("expected process event entry rejection without grant/outbox, got: %s", eventRec.Body.String())
 	}
 }
 
@@ -1167,7 +1260,7 @@ func TestActivityEventBudgetExceededReturnsConflictAndAudit(t *testing.T) {
 func TestActivityEventUserLimitExceededReturnsConflictAndAudit(t *testing.T) {
 	handler := newTestHandler()
 	activityID := createActivity(t, handler)
-	createQuota(t, handler, activityID, marketing.QuotaUserLimit, marketing.QuotaScopeUser, "10001", "0.1")
+	createQuota(t, handler, activityID, marketing.QuotaUserLimit, marketing.QuotaScopeUser, "10001", "0")
 
 	rec := postDepositEvent(t, handler, "evt_user_limit_exceeded", "pay_user_limit_exceeded")
 
@@ -1189,7 +1282,7 @@ func TestActivityEventUserLimitExceededReturnsConflictAndAudit(t *testing.T) {
 func TestActivityEventStockExceededReturnsConflictAndNoRewardableResult(t *testing.T) {
 	handler := newTestHandler()
 	activityID := createActivity(t, handler)
-	createQuota(t, handler, activityID, marketing.QuotaStock, marketing.QuotaScopeActivity, "FIRST_DEPOSIT_RATIO", "0.1")
+	createQuota(t, handler, activityID, marketing.QuotaStock, marketing.QuotaScopeActivity, "FIRST_DEPOSIT_RATIO", "0")
 
 	rec := postDepositEvent(t, handler, "evt_stock_exceeded", "pay_stock_exceeded")
 
@@ -1212,7 +1305,8 @@ func TestActivityEventStockExceededReturnsConflictAndNoRewardableResult(t *testi
 }
 
 func TestRewardCallbackSuccessConfirmsQuotaAndIsIdempotent(t *testing.T) {
-	handler := newTestHandler()
+	repo := marketing.NewMemoryRepository()
+	handler := newTestHandlerWithRepository(repo)
 	activityID := createActivity(t, handler)
 	createQuota(t, handler, activityID, marketing.QuotaBudget, marketing.QuotaScopeActivity, "TOTAL", "100")
 	createQuota(t, handler, activityID, marketing.QuotaStock, marketing.QuotaScopeActivity, "FIRST_DEPOSIT_RATIO", "10")
@@ -1226,6 +1320,7 @@ func TestRewardCallbackSuccessConfirmsQuotaAndIsIdempotent(t *testing.T) {
 		t.Fatalf("decode event result: %v", err)
 	}
 	commandID := eventResult.GrantOrders[0].BillNo
+	markGrantOrderSending(t, repo, commandID)
 
 	rec := postRewardCallback(t, handler, `{
 		"tenantId": "site_001",
@@ -1254,6 +1349,18 @@ func TestRewardCallbackSuccessConfirmsQuotaAndIsIdempotent(t *testing.T) {
 	}`)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"duplicate":true`) {
 		t.Fatalf("expected duplicate success callback, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	conflict := postRewardCallback(t, handler, `{
+		"tenantId": "site_001",
+		"commandId": "`+commandID+`",
+		"status": "SUCCESS",
+		"externalGrantId": "wallet_002",
+		"message": "paid under another wallet id",
+		"finishedAt": "2026-05-24T12:07:00Z"
+	}`)
+	if conflict.Code != http.StatusConflict || !strings.Contains(conflict.Body.String(), `"code":"CALLBACK_STATUS_CONFLICT"`) {
+		t.Fatalf("expected externalGrantId conflict, got %d: %s", conflict.Code, conflict.Body.String())
 	}
 
 	reconcile := httptest.NewRecorder()
@@ -1311,7 +1418,8 @@ func TestRewardReconciliationSupportsActivitySubjectAndEventQueries(t *testing.T
 }
 
 func TestRewardCallbackFailedReleasesQuotaAndRejectsConflictAndUnknown(t *testing.T) {
-	handler := newTestHandler()
+	repo := marketing.NewMemoryRepository()
+	handler := newTestHandlerWithRepository(repo)
 	activityID := createActivity(t, handler)
 	createQuota(t, handler, activityID, marketing.QuotaBudget, marketing.QuotaScopeActivity, "TOTAL", "100")
 	createQuota(t, handler, activityID, marketing.QuotaStock, marketing.QuotaScopeActivity, "FIRST_DEPOSIT_RATIO", "10")
@@ -1325,6 +1433,7 @@ func TestRewardCallbackFailedReleasesQuotaAndRejectsConflictAndUnknown(t *testin
 		t.Fatalf("decode event result: %v", err)
 	}
 	commandID := eventResult.GrantOrders[0].BillNo
+	markGrantOrderSending(t, repo, commandID)
 
 	rec := postRewardCallback(t, handler, `{
 		"tenantId": "site_001",
@@ -1366,6 +1475,185 @@ func TestRewardCallbackFailedReleasesQuotaAndRejectsConflictAndUnknown(t *testin
 	}
 }
 
+func TestRewardCallbackRejectsPendingGrantOrder(t *testing.T) {
+	handler := newTestHandler()
+	activityID := createActivity(t, handler)
+	createQuota(t, handler, activityID, marketing.QuotaBudget, marketing.QuotaScopeActivity, "TOTAL", "100")
+	createQuota(t, handler, activityID, marketing.QuotaStock, marketing.QuotaScopeActivity, "FIRST_DEPOSIT_RATIO", "10")
+
+	eventRec := postDepositEvent(t, handler, "evt_callback_pending", "pay_callback_pending")
+	if eventRec.Code != http.StatusAccepted {
+		t.Fatalf("expected event accepted, got %d: %s", eventRec.Code, eventRec.Body.String())
+	}
+	var eventResult marketing.ProcessEventResult
+	if err := json.Unmarshal(eventRec.Body.Bytes(), &eventResult); err != nil {
+		t.Fatalf("decode event result: %v", err)
+	}
+	commandID := eventResult.GrantOrders[0].BillNo
+
+	rec := postRewardCallback(t, handler, `{
+		"tenantId": "site_001",
+		"commandId": "`+commandID+`",
+		"status": "SUCCESS",
+		"externalGrantId": "wallet_pending",
+		"message": "too early",
+		"finishedAt": "2026-05-24T12:05:00Z"
+	}`)
+	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), `"code":"CALLBACK_STATUS_CONFLICT"`) {
+		t.Fatalf("expected pending callback conflict, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestRewardCallbackSignedIdempotencyAndLocatorConflict(t *testing.T) {
+	repo := marketing.NewMemoryRepository()
+	handler := newSignedCallbackTestHandler(repo)
+	activityID := createActivity(t, handler)
+	createQuota(t, handler, activityID, marketing.QuotaBudget, marketing.QuotaScopeActivity, "TOTAL", "500")
+
+	firstRec := postDepositEvent(t, handler, "evt_callback_signed_a", "pay_callback_signed_a")
+	secondRec := postDepositEvent(t, handler, "evt_callback_signed_b", "pay_callback_signed_b")
+	if firstRec.Code != http.StatusAccepted || secondRec.Code != http.StatusAccepted {
+		t.Fatalf("expected events accepted, got first=%d %s second=%d %s", firstRec.Code, firstRec.Body.String(), secondRec.Code, secondRec.Body.String())
+	}
+	var first, second marketing.ProcessEventResult
+	if err := json.Unmarshal(firstRec.Body.Bytes(), &first); err != nil {
+		t.Fatalf("decode first event result: %v", err)
+	}
+	if err := json.Unmarshal(secondRec.Body.Bytes(), &second); err != nil {
+		t.Fatalf("decode second event result: %v", err)
+	}
+	firstOrder := first.GrantOrders[0]
+	secondOrder := second.GrantOrders[0]
+	markGrantOrderSending(t, repo, firstOrder.BillNo)
+	markGrantOrderSending(t, repo, secondOrder.BillNo)
+
+	body := `{
+		"tenantId": "site_001",
+		"idempotency_key": "` + firstOrder.IdempotencyKey + `",
+		"status": "SUCCESS",
+		"externalGrantId": "wallet_signed_001",
+		"message": "paid",
+		"finishedAt": "2026-05-24T12:05:00Z"
+	}`
+	missing := postRewardCallback(t, handler, body)
+	if missing.Code != http.StatusUnauthorized || !strings.Contains(missing.Body.String(), `"errorCode":"CALLBACK_SIGNATURE_MISSING"`) {
+		t.Fatalf("expected missing signature response, got %d: %s", missing.Code, missing.Body.String())
+	}
+
+	invalid := postSignedRewardCallback(t, handler, body, func(req *http.Request) {
+		req.Header.Set("X-ExMarketing-Signature", "bad")
+	})
+	if invalid.Code != http.StatusUnauthorized || !strings.Contains(invalid.Body.String(), `"errorCode":"CALLBACK_SIGNATURE_INVALID"`) {
+		t.Fatalf("expected invalid signature response, got %d: %s", invalid.Code, invalid.Body.String())
+	}
+
+	ok := postSignedRewardCallback(t, handler, body, nil)
+	if ok.Code != http.StatusOK || !strings.Contains(ok.Body.String(), `"grantStatus":"SUCCESS"`) || !strings.Contains(ok.Body.String(), `"idempotencyKey":"`+firstOrder.IdempotencyKey+`"`) {
+		t.Fatalf("expected signed idempotency callback OK, got %d: %s", ok.Code, ok.Body.String())
+	}
+
+	conflictBody := `{
+		"tenantId": "site_001",
+		"billNo": "` + secondOrder.BillNo + `",
+		"idempotencyKey": "` + firstOrder.IdempotencyKey + `",
+		"status": "FAILED",
+		"message": "wrong locator",
+		"finishedAt": "2026-05-24T12:06:00Z"
+	}`
+	conflict := postSignedRewardCallback(t, handler, conflictBody, nil)
+	if conflict.Code != http.StatusConflict || !strings.Contains(conflict.Body.String(), `"errorCode":"CALLBACK_LOCATOR_CONFLICT"`) {
+		t.Fatalf("expected locator conflict, got %d: %s", conflict.Code, conflict.Body.String())
+	}
+}
+
+func TestQuotaTimeoutReleaseEndpointDryRunReleaseAndAudit(t *testing.T) {
+	repo := marketing.NewMemoryRepository()
+	handler := newTestHandlerWithRepository(repo)
+	old := time.Now().UTC().Add(-3 * time.Hour)
+	activityID := "act_timeout_release_http"
+	if _, err := repo.CreateQuota(context.Background(), marketing.Quota{
+		ID:          "quota_timeout_release_http",
+		ActivityID:  activityID,
+		Type:        marketing.QuotaBudget,
+		Scope:       marketing.QuotaScopeActivity,
+		ScopeKey:    "TOTAL",
+		TotalValue:  "100",
+		UsedValue:   "0",
+		FrozenValue: "0",
+		Version:     1,
+		CreatedAt:   old,
+		UpdatedAt:   old,
+	}); err != nil {
+		t.Fatalf("create quota: %v", err)
+	}
+	_, err := repo.CreateParticipationGrantOutboxesWithQuota(context.Background(), marketing.AtomicGrantCommand{
+		Participation: marketing.Participation{
+			ID:             "part_timeout_release_http",
+			TenantID:       "site_001",
+			ActivityID:     activityID,
+			EventInboxID:   "inbox_timeout_release_http",
+			Subject:        marketing.EventSubject{Type: "USER", ID: "10001"},
+			Biz:            marketing.EventBiz{BizType: "DEPOSIT", BizID: "pay_timeout_release_http"},
+			Status:         marketing.ParticipationRewardable,
+			Snapshot:       []byte(`{}`),
+			IdempotencyKey: "part_idem_timeout_release_http",
+			CreatedAt:      old,
+			UpdatedAt:      old,
+		},
+		BudgetAmount: "10",
+		GrantOrders: []marketing.GrantOrder{{
+			ID:              "grant_timeout_release_http",
+			TenantID:        "site_001",
+			ActivityID:      activityID,
+			ParticipationID: "part_timeout_release_http",
+			Subject:         marketing.EventSubject{Type: "USER", ID: "10001"},
+			RewardType:      marketing.RewardBonus,
+			RewardAmount:    "10",
+			RewardPayload:   []byte(`{}`),
+			BillNo:          "cmd_timeout_release_http",
+			GrantStatus:     marketing.GrantPending,
+			GrantChannel:    marketing.GrantHTTP,
+			IdempotencyKey:  "grant_idem_timeout_release_http",
+			CreatedAt:       old,
+			UpdatedAt:       old,
+		}},
+		OutboxMessages: []marketing.OutboxMessage{{
+			ID:            "outbox_timeout_release_http",
+			TenantID:      "site_001",
+			MessageType:   "REWARD_COMMAND",
+			TargetChannel: marketing.GrantHTTP,
+			TargetRef:     "https://wallet.example.com/reward",
+			Payload:       []byte(`{}`),
+			SendStatus:    marketing.OutboxPending,
+			CreatedAt:     old,
+			UpdatedAt:     old,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("atomic grant: %v", err)
+	}
+
+	body := `{"tenantId":"site_001","olderThan":"` + time.Now().UTC().Add(-2*time.Hour).Format(time.RFC3339) + `","limit":10,"dryRun":true,"operator":"ops","reason":"provider timeout"}`
+	rec := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/admin/v1/quota-reservations/timeout-release", strings.NewReader(body)))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"result":"DRY_RUN"`) || !strings.Contains(rec.Body.String(), `"reservationStatus":"FROZEN"`) {
+		t.Fatalf("expected dry-run candidate, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	body = strings.Replace(body, `"dryRun":true,`, "", 1)
+	rec = httptest.NewRecorder()
+	handler.Routes().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/admin/v1/quota-reservations/timeout-release", strings.NewReader(body)))
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"result":"RELEASED"`) || !strings.Contains(rec.Body.String(), `"grantStatus":"FAILED"`) || !strings.Contains(rec.Body.String(), `"reservationStatus":"RELEASED"`) {
+		t.Fatalf("expected released candidate, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	audit := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(audit, httptest.NewRequest(http.MethodGet, "/admin/v1/audit?tenantId=site_001&action=QUOTA_TIMEOUT_RELEASE", nil))
+	if audit.Code != http.StatusOK || !strings.Contains(audit.Body.String(), `"reason":"provider timeout"`) {
+		t.Fatalf("expected timeout release audit, got %d: %s", audit.Code, audit.Body.String())
+	}
+}
+
 func TestOutboxDLQQueryReplayAndClose(t *testing.T) {
 	repo := marketing.NewMemoryRepository()
 	handler := NewHandler(engine.NewService(repo))
@@ -1385,6 +1673,16 @@ func TestOutboxDLQQueryReplayAndClose(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("create outbox: %v", err)
+	}
+	if _, err := repo.CreateGrantOrder(context.Background(), marketing.GrantOrder{
+		ID:          "grant_dlq_1",
+		TenantID:    "site_001",
+		BillNo:      "cmd_1",
+		GrantStatus: marketing.GrantRetry,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}); err != nil {
+		t.Fatalf("create replay grant order: %v", err)
 	}
 	_, err = repo.CreateOutbox(context.Background(), marketing.OutboxMessage{
 		ID:            "outbox_dlq_other_tenant",
@@ -1451,6 +1749,16 @@ func TestOutboxDLQQueryReplayAndClose(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create close outbox: %v", err)
 	}
+	if _, err := repo.CreateGrantOrder(context.Background(), marketing.GrantOrder{
+		ID:          "grant_dlq_close",
+		TenantID:    "site_001",
+		BillNo:      "cmd_close",
+		GrantStatus: marketing.GrantRetry,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}); err != nil {
+		t.Fatalf("create close grant order: %v", err)
+	}
 	rec = httptest.NewRecorder()
 	closeReq := httptest.NewRequest(http.MethodPost, "/admin/v1/outbox/outbox_dlq_close/close", strings.NewReader(`{
 		"tenantId": "site_001",
@@ -1464,7 +1772,7 @@ func TestOutboxDLQQueryReplayAndClose(t *testing.T) {
 
 	auditRec := httptest.NewRecorder()
 	handler.Routes().ServeHTTP(auditRec, httptest.NewRequest(http.MethodGet, "/admin/v1/audit", nil))
-	for _, want := range []string{`"action":"OUTBOX_DLQ_REPLAY"`, `"action":"OUTBOX_DLQ_CLOSE"`, `"actor":"ops"`} {
+	for _, want := range []string{`"action":"OUTBOX_DLQ_REPLAY"`, `"action":"OUTBOX_DLQ_CLOSE"`, `"actor":"ops"`, `"targetChannel":"HTTP"`, `"retryCount":5`, `"commandId":"cmd_1"`} {
 		if !strings.Contains(auditRec.Body.String(), want) {
 			t.Fatalf("expected audit %s, got: %s", want, auditRec.Body.String())
 		}
@@ -1951,7 +2259,7 @@ func createActivity(t *testing.T, handler *Handler) string {
 	return activity.ID
 }
 
-func TestValidatePrelaunchEndpointReturnsItemizedApprovalRequired(t *testing.T) {
+func TestValidatePrelaunchEndpointReturnsItemizedHighRiskBlock(t *testing.T) {
 	handler := newTestHandler()
 	body := `{
 		"actor": "operator",
@@ -1966,8 +2274,8 @@ func TestValidatePrelaunchEndpointReturnsItemizedApprovalRequired(t *testing.T) 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), `"conclusion":"APPROVAL_REQUIRED"`) {
-		t.Fatalf("expected approval required result, got: %s", rec.Body.String())
+	if !strings.Contains(rec.Body.String(), `"conclusion":"BLOCK"`) {
+		t.Fatalf("expected high-risk block result, got: %s", rec.Body.String())
 	}
 	if !strings.Contains(rec.Body.String(), `"allowGoLive":false`) {
 		t.Fatalf("expected go-live blocked, got: %s", rec.Body.String())
@@ -2334,7 +2642,30 @@ func slicesContains(values []string, target string) bool {
 func postRewardCallback(t *testing.T, handler *Handler, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, "/openapi/v1/reward/callback", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	handler.Routes().ServeHTTP(rec, req)
 	return rec
+}
+
+func postSignedRewardCallback(t *testing.T, handler *Handler, body string, mutate func(*http.Request)) *httptest.ResponseRecorder {
+	t.Helper()
+	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
+	req := httptest.NewRequest(http.MethodPost, "/openapi/v1/reward/callback", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-ExMarketing-Timestamp", timestamp)
+	req.Header.Set("X-ExMarketing-Signature", webhookTestSignature("callback-secret", timestamp, body))
+	if mutate != nil {
+		mutate(req)
+	}
+	rec := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(rec, req)
+	return rec
+}
+
+func markGrantOrderSending(t *testing.T, repo *marketing.MemoryRepository, commandID string) {
+	t.Helper()
+	if err := repo.UpdateGrantOrderByCommandID(context.Background(), "site_001", commandID, marketing.GrantSending, ""); err != nil {
+		t.Fatalf("mark grant order sending: %v", err)
+	}
 }

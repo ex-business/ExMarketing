@@ -1,32 +1,29 @@
 # Commit
 
-## Agent 指令
-
-你是 Commit Agent。只有 review.md 为 PASS 且 test.md 为 PASS 时才能提交。
-
-提交前必须检查：
-
-~~~bash
-git status -sb
-go test ./...
-go build ./...
-~~~
-
-## Scope
-
-待填写。
-
-## Review
+## Result
 
 ~~~text
-PASS / BLOCK
+BLOCK
 ~~~
 
-## Test
+## Gate
+
+- `tasks/2026-05-24-participation/review.md`: PASS
+- `tasks/2026-05-24-participation/test.md`: PASS
+- `git status -sb`: executed; worktree has unstaged changes and one untracked test file.
+- `git diff --check`: FAIL
+- `go test ./...`: PASS
+- `go build ./...`: PASS
+
+## Block Reason
+
+`git diff --check` failed:
 
 ~~~text
-PASS / FAIL
+tasks/2026-05-24-qualify/analysis.md:396: new blank line at EOF.
 ~~~
+
+Commit Agent is not allowed to modify business code, test code, documentation code, config files, or any file other than this commit report. This whitespace issue must be fixed by Dev Agent, then the commit gate should be rerun.
 
 ## Commit
 
@@ -34,6 +31,7 @@ PASS / FAIL
 hash:
 message:
 remote:
+not committed: blocked by git diff --check
 ~~~
 
 需求：2026-05-24-participation

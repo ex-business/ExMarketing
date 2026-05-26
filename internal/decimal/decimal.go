@@ -3,6 +3,7 @@ package decimal
 import (
 	"errors"
 	"math/big"
+	"regexp"
 	"strings"
 )
 
@@ -13,9 +14,14 @@ type Decimal struct {
 var ErrInvalidDecimal = errors.New("invalid decimal")
 var ErrDivideByZero = errors.New("divide by zero")
 
+var decimalPattern = regexp.MustCompile(`^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$`)
+
 func Parse(s string) (Decimal, error) {
 	text := strings.TrimSpace(s)
 	if text == "" {
+		return Decimal{}, ErrInvalidDecimal
+	}
+	if !decimalPattern.MatchString(text) {
 		return Decimal{}, ErrInvalidDecimal
 	}
 
@@ -78,6 +84,10 @@ func (d Decimal) IsNegative() bool {
 
 func (d Decimal) IsPositive() bool {
 	return d.Cmp(Zero()) > 0
+}
+
+func (d Decimal) IsInteger() bool {
+	return d.rat().Denom().Cmp(big.NewInt(1)) == 0
 }
 
 func (d Decimal) Min(other Decimal) Decimal {

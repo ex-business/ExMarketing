@@ -14,26 +14,60 @@ go build ./...
 
 ## Scope
 
-待填写。
+Risk/LIMIT/BUDGET implementation commit was blocked by pre-commit checks.
 
 ## Review
 
 ~~~text
-PASS / BLOCK
+PASS
+
+Evidence:
+- tasks/2026-05-24-risk-limit-budget/review.md Decision: PASS
 ~~~
 
 ## Test
 
 ~~~text
-PASS / FAIL
+PASS
+
+Evidence:
+- tasks/2026-05-24-risk-limit-budget/test.md Result: PASS
+- go test ./...: PASS
+- go build ./...: PASS
+~~~
+
+## Pre-Commit Checks
+
+~~~text
+git status -sb: executed
+git diff --check: FAIL
+go test ./...: PASS
+go build ./...: PASS
+~~~
+
+## Decision
+
+~~~text
+BLOCK
+~~~
+
+Reason:
+
+~~~text
+git diff --check failed:
+tasks/2026-05-24-qualify/analysis.md:396: new blank line at EOF.
+
+Commit Agent is only allowed to write tasks/2026-05-24-risk-limit-budget/commit.md.
+The failing file is outside the allowed write scope, so this must be fixed by Dev Agent before commit can proceed.
+No commit was created.
 ~~~
 
 ## Commit
 
 ~~~text
-hash:
-message:
-remote:
+hash: N/A
+message: N/A
+remote: N/A
 ~~~
 
 需求：2026-05-24-risk-limit-budget

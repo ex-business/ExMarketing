@@ -21,13 +21,23 @@ import (
 )
 
 const (
+	CodeInvalidFactQuery      = "INVALID_FACT_QUERY"
 	CodeProviderNotConfigured = "FACT_PROVIDER_NOT_CONFIGURED"
 	CodeProviderDisabled      = "FACT_PROVIDER_DISABLED"
 	CodeProviderHTTPFailed    = "FACT_PROVIDER_HTTP_FAILED"
 	CodeProviderTimeout       = "FACT_PROVIDER_TIMEOUT"
-	CodeProviderBlocked       = "FACT_PROVIDER_BLOCKED"
+	CodeProviderHostBlocked   = "FACT_PROVIDER_HOST_NOT_ALLOWLISTED"
+	CodeProviderPrivateIP     = "FACT_PROVIDER_PRIVATE_IP_BLOCKED"
 	CodeMappingFailed         = "FACT_MAPPING_FAILED"
-	CodeCacheFailed           = "FACT_CACHE_FAILED"
+	CodeCacheUnavailable      = "FACT_CACHE_UNAVAILABLE"
+)
+
+const (
+	ReasonMappingRequiredMissing = "MAPPING_REQUIRED_MISSING"
+	ReasonMappingTypeMismatch    = "MAPPING_TYPE_MISMATCH"
+	ReasonMappingKeyInvalid      = "MAPPING_KEY_INVALID"
+	ReasonMappingSourceInvalid   = "MAPPING_SOURCE_INVALID"
+	ReasonMappingConfigInvalid   = "MAPPING_CONFIG_INVALID"
 )
 
 type Client struct {
@@ -41,6 +51,18 @@ type cacheEntry struct {
 	response  marketing.FactQueryResponse
 }
 
+type mappingError struct {
+	Reason  string
+	Message string
+}
+
+func (e mappingError) Error() string {
+	if e.Reason == "" {
+		return e.Message
+	}
+	return e.Reason + ": " + e.Message
+}
+
 func NewClient() *Client {
 	return &Client{
 		httpClient: &http.Client{
@@ -52,6 +74,56 @@ func NewClient() *Client {
 	}
 }
 
+func ValidateRequest(request marketing.FactQueryRequest) error {
+	if strings.TrimSpace(request.TenantID) == "" {
+		return errors.New("tenantId is required")
+	}
+	if strings.TrimSpace(request.FactCode) == "" {
+		return errors.New("factCode is required")
+	}
+	if strings.TrimSpace(request.Subject.Type) == "" {
+		return errors.New("subject.type is required")
+	}
+	if strings.TrimSpace(request.Subject.ID) == "" {
+		return errors.New("subject.id is required")
+	}
+	if strings.TrimSpace(request.Biz.BizType) == "" {
+		return errors.New("biz.bizType is required")
+	}
+	if strings.TrimSpace(request.Biz.BizID) == "" {
+		return errors.New("biz.bizId is required")
+	}
+	if request.Attributes == nil {
+		return errors.New("attributes is required")
+	}
+	return nil
+}
+
+func providerValidationFailure(request marketing.FactQueryRequest, err error) marketing.FactQueryResponse {
+	message := err.Error()
+	if strings.Contains(message, "mapping path") {
+		return failure(request, CodeMappingFailed, message, ReasonMappingKeyInvalid, "")
+	}
+	if strings.Contains(message, "source is invalid") {
+		return failure(request, CodeMappingFailed, message, ReasonMappingSourceInvalid, "")
+	}
+	if strings.Contains(message, "mapping is required") || strings.Contains(message, "type is invalid") {
+		return failure(request, CodeMappingFailed, message, ReasonMappingConfigInvalid, "")
+	}
+	return failure(request, CodeProviderNotConfigured, message, "", "")
+}
+
+func endpointFailure(request marketing.FactQueryRequest, err error) marketing.FactQueryResponse {
+	message := err.Error()
+	if strings.Contains(message, "not allowlisted") {
+		return failure(request, CodeProviderHostBlocked, message, "", "")
+	}
+	if strings.Contains(message, "private") || strings.Contains(message, "local") {
+		return failure(request, CodeProviderPrivateIP, message, "", "")
+	}
+	return failure(request, CodeProviderHTTPFailed, message, "", "")
+}
+
 func NewClientWithHTTPClient(httpClient *http.Client) *Client {
 	client := NewClient()
 	if httpClient != nil {
@@ -61,19 +133,22 @@ func NewClientWithHTTPClient(httpClient *http.Client) *Client {
 }
 
 func (c *Client) Query(ctx context.Context, provider marketing.FactProvider, request marketing.FactQueryRequest) marketing.FactQueryResponse {
+	if err := ValidateRequest(request); err != nil {
+		return failure(request, CodeInvalidFactQuery, err.Error(), "", "")
+	}
 	if !provider.Enabled {
-		return failure(request, CodeProviderDisabled, "fact provider is disabled", "")
+		return failure(request, CodeProviderDisabled, "fact provider is disabled", "", "")
 	}
 	if err := provider.Validate(); err != nil {
-		return failure(request, CodeProviderNotConfigured, err.Error(), "")
+		return providerValidationFailure(request, err)
 	}
 	if request.TenantID != provider.TenantID || request.FactCode != provider.FactCode {
-		return failure(request, CodeProviderNotConfigured, "fact provider is not configured for tenant and factCode", "")
+		return failure(request, CodeProviderNotConfigured, "fact provider is not configured for tenant and factCode", "", "")
 	}
 	if provider.CacheTTLSeconds > 0 {
 		key, err := cacheKey(provider, request)
 		if err != nil {
-			return failure(request, CodeCacheFailed, err.Error(), "")
+			return failure(request, CodeCacheUnavailable, err.Error(), "", "")
 		}
 		if cached, ok := c.cached(key); ok {
 			cached.Cached = true
@@ -90,11 +165,17 @@ func (c *Client) Query(ctx context.Context, provider marketing.FactProvider, req
 
 func (c *Client) queryProvider(ctx context.Context, provider marketing.FactProvider, request marketing.FactQueryRequest) marketing.FactQueryResponse {
 	if err := validateEndpoint(provider.Endpoint); err != nil {
-		return failure(request, CodeProviderBlocked, err.Error(), "")
+		return endpointFailure(request, err)
 	}
-	body, err := json.Marshal(request)
+	if provider.TimeoutMS > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(provider.TimeoutMS)*time.Millisecond)
+		defer cancel()
+	}
+	input := providerInput(request)
+	body, err := json.Marshal(input)
 	if err != nil {
-		return failure(request, CodeProviderHTTPFailed, err.Error(), "")
+		return failure(request, CodeProviderHTTPFailed, err.Error(), "", "")
 	}
 	method := strings.ToUpper(strings.TrimSpace(provider.Method))
 	endpoint := provider.Endpoint
@@ -106,7 +187,7 @@ func (c *Client) queryProvider(ctx context.Context, provider marketing.FactProvi
 		req, err = http.NewRequestWithContext(ctx, method, endpoint, bytes.NewReader(body))
 	}
 	if err != nil {
-		return failure(request, CodeProviderHTTPFailed, err.Error(), "")
+		return failure(request, CodeProviderHTTPFailed, err.Error(), "", "")
 	}
 	req.Header.Set("content-type", "application/json")
 	resp, err := c.httpClient.Do(req)
@@ -115,21 +196,25 @@ func (c *Client) queryProvider(ctx context.Context, provider marketing.FactProvi
 		if errors.Is(err, context.DeadlineExceeded) || strings.Contains(strings.ToLower(err.Error()), "timeout") {
 			code = CodeProviderTimeout
 		}
-		return failure(request, code, "fact provider request failed", err.Error())
+		return failure(request, code, "fact provider request failed", "", err.Error())
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return failure(request, CodeProviderHTTPFailed, "fact provider returned non-2xx status", resp.Status)
+		return failure(request, CodeProviderHTTPFailed, "fact provider returned non-2xx status", "", resp.Status)
 	}
 	var raw map[string]any
 	decoder := json.NewDecoder(io.LimitReader(resp.Body, 1<<20))
 	decoder.UseNumber()
 	if err := decoder.Decode(&raw); err != nil {
-		return failure(request, CodeMappingFailed, "fact provider returned invalid json", resp.Status)
+		return failure(request, CodeProviderHTTPFailed, "fact provider returned invalid json", "", resp.Status)
 	}
 	mapped, err := mapFacts(provider, raw)
 	if err != nil {
-		return failure(request, CodeMappingFailed, err.Error(), resp.Status)
+		var mappingErr mappingError
+		if errors.As(err, &mappingErr) {
+			return failure(request, CodeMappingFailed, mappingErr.Message, mappingErr.Reason, resp.Status)
+		}
+		return failure(request, CodeMappingFailed, err.Error(), ReasonMappingConfigInvalid, resp.Status)
 	}
 	return marketing.FactQueryResponse{
 		TenantID:       request.TenantID,
@@ -141,7 +226,7 @@ func (c *Client) queryProvider(ctx context.Context, provider marketing.FactProvi
 	}
 }
 
-func failure(request marketing.FactQueryRequest, code string, message string, providerStatus string) marketing.FactQueryResponse {
+func failure(request marketing.FactQueryRequest, code string, message string, reason string, providerStatus string) marketing.FactQueryResponse {
 	return marketing.FactQueryResponse{
 		TenantID:       request.TenantID,
 		FactCode:       request.FactCode,
@@ -149,6 +234,7 @@ func failure(request marketing.FactQueryRequest, code string, message string, pr
 		Cached:         false,
 		ErrorCode:      code,
 		Error:          message,
+		Reason:         reason,
 		ProviderStatus: providerStatus,
 	}
 }
@@ -172,23 +258,67 @@ func (c *Client) store(key string, response marketing.FactQueryResponse, ttl tim
 }
 
 func cacheKey(provider marketing.FactProvider, request marketing.FactQueryRequest) (string, error) {
-	attributes, err := json.Marshal(request.Attributes)
+	payload, err := json.Marshal(map[string]any{
+		"providerVersion": providerVersion(provider),
+		"input":           providerInput(request),
+	})
 	if err != nil {
 		return "", err
 	}
-	return strings.Join([]string{
-		provider.TenantID,
-		provider.FactCode,
-		provider.UpdatedAt.UTC().Format(time.RFC3339Nano),
-		request.Subject.Type,
-		request.Subject.ID,
-		request.Biz.BizType,
-		request.Biz.BizID,
-		string(attributes),
-	}, "\x00"), nil
+	return string(payload), nil
+}
+
+func providerVersion(provider marketing.FactProvider) map[string]any {
+	if !provider.UpdatedAt.IsZero() {
+		return map[string]any{
+			"tenantId":   provider.TenantID,
+			"factCode":   provider.FactCode,
+			"updatedAt":  provider.UpdatedAt.UTC().Format(time.RFC3339Nano),
+			"versionKey": "updatedAt",
+		}
+	}
+	return map[string]any{
+		"tenantId":        provider.TenantID,
+		"factCode":        provider.FactCode,
+		"providerType":    strings.ToUpper(strings.TrimSpace(provider.ProviderType)),
+		"endpoint":        strings.TrimSpace(provider.Endpoint),
+		"method":          strings.ToUpper(strings.TrimSpace(provider.Method)),
+		"authRef":         provider.AuthRef,
+		"mapping":         provider.Mapping,
+		"cacheTtlSeconds": provider.CacheTTLSeconds,
+		"enabled":         provider.Enabled,
+		"timeoutMs":       provider.TimeoutMS,
+		"versionKey":      "configFingerprint",
+	}
+}
+
+func providerInput(request marketing.FactQueryRequest) map[string]any {
+	input := map[string]any{
+		"tenantId":   request.TenantID,
+		"factCode":   request.FactCode,
+		"subject":    map[string]any{"type": request.Subject.Type, "id": request.Subject.ID},
+		"biz":        map[string]any{"bizType": request.Biz.BizType, "bizId": request.Biz.BizID},
+		"attributes": request.Attributes,
+	}
+	if request.EventID != "" {
+		input["eventId"] = request.EventID
+	}
+	if request.EventType != "" {
+		input["eventType"] = request.EventType
+	}
+	if request.SourceSystem != "" {
+		input["sourceSystem"] = request.SourceSystem
+	}
+	if !request.OccurredAt.IsZero() {
+		input["occurredAt"] = request.OccurredAt.UTC().Format(time.RFC3339Nano)
+	}
+	return input
 }
 
 func mapFacts(provider marketing.FactProvider, raw map[string]any) (map[string]any, error) {
+	if err := provider.Validate(); err != nil {
+		return nil, mappingReasonFromValidation(err)
+	}
 	out := map[string]any{}
 	keys := make([]string, 0, len(provider.Mapping))
 	for key := range provider.Mapping {
@@ -199,14 +329,29 @@ func mapFacts(provider marketing.FactProvider, raw map[string]any) (map[string]a
 		mapping := provider.Mapping[outputPath]
 		value, ok := jsonPathValue(raw, mapping.Source)
 		if !ok {
-			return nil, fmt.Errorf("FACT_FIELD_MISSING: mapping source %s for %s not found", mapping.Source, outputPath)
+			if !mappingRequired(mapping) {
+				continue
+			}
+			return nil, mappingError{Reason: ReasonMappingRequiredMissing, Message: fmt.Sprintf("mapping source %s for %s not found", mapping.Source, outputPath)}
 		}
 		if !mappingTypeMatches(value, mapping.Type) {
-			return nil, fmt.Errorf("FACT_TYPE_MISMATCH: mapping source %s for %s is not %s", mapping.Source, outputPath, mapping.Type)
+			return nil, mappingError{Reason: ReasonMappingTypeMismatch, Message: fmt.Sprintf("mapping source %s for %s is not %s", mapping.Source, outputPath, mapping.Type)}
 		}
 		setNested(out, outputPath, value)
 	}
 	return out, nil
+}
+
+func mappingReasonFromValidation(err error) error {
+	message := err.Error()
+	switch {
+	case strings.Contains(message, "mapping path"):
+		return mappingError{Reason: ReasonMappingKeyInvalid, Message: message}
+	case strings.Contains(message, "source is invalid"):
+		return mappingError{Reason: ReasonMappingSourceInvalid, Message: message}
+	default:
+		return mappingError{Reason: ReasonMappingConfigInvalid, Message: message}
+	}
 }
 
 func jsonPathValue(raw map[string]any, path string) (any, bool) {
@@ -216,16 +361,66 @@ func jsonPathValue(raw map[string]any, path string) (any, bool) {
 	}
 	var current any = raw
 	for _, part := range strings.Split(strings.TrimPrefix(path, "$."), ".") {
+		name, indexes, ok := parsePathPart(part)
+		if !ok {
+			return nil, false
+		}
 		object, ok := current.(map[string]any)
 		if !ok {
 			return nil, false
 		}
-		current, ok = object[part]
+		current, ok = object[name]
 		if !ok {
 			return nil, false
 		}
+		for _, index := range indexes {
+			array, ok := current.([]any)
+			if !ok || index < 0 || index >= len(array) {
+				return nil, false
+			}
+			current = array[index]
+		}
 	}
 	return current, true
+}
+
+func mappingRequired(mapping marketing.FactMapping) bool {
+	return mapping.Required == nil || *mapping.Required
+}
+
+func parsePathPart(part string) (string, []int, bool) {
+	nameEnd := strings.Index(part, "[")
+	if nameEnd == -1 {
+		if part == "" {
+			return "", nil, false
+		}
+		return part, nil, true
+	}
+	name := part[:nameEnd]
+	if name == "" {
+		return "", nil, false
+	}
+	var indexes []int
+	rest := part[nameEnd:]
+	for rest != "" {
+		if !strings.HasPrefix(rest, "[") {
+			return "", nil, false
+		}
+		close := strings.Index(rest, "]")
+		if close <= 1 {
+			return "", nil, false
+		}
+		var index int
+		for _, ch := range rest[1:close] {
+			if ch < '0' || ch > '9' {
+				return "", nil, false
+			}
+			index = index*10 + int(ch-'0')
+		}
+		indexes = append(indexes, index)
+		rest = rest[close+1:]
+	}
+	return name, indexes, true
 }
 
 func mappingTypeMatches(value any, typ string) bool {
@@ -276,14 +471,16 @@ func withQuery(endpoint string, request marketing.FactQueryRequest) string {
 		return endpoint
 	}
 	q := parsed.Query()
-	q.Set("tenantId", request.TenantID)
-	q.Set("factCode", request.FactCode)
-	q.Set("subjectType", request.Subject.Type)
-	q.Set("subjectId", request.Subject.ID)
-	q.Set("bizType", request.Biz.BizType)
-	q.Set("bizId", request.Biz.BizID)
-	if request.TraceID != "" {
-		q.Set("traceId", request.TraceID)
+	for key, value := range providerInput(request) {
+		switch typed := value.(type) {
+		case string:
+			q.Set(key, typed)
+		default:
+			encoded, err := json.Marshal(typed)
+			if err == nil {
+				q.Set(key, string(encoded))
+			}
+		}
 	}
 	parsed.RawQuery = q.Encode()
 	return parsed.String()

@@ -14,11 +14,13 @@ import (
 	"time"
 
 	"github.com/ex-stack/ExMarketing/internal/marketing"
+	"github.com/ex-stack/ExMarketing/internal/mqtarget"
 )
 
 type OutboxWorker struct {
 	repository marketing.Repository
 	client     *http.Client
+	mqSender   MQSender
 	logger     *slog.Logger
 	interval   time.Duration
 	maxRetries int
@@ -29,13 +31,29 @@ type OutboxWorker struct {
 func NewOutboxWorker(repository marketing.Repository, logger *slog.Logger) *OutboxWorker {
 	return &OutboxWorker{
 		repository: repository,
-		client:     &http.Client{Timeout: 5 * time.Second},
+		client: &http.Client{
+			Timeout:       5 * time.Second,
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		},
 		logger:     logger,
 		interval:   2 * time.Second,
 		maxRetries: 5,
 		now:        func() time.Time { return time.Now().UTC() },
 		jitter:     func() float64 { return 0.8 + rand.Float64()*0.4 },
 	}
+}
+
+type MQSender interface {
+	Send(ctx context.Context, message MQMessage) error
+}
+
+type MQMessage struct {
+	Provider    string
+	Destination string
+	TargetRef   string
+	Key         string
+	Headers     map[string]string
+	Payload     []byte
 }
 
 func (w *OutboxWorker) Run(ctx context.Context) {
@@ -59,17 +77,30 @@ func (w *OutboxWorker) tick(ctx context.Context) {
 		return
 	}
 	for _, message := range messages {
+		commandID := rewardCommandID(message)
+		if commandID != "" {
+			if err := w.repository.UpdateGrantOrderByCommandID(ctx, message.TenantID, commandID, marketing.GrantSending, ""); err != nil {
+				w.logger.Warn("advance grant order to sending failed", "outboxID", message.ID, "commandID", commandID, "error", err)
+				continue
+			}
+		}
 		if err := w.deliver(ctx, message); err != nil {
 			deliveryErr := classifyDeliveryError(err)
 			retryCount := message.RetryCount + 1
 			errorMessage := sanitizeError(deliveryErr.Error())
 			if !deliveryErr.retryable || retryCount >= w.maxRetries {
 				_ = w.repository.MarkOutboxDLQ(ctx, message.ID, retryCount, errorMessage)
+				if commandID != "" {
+					_ = w.repository.UpdateGrantOrderByCommandID(ctx, message.TenantID, commandID, marketing.GrantRetry, errorMessage)
+				}
 				w.logger.Warn("outbox moved to dlq", "id", message.ID, "error", err)
 				continue
 			}
 			nextRetry := w.nextRetryAt(retryCount, deliveryErr.retryAfter)
 			_ = w.repository.MarkOutboxFailed(ctx, message.ID, retryCount, nextRetry, errorMessage)
+			if commandID != "" {
+				_ = w.repository.UpdateGrantOrderByCommandID(ctx, message.TenantID, commandID, marketing.GrantRetry, errorMessage)
+			}
 			w.logger.Warn("outbox delivery failed", "id", message.ID, "retryCount", retryCount, "error", err)
 			continue
 		}
@@ -104,10 +135,55 @@ func (w *OutboxWorker) deliver(ctx context.Context, message marketing.OutboxMess
 			return err
 		}
 		return nil
-	case marketing.GrantMQ, marketing.GrantManualExport:
+	case marketing.GrantMQ:
+		if !json.Valid(message.Payload) {
+			return deliveryError{retryable: false, message: "payload_json is invalid JSON"}
+		}
+		target, err := mqtarget.Parse(message.TargetRef)
+		if err != nil {
+			return deliveryError{retryable: false, message: fmt.Sprintf("targetRef is invalid for MQ: %v", err)}
+		}
+		if w.mqSender == nil {
+			return deliveryError{retryable: true, message: fmt.Sprintf("mq sender is not configured for provider %s destination %s", target.Provider, target.Destination)}
+		}
+		mqMessage := buildMQMessage(message, target)
+		if err := w.mqSender.Send(ctx, mqMessage); err != nil {
+			return err
+		}
 		return nil
+	case marketing.GrantManualExport:
+		return deliveryError{retryable: false, message: fmt.Sprintf("unsupported target channel %s", message.TargetChannel)}
 	default:
 		return deliveryError{retryable: false, message: fmt.Sprintf("unsupported target channel %s", message.TargetChannel)}
+	}
+}
+
+func buildMQMessage(message marketing.OutboxMessage, target mqtarget.Target) MQMessage {
+	headers := map[string]string{
+		"tenantId":      message.TenantID,
+		"messageType":   message.MessageType,
+		"targetChannel": string(message.TargetChannel),
+	}
+	var command marketing.RewardCommand
+	if err := json.Unmarshal(message.Payload, &command); err == nil {
+		if command.CommandID != "" {
+			headers["commandId"] = command.CommandID
+		}
+		if command.IdempotencyKey != "" {
+			headers["idempotencyKey"] = command.IdempotencyKey
+		}
+		if command.TenantID != "" {
+			headers["tenantId"] = command.TenantID
+		}
+	}
+	key := firstNonEmpty(headers["commandId"], headers["idempotencyKey"], message.ID)
+	return MQMessage{
+		Provider:    target.Provider,
+		Destination: target.Destination,
+		TargetRef:   message.TargetRef,
+		Key:         key,
+		Headers:     headers,
+		Payload:     append([]byte(nil), message.Payload...),
 	}
 }
 
@@ -196,4 +272,24 @@ func sanitizeError(message string) string {
 		message = message[:500]
 	}
 	return message
+}
+
+func rewardCommandID(message marketing.OutboxMessage) string {
+	if message.MessageType != "REWARD_COMMAND" {
+		return ""
+	}
+	var command marketing.RewardCommand
+	if err := json.Unmarshal(message.Payload, &command); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(command.CommandID)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }

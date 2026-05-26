@@ -2,10 +2,12 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -25,6 +27,120 @@ func TestOutboxWorkerSendsHTTPAndMarksSent(t *testing.T) {
 
 	if got := repo.messages[0].SendStatus; got != marketing.OutboxSent {
 		t.Fatalf("expected SENT, got %s", got)
+	}
+}
+
+func TestOutboxWorkerSendsWebhookAndMarksSent(t *testing.T) {
+	repo := newWorkerTestRepo(outboxMessage("outbox_webhook_sent", marketing.GrantWebhook, "{}"))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("expected POST, got %s", r.Method)
+		}
+		if got := r.Header.Get("content-type"); got != "application/json" {
+			t.Fatalf("expected JSON content-type, got %q", got)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	repo.messages[0].TargetRef = server.URL
+
+	worker := newTestWorker(repo)
+	worker.tick(context.Background())
+
+	if got := repo.messages[0].SendStatus; got != marketing.OutboxSent {
+		t.Fatalf("expected SENT, got %s", got)
+	}
+}
+
+func TestOutboxWorkerDoesNotFollowRedirects(t *testing.T) {
+	redirected := false
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/redirected" {
+			redirected = true
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		http.Redirect(w, r, server.URL+"/redirected", http.StatusFound)
+	}))
+	defer server.Close()
+
+	repo := newWorkerTestRepo(outboxMessage("outbox_redirect", marketing.GrantHTTP, "{}"))
+	repo.messages[0].TargetRef = server.URL
+
+	worker := newTestWorker(repo)
+	worker.tick(context.Background())
+
+	message := repo.messages[0]
+	if redirected {
+		t.Fatal("expected worker not to follow redirect")
+	}
+	if message.SendStatus != marketing.OutboxDLQ || !strings.Contains(message.ErrorMessage, "302") {
+		t.Fatalf("expected 302 to move to DLQ with status error, got %+v", message)
+	}
+}
+
+func TestOutboxWorkerAdvancesGrantOrderState(t *testing.T) {
+	message := outboxMessage("outbox_grant_state", marketing.GrantHTTP, `{"commandId":"cmd_grant_state"}`)
+	repo := newWorkerTestRepo(message)
+	repo.grantStatuses["cmd_grant_state"] = marketing.GrantPending
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+	repo.messages[0].TargetRef = server.URL
+
+	worker := newTestWorker(repo)
+	worker.tick(context.Background())
+
+	if got := repo.grantStatuses["cmd_grant_state"]; got != marketing.GrantRetry {
+		t.Fatalf("expected grant order RETRY after delivery failure, got %s", got)
+	}
+	if got := repo.grantRetryCounts["cmd_grant_state"]; got != 1 {
+		t.Fatalf("expected grant retry_count=1, got %d", got)
+	}
+}
+
+func TestOutboxWorkerTimeoutIsRetryableFailure(t *testing.T) {
+	repo := newWorkerTestRepo(outboxMessage("outbox_timeout", marketing.GrantHTTP, "{}"))
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(50 * time.Millisecond)
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	repo.messages[0].TargetRef = server.URL
+
+	now := time.Date(2026, 5, 25, 10, 0, 0, 0, time.UTC)
+	worker := newTestWorker(repo)
+	worker.client.Timeout = 5 * time.Millisecond
+	worker.now = func() time.Time { return now }
+	worker.tick(context.Background())
+
+	message := repo.messages[0]
+	if message.SendStatus != marketing.OutboxFailed || message.RetryCount != 1 {
+		t.Fatalf("expected timeout to be retryable FAILED, got %+v", message)
+	}
+	if !strings.Contains(strings.ToLower(message.ErrorMessage), "timeout") {
+		t.Fatalf("expected timeout error message, got %q", message.ErrorMessage)
+	}
+}
+
+func TestOutboxWorkerNetworkErrorIsRetryableFailure(t *testing.T) {
+	repo := newWorkerTestRepo(outboxMessage("outbox_network", marketing.GrantHTTP, "{}"))
+	now := time.Date(2026, 5, 25, 10, 0, 0, 0, time.UTC)
+	worker := newTestWorker(repo)
+	worker.client.Transport = roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("dial tcp: connection refused")
+	})
+	worker.now = func() time.Time { return now }
+	worker.tick(context.Background())
+
+	message := repo.messages[0]
+	if message.SendStatus != marketing.OutboxFailed || message.RetryCount != 1 {
+		t.Fatalf("expected network error to be retryable FAILED, got %+v", message)
+	}
+	if !strings.Contains(message.ErrorMessage, "connection refused") {
+		t.Fatalf("expected network error message, got %q", message.ErrorMessage)
 	}
 }
 
@@ -106,13 +222,80 @@ func TestOutboxWorkerMaxRetriesMovesToDLQ(t *testing.T) {
 	}
 }
 
-func TestOutboxWorkerSkipsMQMessages(t *testing.T) {
-	repo := newWorkerTestRepo(outboxMessage("outbox_mq", marketing.GrantMQ, "{}"))
+func TestOutboxWorkerInvalidTargetMovesToDLQ(t *testing.T) {
+	repo := newWorkerTestRepo(outboxMessage("outbox_invalid_target", marketing.GrantHTTP, "{}"))
+	repo.messages[0].TargetRef = "reward.commands"
+
 	worker := newTestWorker(repo)
 	worker.tick(context.Background())
 
-	if repo.messages[0].SendStatus != marketing.OutboxPending {
-		t.Fatalf("expected MQ message to remain pending, got %s", repo.messages[0].SendStatus)
+	message := repo.messages[0]
+	if message.SendStatus != marketing.OutboxDLQ || !strings.Contains(message.ErrorMessage, "http(s) URL") {
+		t.Fatalf("expected invalid target to move to DLQ, got %+v", message)
+	}
+}
+
+func TestOutboxWorkerInvalidPayloadMovesToDLQ(t *testing.T) {
+	repo := newWorkerTestRepo(outboxMessage("outbox_invalid_payload", marketing.GrantHTTP, "{"))
+
+	worker := newTestWorker(repo)
+	worker.tick(context.Background())
+
+	message := repo.messages[0]
+	if message.SendStatus != marketing.OutboxDLQ || !strings.Contains(message.ErrorMessage, "invalid JSON") {
+		t.Fatalf("expected invalid payload to move to DLQ, got %+v", message)
+	}
+}
+
+func TestOutboxWorkerSendsMQAndMarksSent(t *testing.T) {
+	repo := newWorkerTestRepo(outboxMessage("outbox_mq", marketing.GrantMQ, `{"tenantId":"tenant_001","commandId":"cmd_mq","idempotencyKey":"idem_mq"}`))
+	repo.grantStatuses["cmd_mq"] = marketing.GrantPending
+	worker := newTestWorker(repo)
+	sender := &recordingMQSender{}
+	worker.mqSender = sender
+	worker.tick(context.Background())
+
+	if repo.messages[0].SendStatus != marketing.OutboxSent {
+		t.Fatalf("expected MQ message SENT, got %s", repo.messages[0].SendStatus)
+	}
+	if len(sender.messages) != 1 {
+		t.Fatalf("expected one MQ message, got %d", len(sender.messages))
+	}
+	message := sender.messages[0]
+	if message.Provider != "kafka" || message.Destination != "reward.commands" {
+		t.Fatalf("expected kafka reward.commands target, got %+v", message)
+	}
+	if message.Key != "cmd_mq" || message.Headers["tenantId"] != "tenant_001" || message.Headers["idempotencyKey"] != "idem_mq" {
+		t.Fatalf("expected command headers and key, got %+v", message)
+	}
+}
+
+func TestOutboxWorkerMQSendFailureKeepsOutboxRetryable(t *testing.T) {
+	repo := newWorkerTestRepo(outboxMessage("outbox_mq_failure", marketing.GrantMQ, `{"commandId":"cmd_mq_failure"}`))
+	repo.grantStatuses["cmd_mq_failure"] = marketing.GrantPending
+	worker := newTestWorker(repo)
+	worker.mqSender = &recordingMQSender{err: errors.New("broker unavailable token=secret")}
+	worker.tick(context.Background())
+
+	message := repo.messages[0]
+	if message.SendStatus != marketing.OutboxFailed || message.RetryCount != 1 {
+		t.Fatalf("expected MQ failure to keep retryable outbox, got %+v", message)
+	}
+	if strings.Contains(message.ErrorMessage, "token=secret") {
+		t.Fatalf("expected sensitive error to be redacted, got %q", message.ErrorMessage)
+	}
+}
+
+func TestOutboxWorkerMQInvalidTargetMovesToDLQ(t *testing.T) {
+	repo := newWorkerTestRepo(outboxMessage("outbox_mq_invalid", marketing.GrantMQ, "{}"))
+	repo.messages[0].TargetRef = "kafka://"
+	worker := newTestWorker(repo)
+	worker.mqSender = &recordingMQSender{}
+	worker.tick(context.Background())
+
+	message := repo.messages[0]
+	if message.SendStatus != marketing.OutboxDLQ || !strings.Contains(message.ErrorMessage, "targetRef") {
+		t.Fatalf("expected invalid MQ target to move to DLQ, got %+v", message)
 	}
 }
 
@@ -126,7 +309,7 @@ func outboxMessage(id string, channel marketing.GrantChannel, payload string) ma
 	now := time.Date(2026, 5, 25, 9, 0, 0, 0, time.UTC)
 	target := "http://127.0.0.1"
 	if channel == marketing.GrantMQ {
-		target = "reward.commands"
+		target = "kafka://reward.commands"
 	}
 	return marketing.OutboxMessage{
 		ID:            id,
@@ -142,11 +325,17 @@ func outboxMessage(id string, channel marketing.GrantChannel, payload string) ma
 }
 
 type workerTestRepo struct {
-	messages []marketing.OutboxMessage
+	messages         []marketing.OutboxMessage
+	grantStatuses    map[string]marketing.GrantStatus
+	grantRetryCounts map[string]int
 }
 
 func newWorkerTestRepo(messages ...marketing.OutboxMessage) *workerTestRepo {
-	return &workerTestRepo{messages: messages}
+	return &workerTestRepo{
+		messages:         messages,
+		grantStatuses:    map[string]marketing.GrantStatus{},
+		grantRetryCounts: map[string]int{},
+	}
 }
 
 func (r *workerTestRepo) ListPendingOutbox(ctx context.Context, limit int) ([]marketing.OutboxMessage, error) {
@@ -154,7 +343,7 @@ func (r *workerTestRepo) ListPendingOutbox(ctx context.Context, limit int) ([]ma
 	now := time.Now().UTC()
 	for i := range r.messages {
 		message := r.messages[i]
-		if message.TargetChannel != marketing.GrantHTTP && message.TargetChannel != marketing.GrantWebhook {
+		if message.TargetChannel != marketing.GrantHTTP && message.TargetChannel != marketing.GrantWebhook && message.TargetChannel != marketing.GrantMQ {
 			continue
 		}
 		if message.SendStatus != marketing.OutboxPending && message.SendStatus != marketing.OutboxFailed {
@@ -236,10 +425,27 @@ func (r *workerTestRepo) CreateParticipation(context.Context, marketing.Particip
 func (r *workerTestRepo) CreateGrantOrder(context.Context, marketing.GrantOrder) (marketing.GrantOrder, error) {
 	panic("not implemented")
 }
-func (r *workerTestRepo) UpdateGrantOrderByCommandID(context.Context, string, string, marketing.GrantStatus, string) error {
-	panic("not implemented")
+func (r *workerTestRepo) UpdateGrantOrderByCommandID(_ context.Context, _ string, commandID string, status marketing.GrantStatus, _ string) error {
+	current, ok := r.grantStatuses[commandID]
+	if !ok {
+		return marketing.ErrNotFound
+	}
+	if status == marketing.GrantSending && current != marketing.GrantPending && current != marketing.GrantRetry {
+		return marketing.ErrCallbackConflict
+	}
+	if status == marketing.GrantRetry && current != marketing.GrantSending {
+		return marketing.ErrCallbackConflict
+	}
+	r.grantStatuses[commandID] = status
+	if status == marketing.GrantRetry {
+		r.grantRetryCounts[commandID]++
+	}
+	return nil
 }
 func (r *workerTestRepo) ApplyRewardCallback(context.Context, marketing.RewardCallback) (marketing.RewardCallbackResult, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) ReleaseExpiredQuotaReservations(context.Context, marketing.QuotaTimeoutReleaseCommand) (marketing.QuotaTimeoutReleaseResult, error) {
 	panic("not implemented")
 }
 func (r *workerTestRepo) ListRewardReconciliation(context.Context, marketing.RewardReconciliationQuery) ([]marketing.RewardReconciliationItem, error) {
@@ -274,4 +480,20 @@ func (r *workerTestRepo) CreateAudit(context.Context, marketing.AuditRecord) err
 }
 func (r *workerTestRepo) ListAudit(context.Context, marketing.AuditQuery) ([]marketing.AuditRecord, error) {
 	panic("not implemented")
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
+}
+
+type recordingMQSender struct {
+	messages []MQMessage
+	err      error
+}
+
+func (s *recordingMQSender) Send(_ context.Context, message MQMessage) error {
+	s.messages = append(s.messages, message)
+	return s.err
 }

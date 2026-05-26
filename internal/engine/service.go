@@ -43,6 +43,15 @@ func (s *Service) SaveFactProvider(ctx context.Context, provider marketing.FactP
 }
 
 func (s *Service) QueryFacts(ctx context.Context, request marketing.FactQueryRequest) (marketing.FactQueryResponse, error) {
+	if err := fact.ValidateRequest(request); err != nil {
+		return marketing.FactQueryResponse{
+			TenantID:  request.TenantID,
+			FactCode:  request.FactCode,
+			Success:   false,
+			ErrorCode: fact.CodeInvalidFactQuery,
+			Error:     err.Error(),
+		}, nil
+	}
 	provider, err := s.repository.FindEnabledFactProvider(ctx, request.TenantID, request.FactCode)
 	if err != nil {
 		if errors.Is(err, marketing.ErrNotFound) {
@@ -51,7 +60,16 @@ func (s *Service) QueryFacts(ctx context.Context, request marketing.FactQueryReq
 				FactCode:  request.FactCode,
 				Success:   false,
 				ErrorCode: fact.CodeProviderNotConfigured,
-				Error:     "fact provider is not configured or enabled",
+				Error:     "fact provider is not configured",
+			}, nil
+		}
+		if errors.Is(err, marketing.ErrFactProviderDisabled) {
+			return marketing.FactQueryResponse{
+				TenantID:  request.TenantID,
+				FactCode:  request.FactCode,
+				Success:   false,
+				ErrorCode: fact.CodeProviderDisabled,
+				Error:     "fact provider is disabled",
 			}, nil
 		}
 		return marketing.FactQueryResponse{}, err
@@ -107,11 +125,18 @@ func (s *Service) CreateActivity(ctx context.Context, cmd marketing.CreateActivi
 }
 
 func (s *Service) validateActivityFactReferences(ctx context.Context, tenantID string, rules []marketing.Rule) error {
-	for factCode, fields := range marketing.ExtractFactReferences(rules) {
+	refs, err := marketing.ExtractFactReferencesValidated(rules)
+	if err != nil {
+		return errors.Join(marketing.ErrInvalidActivity, err)
+	}
+	for factCode, fields := range refs {
 		provider, err := s.repository.FindEnabledFactProvider(ctx, tenantID, factCode)
 		if err != nil {
 			if errors.Is(err, marketing.ErrNotFound) {
-				return errors.Join(marketing.ErrInvalidActivity, fmt.Errorf("FACT_PROVIDER_NOT_CONFIGURED: fact provider %s is missing or disabled", factCode))
+				return errors.Join(marketing.ErrInvalidActivity, fmt.Errorf("FACT_PROVIDER_NOT_CONFIGURED: fact provider %s is missing", factCode))
+			}
+			if errors.Is(err, marketing.ErrFactProviderDisabled) {
+				return errors.Join(marketing.ErrInvalidActivity, fmt.Errorf("FACT_PROVIDER_DISABLED: fact provider %s is disabled", factCode))
 			}
 			return err
 		}
@@ -246,6 +271,9 @@ func (s *Service) RecordAudit(ctx context.Context, tenantID, actor, action, reso
 }
 
 func (s *Service) ListOutboxDLQ(ctx context.Context, tenantID string, includeClosed bool, limit int) ([]marketing.OutboxMessage, error) {
+	if strings.TrimSpace(tenantID) == "" {
+		return nil, errors.Join(marketing.ErrInvalidOperation, errors.New("tenantId is required"))
+	}
 	return s.repository.ListOutboxDLQ(ctx, tenantID, includeClosed, limit)
 }
 
@@ -316,16 +344,35 @@ func (s *Service) ProcessEventFrom(ctx context.Context, event marketing.Activity
 	exclusiveSingleSelect := exclusiveSingleSelectGroups(activities)
 
 	result := marketing.ProcessEventResult{Inbox: inbox}
-	matchedExclusive := map[string]bool{}
+	matchedExclusive := map[string]string{}
 	for _, activity := range activities {
 		if decision := matchWindowDecision(activity, event.OccurredAt); decision.Decision != marketing.RuleDecisionPassed {
 			continue
 		}
 		if entryAllowed, entryRuleResult := activityEntryAllowed(activity, event); !entryAllowed {
+			participation, err := s.createRejectedParticipation(ctx, inbox, activity, entryRuleResult)
+			if err != nil {
+				inbox.ProcessStatus = marketing.InboxFailed
+				inbox.ErrorMessage = err.Error()
+				inbox.UpdatedAt = now
+				_ = s.repository.UpdateInbox(ctx, inbox)
+				return result, err
+			}
+			result.Participations = append(result.Participations, participation)
 			result.RuleResults = append(result.RuleResults, entryRuleResult)
 			continue
 		}
-		if activity.ExclusiveGroup != "" && matchedExclusive[activity.ExclusiveGroup] && exclusiveSingleSelect[activity.ExclusiveGroup] {
+		if activity.ExclusiveGroup != "" && matchedExclusive[activity.ExclusiveGroup] != "" && exclusiveSingleSelect[activity.ExclusiveGroup] {
+			participation, ruleResult, err := s.createExclusiveRejectedParticipation(ctx, inbox, activity, matchedExclusive[activity.ExclusiveGroup])
+			if err != nil {
+				inbox.ProcessStatus = marketing.InboxFailed
+				inbox.ErrorMessage = err.Error()
+				inbox.UpdatedAt = now
+				_ = s.repository.UpdateInbox(ctx, inbox)
+				return result, err
+			}
+			result.Participations = append(result.Participations, participation)
+			result.RuleResults = append(result.RuleResults, ruleResult)
 			continue
 		}
 
@@ -343,7 +390,7 @@ func (s *Service) ProcessEventFrom(ctx context.Context, event marketing.Activity
 		result.OutboxMessages = append(result.OutboxMessages, outboxMessages...)
 		result.RuleResults = append(result.RuleResults, ruleResult)
 		if qualified && activity.ExclusiveGroup != "" {
-			matchedExclusive[activity.ExclusiveGroup] = true
+			matchedExclusive[activity.ExclusiveGroup] = activity.Code
 		}
 	}
 
@@ -404,7 +451,7 @@ func (s *Service) SimulateEvent(ctx context.Context, event marketing.ActivityEve
 		activityResult.WouldCreateGrantOrders = len(grants) > 0
 
 		if ruleResult.Decision == marketing.RuleDecisionPassed && len(grants) > 0 {
-			quotaPreviews, hasQuotaRisk, err := s.quotaImpactPreviews(ctx, activity.ID, event.Subject.ID, totalRewardAmount, stockReservations)
+			quotaPreviews, hasQuotaRisk, err := s.quotaImpactPreviews(ctx, activity, event, totalRewardAmount, stockReservations)
 			if err != nil {
 				return marketing.SimulationResult{}, err
 			}
@@ -449,11 +496,44 @@ func (s *Service) SimulateEvent(ctx context.Context, event marketing.ActivityEve
 }
 
 func (s *Service) ApplyRewardCallback(ctx context.Context, callback marketing.RewardCallback) (marketing.RewardCallbackResult, error) {
+	callback = callback.Normalized()
+	if callback.FinishedAt.IsZero() {
+		callback.FinishedAt = s.now()
+	}
 	if err := callback.Validate(); err != nil {
 		return marketing.RewardCallbackResult{}, err
 	}
 	callback.FinishedAt = callback.FinishedAt.UTC()
 	return s.repository.ApplyRewardCallback(ctx, callback)
+}
+
+func (s *Service) ReleaseExpiredQuotaReservations(ctx context.Context, cmd marketing.QuotaTimeoutReleaseCommand) (marketing.QuotaTimeoutReleaseResult, error) {
+	if cmd.OlderThan.IsZero() {
+		cmd.OlderThan = s.now().Add(-2 * time.Hour)
+	}
+	cmd.OlderThan = cmd.OlderThan.UTC()
+	if cmd.Limit <= 0 {
+		cmd.Limit = 100
+	}
+	if err := cmd.Validate(); err != nil {
+		return marketing.QuotaTimeoutReleaseResult{}, err
+	}
+	result, err := s.repository.ReleaseExpiredQuotaReservations(ctx, cmd)
+	if err != nil {
+		return marketing.QuotaTimeoutReleaseResult{}, err
+	}
+	action := "QUOTA_TIMEOUT_RELEASE"
+	if cmd.DryRun {
+		action = "QUOTA_TIMEOUT_RELEASE_DRY_RUN"
+	}
+	_ = s.audit(ctx, cmd.TenantID, actorOrSystem(cmd.Operator), action, "quota_reservation", cmd.TenantID, auditSnapshot(nil, result.Items, map[string]any{
+		"olderThan": cmd.OlderThan,
+		"limit":     cmd.Limit,
+		"dryRun":    cmd.DryRun,
+		"reason":    cmd.Reason,
+		"count":     len(result.Items),
+	}))
+	return result, nil
 }
 
 type activityEntryConfig struct {
@@ -706,6 +786,53 @@ func normalizeMatchRuleDecision(activityResult *marketing.SimulationActivityResu
 	}
 }
 
+func (s *Service) createExclusiveRejectedParticipation(ctx context.Context, inbox marketing.EventInbox, activity marketing.Activity, winnerCode string) (marketing.Participation, marketing.ActivityRuleResult, error) {
+	reason := "activity lost exclusive group selection to " + winnerCode
+	ruleResult := marketing.ActivityRuleResult{
+		ActivityID:      activity.ID,
+		ActivityCode:    activity.Code,
+		ActivityVersion: activity.Version,
+		Decision:        marketing.RuleDecisionRejected,
+		FailedStage:     marketing.RuleStageRiskLimitBudget,
+		ReasonCode:      "EXCLUSIVE_GROUP_LOST",
+		Reason:          reason,
+		CanReward:       false,
+		CanReserveQuota: false,
+		StageResults: []marketing.RuleStageResult{{
+			Stage:      marketing.RuleStageRiskLimitBudget,
+			Status:     marketing.RuleDecisionRejected,
+			ReasonCode: "EXCLUSIVE_GROUP_LOST",
+			Reason:     reason,
+		}},
+	}
+	participation, err := s.createRejectedParticipation(ctx, inbox, activity, ruleResult)
+	return participation, ruleResult, err
+}
+
+func (s *Service) createRejectedParticipation(ctx context.Context, inbox marketing.EventInbox, activity marketing.Activity, ruleResult marketing.ActivityRuleResult) (marketing.Participation, error) {
+	now := s.now()
+	rejectReason := ruleResult.ReasonCode
+	if ruleResult.Reason != "" {
+		rejectReason += ": " + ruleResult.Reason
+	}
+	participation := marketing.Participation{
+		ID:             marketingID("part"),
+		TenantID:       activity.TenantID,
+		ActivityID:     activity.ID,
+		EventInboxID:   inbox.ID,
+		Subject:        inbox.Event.Subject,
+		Biz:            inbox.Event.Biz,
+		Status:         marketing.ParticipationRejected,
+		RejectReason:   rejectReason,
+		IdempotencyKey: participationIdempotencyKey(activity, inbox.Event),
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	participation.Snapshot = participationSnapshot(activity, inbox, ruleResult, nil, nil)
+	created, err := s.repository.CreateParticipation(ctx, participation)
+	return created, err
+}
+
 func (s *Service) evaluateActivity(ctx context.Context, inbox marketing.EventInbox, activity marketing.Activity) (marketing.Participation, []marketing.GrantOrder, []marketing.OutboxMessage, marketing.ActivityRuleResult, bool, error) {
 	now := s.now()
 	participation := marketing.Participation{
@@ -852,13 +979,15 @@ func (s *Service) evaluateActivity(ctx context.Context, inbox marketing.EventInb
 	}
 	participation.Snapshot = participationSnapshot(activity, inbox, ruleResult, rewardSummaries, pluginSnapshot)
 	atomicResult, err := s.repository.CreateParticipationGrantOutboxesWithQuota(ctx, marketing.AtomicGrantCommand{
-		Participation:     participation,
-		BudgetAmount:      totalRewardAmount.String(),
-		ReserveUserLimit:  true,
-		UserScopeKey:      inbox.Event.Subject.ID,
-		StockReservations: stockReservations,
-		GrantOrders:       orders,
-		OutboxMessages:    messages,
+		Participation:      participation,
+		BudgetAmount:       totalRewardAmount.String(),
+		ReserveUserLimit:   true,
+		UserScopeKey:       inbox.Event.Subject.ID,
+		ReserveDailyLimit:  true,
+		DailyLimitScopeKey: dailyLimitScopeKey(activity, inbox.Event),
+		StockReservations:  stockReservations,
+		GrantOrders:        orders,
+		OutboxMessages:     messages,
 	})
 	if err != nil {
 		if errors.Is(err, marketing.ErrQuotaExceeded) {
@@ -1071,18 +1200,19 @@ func rewardErrorPreview(configuredReward marketing.Reward, err error) marketing.
 	}
 }
 
-func (s *Service) quotaImpactPreviews(ctx context.Context, activityID string, userScopeKey string, totalRewardAmount decimal.Decimal, stockReservations []marketing.QuotaReservation) ([]marketing.QuotaImpactPreview, bool, error) {
-	quotas, err := s.repository.ListActivityQuotas(ctx, activityID)
+func (s *Service) quotaImpactPreviews(ctx context.Context, activity marketing.Activity, event marketing.ActivityEvent, totalRewardAmount decimal.Decimal, stockReservations []marketing.QuotaReservation) ([]marketing.QuotaImpactPreview, bool, error) {
+	quotas, err := s.repository.ListActivityQuotas(ctx, activity.ID)
 	if err != nil {
 		return nil, false, err
 	}
 	var impacts []marketing.QuotaImpactPreview
 	if totalRewardAmount.IsPositive() {
-		impacts = append(impacts, quotaImpactPreview(quotas, activityID, marketing.QuotaBudget, marketing.QuotaScopeActivity, "TOTAL", totalRewardAmount.String()))
-		impacts = append(impacts, quotaImpactPreview(quotas, activityID, marketing.QuotaUserLimit, marketing.QuotaScopeUser, userScopeKey, "1"))
+		impacts = append(impacts, quotaImpactPreview(quotas, activity.ID, marketing.QuotaBudget, marketing.QuotaScopeActivity, "TOTAL", totalRewardAmount.String()))
 	}
+	impacts = append(impacts, quotaImpactPreview(quotas, activity.ID, marketing.QuotaUserLimit, marketing.QuotaScopeUser, event.Subject.ID, "1"))
+	impacts = append(impacts, quotaImpactPreview(quotas, activity.ID, marketing.QuotaDailyLimit, marketing.QuotaScopeUser, dailyLimitScopeKey(activity, event), "1"))
 	for _, reservation := range stockReservations {
-		impacts = append(impacts, quotaImpactPreview(quotas, activityID, reservation.Type, reservation.Scope, reservation.ScopeKey, reservation.Amount))
+		impacts = append(impacts, quotaImpactPreview(quotas, activity.ID, reservation.Type, reservation.Scope, reservation.ScopeKey, reservation.Amount))
 	}
 	hasRisk := false
 	for _, impact := range impacts {
@@ -1169,12 +1299,16 @@ func (s *Service) queryActivityFacts(ctx context.Context, event marketing.Activi
 	facts := map[string]any{}
 	for factCode := range refs {
 		response, err := s.QueryFacts(ctx, marketing.FactQueryRequest{
-			TenantID:   activity.TenantID,
-			FactCode:   factCode,
-			Subject:    event.Subject,
-			Biz:        event.Biz,
-			Attributes: event.Attributes,
-			TraceID:    event.EventID,
+			EventID:      event.EventID,
+			EventType:    event.EventType,
+			SourceSystem: event.SourceSystem,
+			TenantID:     activity.TenantID,
+			FactCode:     factCode,
+			Subject:      event.Subject,
+			Biz:          event.Biz,
+			OccurredAt:   event.OccurredAt,
+			Attributes:   event.Attributes,
+			TraceID:      event.EventID,
 		})
 		if err != nil {
 			failure := marketing.FactQueryResponse{TenantID: activity.TenantID, FactCode: factCode, Success: false, ErrorCode: fact.CodeProviderHTTPFailed, Error: err.Error()}
@@ -1343,6 +1477,14 @@ func activityState(activity marketing.Activity, now time.Time) map[string]any {
 			"stackable": activity.Stackable,
 		},
 	}
+}
+
+func dailyLimitScopeKey(activity marketing.Activity, event marketing.ActivityEvent) string {
+	location, err := time.LoadLocation(strings.TrimSpace(activity.Timezone))
+	if err != nil {
+		location = time.UTC
+	}
+	return event.Subject.ID + ":" + event.OccurredAt.In(location).Format("2006-01-02")
 }
 
 func (s *Service) audit(ctx context.Context, tenantID, actor, action, resource, resourceID string, payload any) error {

@@ -4,6 +4,107 @@
 
 标题: Grant Order 状态机
 
-最终状态: ANALYSIS_READY
+风险: 高
 
-说明: 等待 Agent 运行。
+最终状态: COMMITTED
+
+生成时间: 2026-05-26T12:19:32Z
+
+说明: 自动流水线运行完成。
+
+## Agent 状态
+
+| Agent | Status | Output | Log | Next |
+| --- | --- | --- | --- | --- |
+| analysis | DONE | tasks/2026-05-24-grant-order/analysis.md | tasks/2026-05-24-grant-order/runs/20260526T120742Z-analysis.log | REVIEW_READY |
+| review | DONE | tasks/2026-05-24-grant-order/review.md | tasks/2026-05-24-grant-order/runs/20260526T121115Z-review.log | REVIEW_PASS |
+| test-plan | DONE | tasks/2026-05-24-grant-order/test-plan.md | tasks/2026-05-24-grant-order/runs/20260526T121224Z-test-plan.log | REVIEW_PASS |
+| dev | DONE | tasks/2026-05-24-grant-order/implementation.md | tasks/2026-05-24-grant-order/runs/20260526T121224Z-dev.log | REVIEW_PASS |
+| test | DONE | tasks/2026-05-24-grant-order/test.md | tasks/2026-05-24-grant-order/runs/20260526T121742Z-test.log | COMMIT_READY |
+| commit | DONE | tasks/2026-05-24-grant-order/commit.md | tasks/2026-05-24-grant-order/runs/20260526T121844Z-commit.log | COMMITTED |
+
+## 本次运行
+
+### review
+
+- ExitCode: 0
+- NextStatus: REVIEW_BLOCK
+- Score: -1
+- Log: tasks/2026-05-24-grant-order/runs/20260526T120150Z-review.log
+- Artifact: tasks/2026-05-24-grant-order/review.md
+
+### analysis
+
+- ExitCode: 0
+- NextStatus: REVIEW_READY
+- Score: 90
+- Log: tasks/2026-05-24-grant-order/runs/20260526T120259Z-analysis.log
+- Artifact: tasks/2026-05-24-grant-order/analysis.md
+
+### review
+
+- ExitCode: 0
+- NextStatus: REVIEW_BLOCK
+- Score: -1
+- Log: tasks/2026-05-24-grant-order/runs/20260526T120635Z-review.log
+- Artifact: tasks/2026-05-24-grant-order/review.md
+
+### analysis
+
+- ExitCode: 0
+- NextStatus: REVIEW_READY
+- Score: 91
+- Log: tasks/2026-05-24-grant-order/runs/20260526T120742Z-analysis.log
+- Artifact: tasks/2026-05-24-grant-order/analysis.md
+
+### review
+
+- ExitCode: 0
+- NextStatus: REVIEW_PASS
+- Score: -1
+- Log: tasks/2026-05-24-grant-order/runs/20260526T121115Z-review.log
+- Artifact: tasks/2026-05-24-grant-order/review.md
+
+### test-plan
+
+- ExitCode: 0
+- NextStatus: REVIEW_PASS
+- Score: -1
+- Log: tasks/2026-05-24-grant-order/runs/20260526T121224Z-test-plan.log
+- Artifact: tasks/2026-05-24-grant-order/test-plan.md
+
+### dev
+
+- ExitCode: 0
+- NextStatus: REVIEW_PASS
+- Score: -1
+- Log: tasks/2026-05-24-grant-order/runs/20260526T121224Z-dev.log
+- Artifact: tasks/2026-05-24-grant-order/implementation.md
+
+### test
+
+- ExitCode: 0
+- NextStatus: COMMIT_READY
+- Score: -1
+- Log: tasks/2026-05-24-grant-order/runs/20260526T121742Z-test.log
+- Artifact: tasks/2026-05-24-grant-order/test.md
+
+### commit
+
+- ExitCode: 0
+- NextStatus: COMMITTED
+- Score: -1
+- Log: tasks/2026-05-24-grant-order/runs/20260526T121844Z-commit.log
+- Artifact: tasks/2026-05-24-grant-order/commit.md
+
+
+## 产物文件
+
+- tasks/2026-05-24-grant-order/task.md
+- tasks/2026-05-24-grant-order/analysis.md
+- tasks/2026-05-24-grant-order/review.md
+- tasks/2026-05-24-grant-order/test-plan.md
+- tasks/2026-05-24-grant-order/implementation.md
+- tasks/2026-05-24-grant-order/test.md
+- tasks/2026-05-24-grant-order/commit.md
+- tasks/2026-05-24-grant-order/agent-status.json

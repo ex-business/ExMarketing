@@ -1,30 +1,54 @@
 {
   "requirementId": "2026-05-24-fact-query-2",
-  "updatedAt": "2026-05-24T11:39:29.039429Z",
+  "updatedAt": "2026-05-26T15:31:32.317832Z",
   "agents": {
     "analysis": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-fact-query-2/analysis.md"
+      "status": "DONE",
+      "startedAt": "2026-05-26T15:18:22.931663Z",
+      "finishedAt": "2026-05-26T15:21:07.275046Z",
+      "output": "tasks/2026-05-24-fact-query-2/analysis.md",
+      "log": "tasks/2026-05-24-fact-query-2/runs/20260526T151822Z-analysis.log",
+      "nextStatus": "REVIEW_READY"
     },
     "commit": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-fact-query-2/commit.md"
+      "status": "DONE",
+      "startedAt": "2026-05-26T15:30:41.384189Z",
+      "finishedAt": "2026-05-26T15:31:32.317828Z",
+      "output": "tasks/2026-05-24-fact-query-2/commit.md",
+      "log": "tasks/2026-05-24-fact-query-2/runs/20260526T153041Z-commit.log",
+      "nextStatus": "COMMITTED"
     },
     "dev": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-fact-query-2/implementation.md"
+      "status": "DONE",
+      "startedAt": "2026-05-26T15:22:03.182778Z",
+      "finishedAt": "2026-05-26T15:28:36.564105Z",
+      "output": "tasks/2026-05-24-fact-query-2/implementation.md",
+      "log": "tasks/2026-05-24-fact-query-2/runs/20260526T152203Z-dev.log",
+      "nextStatus": "REVIEW_PASS"
     },
     "review": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-fact-query-2/review.md"
+      "status": "DONE",
+      "startedAt": "2026-05-26T15:21:07.306197Z",
+      "finishedAt": "2026-05-26T15:22:03.178491Z",
+      "output": "tasks/2026-05-24-fact-query-2/review.md",
+      "log": "tasks/2026-05-24-fact-query-2/runs/20260526T152107Z-review.log",
+      "nextStatus": "REVIEW_PASS"
     },
     "test": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-fact-query-2/test.md"
+      "status": "DONE",
+      "startedAt": "2026-05-26T15:28:36.632536Z",
+      "finishedAt": "2026-05-26T15:30:41.355056Z",
+      "output": "tasks/2026-05-24-fact-query-2/test.md",
+      "log": "tasks/2026-05-24-fact-query-2/runs/20260526T152836Z-test.log",
+      "nextStatus": "COMMIT_READY"
     },
     "test-plan": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-fact-query-2/test-plan.md"
+      "status": "DONE",
+      "startedAt": "2026-05-26T15:22:03.211928Z",
+      "finishedAt": "2026-05-26T15:23:26.704254Z",
+      "output": "tasks/2026-05-24-fact-query-2/test-plan.md",
+      "log": "tasks/2026-05-24-fact-query-2/runs/20260526T152203Z-test-plan.log",
+      "nextStatus": "REVIEW_PASS"
     }
   }
 }

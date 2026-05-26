@@ -266,7 +266,7 @@ func (r *Repository) FindEnabledFactProvider(ctx context.Context, tenantID strin
 		SELECT tenant_id, fact_code, provider_type, endpoint, method, auth_ref,
 		       mapping_json, cache_ttl_seconds, enabled, timeout_ms, created_at, updated_at
 		FROM marketing_fact_provider
-		WHERE tenant_id = $1 AND fact_code = $2 AND enabled = TRUE
+		WHERE tenant_id = $1 AND fact_code = $2
 	`, tenantID, factCode).Scan(&provider.TenantID, &provider.FactCode, &provider.ProviderType, &provider.Endpoint,
 		&provider.Method, &authRef, &mapping, &provider.CacheTTLSeconds, &provider.Enabled, &provider.TimeoutMS,
 		&provider.CreatedAt, &provider.UpdatedAt)
@@ -279,6 +279,9 @@ func (r *Repository) FindEnabledFactProvider(ctx context.Context, tenantID strin
 	provider.AuthRef = authRef.String
 	if err := json.Unmarshal(mapping, &provider.Mapping); err != nil {
 		return marketing.FactProvider{}, err
+	}
+	if !provider.Enabled {
+		return marketing.FactProvider{}, marketing.ErrFactProviderDisabled
 	}
 	if err := provider.Validate(); err != nil {
 		return marketing.FactProvider{}, err
@@ -367,8 +370,16 @@ func (r *Repository) CreateGrantOrder(ctx context.Context, order marketing.Grant
 func (r *Repository) UpdateGrantOrderByCommandID(ctx context.Context, tenantID string, commandID string, status marketing.GrantStatus, message string) error {
 	result, err := r.db.ExecContext(ctx, `
 		UPDATE marketing_grant_order
-		SET grant_status = $1, error_message = $2, updated_at = NOW()
+		SET grant_status = $1,
+		    error_message = $2,
+		    retry_count = CASE WHEN $1 = 'RETRY' THEN retry_count + 1 ELSE retry_count END,
+		    updated_at = NOW()
 		WHERE tenant_id = $3 AND bill_no = $4
+		  AND grant_status NOT IN ('SUCCESS', 'FAILED', 'CLOSED')
+		  AND (
+		    ($1 = 'SENDING' AND grant_status IN ('PENDING', 'RETRY')) OR
+		    ($1 = 'RETRY' AND grant_status = 'SENDING')
+		  )
 	`, status, nullString(message), tenantID, commandID)
 	if err != nil {
 		return err
@@ -378,6 +389,18 @@ func (r *Repository) UpdateGrantOrderByCommandID(ctx context.Context, tenantID s
 		return err
 	}
 	if affected == 0 {
+		var exists bool
+		err = r.db.QueryRowContext(ctx, `
+			SELECT EXISTS (
+				SELECT 1 FROM marketing_grant_order WHERE tenant_id = $1 AND bill_no = $2
+			)
+		`, tenantID, commandID).Scan(&exists)
+		if err != nil {
+			return err
+		}
+		if exists {
+			return marketing.ErrCallbackConflict
+		}
 		return marketing.ErrNotFound
 	}
 	return nil
@@ -393,23 +416,45 @@ func (r *Repository) ApplyRewardCallback(ctx context.Context, callback marketing
 	var order marketing.GrantOrder
 	var externalGrantID sql.NullString
 	var finishedAt sql.NullTime
-	err = tx.QueryRowContext(ctx, `
+	rows, err := tx.QueryContext(ctx, `
 		SELECT id, tenant_id, activity_id, participation_id, subject_type, subject_id,
 		       reward_type, reward_amount::text, bill_no, grant_status, COALESCE(error_message, ''),
-		       COALESCE(external_grant_id, ''), finished_at, updated_at
+		       COALESCE(external_grant_id, ''), finished_at, idempotency_key, created_at, updated_at
 		FROM marketing_grant_order
-		WHERE tenant_id = $1 AND bill_no = $2
+		WHERE tenant_id = $1
+		  AND (($2 <> '' AND bill_no = $2) OR ($3 <> '' AND idempotency_key = $3))
 		FOR UPDATE
-	`, callback.TenantID, callback.CommandID).Scan(
-		&order.ID, &order.TenantID, &order.ActivityID, &order.ParticipationID,
-		&order.Subject.Type, &order.Subject.ID, &order.RewardType, &order.RewardAmount,
-		&order.BillNo, &order.GrantStatus, &order.ErrorMessage, &externalGrantID, &finishedAt, &order.UpdatedAt,
-	)
+	`, callback.TenantID, callback.CommandID, callback.IdempotencyKey)
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return marketing.RewardCallbackResult{}, marketing.ErrNotFound
-		}
 		return marketing.RewardCallbackResult{}, err
+	}
+	defer rows.Close()
+	found := 0
+	for rows.Next() {
+		found++
+		if found > 1 {
+			return marketing.RewardCallbackResult{}, marketing.ErrCallbackLocatorConflict
+		}
+		if err := rows.Scan(
+			&order.ID, &order.TenantID, &order.ActivityID, &order.ParticipationID,
+			&order.Subject.Type, &order.Subject.ID, &order.RewardType, &order.RewardAmount,
+			&order.BillNo, &order.GrantStatus, &order.ErrorMessage, &externalGrantID, &finishedAt,
+			&order.IdempotencyKey, &order.CreatedAt, &order.UpdatedAt,
+		); err != nil {
+			return marketing.RewardCallbackResult{}, err
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return marketing.RewardCallbackResult{}, err
+	}
+	if found == 0 {
+		return marketing.RewardCallbackResult{}, marketing.ErrNotFound
+	}
+	if callback.CommandID != "" && order.BillNo != callback.CommandID {
+		return marketing.RewardCallbackResult{}, marketing.ErrCallbackLocatorConflict
+	}
+	if callback.IdempotencyKey != "" && order.IdempotencyKey != callback.IdempotencyKey {
+		return marketing.RewardCallbackResult{}, marketing.ErrCallbackLocatorConflict
 	}
 	order.ExternalGrantID = externalGrantID.String
 	if finishedAt.Valid {
@@ -435,21 +480,61 @@ func (r *Repository) ApplyRewardCallback(ctx context.Context, callback marketing
 		}
 		return marketing.RewardCallbackResult{
 			CommandID:           order.BillNo,
+			BillNo:              order.BillNo,
+			IdempotencyKey:      order.IdempotencyKey,
 			TenantID:            order.TenantID,
 			GrantOrderID:        order.ID,
 			ParticipationID:     order.ParticipationID,
 			GrantStatus:         order.GrantStatus,
+			Status:              order.GrantStatus,
 			ParticipationStatus: status,
 			Duplicate:           true,
 			Reservations:        reservations,
 		}, nil
 	}
+	if order.GrantStatus != marketing.GrantSending && order.GrantStatus != marketing.GrantRetry {
+		return marketing.RewardCallbackResult{}, marketing.ErrCallbackConflict
+	}
 	if len(reservations) == 0 {
-		return marketing.RewardCallbackResult{}, marketing.ErrQuotaReservationMissing
+		hadQuota, err := activityHadQuotaAtTx(ctx, tx, order.ActivityID, order.CreatedAt)
+		if err != nil {
+			return marketing.RewardCallbackResult{}, err
+		}
+		if hadQuota {
+			return marketing.RewardCallbackResult{}, marketing.ErrQuotaReservationMissing
+		}
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE marketing_grant_order
+			SET grant_status = $1, external_grant_id = $2, error_message = $3, finished_at = $4, updated_at = NOW()
+			WHERE id = $5
+		`, callback.Status, nullString(callback.ExternalGrantID), nullString(callback.Message), callback.FinishedAt, order.ID); err != nil {
+			return marketing.RewardCallbackResult{}, err
+		}
+		status, err := updateParticipationAfterCallbackTx(ctx, tx, order.ParticipationID)
+		if err != nil {
+			return marketing.RewardCallbackResult{}, err
+		}
+		if err := tx.Commit(); err != nil {
+			return marketing.RewardCallbackResult{}, err
+		}
+		return marketing.RewardCallbackResult{
+			CommandID:           order.BillNo,
+			BillNo:              order.BillNo,
+			IdempotencyKey:      order.IdempotencyKey,
+			TenantID:            order.TenantID,
+			GrantOrderID:        order.ID,
+			ParticipationID:     order.ParticipationID,
+			GrantStatus:         callback.Status,
+			Status:              callback.Status,
+			ParticipationStatus: status,
+		}, nil
 	}
 	for _, reservation := range reservations {
 		if reservation.Status != marketing.QuotaReservationFrozen {
 			return marketing.RewardCallbackResult{}, marketing.ErrQuotaReservationConflict
+		}
+		if isParticipationQuotaReservation(reservation) {
+			continue
 		}
 		if err := finishQuotaReservationTx(ctx, tx, reservation, callback.Status); err != nil {
 			return marketing.RewardCallbackResult{}, err
@@ -466,6 +551,15 @@ func (r *Repository) ApplyRewardCallback(ctx context.Context, callback marketing
 	if err != nil {
 		return marketing.RewardCallbackResult{}, err
 	}
+	if status == marketing.ParticipationGranted || status == marketing.ParticipationFailed {
+		finalStatus := marketing.GrantSuccess
+		if status == marketing.ParticipationFailed {
+			finalStatus = marketing.GrantFailed
+		}
+		if err := finishParticipationQuotaReservationsTx(ctx, tx, order.ParticipationID, finalStatus); err != nil {
+			return marketing.RewardCallbackResult{}, err
+		}
+	}
 	reservations, err = quotaReservationsForOrderTx(ctx, tx, order.ID)
 	if err != nil {
 		return marketing.RewardCallbackResult{}, err
@@ -475,13 +569,146 @@ func (r *Repository) ApplyRewardCallback(ctx context.Context, callback marketing
 	}
 	return marketing.RewardCallbackResult{
 		CommandID:           order.BillNo,
+		BillNo:              order.BillNo,
+		IdempotencyKey:      order.IdempotencyKey,
 		TenantID:            order.TenantID,
 		GrantOrderID:        order.ID,
 		ParticipationID:     order.ParticipationID,
 		GrantStatus:         callback.Status,
+		Status:              callback.Status,
 		ParticipationStatus: status,
 		Reservations:        reservations,
 	}, nil
+}
+
+func (r *Repository) ReleaseExpiredQuotaReservations(ctx context.Context, cmd marketing.QuotaTimeoutReleaseCommand) (marketing.QuotaTimeoutReleaseResult, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return marketing.QuotaTimeoutReleaseResult{}, err
+	}
+	defer rollback(tx)
+
+	limit := cmd.Limit
+	if limit <= 0 {
+		limit = 100
+	}
+	result := marketing.QuotaTimeoutReleaseResult{
+		TenantID:  cmd.TenantID,
+		OlderThan: cmd.OlderThan,
+		Limit:     limit,
+		DryRun:    cmd.DryRun,
+		Operator:  cmd.Operator,
+		Reason:    cmd.Reason,
+	}
+	rows, err := tx.QueryContext(ctx, `
+		SELECT g.id, g.tenant_id, g.activity_id, g.participation_id, g.bill_no, g.grant_status
+		FROM marketing_grant_order g
+		WHERE g.tenant_id = $1
+		  AND g.grant_status NOT IN ('SUCCESS', 'FAILED', 'CLOSED')
+		  AND COALESCE(g.updated_at, g.created_at) < $2
+		  AND EXISTS (
+		    SELECT 1 FROM marketing_quota_reservation r
+		    WHERE r.grant_order_id = g.id AND r.reservation_status = 'FROZEN'
+		  )
+		ORDER BY COALESCE(g.updated_at, g.created_at) ASC, g.id ASC
+		LIMIT $3
+		FOR UPDATE OF g
+	`, cmd.TenantID, cmd.OlderThan, limit)
+	if err != nil {
+		return marketing.QuotaTimeoutReleaseResult{}, err
+	}
+	defer rows.Close()
+
+	var orders []marketing.GrantOrder
+	for rows.Next() {
+		var order marketing.GrantOrder
+		if err := rows.Scan(&order.ID, &order.TenantID, &order.ActivityID, &order.ParticipationID, &order.BillNo, &order.GrantStatus); err != nil {
+			return marketing.QuotaTimeoutReleaseResult{}, err
+		}
+		orders = append(orders, order)
+	}
+	if err := rows.Err(); err != nil {
+		return marketing.QuotaTimeoutReleaseResult{}, err
+	}
+	if err := rows.Close(); err != nil {
+		return marketing.QuotaTimeoutReleaseResult{}, err
+	}
+
+	for _, order := range orders {
+		beforeStatus := order.GrantStatus
+		reservations, err := quotaReservationsForOrderTx(ctx, tx, order.ID)
+		if err != nil {
+			return marketing.QuotaTimeoutReleaseResult{}, err
+		}
+		if cmd.DryRun {
+			status, err := participationStatusTx(ctx, tx, order.ParticipationID)
+			if err != nil {
+				return marketing.QuotaTimeoutReleaseResult{}, err
+			}
+			result.Items = append(result.Items, marketing.QuotaTimeoutReleaseItem{
+				CommandID:           order.BillNo,
+				GrantOrderID:        order.ID,
+				ParticipationID:     order.ParticipationID,
+				ActivityID:          order.ActivityID,
+				PreviousGrantStatus: beforeStatus,
+				GrantStatus:         order.GrantStatus,
+				ParticipationStatus: status,
+				Result:              "DRY_RUN",
+				Reservations:        reservations,
+			})
+			continue
+		}
+		for _, reservation := range reservations {
+			if reservation.Status != marketing.QuotaReservationFrozen || isParticipationQuotaReservation(reservation) {
+				continue
+			}
+			if err := finishQuotaReservationTx(ctx, tx, reservation, marketing.GrantFailed); err != nil {
+				return marketing.QuotaTimeoutReleaseResult{}, err
+			}
+		}
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE marketing_grant_order
+			SET grant_status = 'FAILED',
+			    error_message = $2,
+			    finished_at = NOW(),
+			    updated_at = NOW()
+			WHERE id = $1
+		`, order.ID, nullString("TIMEOUT_RELEASE: "+cmd.Reason)); err != nil {
+			return marketing.QuotaTimeoutReleaseResult{}, err
+		}
+		status, err := updateParticipationAfterCallbackTx(ctx, tx, order.ParticipationID)
+		if err != nil {
+			return marketing.QuotaTimeoutReleaseResult{}, err
+		}
+		if status == marketing.ParticipationGranted || status == marketing.ParticipationFailed {
+			finalStatus := marketing.GrantSuccess
+			if status == marketing.ParticipationFailed {
+				finalStatus = marketing.GrantFailed
+			}
+			if err := finishParticipationQuotaReservationsTx(ctx, tx, order.ParticipationID, finalStatus); err != nil {
+				return marketing.QuotaTimeoutReleaseResult{}, err
+			}
+		}
+		reservations, err = quotaReservationsForOrderTx(ctx, tx, order.ID)
+		if err != nil {
+			return marketing.QuotaTimeoutReleaseResult{}, err
+		}
+		result.Items = append(result.Items, marketing.QuotaTimeoutReleaseItem{
+			CommandID:           order.BillNo,
+			GrantOrderID:        order.ID,
+			ParticipationID:     order.ParticipationID,
+			ActivityID:          order.ActivityID,
+			PreviousGrantStatus: beforeStatus,
+			GrantStatus:         marketing.GrantFailed,
+			ParticipationStatus: status,
+			Result:              "RELEASED",
+			Reservations:        reservations,
+		})
+	}
+	if err := tx.Commit(); err != nil {
+		return marketing.QuotaTimeoutReleaseResult{}, err
+	}
+	return result, nil
 }
 
 func (r *Repository) ListRewardReconciliation(ctx context.Context, query marketing.RewardReconciliationQuery) ([]marketing.RewardReconciliationItem, error) {
@@ -568,6 +795,11 @@ func (r *Repository) CreateParticipationGrantOutboxesWithQuota(ctx context.Conte
 			return marketing.AtomicGrantResult{}, err
 		}
 	}
+	if cmd.ReserveDailyLimit {
+		if err := reserveQuotaOrExceeded(ctx, tx, cmd.Participation.ActivityID, marketing.QuotaDailyLimit, marketing.QuotaScopeUser, cmd.DailyLimitScopeKey, "1"); err != nil {
+			return marketing.AtomicGrantResult{}, err
+		}
+	}
 	for _, reservation := range cmd.StockReservations {
 		if err := reserveQuotaOrExceeded(ctx, tx, cmd.Participation.ActivityID, reservation.Type, reservation.Scope, reservation.ScopeKey, reservation.Amount); err != nil {
 			return marketing.AtomicGrantResult{}, err
@@ -588,7 +820,11 @@ func (r *Repository) CreateParticipationGrantOutboxesWithQuota(ctx context.Conte
 			return marketing.AtomicGrantResult{}, err
 		}
 	}
-	for _, reservation := range postgresQuotaReservationsForAtomicCommand(cmd, time.Now().UTC()) {
+	reservations, err := postgresQuotaReservationsForAtomicCommand(ctx, tx, cmd, time.Now().UTC())
+	if err != nil {
+		return marketing.AtomicGrantResult{}, err
+	}
+	for _, reservation := range reservations {
 		_, err = tx.ExecContext(ctx, `
 			INSERT INTO marketing_quota_reservation (
 				id, tenant_id, activity_id, grant_order_id, command_id, quota_type,
@@ -738,7 +974,7 @@ func (r *Repository) ListPendingOutbox(ctx context.Context, limit int) ([]market
 			SELECT id
 			FROM marketing_outbox
 			WHERE send_status IN ('PENDING', 'FAILED')
-			  AND target_channel IN ('HTTP', 'WEBHOOK')
+		  AND target_channel IN ('HTTP', 'WEBHOOK', 'MQ')
 			  AND (next_retry_at IS NULL OR next_retry_at <= NOW())
 			ORDER BY created_at ASC
 			LIMIT $1
@@ -844,21 +1080,45 @@ func (r *Repository) updateOutboxDLQ(ctx context.Context, tenantID string, id st
 	}
 	defer rollback(tx)
 
-	var before marketing.OutboxStatus
+	var before marketing.OutboxMessage
 	err = tx.QueryRowContext(ctx, `
-		SELECT send_status
+		SELECT id, tenant_id, message_type, target_channel, target_ref, payload_json,
+		       send_status, retry_count, next_retry_at, COALESCE(error_message, ''), created_at, updated_at
 		FROM marketing_outbox
 		WHERE id = $1 AND tenant_id = $2
 		FOR UPDATE
-	`, id, tenantID).Scan(&before)
+	`, id, tenantID).Scan(
+		&before.ID, &before.TenantID, &before.MessageType, &before.TargetChannel, &before.TargetRef,
+		&before.Payload, &before.SendStatus, &before.RetryCount, &before.NextRetryAt,
+		&before.ErrorMessage, &before.CreatedAt, &before.UpdatedAt,
+	)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return marketing.OutboxMessage{}, marketing.ErrNotFound
 		}
 		return marketing.OutboxMessage{}, err
 	}
-	if before != marketing.OutboxDLQ {
+	if before.SendStatus != marketing.OutboxDLQ {
 		return marketing.OutboxMessage{}, marketing.ErrInvalidOperation
+	}
+	commandID := outboxRewardCommandID(before.Payload)
+	if commandID != "" && nextStatus == marketing.OutboxPending {
+		var grantStatus marketing.GrantStatus
+		err = tx.QueryRowContext(ctx, `
+			SELECT grant_status
+			FROM marketing_grant_order
+			WHERE tenant_id = $1 AND bill_no = $2
+			FOR UPDATE
+		`, tenantID, commandID).Scan(&grantStatus)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return marketing.OutboxMessage{}, marketing.ErrNotFound
+			}
+			return marketing.OutboxMessage{}, err
+		}
+		if grantStatus != marketing.GrantRetry {
+			return marketing.OutboxMessage{}, marketing.ErrInvalidOperation
+		}
 	}
 
 	var row *sql.Row
@@ -883,19 +1143,24 @@ func (r *Repository) updateOutboxDLQ(ctx context.Context, tenantID string, id st
 	if err != nil {
 		return marketing.OutboxMessage{}, err
 	}
-	payload, _ := json.Marshal(map[string]any{
-		"outboxId":     id,
-		"operator":     operator,
-		"reason":       reason,
-		"beforeStatus": before,
-		"afterStatus":  nextStatus,
-		"operatedAt":   at,
+	auditPayload, _ := json.Marshal(map[string]any{
+		"outboxId":      id,
+		"operator":      operator,
+		"reason":        reason,
+		"beforeStatus":  before.SendStatus,
+		"afterStatus":   nextStatus,
+		"targetChannel": before.TargetChannel,
+		"targetRef":     before.TargetRef,
+		"retryCount":    before.RetryCount,
+		"errorMessage":  before.ErrorMessage,
+		"commandId":     commandID,
+		"operatedAt":    at,
 	})
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO marketing_audit (
 			id, tenant_id, actor, action, resource, resource_id, payload_json, created_at
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-	`, marketing.NewID("audit"), tenantID, operator, action, "outbox", id, payload, at)
+	`, marketing.NewID("audit"), tenantID, operator, action, "outbox", id, auditPayload, at)
 	if err != nil {
 		return marketing.OutboxMessage{}, err
 	}
@@ -1274,10 +1539,57 @@ func insertParticipationTx(ctx context.Context, tx *sql.Tx, participation market
 	return err
 }
 
-func postgresQuotaReservationsForAtomicCommand(cmd marketing.AtomicGrantCommand, now time.Time) []marketing.QuotaReservation {
+func postgresQuotaReservationsForAtomicCommand(ctx context.Context, tx *sql.Tx, cmd marketing.AtomicGrantCommand, now time.Time) ([]marketing.QuotaReservation, error) {
 	var reservations []marketing.QuotaReservation
+	if len(cmd.GrantOrders) > 0 {
+		firstOrder := cmd.GrantOrders[0]
+		exists, err := quotaExistsTx(ctx, tx, cmd.Participation.ActivityID, marketing.QuotaUserLimit, marketing.QuotaScopeUser, cmd.UserScopeKey)
+		if err != nil {
+			return nil, err
+		}
+		if cmd.ReserveUserLimit && exists {
+			reservations = append(reservations, marketing.QuotaReservation{
+				ID:           marketing.NewID("reservation"),
+				TenantID:     firstOrder.TenantID,
+				ActivityID:   firstOrder.ActivityID,
+				GrantOrderID: firstOrder.ID,
+				CommandID:    firstOrder.BillNo,
+				Type:         marketing.QuotaUserLimit,
+				Scope:        marketing.QuotaScopeUser,
+				ScopeKey:     cmd.UserScopeKey,
+				Amount:       "1",
+				Status:       marketing.QuotaReservationFrozen,
+				CreatedAt:    now,
+				UpdatedAt:    now,
+			})
+		}
+		exists, err = quotaExistsTx(ctx, tx, cmd.Participation.ActivityID, marketing.QuotaDailyLimit, marketing.QuotaScopeUser, cmd.DailyLimitScopeKey)
+		if err != nil {
+			return nil, err
+		}
+		if cmd.ReserveDailyLimit && exists {
+			reservations = append(reservations, marketing.QuotaReservation{
+				ID:           marketing.NewID("reservation"),
+				TenantID:     firstOrder.TenantID,
+				ActivityID:   firstOrder.ActivityID,
+				GrantOrderID: firstOrder.ID,
+				CommandID:    firstOrder.BillNo,
+				Type:         marketing.QuotaDailyLimit,
+				Scope:        marketing.QuotaScopeUser,
+				ScopeKey:     cmd.DailyLimitScopeKey,
+				Amount:       "1",
+				Status:       marketing.QuotaReservationFrozen,
+				CreatedAt:    now,
+				UpdatedAt:    now,
+			})
+		}
+	}
 	for _, order := range cmd.GrantOrders {
-		if order.RewardAmount != "" {
+		exists, err := quotaExistsTx(ctx, tx, cmd.Participation.ActivityID, marketing.QuotaBudget, marketing.QuotaScopeActivity, "TOTAL")
+		if err != nil {
+			return nil, err
+		}
+		if order.RewardAmount != "" && exists {
 			reservations = append(reservations, marketing.QuotaReservation{
 				ID:           marketing.NewID("reservation"),
 				TenantID:     order.TenantID,
@@ -1294,7 +1606,11 @@ func postgresQuotaReservationsForAtomicCommand(cmd marketing.AtomicGrantCommand,
 			})
 		}
 		rewardCode := rewardCodeFromPayload(order.RewardPayload)
-		if rewardCode != "" {
+		exists, err = quotaExistsTx(ctx, tx, cmd.Participation.ActivityID, marketing.QuotaStock, marketing.QuotaScopeActivity, rewardCode)
+		if err != nil {
+			return nil, err
+		}
+		if rewardCode != "" && exists {
 			reservations = append(reservations, marketing.QuotaReservation{
 				ID:           marketing.NewID("reservation"),
 				TenantID:     order.TenantID,
@@ -1311,7 +1627,22 @@ func postgresQuotaReservationsForAtomicCommand(cmd marketing.AtomicGrantCommand,
 			})
 		}
 	}
-	return reservations
+	return reservations, nil
+}
+
+func quotaExistsTx(ctx context.Context, tx *sql.Tx, activityID string, quotaType marketing.QuotaType, scope marketing.QuotaScope, scopeKey string) (bool, error) {
+	var exists bool
+	err := tx.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM marketing_quota
+			WHERE activity_id = $1 AND quota_type = $2 AND scope = $3 AND scope_key = $4
+		)
+	`, activityID, quotaType, scope, scopeKey).Scan(&exists)
+	return exists, err
+}
+
+func isParticipationQuotaReservation(reservation marketing.QuotaReservation) bool {
+	return reservation.Type == marketing.QuotaUserLimit || reservation.Type == marketing.QuotaDailyLimit
 }
 
 func rewardCodeFromPayload(payload json.RawMessage) string {
@@ -1424,6 +1755,108 @@ func finishQuotaReservationTx(ctx context.Context, tx *sql.Tx, reservation marke
 	return nil
 }
 
+func finishParticipationQuotaReservationsTx(ctx context.Context, tx *sql.Tx, participationID string, status marketing.GrantStatus) error {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT r.id, r.tenant_id, r.activity_id, r.grant_order_id, r.command_id, r.quota_type,
+		       r.scope, r.scope_key, r.reserved_amount::text, r.reservation_status,
+		       r.created_at, r.updated_at, r.confirmed_at, r.released_at
+		FROM marketing_quota_reservation r
+		JOIN marketing_grant_order g ON g.id = r.grant_order_id
+		WHERE g.participation_id = $1
+		  AND r.quota_type IN ('USER_LIMIT', 'DAILY_LIMIT')
+		  AND r.reservation_status = 'FROZEN'
+		ORDER BY r.created_at ASC, r.id ASC
+		FOR UPDATE OF r
+	`, participationID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	var reservations []marketing.QuotaReservation
+	for rows.Next() {
+		var reservation marketing.QuotaReservation
+		var confirmedAt sql.NullTime
+		var releasedAt sql.NullTime
+		if err := rows.Scan(&reservation.ID, &reservation.TenantID, &reservation.ActivityID,
+			&reservation.GrantOrderID, &reservation.CommandID, &reservation.Type, &reservation.Scope,
+			&reservation.ScopeKey, &reservation.Amount, &reservation.Status,
+			&reservation.CreatedAt, &reservation.UpdatedAt, &confirmedAt, &releasedAt); err != nil {
+			return err
+		}
+		if confirmedAt.Valid {
+			reservation.ConfirmedAt = &confirmedAt.Time
+		}
+		if releasedAt.Valid {
+			reservation.ReleasedAt = &releasedAt.Time
+		}
+		reservations = append(reservations, reservation)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, reservation := range reservations {
+		if err := finishQuotaReservationTx(ctx, tx, reservation, status); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func closeGrantOrderForOutboxTx(ctx context.Context, tx *sql.Tx, tenantID string, commandID string, reason string, closedAt time.Time) error {
+	var order marketing.GrantOrder
+	err := tx.QueryRowContext(ctx, `
+		SELECT id, participation_id
+		FROM marketing_grant_order
+		WHERE tenant_id = $1 AND bill_no = $2
+		FOR UPDATE
+	`, tenantID, commandID).Scan(&order.ID, &order.ParticipationID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return marketing.ErrNotFound
+		}
+		return err
+	}
+	reservations, err := quotaReservationsForOrderTx(ctx, tx, order.ID)
+	if err != nil {
+		return err
+	}
+	for _, reservation := range reservations {
+		if reservation.Status != marketing.QuotaReservationFrozen || isParticipationQuotaReservation(reservation) {
+			continue
+		}
+		if err := finishQuotaReservationTx(ctx, tx, reservation, marketing.GrantClosed); err != nil {
+			return err
+		}
+	}
+	_, err = tx.ExecContext(ctx, `
+		UPDATE marketing_grant_order
+		SET grant_status = 'CLOSED',
+		    error_message = $3,
+		    finished_at = $4,
+		    updated_at = $4
+		WHERE tenant_id = $1 AND bill_no = $2
+		  AND grant_status NOT IN ('SUCCESS', 'FAILED', 'CLOSED')
+	`, tenantID, commandID, nullString(reason), closedAt)
+	if err != nil {
+		return err
+	}
+	status, err := updateParticipationAfterCallbackTx(ctx, tx, order.ParticipationID)
+	if err != nil {
+		return err
+	}
+	if status == marketing.ParticipationGranted || status == marketing.ParticipationFailed {
+		finalStatus := marketing.GrantSuccess
+		if status == marketing.ParticipationFailed {
+			finalStatus = marketing.GrantClosed
+		}
+		if err := finishParticipationQuotaReservationsTx(ctx, tx, order.ParticipationID, finalStatus); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func participationStatusTx(ctx context.Context, tx *sql.Tx, participationID string) (marketing.ParticipationStatus, error) {
 	var status marketing.ParticipationStatus
 	err := tx.QueryRowContext(ctx, `SELECT status FROM marketing_participation WHERE id = $1`, participationID).Scan(&status)
@@ -1443,6 +1876,7 @@ func updateParticipationAfterCallbackTx(ctx context.Context, tx *sql.Tx, partici
 	}
 	defer rows.Close()
 	allFinal := true
+	anySuccess := false
 	anyFailed := false
 	for rows.Next() {
 		var status marketing.GrantStatus
@@ -1450,9 +1884,10 @@ func updateParticipationAfterCallbackTx(ctx context.Context, tx *sql.Tx, partici
 			return "", err
 		}
 		switch status {
-		case marketing.GrantFailed:
+		case marketing.GrantFailed, marketing.GrantClosed:
 			anyFailed = true
 		case marketing.GrantSuccess:
+			anySuccess = true
 		default:
 			allFinal = false
 		}
@@ -1464,7 +1899,7 @@ func updateParticipationAfterCallbackTx(ctx context.Context, tx *sql.Tx, partici
 		return participationStatusTx(ctx, tx, participationID)
 	}
 	next := marketing.ParticipationGranted
-	if anyFailed {
+	if anyFailed && !anySuccess {
 		next = marketing.ParticipationFailed
 	}
 	_, err = tx.ExecContext(ctx, `
@@ -1476,6 +1911,28 @@ func updateParticipationAfterCallbackTx(ctx context.Context, tx *sql.Tx, partici
 		return "", err
 	}
 	return next, nil
+}
+
+func activityHadQuotaAtTx(ctx context.Context, tx *sql.Tx, activityID string, at time.Time) (bool, error) {
+	var count int
+	err := tx.QueryRowContext(ctx, `
+		SELECT COUNT(1)
+		FROM marketing_quota
+		WHERE activity_id = $1
+		  AND created_at <= $2
+	`, activityID, at).Scan(&count)
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+func outboxRewardCommandID(payload json.RawMessage) string {
+	var command marketing.RewardCommand
+	if err := json.Unmarshal(payload, &command); err != nil {
+		return ""
+	}
+	return string(bytes.TrimSpace([]byte(command.CommandID)))
 }
 
 var _ marketing.Repository = (*Repository)(nil)

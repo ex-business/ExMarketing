@@ -44,6 +44,28 @@ func TestConditionEvaluatorStandardEventFields(t *testing.T) {
 	}
 }
 
+func TestConditionEvaluatorKeepsJSONNumberDecimalPrecision(t *testing.T) {
+	event := marketing.ActivityEvent{
+		EventType:  "DEPOSIT_SUCCESS",
+		Attributes: map[string]any{"amount": "0.3"},
+	}
+	rule := marketing.Rule{
+		Type: marketing.RuleTypeCondition,
+		Config: []byte(`{
+			"logic": "AND",
+			"conditions": [
+				{"field": "attributes.amount", "op": "=", "value": 0.30},
+				{"field": "attributes.amount", "op": ">=", "value": 0.1}
+			]
+		}`),
+	}
+
+	result := ConditionEvaluator{}.Evaluate(Context{Event: event}, rule)
+	if !result.Passed {
+		t.Fatalf("expected JSON number decimal comparisons to pass, got %+v", result)
+	}
+}
+
 func TestConditionEvaluatorRejectsNonStandardTopLevelField(t *testing.T) {
 	rule := marketing.Rule{
 		Type: marketing.RuleTypeCondition,
@@ -119,6 +141,99 @@ func TestExecuteReportsDisabledAndMissingFact(t *testing.T) {
 	}
 	if got := result.StageResults[1].RuleResults[0]; got.ReasonCode != ReasonFactFieldMissing || got.Field != "facts.USER_PROFILE.vipLevel" {
 		t.Fatalf("expected fact missing detail, got %+v", got)
+	}
+}
+
+func TestRewardConditionReturnsConditionDetailsAndRejectsEmptyConditions(t *testing.T) {
+	empty := conditionRule("reward_empty", marketing.RulePhaseReward, 1, `{"logic":"AND","conditions":[]}`)
+	emptyResult := NewRegistry().Evaluate(Context{}, empty)
+	if emptyResult.Status != marketing.RuleDecisionError || emptyResult.ReasonCode != ReasonInvalidConfig {
+		t.Fatalf("expected empty REWARD conditions to be invalid, got %+v", emptyResult)
+	}
+
+	rule := conditionRule("reward_amount", marketing.RulePhaseReward, 10, `{
+		"logic": "AND",
+		"conditions": [
+			{"field":"attributes.amount","op":">=","value":"100.00"},
+			{"field":"attributes.inviteCount","op":">=","value":"3"}
+		]
+	}`)
+	event := marketing.ActivityEvent{
+		Attributes: map[string]any{"amount": "99.99", "inviteCount": "2"},
+	}
+
+	result := Execute(Context{Event: event}, []marketing.Rule{rule}, NewRegistry())
+
+	if result.Decision != marketing.RuleDecisionRejected || result.FailedStage != marketing.RuleStageReward {
+		t.Fatalf("expected REWARD rejection, got %+v", result)
+	}
+	got := result.StageResults[2].RuleResults[0]
+	if got.Field != "attributes.amount" || got.Actual != "99.99" || got.Expected != "100.00" {
+		t.Fatalf("expected first failing condition explain, got %+v", got)
+	}
+	conditions, ok := got.Detail["conditions"].([]map[string]any)
+	if !ok || len(conditions) != 2 {
+		t.Fatalf("expected condition details, got %#v", got.Detail)
+	}
+	if conditions[0]["field"] != "attributes.amount" || conditions[0]["passed"] != false {
+		t.Fatalf("unexpected first condition detail: %#v", conditions[0])
+	}
+	if conditions[1]["field"] != "attributes.inviteCount" || conditions[1]["actual"] != "2" {
+		t.Fatalf("unexpected second condition detail: %#v", conditions[1])
+	}
+}
+
+func TestQualifyConditionSupportsVIPRegisterChannelAndTags(t *testing.T) {
+	rule := conditionRule("qualify_profile", marketing.RulePhaseQualify, 10, `{
+		"logic": "AND",
+		"conditions": [
+			{"field":"attributes.vipLevel","op":">=","value":"3"},
+			{"field":"attributes.registerDays","op":">=","value":"7"},
+			{"field":"attributes.channel","op":"IN","value":["APP","WEB"]},
+			{"field":"attributes.tags","op":"IN","value":["new_user","high_value"]},
+			{"field":"attributes.riskTags","op":"NOT_IN","value":["black","bonus_abuse"]}
+		]
+	}`)
+	event := marketing.ActivityEvent{
+		Attributes: map[string]any{
+			"vipLevel":     "3",
+			"registerDays": 8,
+			"channel":      "APP",
+			"tags":         []any{"sports", "high_value"},
+			"riskTags":     []any{"normal"},
+		},
+	}
+
+	result := Execute(Context{Event: event}, []marketing.Rule{rule}, NewRegistry())
+
+	if result.Decision != marketing.RuleDecisionPassed {
+		t.Fatalf("expected QUALIFY array and decimal conditions to pass, got %+v", result)
+	}
+}
+
+func TestQualifyConditionExplainsMissingAttributeWithoutRewardOrQuota(t *testing.T) {
+	rule := conditionRule("qualify_missing", marketing.RulePhaseQualify, 10, `{
+		"logic": "AND",
+		"conditions": [
+			{"field":"attributes.vipLevel","op":">=","value":"3"},
+			{"field":"attributes.registerDays","op":">=","value":"7"}
+		]
+	}`)
+	event := marketing.ActivityEvent{
+		Attributes: map[string]any{"vipLevel": "3"},
+	}
+
+	result := Execute(Context{Event: event}, []marketing.Rule{rule}, NewRegistry())
+
+	if result.Decision != marketing.RuleDecisionRejected || result.FailedStage != marketing.RuleStageQualify {
+		t.Fatalf("expected QUALIFY rejection, got %+v", result)
+	}
+	if result.CanReward || result.CanReserveQuota {
+		t.Fatalf("expected rejected QUALIFY to block reward and quota, got %+v", result)
+	}
+	got := result.StageResults[1].RuleResults[0]
+	if got.ReasonCode != ReasonFieldMissing || got.Field != "attributes.registerDays" {
+		t.Fatalf("expected missing field explain, got %+v", got)
 	}
 }
 

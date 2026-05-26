@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -229,6 +231,50 @@ func TestPostgresParticipationAndGrantIdempotencyUniqueConstraints(t *testing.T)
 	assertPostgresCount(t, repo, `SELECT COUNT(*) FROM marketing_grant_order WHERE idempotency_key = $1`, prefix+"_grant_idem", 1)
 }
 
+func TestPostgresCloseOutboxDLQOnlyClosesOutbox(t *testing.T) {
+	ctx, repo := openPostgresIntegrationRepository(t)
+	prefix := "pg_dlq_close"
+	cleanupPostgresAtomicTest(t, repo, prefix)
+	t.Cleanup(func() { cleanupPostgresAtomicTest(t, repo, prefix) })
+
+	now := time.Now().UTC()
+	activityID := prefix + "_act"
+	createPostgresAtomicQuotas(t, repo, activityID, prefix, now)
+	grant := testPostgresGrant(prefix+"_grant", activityID, prefix+"_part", prefix+"_grant_idem", now)
+	grant.RewardAmount = "10"
+	outbox := testPostgresOutbox(prefix+"_outbox", now)
+	outbox.Payload = []byte(`{"commandId":"` + grant.BillNo + `"}`)
+	_, err := repo.CreateParticipationGrantOutboxesWithQuota(ctx, marketing.AtomicGrantCommand{
+		Participation:  testPostgresParticipation(prefix+"_part", activityID, prefix+"_part_idem", now),
+		BudgetAmount:   "10",
+		GrantOrders:    []marketing.GrantOrder{grant},
+		OutboxMessages: []marketing.OutboxMessage{outbox},
+	})
+	if err != nil {
+		t.Fatalf("atomic grant: %v", err)
+	}
+	if err := repo.UpdateGrantOrderByCommandID(ctx, "site_001", grant.BillNo, marketing.GrantSending, "sending"); err != nil {
+		t.Fatalf("mark sending: %v", err)
+	}
+	if err := repo.UpdateGrantOrderByCommandID(ctx, "site_001", grant.BillNo, marketing.GrantRetry, "target returned status 400"); err != nil {
+		t.Fatalf("mark retry: %v", err)
+	}
+	if err := repo.MarkOutboxDLQ(ctx, outbox.ID, 5, "target returned status 400"); err != nil {
+		t.Fatalf("mark dlq: %v", err)
+	}
+	closed, err := repo.CloseOutboxDLQ(ctx, "site_001", outbox.ID, "ops", "business rejected", now.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("close dlq: %v", err)
+	}
+	if closed.SendStatus != marketing.OutboxDLQClosed {
+		t.Fatalf("expected DLQ_CLOSED, got %s", closed.SendStatus)
+	}
+	assertPostgresGrantStatus(t, repo, "site_001", grant.BillNo, marketing.GrantRetry)
+	assertPostgresQuotaValues(t, repo, activityID, marketing.QuotaBudget, marketing.QuotaScopeActivity, "TOTAL", "0.0000", "10.0000")
+	assertPostgresCount(t, repo, `SELECT COUNT(*) FROM marketing_quota_reservation WHERE activity_id = $1 AND reservation_status = 'FROZEN'`, activityID, 1)
+	assertPostgresParticipationStatus(t, repo, prefix+"_part", marketing.ParticipationRewardable)
+}
+
 func TestPostgresAtomicGrantRollsBackWhenGrantOrderCreateFails(t *testing.T) {
 	databaseURL := os.Getenv("EX_MARKETING_DATABASE_URL")
 	if databaseURL == "" {
@@ -307,10 +353,335 @@ func TestPostgresAtomicGrantRollsBackWhenOutboxCreateFails(t *testing.T) {
 	assertPostgresCount(t, repo, `SELECT COUNT(*) FROM marketing_quota WHERE activity_id = $1 AND used_value <> 0`, activityID, 0)
 }
 
+func TestPostgresQuotaInsufficientBudgetHasNoDirtyWrites(t *testing.T) {
+	ctx, repo := openPostgresIntegrationRepository(t)
+
+	prefix := "pg_quota_budget_dirty"
+	cleanupPostgresAtomicTest(t, repo, prefix)
+	t.Cleanup(func() { cleanupPostgresAtomicTest(t, repo, prefix) })
+
+	now := time.Now().UTC()
+	activityID := prefix + "_act"
+	mustCreatePostgresQuota(t, repo, marketing.Quota{ID: prefix + "_budget", ActivityID: activityID, Type: marketing.QuotaBudget, Scope: marketing.QuotaScopeActivity, ScopeKey: "TOTAL", TotalValue: "10", UsedValue: "0", FrozenValue: "0", Version: 1, CreatedAt: now, UpdatedAt: now})
+
+	_, err := repo.CreateParticipationGrantOutboxesWithQuota(ctx, marketing.AtomicGrantCommand{
+		Participation:  testPostgresParticipation(prefix+"_part", activityID, prefix+"_part_idem", now),
+		BudgetAmount:   "20",
+		GrantOrders:    []marketing.GrantOrder{testPostgresGrant(prefix+"_grant", activityID, prefix+"_part", prefix+"_grant_idem", now)},
+		OutboxMessages: []marketing.OutboxMessage{testPostgresOutbox(prefix+"_outbox", now)},
+	})
+	if !errors.Is(err, marketing.ErrQuotaExceeded) {
+		t.Fatalf("expected quota exceeded, got %v", err)
+	}
+
+	assertPostgresCount(t, repo, `SELECT COUNT(*) FROM marketing_participation WHERE id LIKE $1`, prefix+"_%", 0)
+	assertPostgresCount(t, repo, `SELECT COUNT(*) FROM marketing_grant_order WHERE id LIKE $1`, prefix+"_%", 0)
+	assertPostgresCount(t, repo, `SELECT COUNT(*) FROM marketing_outbox WHERE id LIKE $1`, prefix+"_%", 0)
+	assertPostgresCount(t, repo, `SELECT COUNT(*) FROM marketing_quota_reservation WHERE activity_id = $1`, activityID, 0)
+	assertPostgresQuotaValues(t, repo, activityID, marketing.QuotaBudget, marketing.QuotaScopeActivity, "TOTAL", "0.0000", "0.0000")
+}
+
+func TestPostgresCallbackConfirmReleaseIdempotencyAndConflict(t *testing.T) {
+	ctx, repo := openPostgresIntegrationRepository(t)
+
+	now := time.Now().UTC()
+	successPrefix := "pg_callback_success"
+	cleanupPostgresAtomicTest(t, repo, successPrefix)
+	t.Cleanup(func() { cleanupPostgresAtomicTest(t, repo, successPrefix) })
+	successActivityID := successPrefix + "_act"
+	createPostgresCallbackQuotas(t, repo, successActivityID, successPrefix, "user_1", "user_1:2026-05-24", now)
+
+	successGrant := testPostgresGrant(successPrefix+"_grant", successActivityID, successPrefix+"_part", successPrefix+"_grant_idem", now)
+	successGrant.RewardAmount = "10"
+	successGrant.RewardPayload = []byte(`{"rewardCode":"REWARD_A"}`)
+	_, err := repo.CreateParticipationGrantOutboxesWithQuota(ctx, marketing.AtomicGrantCommand{
+		Participation:      testPostgresParticipation(successPrefix+"_part", successActivityID, successPrefix+"_part_idem", now),
+		BudgetAmount:       "10",
+		ReserveUserLimit:   true,
+		UserScopeKey:       "user_1",
+		ReserveDailyLimit:  true,
+		DailyLimitScopeKey: "user_1:2026-05-24",
+		StockReservations: []marketing.QuotaReservation{
+			{Type: marketing.QuotaStock, Scope: marketing.QuotaScopeActivity, ScopeKey: "REWARD_A", Amount: "1"},
+		},
+		GrantOrders:    []marketing.GrantOrder{successGrant},
+		OutboxMessages: []marketing.OutboxMessage{testPostgresOutbox(successPrefix+"_outbox", now)},
+	})
+	if err != nil {
+		t.Fatalf("atomic grant success path: %v", err)
+	}
+	assertPostgresCount(t, repo, `SELECT COUNT(*) FROM marketing_quota_reservation WHERE activity_id = $1 AND reservation_status = 'FROZEN'`, successActivityID, 4)
+	assertPostgresQuotaValues(t, repo, successActivityID, marketing.QuotaBudget, marketing.QuotaScopeActivity, "TOTAL", "0.0000", "10.0000")
+	assertPostgresQuotaValues(t, repo, successActivityID, marketing.QuotaStock, marketing.QuotaScopeActivity, "REWARD_A", "0.0000", "1.0000")
+	assertPostgresQuotaValues(t, repo, successActivityID, marketing.QuotaUserLimit, marketing.QuotaScopeUser, "user_1", "0.0000", "1.0000")
+	assertPostgresQuotaValues(t, repo, successActivityID, marketing.QuotaDailyLimit, marketing.QuotaScopeUser, "user_1:2026-05-24", "0.0000", "1.0000")
+
+	if err := repo.UpdateGrantOrderByCommandID(ctx, "site_001", successGrant.BillNo, marketing.GrantSending, "sending"); err != nil {
+		t.Fatalf("mark grant sending: %v", err)
+	}
+	result, err := repo.ApplyRewardCallback(ctx, marketing.RewardCallback{
+		TenantID:        "site_001",
+		CommandID:       successGrant.BillNo,
+		Status:          marketing.GrantSuccess,
+		ExternalGrantID: successPrefix + "_external",
+		FinishedAt:      now.Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("success callback: %v", err)
+	}
+	if result.Duplicate || result.ParticipationStatus != marketing.ParticipationGranted {
+		t.Fatalf("unexpected success callback result: %+v", result)
+	}
+	assertPostgresCount(t, repo, `SELECT COUNT(*) FROM marketing_quota_reservation WHERE activity_id = $1 AND reservation_status = 'CONFIRMED'`, successActivityID, 4)
+	assertPostgresQuotaValues(t, repo, successActivityID, marketing.QuotaBudget, marketing.QuotaScopeActivity, "TOTAL", "10.0000", "0.0000")
+	assertPostgresQuotaValues(t, repo, successActivityID, marketing.QuotaStock, marketing.QuotaScopeActivity, "REWARD_A", "1.0000", "0.0000")
+	assertPostgresQuotaValues(t, repo, successActivityID, marketing.QuotaUserLimit, marketing.QuotaScopeUser, "user_1", "1.0000", "0.0000")
+	assertPostgresQuotaValues(t, repo, successActivityID, marketing.QuotaDailyLimit, marketing.QuotaScopeUser, "user_1:2026-05-24", "1.0000", "0.0000")
+	successVersion := postgresQuotaVersion(t, repo, successActivityID, marketing.QuotaBudget, marketing.QuotaScopeActivity, "TOTAL")
+
+	result, err = repo.ApplyRewardCallback(ctx, marketing.RewardCallback{
+		TenantID:        "site_001",
+		CommandID:       successGrant.BillNo,
+		Status:          marketing.GrantSuccess,
+		ExternalGrantID: successPrefix + "_external",
+		FinishedAt:      now.Add(2 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("duplicate success callback: %v", err)
+	}
+	if !result.Duplicate {
+		t.Fatalf("expected duplicate success callback result: %+v", result)
+	}
+	if got := postgresQuotaVersion(t, repo, successActivityID, marketing.QuotaBudget, marketing.QuotaScopeActivity, "TOTAL"); got != successVersion {
+		t.Fatalf("duplicate success callback changed budget version: before=%d after=%d", successVersion, got)
+	}
+	if _, err := repo.ApplyRewardCallback(ctx, marketing.RewardCallback{
+		TenantID:   "site_001",
+		CommandID:  successGrant.BillNo,
+		Status:     marketing.GrantFailed,
+		Message:    "late failure",
+		FinishedAt: now.Add(3 * time.Minute),
+	}); !errors.Is(err, marketing.ErrCallbackConflict) {
+		t.Fatalf("expected success-to-failed callback conflict, got %v", err)
+	}
+
+	releasePrefix := "pg_callback_release"
+	cleanupPostgresAtomicTest(t, repo, releasePrefix)
+	t.Cleanup(func() { cleanupPostgresAtomicTest(t, repo, releasePrefix) })
+	releaseActivityID := releasePrefix + "_act"
+	mustCreatePostgresQuota(t, repo, marketing.Quota{ID: releasePrefix + "_budget", ActivityID: releaseActivityID, Type: marketing.QuotaBudget, Scope: marketing.QuotaScopeActivity, ScopeKey: "TOTAL", TotalValue: "20", UsedValue: "0", FrozenValue: "0", Version: 1, CreatedAt: now, UpdatedAt: now})
+	releaseGrant := testPostgresGrant(releasePrefix+"_grant", releaseActivityID, releasePrefix+"_part", releasePrefix+"_grant_idem", now)
+	releaseGrant.RewardAmount = "10"
+	_, err = repo.CreateParticipationGrantOutboxesWithQuota(ctx, marketing.AtomicGrantCommand{
+		Participation:  testPostgresParticipation(releasePrefix+"_part", releaseActivityID, releasePrefix+"_part_idem", now),
+		BudgetAmount:   "10",
+		GrantOrders:    []marketing.GrantOrder{releaseGrant},
+		OutboxMessages: []marketing.OutboxMessage{testPostgresOutbox(releasePrefix+"_outbox", now)},
+	})
+	if err != nil {
+		t.Fatalf("atomic grant release path: %v", err)
+	}
+	if err := repo.UpdateGrantOrderByCommandID(ctx, "site_001", releaseGrant.BillNo, marketing.GrantSending, "sending"); err != nil {
+		t.Fatalf("mark release grant sending: %v", err)
+	}
+	result, err = repo.ApplyRewardCallback(ctx, marketing.RewardCallback{
+		TenantID:   "site_001",
+		CommandID:  releaseGrant.BillNo,
+		Status:     marketing.GrantFailed,
+		Message:    "failed",
+		FinishedAt: now.Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("failed callback: %v", err)
+	}
+	if result.ParticipationStatus != marketing.ParticipationFailed {
+		t.Fatalf("expected failed participation, got %+v", result)
+	}
+	assertPostgresCount(t, repo, `SELECT COUNT(*) FROM marketing_quota_reservation WHERE activity_id = $1 AND reservation_status = 'RELEASED'`, releaseActivityID, 1)
+	assertPostgresQuotaValues(t, repo, releaseActivityID, marketing.QuotaBudget, marketing.QuotaScopeActivity, "TOTAL", "0.0000", "0.0000")
+	releaseVersion := postgresQuotaVersion(t, repo, releaseActivityID, marketing.QuotaBudget, marketing.QuotaScopeActivity, "TOTAL")
+
+	result, err = repo.ApplyRewardCallback(ctx, marketing.RewardCallback{
+		TenantID:   "site_001",
+		CommandID:  releaseGrant.BillNo,
+		Status:     marketing.GrantFailed,
+		Message:    "failed retry",
+		FinishedAt: now.Add(2 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("duplicate failed callback: %v", err)
+	}
+	if !result.Duplicate {
+		t.Fatalf("expected duplicate failed callback result: %+v", result)
+	}
+	if got := postgresQuotaVersion(t, repo, releaseActivityID, marketing.QuotaBudget, marketing.QuotaScopeActivity, "TOTAL"); got != releaseVersion {
+		t.Fatalf("duplicate failed callback changed budget version: before=%d after=%d", releaseVersion, got)
+	}
+}
+
+func TestPostgresCallbackTenantIsolation(t *testing.T) {
+	ctx, repo := openPostgresIntegrationRepository(t)
+
+	prefix := "pg_callback_tenant"
+	cleanupPostgresAtomicTest(t, repo, prefix)
+	t.Cleanup(func() { cleanupPostgresAtomicTest(t, repo, prefix) })
+
+	now := time.Now().UTC()
+	commandID := prefix + "_shared_cmd"
+	for _, tenantID := range []string{"tenant_a", "tenant_b"} {
+		suffix := strings.TrimPrefix(tenantID, "tenant_")
+		activityID := prefix + "_" + suffix + "_act"
+		mustCreatePostgresQuota(t, repo, marketing.Quota{ID: prefix + "_" + suffix + "_budget", ActivityID: activityID, Type: marketing.QuotaBudget, Scope: marketing.QuotaScopeActivity, ScopeKey: "TOTAL", TotalValue: "20", UsedValue: "0", FrozenValue: "0", Version: 1, CreatedAt: now, UpdatedAt: now})
+		part := testPostgresParticipation(prefix+"_"+suffix+"_part", activityID, prefix+"_"+suffix+"_part_idem", now)
+		part.TenantID = tenantID
+		grant := testPostgresGrant(prefix+"_"+suffix+"_grant", activityID, part.ID, prefix+"_"+suffix+"_grant_idem", now)
+		grant.TenantID = tenantID
+		grant.BillNo = commandID
+		grant.RewardAmount = "10"
+		outbox := testPostgresOutbox(prefix+"_"+suffix+"_outbox", now)
+		outbox.TenantID = tenantID
+		_, err := repo.CreateParticipationGrantOutboxesWithQuota(ctx, marketing.AtomicGrantCommand{
+			Participation:  part,
+			BudgetAmount:   "10",
+			GrantOrders:    []marketing.GrantOrder{grant},
+			OutboxMessages: []marketing.OutboxMessage{outbox},
+		})
+		if err != nil {
+			t.Fatalf("atomic grant tenant %s: %v", tenantID, err)
+		}
+		if err := repo.UpdateGrantOrderByCommandID(ctx, tenantID, commandID, marketing.GrantSending, "sending"); err != nil {
+			t.Fatalf("mark tenant %s sending: %v", tenantID, err)
+		}
+	}
+
+	if _, err := repo.ApplyRewardCallback(ctx, marketing.RewardCallback{
+		TenantID:        "tenant_a",
+		CommandID:       commandID,
+		Status:          marketing.GrantSuccess,
+		ExternalGrantID: prefix + "_external_a",
+		FinishedAt:      now.Add(time.Minute),
+	}); err != nil {
+		t.Fatalf("tenant A callback: %v", err)
+	}
+
+	assertPostgresGrantStatus(t, repo, "tenant_a", commandID, marketing.GrantSuccess)
+	assertPostgresGrantStatus(t, repo, "tenant_b", commandID, marketing.GrantSending)
+	assertPostgresQuotaValues(t, repo, prefix+"_a_act", marketing.QuotaBudget, marketing.QuotaScopeActivity, "TOTAL", "10.0000", "0.0000")
+	assertPostgresQuotaValues(t, repo, prefix+"_b_act", marketing.QuotaBudget, marketing.QuotaScopeActivity, "TOTAL", "0.0000", "10.0000")
+
+	if _, err := repo.ApplyRewardCallback(ctx, marketing.RewardCallback{
+		TenantID:        "tenant_missing",
+		CommandID:       commandID,
+		Status:          marketing.GrantSuccess,
+		ExternalGrantID: prefix + "_external_missing",
+		FinishedAt:      now.Add(2 * time.Minute),
+	}); !errors.Is(err, marketing.ErrNotFound) {
+		t.Fatalf("expected tenant-missing callback not found, got %v", err)
+	}
+	assertPostgresGrantStatus(t, repo, "tenant_b", commandID, marketing.GrantSending)
+	assertPostgresQuotaValues(t, repo, prefix+"_b_act", marketing.QuotaBudget, marketing.QuotaScopeActivity, "TOTAL", "0.0000", "10.0000")
+}
+
+func TestPostgresConcurrentBudgetDoesNotOverspend(t *testing.T) {
+	ctx, repo := openPostgresIntegrationRepository(t)
+
+	prefix := "pg_concurrent_budget"
+	cleanupPostgresAtomicTest(t, repo, prefix)
+	t.Cleanup(func() { cleanupPostgresAtomicTest(t, repo, prefix) })
+
+	now := time.Now().UTC()
+	activityID := prefix + "_act"
+	mustCreatePostgresQuota(t, repo, marketing.Quota{ID: prefix + "_budget", ActivityID: activityID, Type: marketing.QuotaBudget, Scope: marketing.QuotaScopeActivity, ScopeKey: "TOTAL", TotalValue: "100", UsedValue: "0", FrozenValue: "0", Version: 1, CreatedAt: now, UpdatedAt: now})
+
+	const attempts = 50
+	start := make(chan struct{})
+	results := make(chan error, attempts)
+	var wg sync.WaitGroup
+	for i := 0; i < attempts; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			suffix := fmt.Sprintf("%02d", i)
+			_, err := repo.CreateParticipationGrantOutboxesWithQuota(ctx, marketing.AtomicGrantCommand{
+				Participation:  testPostgresParticipation(prefix+"_part_"+suffix, activityID, prefix+"_part_idem_"+suffix, now),
+				BudgetAmount:   "10",
+				GrantOrders:    []marketing.GrantOrder{testPostgresGrant(prefix+"_grant_"+suffix, activityID, prefix+"_part_"+suffix, prefix+"_grant_idem_"+suffix, now)},
+				OutboxMessages: []marketing.OutboxMessage{testPostgresOutbox(prefix+"_outbox_"+suffix, now)},
+			})
+			results <- err
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+
+	success, quotaExceeded := countPostgresAtomicResults(t, results)
+	if success != 10 || quotaExceeded != attempts-10 {
+		t.Fatalf("expected 10 successes and %d quota failures, got success=%d quotaExceeded=%d", attempts-10, success, quotaExceeded)
+	}
+	assertPostgresQuotaValues(t, repo, activityID, marketing.QuotaBudget, marketing.QuotaScopeActivity, "TOTAL", "0.0000", "100.0000")
+	assertPostgresCount(t, repo, `SELECT COUNT(*) FROM marketing_grant_order WHERE activity_id = $1`, activityID, 10)
+	assertPostgresCount(t, repo, `SELECT COUNT(*) FROM marketing_outbox WHERE id LIKE $1`, prefix+"_%", 10)
+	assertPostgresCount(t, repo, `SELECT COUNT(*) FROM marketing_quota_reservation WHERE activity_id = $1`, activityID, 10)
+	assertPostgresCount(t, repo, `SELECT COUNT(*) FROM marketing_quota WHERE activity_id = $1 AND used_value + frozen_value > total_value`, activityID, 0)
+}
+
+func TestPostgresConcurrentStockLastItem(t *testing.T) {
+	ctx, repo := openPostgresIntegrationRepository(t)
+
+	prefix := "pg_concurrent_stock"
+	cleanupPostgresAtomicTest(t, repo, prefix)
+	t.Cleanup(func() { cleanupPostgresAtomicTest(t, repo, prefix) })
+
+	now := time.Now().UTC()
+	activityID := prefix + "_act"
+	mustCreatePostgresQuota(t, repo, marketing.Quota{ID: prefix + "_stock", ActivityID: activityID, Type: marketing.QuotaStock, Scope: marketing.QuotaScopeActivity, ScopeKey: "REWARD_A", TotalValue: "1", UsedValue: "0", FrozenValue: "0", Version: 1, CreatedAt: now, UpdatedAt: now})
+
+	const attempts = 20
+	start := make(chan struct{})
+	results := make(chan error, attempts)
+	var wg sync.WaitGroup
+	for i := 0; i < attempts; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			suffix := fmt.Sprintf("%02d", i)
+			grant := testPostgresGrant(prefix+"_grant_"+suffix, activityID, prefix+"_part_"+suffix, prefix+"_grant_idem_"+suffix, now)
+			grant.RewardAmount = "0"
+			grant.RewardPayload = []byte(`{"rewardCode":"REWARD_A"}`)
+			_, err := repo.CreateParticipationGrantOutboxesWithQuota(ctx, marketing.AtomicGrantCommand{
+				Participation: testPostgresParticipation(prefix+"_part_"+suffix, activityID, prefix+"_part_idem_"+suffix, now),
+				StockReservations: []marketing.QuotaReservation{
+					{Type: marketing.QuotaStock, Scope: marketing.QuotaScopeActivity, ScopeKey: "REWARD_A", Amount: "1"},
+				},
+				GrantOrders:    []marketing.GrantOrder{grant},
+				OutboxMessages: []marketing.OutboxMessage{testPostgresOutbox(prefix+"_outbox_"+suffix, now)},
+			})
+			results <- err
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+
+	success, quotaExceeded := countPostgresAtomicResults(t, results)
+	if success != 1 || quotaExceeded != attempts-1 {
+		t.Fatalf("expected 1 success and %d quota failures, got success=%d quotaExceeded=%d", attempts-1, success, quotaExceeded)
+	}
+	assertPostgresQuotaValues(t, repo, activityID, marketing.QuotaStock, marketing.QuotaScopeActivity, "REWARD_A", "0.0000", "1.0000")
+	assertPostgresCount(t, repo, `SELECT COUNT(*) FROM marketing_grant_order WHERE activity_id = $1`, activityID, 1)
+	assertPostgresCount(t, repo, `SELECT COUNT(*) FROM marketing_outbox WHERE id LIKE $1`, prefix+"_%", 1)
+	assertPostgresCount(t, repo, `SELECT COUNT(*) FROM marketing_quota_reservation WHERE activity_id = $1`, activityID, 1)
+	assertPostgresCount(t, repo, `SELECT COUNT(*) FROM marketing_quota WHERE activity_id = $1 AND used_value + frozen_value > total_value`, activityID, 0)
+}
+
 func cleanupPostgresAtomicTest(t *testing.T, repo *Repository, prefix string) {
 	t.Helper()
 	ctx := context.Background()
 	for _, stmt := range []string{
+		`DELETE FROM marketing_quota_reservation WHERE activity_id LIKE $1 OR grant_order_id LIKE $1 OR command_id LIKE $1`,
 		`DELETE FROM marketing_outbox WHERE id LIKE $1`,
 		`DELETE FROM marketing_grant_order WHERE id LIKE $1`,
 		`DELETE FROM marketing_participation WHERE id LIKE $1`,
@@ -320,6 +691,21 @@ func cleanupPostgresAtomicTest(t *testing.T, repo *Repository, prefix string) {
 			t.Fatalf("cleanup %q: %v", stmt, err)
 		}
 	}
+}
+
+func openPostgresIntegrationRepository(t *testing.T) (context.Context, *Repository) {
+	t.Helper()
+	databaseURL := os.Getenv("EX_MARKETING_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("EX_MARKETING_DATABASE_URL is not set")
+	}
+	ctx := context.Background()
+	repo, err := NewRepository(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("connect postgres: %v", err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+	return ctx, repo
 }
 
 func cleanupPostgresInboxTest(t *testing.T, repo *Repository, prefix string) {
@@ -361,6 +747,103 @@ func assertPostgresCount(t *testing.T, repo *Repository, query string, arg any, 
 	}
 	if got != want {
 		t.Fatalf("expected count %d, got %d for %s", want, got, query)
+	}
+}
+
+func assertPostgresQuotaValues(t *testing.T, repo *Repository, activityID string, quotaType marketing.QuotaType, scope marketing.QuotaScope, scopeKey string, wantUsed string, wantFrozen string) {
+	t.Helper()
+	var used string
+	var frozen string
+	err := repo.db.QueryRowContext(context.Background(), `
+		SELECT used_value::numeric(18,4)::text, frozen_value::numeric(18,4)::text
+		FROM marketing_quota
+		WHERE activity_id = $1 AND quota_type = $2 AND scope = $3 AND scope_key = $4
+	`, activityID, quotaType, scope, scopeKey).Scan(&used, &frozen)
+	if err != nil {
+		t.Fatalf("query quota values: %v", err)
+	}
+	if used != wantUsed || frozen != wantFrozen {
+		t.Fatalf("expected quota %s/%s/%s used=%s frozen=%s, got used=%s frozen=%s", quotaType, scope, scopeKey, wantUsed, wantFrozen, used, frozen)
+	}
+}
+
+func postgresQuotaVersion(t *testing.T, repo *Repository, activityID string, quotaType marketing.QuotaType, scope marketing.QuotaScope, scopeKey string) int {
+	t.Helper()
+	var version int
+	err := repo.db.QueryRowContext(context.Background(), `
+		SELECT version
+		FROM marketing_quota
+		WHERE activity_id = $1 AND quota_type = $2 AND scope = $3 AND scope_key = $4
+	`, activityID, quotaType, scope, scopeKey).Scan(&version)
+	if err != nil {
+		t.Fatalf("query quota version: %v", err)
+	}
+	return version
+}
+
+func assertPostgresGrantStatus(t *testing.T, repo *Repository, tenantID string, commandID string, want marketing.GrantStatus) {
+	t.Helper()
+	var got marketing.GrantStatus
+	if err := repo.db.QueryRowContext(context.Background(), `
+		SELECT grant_status
+		FROM marketing_grant_order
+		WHERE tenant_id = $1 AND bill_no = $2
+	`, tenantID, commandID).Scan(&got); err != nil {
+		t.Fatalf("query grant status: %v", err)
+	}
+	if got != want {
+		t.Fatalf("expected grant %s/%s status %s, got %s", tenantID, commandID, want, got)
+	}
+}
+
+func assertPostgresParticipationStatus(t *testing.T, repo *Repository, participationID string, want marketing.ParticipationStatus) {
+	t.Helper()
+	var got marketing.ParticipationStatus
+	if err := repo.db.QueryRowContext(context.Background(), `
+		SELECT status
+		FROM marketing_participation
+		WHERE id = $1
+	`, participationID).Scan(&got); err != nil {
+		t.Fatalf("query participation status: %v", err)
+	}
+	if got != want {
+		t.Fatalf("expected participation %s status %s, got %s", participationID, want, got)
+	}
+}
+
+func countPostgresAtomicResults(t *testing.T, results <-chan error) (int, int) {
+	t.Helper()
+	var success int
+	var quotaExceeded int
+	for err := range results {
+		switch {
+		case err == nil:
+			success++
+		case errors.Is(err, marketing.ErrQuotaExceeded):
+			quotaExceeded++
+		default:
+			t.Fatalf("unexpected concurrent atomic grant error: %v", err)
+		}
+	}
+	return success, quotaExceeded
+}
+
+func mustCreatePostgresQuota(t *testing.T, repo *Repository, quota marketing.Quota) {
+	t.Helper()
+	if _, err := repo.CreateQuota(context.Background(), quota); err != nil {
+		t.Fatalf("create quota %s: %v", quota.ID, err)
+	}
+}
+
+func createPostgresCallbackQuotas(t *testing.T, repo *Repository, activityID string, prefix string, userScopeKey string, dailyScopeKey string, now time.Time) {
+	t.Helper()
+	for _, quota := range []marketing.Quota{
+		{ID: prefix + "_budget", ActivityID: activityID, Type: marketing.QuotaBudget, Scope: marketing.QuotaScopeActivity, ScopeKey: "TOTAL", TotalValue: "100", UsedValue: "0", FrozenValue: "0", Version: 1, CreatedAt: now, UpdatedAt: now},
+		{ID: prefix + "_stock", ActivityID: activityID, Type: marketing.QuotaStock, Scope: marketing.QuotaScopeActivity, ScopeKey: "REWARD_A", TotalValue: "10", UsedValue: "0", FrozenValue: "0", Version: 1, CreatedAt: now, UpdatedAt: now},
+		{ID: prefix + "_user", ActivityID: activityID, Type: marketing.QuotaUserLimit, Scope: marketing.QuotaScopeUser, ScopeKey: userScopeKey, TotalValue: "1", UsedValue: "0", FrozenValue: "0", Version: 1, CreatedAt: now, UpdatedAt: now},
+		{ID: prefix + "_daily", ActivityID: activityID, Type: marketing.QuotaDailyLimit, Scope: marketing.QuotaScopeUser, ScopeKey: dailyScopeKey, TotalValue: "1", UsedValue: "0", FrozenValue: "0", Version: 1, CreatedAt: now, UpdatedAt: now},
+	} {
+		mustCreatePostgresQuota(t, repo, quota)
 	}
 }
 

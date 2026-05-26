@@ -146,8 +146,11 @@ func (r *MemoryRepository) FindEnabledFactProvider(ctx context.Context, tenantID
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	provider, ok := r.factProviders[factProviderKey(tenantID, factCode)]
-	if !ok || !provider.Enabled {
+	if !ok {
 		return FactProvider{}, ErrNotFound
+	}
+	if !provider.Enabled {
+		return FactProvider{}, ErrFactProviderDisabled
 	}
 	if err := provider.Validate(); err != nil {
 		return FactProvider{}, err
@@ -226,8 +229,22 @@ func (r *MemoryRepository) UpdateGrantOrderByCommandID(ctx context.Context, tena
 	defer r.mu.Unlock()
 	for i := range r.grantOrders {
 		if r.grantOrders[i].TenantID == tenantID && r.grantOrders[i].BillNo == commandID {
+			current := r.grantOrders[i].GrantStatus
+			if current == GrantSuccess || current == GrantFailed || current == GrantClosed {
+				return ErrCallbackConflict
+			}
+			if status == GrantSending && current != GrantPending && current != GrantRetry {
+				return ErrCallbackConflict
+			}
+			if status == GrantRetry && current != GrantSending {
+				return ErrCallbackConflict
+			}
 			r.grantOrders[i].GrantStatus = status
 			r.grantOrders[i].ErrorMessage = message
+			if status == GrantRetry {
+				r.grantOrders[i].RetryCount++
+			}
+			r.grantOrders[i].UpdatedAt = time.Now().UTC()
 			return nil
 		}
 	}
@@ -242,18 +259,21 @@ func (r *MemoryRepository) ApplyRewardCallback(ctx context.Context, callback Rew
 	defer r.mu.Unlock()
 
 	now := time.Now().UTC()
-	orderIndex := -1
-	for i := range r.grantOrders {
-		if r.grantOrders[i].TenantID == callback.TenantID && r.grantOrders[i].BillNo == callback.CommandID {
-			orderIndex = i
-			break
-		}
+	orderIndex := r.rewardCallbackOrderIndexLocked(callback)
+	if orderIndex == -2 {
+		return RewardCallbackResult{}, ErrCallbackLocatorConflict
 	}
 	if orderIndex < 0 {
 		return RewardCallbackResult{}, ErrNotFound
 	}
 
 	order := &r.grantOrders[orderIndex]
+	if callback.CommandID != "" && order.BillNo != callback.CommandID {
+		return RewardCallbackResult{}, ErrCallbackLocatorConflict
+	}
+	if callback.IdempotencyKey != "" && order.IdempotencyKey != callback.IdempotencyKey {
+		return RewardCallbackResult{}, ErrCallbackLocatorConflict
+	}
 	if order.GrantStatus == GrantClosed {
 		return RewardCallbackResult{}, ErrGrantOrderClosed
 	}
@@ -263,19 +283,44 @@ func (r *MemoryRepository) ApplyRewardCallback(ctx context.Context, callback Rew
 		}
 		return RewardCallbackResult{
 			CommandID:           order.BillNo,
+			BillNo:              order.BillNo,
+			IdempotencyKey:      order.IdempotencyKey,
 			TenantID:            order.TenantID,
 			GrantOrderID:        order.ID,
 			ParticipationID:     order.ParticipationID,
 			GrantStatus:         order.GrantStatus,
+			Status:              order.GrantStatus,
 			ParticipationStatus: r.participationStatusLocked(order.ParticipationID),
 			Duplicate:           true,
 			Reservations:        r.reservationsForGrantOrderLocked(order.ID),
 		}, nil
 	}
+	if order.GrantStatus != GrantSending && order.GrantStatus != GrantRetry {
+		return RewardCallbackResult{}, ErrCallbackConflict
+	}
 
 	reservationIndexes := r.reservationIndexesForGrantOrderLocked(order.ID)
 	if len(reservationIndexes) == 0 {
-		return RewardCallbackResult{}, ErrQuotaReservationMissing
+		if r.activityHadQuotaAtLocked(order.ActivityID, order.CreatedAt) {
+			return RewardCallbackResult{}, ErrQuotaReservationMissing
+		}
+		order.GrantStatus = callback.Status
+		order.ExternalGrantID = callback.ExternalGrantID
+		order.ErrorMessage = callback.Message
+		order.FinishedAt = &callback.FinishedAt
+		order.UpdatedAt = now
+		participationStatus := r.updateParticipationAfterCallbackLocked(order.ParticipationID, now)
+		return RewardCallbackResult{
+			CommandID:           order.BillNo,
+			BillNo:              order.BillNo,
+			IdempotencyKey:      order.IdempotencyKey,
+			TenantID:            order.TenantID,
+			GrantOrderID:        order.ID,
+			ParticipationID:     order.ParticipationID,
+			GrantStatus:         order.GrantStatus,
+			Status:              order.GrantStatus,
+			ParticipationStatus: participationStatus,
+		}, nil
 	}
 	for _, idx := range reservationIndexes {
 		if r.quotaReservations[idx].Status != QuotaReservationFrozen {
@@ -285,16 +330,11 @@ func (r *MemoryRepository) ApplyRewardCallback(ctx context.Context, callback Rew
 
 	for _, idx := range reservationIndexes {
 		reservation := &r.quotaReservations[idx]
-		if err := r.finishReservationQuotaLocked(*reservation, callback.Status, now); err != nil {
-			return RewardCallbackResult{}, err
+		if isParticipationQuotaReservation(*reservation) {
+			continue
 		}
-		reservation.UpdatedAt = now
-		if callback.Status == GrantSuccess {
-			reservation.Status = QuotaReservationConfirmed
-			reservation.ConfirmedAt = &now
-		} else {
-			reservation.Status = QuotaReservationReleased
-			reservation.ReleasedAt = &now
+		if err := r.finishReservationLocked(reservation, callback.Status, now); err != nil {
+			return RewardCallbackResult{}, err
 		}
 	}
 
@@ -305,15 +345,142 @@ func (r *MemoryRepository) ApplyRewardCallback(ctx context.Context, callback Rew
 	order.UpdatedAt = now
 
 	participationStatus := r.updateParticipationAfterCallbackLocked(order.ParticipationID, now)
+	if participationStatus == ParticipationGranted || participationStatus == ParticipationFailed {
+		finalStatus := GrantSuccess
+		if participationStatus == ParticipationFailed {
+			finalStatus = GrantFailed
+		}
+		if err := r.finishParticipationQuotaReservationsLocked(order.ParticipationID, finalStatus, now); err != nil {
+			return RewardCallbackResult{}, err
+		}
+	}
 	return RewardCallbackResult{
 		CommandID:           order.BillNo,
+		BillNo:              order.BillNo,
+		IdempotencyKey:      order.IdempotencyKey,
 		TenantID:            order.TenantID,
 		GrantOrderID:        order.ID,
 		ParticipationID:     order.ParticipationID,
 		GrantStatus:         order.GrantStatus,
+		Status:              order.GrantStatus,
 		ParticipationStatus: participationStatus,
 		Reservations:        r.reservationsForGrantOrderLocked(order.ID),
 	}, nil
+}
+
+func (r *MemoryRepository) rewardCallbackOrderIndexLocked(callback RewardCallback) int {
+	byCommand := -1
+	byIDem := -1
+	for i := range r.grantOrders {
+		order := r.grantOrders[i]
+		if order.TenantID != callback.TenantID {
+			continue
+		}
+		if callback.CommandID != "" && order.BillNo == callback.CommandID {
+			byCommand = i
+		}
+		if callback.IdempotencyKey != "" && order.IdempotencyKey == callback.IdempotencyKey {
+			byIDem = i
+		}
+	}
+	if byCommand >= 0 && byIDem >= 0 && byCommand != byIDem {
+		return -2
+	}
+	if byCommand >= 0 {
+		return byCommand
+	}
+	return byIDem
+}
+
+func (r *MemoryRepository) ReleaseExpiredQuotaReservations(ctx context.Context, cmd QuotaTimeoutReleaseCommand) (QuotaTimeoutReleaseResult, error) {
+	if err := ctx.Err(); err != nil {
+		return QuotaTimeoutReleaseResult{}, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	limit := cmd.Limit
+	if limit <= 0 {
+		limit = 100
+	}
+	result := QuotaTimeoutReleaseResult{
+		TenantID:  cmd.TenantID,
+		OlderThan: cmd.OlderThan,
+		Limit:     limit,
+		DryRun:    cmd.DryRun,
+		Operator:  cmd.Operator,
+		Reason:    cmd.Reason,
+	}
+	now := time.Now().UTC()
+	for i := range r.grantOrders {
+		if len(result.Items) >= limit {
+			break
+		}
+		order := &r.grantOrders[i]
+		if order.TenantID != cmd.TenantID || isFinalGrantStatus(order.GrantStatus) {
+			continue
+		}
+		candidateAt := order.UpdatedAt
+		if candidateAt.IsZero() {
+			candidateAt = order.CreatedAt
+		}
+		if !candidateAt.Before(cmd.OlderThan) {
+			continue
+		}
+		if !r.hasFrozenReservationForGrantOrderLocked(order.ID) {
+			continue
+		}
+		beforeStatus := order.GrantStatus
+		if cmd.DryRun {
+			result.Items = append(result.Items, QuotaTimeoutReleaseItem{
+				CommandID:           order.BillNo,
+				GrantOrderID:        order.ID,
+				ParticipationID:     order.ParticipationID,
+				ActivityID:          order.ActivityID,
+				PreviousGrantStatus: beforeStatus,
+				GrantStatus:         order.GrantStatus,
+				ParticipationStatus: r.participationStatusLocked(order.ParticipationID),
+				Result:              "DRY_RUN",
+				Reservations:        r.reservationsForGrantOrderLocked(order.ID),
+			})
+			continue
+		}
+		for _, idx := range r.reservationIndexesForGrantOrderLocked(order.ID) {
+			reservation := &r.quotaReservations[idx]
+			if reservation.Status != QuotaReservationFrozen || isParticipationQuotaReservation(*reservation) {
+				continue
+			}
+			if err := r.finishReservationLocked(reservation, GrantFailed, now); err != nil {
+				return QuotaTimeoutReleaseResult{}, err
+			}
+		}
+		order.GrantStatus = GrantFailed
+		order.ErrorMessage = "TIMEOUT_RELEASE: " + cmd.Reason
+		order.FinishedAt = &now
+		order.UpdatedAt = now
+		participationStatus := r.updateParticipationAfterCallbackLocked(order.ParticipationID, now)
+		if participationStatus == ParticipationGranted || participationStatus == ParticipationFailed {
+			finalStatus := GrantSuccess
+			if participationStatus == ParticipationFailed {
+				finalStatus = GrantFailed
+			}
+			if err := r.finishParticipationQuotaReservationsLocked(order.ParticipationID, finalStatus, now); err != nil {
+				return QuotaTimeoutReleaseResult{}, err
+			}
+		}
+		result.Items = append(result.Items, QuotaTimeoutReleaseItem{
+			CommandID:           order.BillNo,
+			GrantOrderID:        order.ID,
+			ParticipationID:     order.ParticipationID,
+			ActivityID:          order.ActivityID,
+			PreviousGrantStatus: beforeStatus,
+			GrantStatus:         order.GrantStatus,
+			ParticipationStatus: participationStatus,
+			Result:              "RELEASED",
+			Reservations:        r.reservationsForGrantOrderLocked(order.ID),
+		})
+	}
+	return result, nil
 }
 
 func (r *MemoryRepository) ListRewardReconciliation(ctx context.Context, query RewardReconciliationQuery) ([]RewardReconciliationItem, error) {
@@ -417,6 +584,9 @@ func (r *MemoryRepository) CreateParticipationGrantOutboxesWithQuota(ctx context
 	if cmd.ReserveUserLimit && !reserveQuotaIn(nextQuotas, cmd.Participation.ActivityID, QuotaUserLimit, QuotaScopeUser, cmd.UserScopeKey, "1") {
 		return AtomicGrantResult{}, QuotaExceededError{Type: QuotaUserLimit, Scope: QuotaScopeUser, ScopeKey: cmd.UserScopeKey, Amount: "1"}
 	}
+	if cmd.ReserveDailyLimit && !reserveQuotaIn(nextQuotas, cmd.Participation.ActivityID, QuotaDailyLimit, QuotaScopeUser, cmd.DailyLimitScopeKey, "1") {
+		return AtomicGrantResult{}, QuotaExceededError{Type: QuotaDailyLimit, Scope: QuotaScopeUser, ScopeKey: cmd.DailyLimitScopeKey, Amount: "1"}
+	}
 	for _, reservation := range cmd.StockReservations {
 		if !reserveQuotaIn(nextQuotas, cmd.Participation.ActivityID, reservation.Type, reservation.Scope, reservation.ScopeKey, reservation.Amount) {
 			return AtomicGrantResult{}, QuotaExceededError{Type: reservation.Type, Scope: reservation.Scope, ScopeKey: reservation.ScopeKey, Amount: reservation.Amount}
@@ -425,7 +595,7 @@ func (r *MemoryRepository) CreateParticipationGrantOutboxesWithQuota(ctx context
 	r.quotas = nextQuotas
 	r.participations = append(r.participations, cmd.Participation)
 	r.grantOrders = append(r.grantOrders, cmd.GrantOrders...)
-	r.quotaReservations = append(r.quotaReservations, quotaReservationsForAtomicCommand(cmd, time.Now().UTC())...)
+	r.quotaReservations = append(r.quotaReservations, quotaReservationsForAtomicCommand(cmd, time.Now().UTC(), r.quotas)...)
 	r.outboxMessages = append(r.outboxMessages, cmd.OutboxMessages...)
 	return AtomicGrantResult{
 		Participation:  cmd.Participation,
@@ -511,7 +681,7 @@ func (r *MemoryRepository) ListPendingOutbox(ctx context.Context, limit int) ([]
 		if len(out) >= limit {
 			break
 		}
-		if message.TargetChannel != GrantHTTP && message.TargetChannel != GrantWebhook {
+		if message.TargetChannel != GrantHTTP && message.TargetChannel != GrantWebhook && message.TargetChannel != GrantMQ {
 			continue
 		}
 		if message.SendStatus == OutboxPending || message.SendStatus == OutboxFailed {
@@ -598,11 +768,20 @@ func (r *MemoryRepository) ReplayOutboxDLQ(ctx context.Context, tenantID string,
 		if item.SendStatus != OutboxDLQ {
 			return OutboxMessage{}, ErrInvalidOperation
 		}
+		if commandID := outboxRewardCommandID(item.Payload); commandID != "" {
+			order := r.grantOrderByCommandIDLocked(tenantID, commandID)
+			if order == nil {
+				return OutboxMessage{}, ErrNotFound
+			}
+			if order.GrantStatus != GrantRetry {
+				return OutboxMessage{}, ErrInvalidOperation
+			}
+		}
 		before := *item
 		item.SendStatus = OutboxPending
 		item.NextRetryAt = nil
 		item.UpdatedAt = replayedAt
-		r.auditRecords = append(r.auditRecords, outboxOperationAudit(tenantID, operator, "OUTBOX_DLQ_REPLAY", id, reason, before.SendStatus, item.SendStatus, replayedAt))
+		r.auditRecords = append(r.auditRecords, outboxOperationAudit(tenantID, operator, "OUTBOX_DLQ_REPLAY", before, item.SendStatus, reason, replayedAt))
 		return *item, nil
 	}
 	return OutboxMessage{}, ErrNotFound
@@ -625,7 +804,7 @@ func (r *MemoryRepository) CloseOutboxDLQ(ctx context.Context, tenantID string, 
 		before := *item
 		item.SendStatus = OutboxDLQClosed
 		item.UpdatedAt = closedAt
-		r.auditRecords = append(r.auditRecords, outboxOperationAudit(tenantID, operator, "OUTBOX_DLQ_CLOSE", id, reason, before.SendStatus, item.SendStatus, closedAt))
+		r.auditRecords = append(r.auditRecords, outboxOperationAudit(tenantID, operator, "OUTBOX_DLQ_CLOSE", before, item.SendStatus, reason, closedAt))
 		return *item, nil
 	}
 	return OutboxMessage{}, ErrNotFound
@@ -705,10 +884,45 @@ func reserveQuotaIn(quotas []Quota, activityID string, quotaType QuotaType, scop
 	return true
 }
 
-func quotaReservationsForAtomicCommand(cmd AtomicGrantCommand, now time.Time) []QuotaReservation {
+func quotaReservationsForAtomicCommand(cmd AtomicGrantCommand, now time.Time, quotas []Quota) []QuotaReservation {
 	var reservations []QuotaReservation
+	if len(cmd.GrantOrders) > 0 {
+		firstOrder := cmd.GrantOrders[0]
+		if cmd.ReserveUserLimit && quotaExistsIn(quotas, cmd.Participation.ActivityID, QuotaUserLimit, QuotaScopeUser, cmd.UserScopeKey) {
+			reservations = append(reservations, QuotaReservation{
+				ID:           NewID("reservation"),
+				TenantID:     firstOrder.TenantID,
+				ActivityID:   firstOrder.ActivityID,
+				GrantOrderID: firstOrder.ID,
+				CommandID:    firstOrder.BillNo,
+				Type:         QuotaUserLimit,
+				Scope:        QuotaScopeUser,
+				ScopeKey:     cmd.UserScopeKey,
+				Amount:       "1",
+				Status:       QuotaReservationFrozen,
+				CreatedAt:    now,
+				UpdatedAt:    now,
+			})
+		}
+		if cmd.ReserveDailyLimit && quotaExistsIn(quotas, cmd.Participation.ActivityID, QuotaDailyLimit, QuotaScopeUser, cmd.DailyLimitScopeKey) {
+			reservations = append(reservations, QuotaReservation{
+				ID:           NewID("reservation"),
+				TenantID:     firstOrder.TenantID,
+				ActivityID:   firstOrder.ActivityID,
+				GrantOrderID: firstOrder.ID,
+				CommandID:    firstOrder.BillNo,
+				Type:         QuotaDailyLimit,
+				Scope:        QuotaScopeUser,
+				ScopeKey:     cmd.DailyLimitScopeKey,
+				Amount:       "1",
+				Status:       QuotaReservationFrozen,
+				CreatedAt:    now,
+				UpdatedAt:    now,
+			})
+		}
+	}
 	for _, order := range cmd.GrantOrders {
-		if order.RewardAmount != "" {
+		if order.RewardAmount != "" && quotaExistsIn(quotas, cmd.Participation.ActivityID, QuotaBudget, QuotaScopeActivity, "TOTAL") {
 			reservations = append(reservations, QuotaReservation{
 				ID:           NewID("reservation"),
 				TenantID:     order.TenantID,
@@ -725,7 +939,7 @@ func quotaReservationsForAtomicCommand(cmd AtomicGrantCommand, now time.Time) []
 			})
 		}
 		rewardCode := rewardCodeFromPayload(order.RewardPayload)
-		if rewardCode != "" {
+		if rewardCode != "" && quotaExistsIn(quotas, cmd.Participation.ActivityID, QuotaStock, QuotaScopeActivity, rewardCode) {
 			reservations = append(reservations, QuotaReservation{
 				ID:           NewID("reservation"),
 				TenantID:     order.TenantID,
@@ -743,6 +957,19 @@ func quotaReservationsForAtomicCommand(cmd AtomicGrantCommand, now time.Time) []
 		}
 	}
 	return reservations
+}
+
+func quotaExistsIn(quotas []Quota, activityID string, quotaType QuotaType, scope QuotaScope, scopeKey string) bool {
+	for _, quota := range quotas {
+		if quota.ActivityID == activityID && quota.Type == quotaType && quota.Scope == scope && quota.ScopeKey == scopeKey {
+			return true
+		}
+	}
+	return false
+}
+
+func isParticipationQuotaReservation(reservation QuotaReservation) bool {
+	return reservation.Type == QuotaUserLimit || reservation.Type == QuotaDailyLimit
 }
 
 func rewardCodeFromPayload(payload json.RawMessage) string {
@@ -795,20 +1022,62 @@ func (r *MemoryRepository) finishReservationQuotaLocked(reservation QuotaReserva
 	return errors.Join(ErrQuotaAggregateConflict, errors.New("quota not found"))
 }
 
+func (r *MemoryRepository) finishReservationLocked(reservation *QuotaReservation, status GrantStatus, now time.Time) error {
+	if err := r.finishReservationQuotaLocked(*reservation, status, now); err != nil {
+		return err
+	}
+	reservation.UpdatedAt = now
+	if status == GrantSuccess {
+		reservation.Status = QuotaReservationConfirmed
+		reservation.ConfirmedAt = &now
+	} else {
+		reservation.Status = QuotaReservationReleased
+		reservation.ReleasedAt = &now
+	}
+	return nil
+}
+
+func (r *MemoryRepository) finishParticipationQuotaReservationsLocked(participationID string, status GrantStatus, now time.Time) error {
+	for i := range r.quotaReservations {
+		reservation := &r.quotaReservations[i]
+		if !isParticipationQuotaReservation(*reservation) || reservation.Status != QuotaReservationFrozen {
+			continue
+		}
+		if !r.grantOrderBelongsToParticipationLocked(reservation.GrantOrderID, participationID) {
+			continue
+		}
+		if err := r.finishReservationLocked(reservation, status, now); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *MemoryRepository) grantOrderBelongsToParticipationLocked(grantOrderID string, participationID string) bool {
+	for _, order := range r.grantOrders {
+		if order.ID == grantOrderID && order.ParticipationID == participationID {
+			return true
+		}
+	}
+	return false
+}
+
 func (r *MemoryRepository) updateParticipationAfterCallbackLocked(participationID string, now time.Time) ParticipationStatus {
 	if participationID == "" {
 		return ""
 	}
 	allFinal := true
+	anySuccess := false
 	anyFailed := false
 	for _, order := range r.grantOrders {
 		if order.ParticipationID != participationID {
 			continue
 		}
 		switch order.GrantStatus {
-		case GrantFailed:
+		case GrantFailed, GrantClosed:
 			anyFailed = true
 		case GrantSuccess:
+			anySuccess = true
 		default:
 			allFinal = false
 		}
@@ -817,7 +1086,7 @@ func (r *MemoryRepository) updateParticipationAfterCallbackLocked(participationI
 		return r.participationStatusLocked(participationID)
 	}
 	next := ParticipationGranted
-	if anyFailed {
+	if anyFailed && !anySuccess {
 		next = ParticipationFailed
 	}
 	for i := range r.participations {
@@ -828,6 +1097,45 @@ func (r *MemoryRepository) updateParticipationAfterCallbackLocked(participationI
 		}
 	}
 	return ""
+}
+
+func (r *MemoryRepository) activityHadQuotaAtLocked(activityID string, at time.Time) bool {
+	for _, quota := range r.quotas {
+		if quota.ActivityID == activityID && (at.IsZero() || quota.CreatedAt.IsZero() || !quota.CreatedAt.After(at)) {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *MemoryRepository) hasFrozenReservationForGrantOrderLocked(grantOrderID string) bool {
+	for _, reservation := range r.quotaReservations {
+		if reservation.GrantOrderID == grantOrderID && reservation.Status == QuotaReservationFrozen {
+			return true
+		}
+	}
+	return false
+}
+
+func isFinalGrantStatus(status GrantStatus) bool {
+	return status == GrantSuccess || status == GrantFailed || status == GrantClosed
+}
+
+func (r *MemoryRepository) grantOrderByCommandIDLocked(tenantID string, commandID string) *GrantOrder {
+	for i := range r.grantOrders {
+		if r.grantOrders[i].TenantID == tenantID && r.grantOrders[i].BillNo == commandID {
+			return &r.grantOrders[i]
+		}
+	}
+	return nil
+}
+
+func outboxRewardCommandID(payload json.RawMessage) string {
+	var command RewardCommand
+	if err := json.Unmarshal(payload, &command); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(command.CommandID)
 }
 
 func (r *MemoryRepository) participationStatusLocked(participationID string) ParticipationStatus {
@@ -918,14 +1226,19 @@ func rawJSONContains(payload json.RawMessage, value string) bool {
 	return value != "" && strings.Contains(string(payload), value)
 }
 
-func outboxOperationAudit(tenantID string, operator string, action string, outboxID string, reason string, before OutboxStatus, after OutboxStatus, at time.Time) AuditRecord {
+func outboxOperationAudit(tenantID string, operator string, action string, before OutboxMessage, after OutboxStatus, reason string, at time.Time) AuditRecord {
 	payload, _ := json.Marshal(map[string]any{
-		"outboxId":     outboxID,
-		"operator":     operator,
-		"reason":       reason,
-		"beforeStatus": before,
-		"afterStatus":  after,
-		"operatedAt":   at,
+		"outboxId":      before.ID,
+		"operator":      operator,
+		"reason":        reason,
+		"beforeStatus":  before.SendStatus,
+		"afterStatus":   after,
+		"targetChannel": before.TargetChannel,
+		"targetRef":     before.TargetRef,
+		"retryCount":    before.RetryCount,
+		"errorMessage":  before.ErrorMessage,
+		"commandId":     outboxRewardCommandID(before.Payload),
+		"operatedAt":    at,
 	})
 	return AuditRecord{
 		ID:         NewID("audit"),
@@ -933,7 +1246,7 @@ func outboxOperationAudit(tenantID string, operator string, action string, outbo
 		Actor:      operator,
 		Action:     action,
 		Resource:   "outbox",
-		ResourceID: outboxID,
+		ResourceID: before.ID,
 		Payload:    payload,
 		CreatedAt:  at,
 	}

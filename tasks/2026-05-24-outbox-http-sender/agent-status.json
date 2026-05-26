@@ -1,30 +1,54 @@
 {
   "requirementId": "2026-05-24-outbox-http-sender",
-  "updatedAt": "2026-05-24T11:39:29.03511Z",
+  "updatedAt": "2026-05-26T13:12:50.749782Z",
   "agents": {
     "analysis": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-outbox-http-sender/analysis.md"
+      "status": "DONE",
+      "startedAt": "2026-05-26T13:03:42.792109Z",
+      "finishedAt": "2026-05-26T13:05:54.014902Z",
+      "output": "tasks/2026-05-24-outbox-http-sender/analysis.md",
+      "log": "tasks/2026-05-24-outbox-http-sender/runs/20260526T130342Z-analysis.log",
+      "nextStatus": "REVIEW_READY"
     },
     "commit": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-outbox-http-sender/commit.md"
+      "status": "DONE",
+      "startedAt": "2026-05-26T13:11:59.45203Z",
+      "finishedAt": "2026-05-26T13:12:50.749771Z",
+      "output": "tasks/2026-05-24-outbox-http-sender/commit.md",
+      "log": "tasks/2026-05-24-outbox-http-sender/runs/20260526T131159Z-commit.log",
+      "nextStatus": "COMMITTED"
     },
     "dev": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-outbox-http-sender/implementation.md"
+      "status": "DONE",
+      "startedAt": "2026-05-26T13:06:35.2748Z",
+      "finishedAt": "2026-05-26T13:09:36.701557Z",
+      "output": "tasks/2026-05-24-outbox-http-sender/implementation.md",
+      "log": "tasks/2026-05-24-outbox-http-sender/runs/20260526T130635Z-dev.log",
+      "nextStatus": "REVIEW_PASS"
     },
     "review": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-outbox-http-sender/review.md"
+      "status": "DONE",
+      "startedAt": "2026-05-26T13:05:54.373374Z",
+      "finishedAt": "2026-05-26T13:06:35.271447Z",
+      "output": "tasks/2026-05-24-outbox-http-sender/review.md",
+      "log": "tasks/2026-05-24-outbox-http-sender/runs/20260526T130554Z-review.log",
+      "nextStatus": "REVIEW_PASS"
     },
     "test": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-outbox-http-sender/test.md"
+      "status": "DONE",
+      "startedAt": "2026-05-26T13:09:36.766976Z",
+      "finishedAt": "2026-05-26T13:11:59.423049Z",
+      "output": "tasks/2026-05-24-outbox-http-sender/test.md",
+      "log": "tasks/2026-05-24-outbox-http-sender/runs/20260526T130936Z-test.log",
+      "nextStatus": "COMMIT_READY"
     },
     "test-plan": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-outbox-http-sender/test-plan.md"
+      "status": "DONE",
+      "startedAt": "2026-05-26T13:06:35.300696Z",
+      "finishedAt": "2026-05-26T13:07:53.183006Z",
+      "output": "tasks/2026-05-24-outbox-http-sender/test-plan.md",
+      "log": "tasks/2026-05-24-outbox-http-sender/runs/20260526T130635Z-test-plan.log",
+      "nextStatus": "REVIEW_PASS"
     }
   }
 }

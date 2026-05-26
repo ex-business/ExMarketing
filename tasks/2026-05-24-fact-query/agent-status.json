@@ -1,6 +1,6 @@
 {
   "requirementId": "2026-05-24-fact-query",
-  "updatedAt": "2026-05-26T07:20:52.897227Z",
+  "updatedAt": "2026-05-26T07:22:47.870946Z",
   "agents": {
     "analysis": {
       "status": "INTERRUPTED",
@@ -12,11 +12,12 @@
       "error": "agent stopped by user: pid 80067"
     },
     "commit": {
-      "status": "RUNNING",
+      "status": "DONE",
       "startedAt": "2026-05-26T07:20:52.897224Z",
+      "finishedAt": "2026-05-26T07:22:47.870943Z",
       "output": "tasks/2026-05-24-fact-query/commit.md",
       "log": "tasks/2026-05-24-fact-query/runs/20260526T072052Z-commit.log",
-      "pid": 67829
+      "nextStatus": "COMMITTED"
     },
     "dev": {
       "status": "DONE",

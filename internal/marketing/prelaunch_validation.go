@@ -26,9 +26,9 @@ const (
 	PrelaunchError    PrelaunchSeverity = "ERROR"
 	PrelaunchHighRisk PrelaunchSeverity = "HIGH_RISK"
 
-	PrelaunchItemPassed PrelaunchItemResult = "PASSED"
+	PrelaunchItemPassed PrelaunchItemResult = "PASS"
 	PrelaunchItemWarn   PrelaunchItemResult = "WARN"
-	PrelaunchItemFailed PrelaunchItemResult = "FAILED"
+	PrelaunchItemFailed PrelaunchItemResult = "BLOCK"
 
 	ApprovalNone      ApprovalStatus = "NONE"
 	ApprovalPending   ApprovalStatus = "PENDING"
@@ -112,7 +112,6 @@ func ValidatePrelaunch(req PrelaunchValidationRequest, now time.Time) PrelaunchV
 	builder.checkStock()
 	builder.checkConflicts()
 	builder.checkHighRisk()
-	builder.checkApproval()
 	return builder.result()
 }
 
@@ -161,20 +160,26 @@ func (b *prelaunchBuilder) checkBudget() {
 	}
 	if hasBudget {
 		if !deterministic {
-			b.addHighRisk("BUDGET_EXPOSURE_UNKNOWN", "reward maximum exposure cannot be fully determined and needs approval", fields)
-			b.addItem("BUDGET_EXPOSURE_UNKNOWN", "Budget exposure validation", PrelaunchHighRisk, PrelaunchItemFailed, "reward maximum exposure cannot be fully determined", fields, nil, "configure upper bounds or submit for second-level approval")
+			b.addHighRisk("BUDGET_EXPOSURE_UNKNOWN", "reward maximum exposure cannot be fully determined", fields)
+			b.addItem("BUDGET_EXPOSURE_UNKNOWN", "Budget exposure validation", PrelaunchHighRisk, PrelaunchItemFailed, "reward maximum exposure cannot be fully determined", fields, nil, "configure upper bounds before go-live")
 			return
 		}
 		if exposure.Cmp(budget) > 0 {
 			b.addError("BUDGET_EXCEEDED", "Budget exposure validation", "maximum reward exposure exceeds activity budget", fields, map[string]string{"exposure": exposure.String(), "budget": budget.String()}, "lower reward exposure or raise approved budget")
 			return
 		}
+		if exposure.Cmp(defaultMaxSingleRewardExposure()) > 0 {
+			b.addHighRisk("HIGH_RISK_SINGLE_REWARD_THRESHOLD", "single maximum reward exposure exceeds default threshold", fields)
+		}
+		if budget.Cmp(defaultMaxActivityBudget()) > 0 {
+			b.addHighRisk("HIGH_RISK_ACTIVITY_BUDGET_THRESHOLD", "activity budget exceeds default threshold", []string{"quotas"})
+		}
 		b.addPass("BUDGET_EXPOSURE", "Budget exposure validation", fields)
 		return
 	}
 	if hasAutoFundReward(b.request.Activity.Rewards) {
-		b.addHighRisk("BUDGET_MISSING_AUTO_FUND", "automatic fund reward has no activity budget quota", []string{"quotas", "rewards"})
-		b.addItem("BUDGET_MISSING_AUTO_FUND", "Budget exposure validation", PrelaunchHighRisk, PrelaunchItemFailed, "automatic fund reward has no BUDGET/ACTIVITY/TOTAL quota", []string{"quotas", "rewards"}, nil, "configure total budget or submit for second-level approval")
+		b.addHighRisk("HIGH_RISK_MISSING_BUDGET", "automatic fund reward has no activity budget quota", []string{"quotas", "rewards"})
+		b.addItem("HIGH_RISK_MISSING_BUDGET", "Budget exposure validation", PrelaunchHighRisk, PrelaunchItemFailed, "automatic fund reward has no BUDGET/ACTIVITY/TOTAL quota", []string{"quotas", "rewards"}, nil, "configure total budget before go-live")
 		return
 	}
 	b.addItem("BUDGET_OPTIONAL", "Budget exposure validation", PrelaunchWarning, PrelaunchItemWarn, "activity has no total budget quota", []string{"quotas"}, nil, "configure budget quota when budget control is required")
@@ -191,7 +196,7 @@ func (b *prelaunchBuilder) checkStock() {
 			b.addError("STOCK_SCHEMA", "Stock quota validation", "stock quota totalValue must be a non-negative Decimal", []string{"quotas", field}, nil, "fix STOCK/ACTIVITY/rewardCode quota")
 			return
 		}
-		if requiresStock(reward.CalculateType) {
+		if requiresStock(reward) {
 			if !exists {
 				b.addError("STOCK_MISSING", "Stock quota validation", "stock-sensitive reward is missing activity stock quota", []string{"quotas", field}, reward.Code, "add STOCK/ACTIVITY quota for this reward")
 				return
@@ -248,11 +253,11 @@ func (b *prelaunchBuilder) checkHighRisk() {
 		}
 		field := fmt.Sprintf("rewards[%d]", i)
 		if reward.GrantMode == GrantAuto && (reward.Type == RewardBonus || reward.Type == RewardCash) {
-			b.addHighRisk("AUTO_FUND_REWARD", "automatic fund reward requires second-level approval", []string{field, "grantMode", "rewardType"})
+			b.addHighRisk("HIGH_RISK_AUTO_FUND_REWARD", "automatic fund reward is high-risk and cannot go live without a later approval flow", []string{field, "grantMode", "rewardType"})
 		}
 		switch reward.CalculateType {
 		case CalculateRandom, CalculateProbability, CalculatePoolSplit:
-			b.addHighRisk("VARIABLE_REWARD", "random, probability, or pool-split reward requires second-level approval", []string{field, "calculateType"})
+			b.addHighRisk("HIGH_RISK_VARIABLE_REWARD", "random, probability, or pool-split reward is high-risk and cannot go live without a later approval flow", []string{field, "calculateType"})
 		}
 	}
 	if len(b.highRiskItems) == 0 {
@@ -261,7 +266,7 @@ func (b *prelaunchBuilder) checkHighRisk() {
 	}
 	for _, highRisk := range b.highRiskItems {
 		if !b.hasItem(highRisk.Code) {
-			b.addItem(highRisk.Code, "High-risk configuration validation", PrelaunchHighRisk, PrelaunchItemFailed, highRisk.Reason, highRisk.Fields, nil, "submit second-level approval before go-live")
+			b.addItem(highRisk.Code, "High-risk configuration validation", PrelaunchHighRisk, PrelaunchItemFailed, highRisk.Reason, highRisk.Fields, nil, "remove or lower high-risk configuration before go-live")
 		}
 	}
 }
@@ -292,30 +297,21 @@ func (b *prelaunchBuilder) checkApproval() {
 func (b *prelaunchBuilder) result() PrelaunchValidationResult {
 	hasError := false
 	hasHighRisk := false
-	hasWarn := false
 	for _, item := range b.items {
 		switch item.Severity {
 		case PrelaunchError:
 			hasError = true
 		case PrelaunchHighRisk:
 			hasHighRisk = true
-		case PrelaunchWarning:
-			hasWarn = true
 		}
 	}
-	approved := b.request.Approval.Status == ApprovalApproved && b.request.Approval.ActivityVersion == b.activityVersion()
 	conclusion := PrelaunchPass
 	allow := true
 	requireApproval := len(b.highRiskItems) > 0
 	switch {
-	case hasError:
+	case hasError || hasHighRisk:
 		conclusion = PrelaunchBlock
 		allow = false
-	case hasHighRisk && !approved:
-		conclusion = PrelaunchApprovalRequired
-		allow = false
-	case hasWarn:
-		conclusion = PrelaunchWarn
 	default:
 		conclusion = PrelaunchPass
 	}
@@ -352,11 +348,11 @@ func (b *prelaunchBuilder) activityVersion() int {
 func (b *prelaunchBuilder) activityBudget() (decimal.Decimal, bool, bool) {
 	for _, quota := range b.request.Quotas {
 		if quota.Type == QuotaBudget && quota.Scope == QuotaScopeActivity && quota.ScopeKey == "TOTAL" {
-			value, err := decimal.Parse(quota.TotalValue)
-			if err != nil || value.IsNegative() {
+			available, ok := quotaAvailable(quota)
+			if !ok {
 				return decimal.Decimal{}, true, false
 			}
-			return value, true, true
+			return available, true, true
 		}
 	}
 	return decimal.Zero(), false, true
@@ -365,14 +361,44 @@ func (b *prelaunchBuilder) activityBudget() (decimal.Decimal, bool, bool) {
 func (b *prelaunchBuilder) rewardStock(rewardCode string) (decimal.Decimal, bool, bool) {
 	for _, quota := range b.request.Quotas {
 		if quota.Type == QuotaStock && quota.Scope == QuotaScopeActivity && quota.ScopeKey == rewardCode {
-			value, err := decimal.Parse(quota.TotalValue)
-			if err != nil || value.IsNegative() {
+			available, ok := quotaAvailable(quota)
+			if !ok {
 				return decimal.Decimal{}, true, false
 			}
-			return value, true, true
+			return available, true, true
 		}
 	}
 	return decimal.Zero(), false, true
+}
+
+func quotaAvailable(quota Quota) (decimal.Decimal, bool) {
+	total, err := decimal.Parse(quota.TotalValue)
+	if err != nil || total.IsNegative() {
+		return decimal.Decimal{}, false
+	}
+	used, err := parseOptionalQuotaDecimal(quota.UsedValue)
+	if err != nil {
+		return decimal.Decimal{}, false
+	}
+	frozen, err := parseOptionalQuotaDecimal(quota.FrozenValue)
+	if err != nil {
+		return decimal.Decimal{}, false
+	}
+	if used.IsNegative() || frozen.IsNegative() {
+		return decimal.Decimal{}, false
+	}
+	available := total.Sub(used).Sub(frozen)
+	if available.IsNegative() {
+		return decimal.Decimal{}, false
+	}
+	return available, true
+}
+
+func parseOptionalQuotaDecimal(value string) (decimal.Decimal, error) {
+	if strings.TrimSpace(value) == "" {
+		return decimal.Zero(), nil
+	}
+	return decimal.Parse(value)
 }
 
 func (b *prelaunchBuilder) addPass(code, name string, fields []string) {
@@ -417,7 +443,7 @@ func expectedForSeverity(severity PrelaunchSeverity) any {
 	case PrelaunchError:
 		return "no blocking validation errors"
 	case PrelaunchHighRisk:
-		return "second-level approval before go-live"
+		return "no high-risk configuration before go-live"
 	case PrelaunchWarning:
 		return "operator acknowledgement"
 	default:
@@ -507,8 +533,21 @@ func hasAutoFundReward(rewards []Reward) bool {
 	})
 }
 
-func requiresStock(calculateType CalculateType) bool {
-	return calculateType == CalculateProbability || calculateType == CalculatePoolSplit
+func requiresStock(reward Reward) bool {
+	switch reward.Type {
+	case RewardCoupon, RewardGift, RewardDrawChance, RewardMembership:
+		return true
+	default:
+		return reward.CalculateType == CalculateRandom || reward.CalculateType == CalculateProbability || reward.CalculateType == CalculatePoolSplit
+	}
+}
+
+func defaultMaxSingleRewardExposure() decimal.Decimal {
+	return decimal.MustParse("1000.0000")
+}
+
+func defaultMaxActivityBudget() decimal.Decimal {
+	return decimal.MustParse("100000.0000")
 }
 
 func timeWindowsOverlap(leftStart, leftEnd, rightStart, rightEnd time.Time) bool {

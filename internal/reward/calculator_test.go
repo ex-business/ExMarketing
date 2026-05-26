@@ -1,6 +1,7 @@
 package reward
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -56,24 +57,89 @@ func TestConfigCalculatorRatioUsesAttributesBaseFieldAndCap(t *testing.T) {
 	}
 }
 
-func TestConfigCalculatorLadderMatchesClosedInterval(t *testing.T) {
-	ctx := baseContext()
-	ctx.Event.Attributes["continueDays"] = "7"
-	result, err := ConfigCalculator{}.Calculate(ctx, rewardConfig(marketing.CalculateLadder, `{
-		"field":"attributes.continueDays",
-		"ladders":[
-			{"min":"7","max":"999","amount":"58.00"},
-			{"min":"1","max":"2","amount":"5.00"},
-			{"min":"3","max":"6","amount":"18.00"}
-		],
-		"currency":"CNY",
-		"targetRef":"https://wallet.example.com/reward"
-	}`))
-	if err != nil {
-		t.Fatalf("calculate ladder: %v", err)
+func TestConfigCalculatorRatioAvoidsFloatDriftAndAcceptsJSONNumbers(t *testing.T) {
+	var event marketing.ActivityEvent
+	if err := json.Unmarshal([]byte(`{
+		"eventId":"evt_decimal",
+		"eventType":"DEPOSIT_SUCCESS",
+		"sourceSystem":"payment",
+		"tenantId":"tenant_1",
+		"subject":{"type":"USER","id":"user_1"},
+		"biz":{"bizType":"DEPOSIT","bizId":"pay_1"},
+		"occurredAt":"2026-05-24T12:00:00Z",
+		"attributes":{"amount":299.00}
+	}`), &event); err != nil {
+		t.Fatalf("unmarshal event: %v", err)
 	}
-	if result.Amount != "58.0000" || result.Payload["ladderIndex"] != 0 {
-		t.Fatalf("unexpected ladder result: %+v payload=%#v", result, result.Payload)
+	ctx := baseContext()
+	ctx.Event = event
+	result, err := ConfigCalculator{}.Calculate(ctx, rewardConfig(marketing.CalculateRatio, `{"baseField":"attributes.amount","rate":0.20,"currency":"CNY","targetRef":"https://wallet.example.com/reward"}`))
+	if err != nil {
+		t.Fatalf("calculate ratio: %v", err)
+	}
+	if result.Amount != "59.8000" || result.Payload["rate"] != "0.2000" || result.Payload["baseAmount"] != "299.0000" {
+		t.Fatalf("unexpected decimal ratio result: %+v payload=%#v", result, result.Payload)
+	}
+}
+
+func TestConfigCalculatorRebateRatioIsStable(t *testing.T) {
+	ctx := baseContext()
+	ctx.Event.Attributes["rebateBaseAmount"] = "333.33"
+	first, err := ConfigCalculator{}.Calculate(ctx, rewardConfig(marketing.CalculateRatio, `{"baseField":"attributes.rebateBaseAmount","rate":"0.015","currency":"CNY","targetRef":"https://wallet.example.com/reward"}`))
+	if err != nil {
+		t.Fatalf("calculate rebate first: %v", err)
+	}
+	second, err := ConfigCalculator{}.Calculate(ctx, rewardConfig(marketing.CalculateRatio, `{"baseField":"attributes.rebateBaseAmount","rate":"0.015","currency":"CNY","targetRef":"https://wallet.example.com/reward"}`))
+	if err != nil {
+		t.Fatalf("calculate rebate second: %v", err)
+	}
+	if first.Amount != "5.0000" || second.Amount != first.Amount {
+		t.Fatalf("expected stable rebate amount 5.0000, first=%+v second=%+v", first, second)
+	}
+}
+
+func TestConfigCalculatorRejectsNonIntegerQuantityWithoutRounding(t *testing.T) {
+	cfg := rewardConfig(marketing.CalculateFixed, `{"couponTemplateId":"WELCOME_10","quantity":"1.00001","targetRef":"https://coupon.example.com/grant"}`)
+	cfg.Type = marketing.RewardCoupon
+
+	_, err := ConfigCalculator{}.Calculate(baseContext(), cfg)
+	var rewardErr Error
+	if !errors.As(err, &rewardErr) || rewardErr.ReasonCode != ReasonInvalidRewardConfig {
+		t.Fatalf("expected invalid integer quantity error, got %T %[1]v", err)
+	}
+}
+
+func TestConfigCalculatorLadderMatchesClosedInterval(t *testing.T) {
+	tests := []struct {
+		continueDays string
+		wantAmount   string
+		wantIndex    int
+	}{
+		{continueDays: "1", wantAmount: "5.0000", wantIndex: 1},
+		{continueDays: "3", wantAmount: "18.0000", wantIndex: 2},
+		{continueDays: "7", wantAmount: "58.0000", wantIndex: 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.continueDays, func(t *testing.T) {
+			ctx := baseContext()
+			ctx.Event.Attributes["continueDays"] = tt.continueDays
+			result, err := ConfigCalculator{}.Calculate(ctx, rewardConfig(marketing.CalculateLadder, `{
+				"field":"attributes.continueDays",
+				"ladders":[
+					{"min":"7","max":"999","amount":"58.00"},
+					{"min":"1","max":"2","amount":"5.00"},
+					{"min":"3","max":"6","amount":"18.00"}
+				],
+				"currency":"CNY",
+				"targetRef":"https://wallet.example.com/reward"
+			}`))
+			if err != nil {
+				t.Fatalf("calculate ladder: %v", err)
+			}
+			if result.Amount != tt.wantAmount || result.Payload["ladderIndex"] != tt.wantIndex {
+				t.Fatalf("unexpected ladder result: %+v payload=%#v", result, result.Payload)
+			}
+		})
 	}
 }
 
@@ -92,10 +158,21 @@ func TestConfigCalculatorRandomIsStableForSameSeed(t *testing.T) {
 	}
 }
 
+func TestConfigCalculatorRandomStepLargerThanRangeUsesMinAmount(t *testing.T) {
+	cfg := rewardConfig(marketing.CalculateRandom, `{"minAmount":"1.00","maxAmount":"2.00","step":"5.00","currency":"CNY","targetRef":"https://wallet.example.com/reward"}`)
+	result, err := ConfigCalculator{}.Calculate(baseContext(), cfg)
+	if err != nil {
+		t.Fatalf("calculate random: %v", err)
+	}
+	if result.Amount != "1.0000" || result.Payload["candidateCount"] != int64(1) {
+		t.Fatalf("expected only minAmount candidate, got %+v payload=%#v", result, result.Payload)
+	}
+}
+
 func TestConfigCalculatorProbabilityZeroItemSkipsReward(t *testing.T) {
 	cfg := rewardConfig(marketing.CalculateProbability, `{
 		"items":[
-			{"itemCode":"NO_PRIZE","weight":"1","rewardType":"BONUS","amount":"0","label":"No prize"}
+			{"itemCode":"NO_PRIZE","weight":"100","rewardType":"BONUS","amount":"0","label":"No prize"}
 		],
 		"currency":"CNY",
 		"targetRef":"https://wallet.example.com/reward"
@@ -109,6 +186,40 @@ func TestConfigCalculatorProbabilityZeroItemSkipsReward(t *testing.T) {
 	}
 	if result.Payload["itemCode"] != "NO_PRIZE" {
 		t.Fatalf("expected selected item payload, got %#v", result.Payload)
+	}
+}
+
+func TestConfigCalculatorProbabilityRejectsTotalWeightNot100(t *testing.T) {
+	cfg := rewardConfig(marketing.CalculateProbability, `{
+		"items":[
+			{"itemCode":"A","weight":"50","amount":"1.00"},
+			{"itemCode":"B","weight":"49.9999","amount":"2.00"}
+		],
+		"currency":"CNY",
+		"targetRef":"https://wallet.example.com/reward"
+	}`)
+	_, err := ConfigCalculator{}.Calculate(baseContext(), cfg)
+	var rewardErr Error
+	if !errors.As(err, &rewardErr) || rewardErr.ReasonCode != ReasonProbabilityTotalInvalid {
+		t.Fatalf("expected probability total error, got %T %[1]v", err)
+	}
+}
+
+func TestConfigCalculatorPoolSplitCountFieldAlias(t *testing.T) {
+	ctx := baseContext()
+	ctx.Event.Attributes["poolParticipantCount"] = "4"
+	result, err := ConfigCalculator{}.Calculate(ctx, rewardConfig(marketing.CalculatePoolSplit, `{
+		"poolAmount":"1000.00",
+		"splitBy":"COUNT",
+		"countField":"attributes.poolParticipantCount",
+		"currency":"CNY",
+		"targetRef":"https://wallet.example.com/reward"
+	}`))
+	if err != nil {
+		t.Fatalf("calculate pool split count: %v", err)
+	}
+	if result.Amount != "250.0000" || result.Payload["participantCount"] != "4.0000" {
+		t.Fatalf("expected count split 250.0000, got %+v payload=%#v", result, result.Payload)
 	}
 }
 

@@ -14,25 +14,43 @@ go build ./...
 
 ## Scope
 
-待填写。
+未提交。提交前检查发现工作区存在 `git diff --check` 阻断项，按 Commit Agent 规则打回 Dev Agent 修复。
 
 ## Review
 
 ~~~text
-PASS / BLOCK
+PASS
 ~~~
 
 ## Test
 
 ~~~text
-PASS / FAIL
+PASS
+~~~
+
+## Pre-Commit Checks
+
+~~~text
+git status -sb: PASS
+git diff --check: BLOCK
+go test ./...: PASS
+go build ./...: PASS
+~~~
+
+## Block Reason
+
+~~~text
+BLOCK
+tasks/2026-05-24-qualify/analysis.md:396: new blank line at EOF.
+
+原因：提交前必须执行并通过 git diff --check；当前存在 whitespace error。按用户约束，Commit Agent 禁止修改除 tasks/2026-05-24-113929-4/commit.md 以外的任何文件，因此不能自行修复，必须打回 Dev Agent。
 ~~~
 
 ## Commit
 
 ~~~text
-hash:
-message:
+hash: BLOCK - no commit created
+message: BLOCK - pre-commit check failed
 remote:
 ~~~
 

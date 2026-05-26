@@ -8,11 +8,11 @@ import (
 	"net/url"
 	"reflect"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/ex-stack/ExMarketing/internal/decimal"
+	"github.com/ex-stack/ExMarketing/internal/mqtarget"
 )
 
 type ActivityStatus string
@@ -351,6 +351,7 @@ type RewardConfig struct {
 	PoolAmount            string            `json:"poolAmount,omitempty"`
 	SplitBy               string            `json:"splitBy,omitempty"`
 	SplitMode             string            `json:"splitMode,omitempty"`
+	CountField            string            `json:"countField,omitempty"`
 	ParticipantCountField string            `json:"participantCountField,omitempty"`
 	WeightField           string            `json:"weightField,omitempty"`
 	TotalWeightField      string            `json:"totalWeightField,omitempty"`
@@ -377,10 +378,46 @@ type RewardConfig struct {
 	RewardPayload         any               `json:"rewardPayload,omitempty"`
 }
 
+func (c *RewardConfig) UnmarshalJSON(data []byte) error {
+	normalized, err := normalizeRawDecimalFields(data, rewardConfigJSONFields(), map[string]struct{}{
+		"amount": {}, "points": {}, "quantity": {}, "chanceCount": {}, "durationDays": {},
+		"rate": {}, "maxAmount": {}, "minAmount": {}, "step": {}, "poolAmount": {},
+		"faceValue": {}, "discountRate": {}, "valuationAmount": {}, "flowMultiple": {},
+	})
+	if err != nil {
+		return err
+	}
+	type alias RewardConfig
+	var out alias
+	if err := json.Unmarshal(normalized, &out); err != nil {
+		return err
+	}
+	*c = RewardConfig(out)
+	return nil
+}
+
 type RewardLadder struct {
 	Min    string `json:"min"`
 	Max    string `json:"max"`
 	Amount string `json:"amount"`
+}
+
+func (l *RewardLadder) UnmarshalJSON(data []byte) error {
+	normalized, err := normalizeRawDecimalFields(data, map[string]struct{}{
+		"min": {}, "max": {}, "amount": {},
+	}, map[string]struct{}{
+		"min": {}, "max": {}, "amount": {},
+	})
+	if err != nil {
+		return err
+	}
+	type alias RewardLadder
+	var out alias
+	if err := json.Unmarshal(normalized, &out); err != nil {
+		return err
+	}
+	*l = RewardLadder(out)
+	return nil
 }
 
 type ProbabilityItem struct {
@@ -390,6 +427,24 @@ type ProbabilityItem struct {
 	Amount     string     `json:"amount"`
 	Currency   string     `json:"currency,omitempty"`
 	Label      string     `json:"label,omitempty"`
+}
+
+func (i *ProbabilityItem) UnmarshalJSON(data []byte) error {
+	normalized, err := normalizeRawDecimalFields(data, map[string]struct{}{
+		"itemCode": {}, "weight": {}, "rewardType": {}, "amount": {}, "currency": {}, "label": {},
+	}, map[string]struct{}{
+		"weight": {}, "amount": {},
+	})
+	if err != nil {
+		return err
+	}
+	type alias ProbabilityItem
+	var out alias
+	if err := json.Unmarshal(normalized, &out); err != nil {
+		return err
+	}
+	*i = ProbabilityItem(out)
+	return nil
 }
 
 type ActivityEvent struct {
@@ -605,13 +660,15 @@ type QuotaReservation struct {
 }
 
 type AtomicGrantCommand struct {
-	Participation     Participation
-	BudgetAmount      string
-	ReserveUserLimit  bool
-	UserScopeKey      string
-	StockReservations []QuotaReservation
-	GrantOrders       []GrantOrder
-	OutboxMessages    []OutboxMessage
+	Participation      Participation
+	BudgetAmount       string
+	ReserveUserLimit   bool
+	UserScopeKey       string
+	ReserveDailyLimit  bool
+	DailyLimitScopeKey string
+	StockReservations  []QuotaReservation
+	GrantOrders        []GrantOrder
+	OutboxMessages     []OutboxMessage
 }
 
 type AtomicGrantResult struct {
@@ -655,6 +712,24 @@ type CreateQuotaCommand struct {
 	TotalValue string     `json:"totalValue"`
 }
 
+func (cmd *CreateQuotaCommand) UnmarshalJSON(data []byte) error {
+	normalized, err := normalizeRawDecimalFields(data, map[string]struct{}{
+		"operator": {}, "tenantId": {}, "activityId": {}, "quotaType": {}, "scope": {}, "scopeKey": {}, "totalValue": {},
+	}, map[string]struct{}{
+		"totalValue": {},
+	})
+	if err != nil {
+		return err
+	}
+	type alias CreateQuotaCommand
+	var out alias
+	if err := json.Unmarshal(normalized, &out); err != nil {
+		return err
+	}
+	*cmd = CreateQuotaCommand(out)
+	return nil
+}
+
 type AuditRecord struct {
 	ID         string          `json:"id"`
 	TenantID   string          `json:"tenantId"`
@@ -694,17 +769,22 @@ type FactProvider struct {
 }
 
 type FactMapping struct {
-	Source string `json:"source"`
-	Type   string `json:"type"`
+	Source   string `json:"source"`
+	Type     string `json:"type"`
+	Required *bool  `json:"required,omitempty"`
 }
 
 type FactQueryRequest struct {
-	TenantID   string         `json:"tenantId"`
-	FactCode   string         `json:"factCode"`
-	Subject    EventSubject   `json:"subject"`
-	Biz        EventBiz       `json:"biz"`
-	Attributes map[string]any `json:"attributes,omitempty"`
-	TraceID    string         `json:"traceId,omitempty"`
+	EventID      string         `json:"eventId,omitempty"`
+	EventType    string         `json:"eventType,omitempty"`
+	SourceSystem string         `json:"sourceSystem,omitempty"`
+	TenantID     string         `json:"tenantId"`
+	FactCode     string         `json:"factCode"`
+	Subject      EventSubject   `json:"subject"`
+	Biz          EventBiz       `json:"biz"`
+	OccurredAt   time.Time      `json:"occurredAt,omitempty"`
+	Attributes   map[string]any `json:"attributes"`
+	TraceID      string         `json:"traceId,omitempty"`
 }
 
 type FactQueryResponse struct {
@@ -715,6 +795,7 @@ type FactQueryResponse struct {
 	Facts          map[string]any `json:"facts,omitempty"`
 	ErrorCode      string         `json:"errorCode,omitempty"`
 	Error          string         `json:"error,omitempty"`
+	Reason         string         `json:"reason,omitempty"`
 	ProviderStatus string         `json:"providerStatus,omitempty"`
 }
 
@@ -801,27 +882,58 @@ type ProcessEventResult struct {
 
 type RewardCallbackResult struct {
 	CommandID           string              `json:"commandId"`
+	BillNo              string              `json:"billNo,omitempty"`
+	IdempotencyKey      string              `json:"idempotencyKey,omitempty"`
 	TenantID            string              `json:"tenantId"`
 	GrantOrderID        string              `json:"grantOrderId"`
 	ParticipationID     string              `json:"participationId"`
 	GrantStatus         GrantStatus         `json:"grantStatus"`
+	Status              GrantStatus         `json:"status"`
 	ParticipationStatus ParticipationStatus `json:"participationStatus,omitempty"`
 	Duplicate           bool                `json:"duplicate"`
 	Reservations        []QuotaReservation  `json:"quotaReservations,omitempty"`
 }
 
 type RewardCallback struct {
-	CommandID       string      `json:"commandId"`
-	TenantID        string      `json:"tenantId"`
-	Status          GrantStatus `json:"status"`
-	ExternalGrantID string      `json:"externalGrantId"`
-	Message         string      `json:"message"`
-	FinishedAt      time.Time   `json:"finishedAt"`
+	CommandID        string      `json:"commandId"`
+	BillNo           string      `json:"billNo"`
+	BillNoSnake      string      `json:"bill_no"`
+	IdempotencyKey   string      `json:"idempotencyKey"`
+	IdempotencySnake string      `json:"idempotency_key"`
+	TenantID         string      `json:"tenantId"`
+	Status           GrantStatus `json:"status"`
+	ExternalGrantID  string      `json:"externalGrantId"`
+	Message          string      `json:"message"`
+	FinishedAt       time.Time   `json:"finishedAt"`
+}
+
+func (callback RewardCallback) Normalized() RewardCallback {
+	callback.TenantID = strings.TrimSpace(callback.TenantID)
+	callback.CommandID = strings.TrimSpace(callback.CommandID)
+	callback.BillNo = strings.TrimSpace(callback.BillNo)
+	callback.BillNoSnake = strings.TrimSpace(callback.BillNoSnake)
+	callback.IdempotencyKey = strings.TrimSpace(callback.IdempotencyKey)
+	callback.IdempotencySnake = strings.TrimSpace(callback.IdempotencySnake)
+	callback.ExternalGrantID = strings.TrimSpace(callback.ExternalGrantID)
+	if callback.CommandID == "" {
+		callback.CommandID = firstNonEmpty(callback.BillNo, callback.BillNoSnake)
+	}
+	if callback.BillNo == "" {
+		callback.BillNo = firstNonEmpty(callback.CommandID, callback.BillNoSnake)
+	}
+	if callback.IdempotencyKey == "" {
+		callback.IdempotencyKey = callback.IdempotencySnake
+	}
+	return callback
 }
 
 func (callback RewardCallback) Validate() error {
-	if strings.TrimSpace(callback.TenantID) == "" || strings.TrimSpace(callback.CommandID) == "" {
-		return errors.Join(ErrInvalidCallback, errors.New("tenantId and commandId are required"))
+	callback = callback.Normalized()
+	if callback.TenantID == "" {
+		return errors.Join(ErrInvalidCallback, errors.New("tenantId is required"))
+	}
+	if callback.CommandID == "" && callback.IdempotencyKey == "" {
+		return errors.Join(ErrInvalidCallback, errors.New("billNo/commandId or idempotencyKey is required"))
 	}
 	if callback.Status != GrantSuccess && callback.Status != GrantFailed {
 		return errors.Join(ErrInvalidCallback, errors.New("status must be SUCCESS or FAILED"))
@@ -833,6 +945,56 @@ func (callback RewardCallback) Validate() error {
 		return errors.Join(ErrInvalidCallback, errors.New("finishedAt is required"))
 	}
 	return nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+type QuotaTimeoutReleaseCommand struct {
+	TenantID  string    `json:"tenantId"`
+	OlderThan time.Time `json:"olderThan,omitempty"`
+	Limit     int       `json:"limit,omitempty"`
+	DryRun    bool      `json:"dryRun,omitempty"`
+	Operator  string    `json:"operator"`
+	Reason    string    `json:"reason"`
+}
+
+func (cmd QuotaTimeoutReleaseCommand) Validate() error {
+	if strings.TrimSpace(cmd.TenantID) == "" || strings.TrimSpace(cmd.Operator) == "" || strings.TrimSpace(cmd.Reason) == "" {
+		return errors.Join(ErrInvalidOperation, errors.New("tenantId, operator and reason are required"))
+	}
+	if cmd.Limit < 0 {
+		return errors.Join(ErrInvalidOperation, errors.New("limit must be non-negative"))
+	}
+	return nil
+}
+
+type QuotaTimeoutReleaseResult struct {
+	TenantID  string                    `json:"tenantId"`
+	OlderThan time.Time                 `json:"olderThan"`
+	Limit     int                       `json:"limit"`
+	DryRun    bool                      `json:"dryRun"`
+	Operator  string                    `json:"operator"`
+	Reason    string                    `json:"reason"`
+	Items     []QuotaTimeoutReleaseItem `json:"items"`
+}
+
+type QuotaTimeoutReleaseItem struct {
+	CommandID           string              `json:"commandId"`
+	GrantOrderID        string              `json:"grantOrderId"`
+	ParticipationID     string              `json:"participationId"`
+	ActivityID          string              `json:"activityId"`
+	PreviousGrantStatus GrantStatus         `json:"previousGrantStatus"`
+	GrantStatus         GrantStatus         `json:"grantStatus"`
+	ParticipationStatus ParticipationStatus `json:"participationStatus,omitempty"`
+	Result              string              `json:"result"`
+	Reservations        []QuotaReservation  `json:"quotaReservations,omitempty"`
 }
 
 type RewardReconciliationItem struct {
@@ -910,6 +1072,7 @@ var (
 	ErrInvalidActivity          = errors.New("invalid activity")
 	ErrInvalidEvent             = errors.New("invalid event")
 	ErrInvalidFactProvider      = errors.New("invalid fact provider")
+	ErrFactProviderDisabled     = errors.New("fact provider disabled")
 	ErrDuplicateEvent           = errors.New("duplicate event")
 	ErrIdempotencyConflict      = errors.New("idempotency key payload conflict")
 	ErrNotFound                 = errors.New("not found")
@@ -917,6 +1080,7 @@ var (
 	ErrInvalidOperation         = errors.New("invalid operation")
 	ErrInvalidCallback          = errors.New("invalid callback request")
 	ErrCallbackConflict         = errors.New("callback status conflict")
+	ErrCallbackLocatorConflict  = errors.New("callback locator conflict")
 	ErrGrantOrderClosed         = errors.New("grant order closed")
 	ErrQuotaReservationMissing  = errors.New("quota reservation missing")
 	ErrQuotaReservationConflict = errors.New("quota reservation conflict")
@@ -926,7 +1090,11 @@ var (
 
 const MaxFactCacheTTLSeconds = 3600
 
-var factCodePattern = regexp.MustCompile(`^[A-Z][A-Z0-9_]{1,63}$`)
+var (
+	factCodePattern         = regexp.MustCompile(`^[A-Z][A-Z0-9_]{1,63}$`)
+	factMappingOutputRegexp = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$`)
+	factMappingSourceRegexp = regexp.MustCompile(`^\$(\.[A-Za-z_][A-Za-z0-9_]*(\[[0-9]+\])*)+$`)
+)
 
 func (provider FactProvider) Validate() error {
 	if strings.TrimSpace(provider.TenantID) == "" {
@@ -956,10 +1124,17 @@ func (provider FactProvider) Validate() error {
 		return errors.Join(ErrInvalidFactProvider, errors.New("mapping is required"))
 	}
 	for outputPath, mapping := range provider.Mapping {
-		if strings.TrimSpace(outputPath) == "" || strings.HasPrefix(outputPath, ".") || strings.Contains(outputPath, "..") {
+		outputPath = strings.TrimSpace(outputPath)
+		if outputPath == "" ||
+			strings.HasPrefix(outputPath, ".") ||
+			strings.HasSuffix(outputPath, ".") ||
+			strings.Contains(outputPath, "..") ||
+			strings.HasPrefix(outputPath, "facts.") ||
+			!factMappingOutputRegexp.MatchString(outputPath) {
 			return errors.Join(ErrInvalidFactProvider, fmt.Errorf("mapping path %q is invalid", outputPath))
 		}
-		if !strings.HasPrefix(strings.TrimSpace(mapping.Source), "$.") {
+		source := strings.TrimSpace(mapping.Source)
+		if source == "" || !factMappingSourceRegexp.MatchString(source) {
 			return errors.Join(ErrInvalidFactProvider, fmt.Errorf("mapping %s source is invalid", outputPath))
 		}
 		switch strings.ToLower(strings.TrimSpace(mapping.Type)) {
@@ -972,6 +1147,11 @@ func (provider FactProvider) Validate() error {
 }
 
 func ExtractFactReferences(rules []Rule) map[string]map[string]struct{} {
+	refs, _ := ExtractFactReferencesValidated(rules)
+	return refs
+}
+
+func ExtractFactReferencesValidated(rules []Rule) (map[string]map[string]struct{}, error) {
 	refs := map[string]map[string]struct{}{}
 	for _, rule := range rules {
 		if rule.Type != RuleTypeCondition || emptyOrNullJSON(rule.Config) {
@@ -982,9 +1162,18 @@ func ExtractFactReferences(rules []Rule) map[string]map[string]struct{} {
 			continue
 		}
 		for _, condition := range cfg.Conditions {
+			if strings.HasPrefix(condition.Field, "facts") && !strings.HasPrefix(condition.Field, "facts.") {
+				return nil, fmt.Errorf("FACT_FIELD_INVALID: fact field %q is invalid", condition.Field)
+			}
 			factCode, path, ok := splitFactField(condition.Field)
 			if !ok {
+				if strings.HasPrefix(condition.Field, "facts.") {
+					return nil, fmt.Errorf("FACT_FIELD_INVALID: fact field %q is invalid", condition.Field)
+				}
 				continue
+			}
+			if !factCodePattern.MatchString(factCode) || strings.HasPrefix(path, ".") || strings.HasSuffix(path, ".") || strings.Contains(path, "..") {
+				return nil, fmt.Errorf("FACT_FIELD_INVALID: fact field %q is invalid", condition.Field)
 			}
 			if refs[factCode] == nil {
 				refs[factCode] = map[string]struct{}{}
@@ -992,7 +1181,7 @@ func ExtractFactReferences(rules []Rule) map[string]map[string]struct{} {
 			refs[factCode][path] = struct{}{}
 		}
 	}
-	return refs
+	return refs, nil
 }
 
 func splitFactField(field string) (string, string, bool) {
@@ -1498,7 +1687,7 @@ func validateReward(index int, reward Reward, pluginCode string) error {
 	if reward.GrantMode != GrantAuto {
 		return invalidActivityf("rewards[%d].grantMode is unsupported", index)
 	}
-	if reward.GrantChannel != GrantHTTP && reward.GrantChannel != GrantWebhook {
+	if reward.GrantChannel != GrantHTTP && reward.GrantChannel != GrantWebhook && reward.GrantChannel != GrantMQ {
 		return invalidActivityf("rewards[%d].grantChannel is unsupported", index)
 	}
 	if reward.Version > 1 {
@@ -1508,7 +1697,7 @@ func validateReward(index int, reward Reward, pluginCode string) error {
 	if err := decodeStrict(reward.Config, &cfg); err != nil {
 		return invalidActivityf("rewards[%d].rewardConfig is invalid: %v", index, err)
 	}
-	if err := validateHTTPURL(fmt.Sprintf("rewards[%d].rewardConfig.targetRef", index), cfg.TargetRef, true); err != nil {
+	if err := validateRewardTargetRef(fmt.Sprintf("rewards[%d].rewardConfig.targetRef", index), cfg.TargetRef, reward.GrantChannel); err != nil {
 		return err
 	}
 	if (reward.Type == RewardBonus || reward.Type == RewardCash) && strings.TrimSpace(cfg.Currency) == "" {
@@ -1823,14 +2012,11 @@ func validateRandomRewardConfig(index int, cfg RewardConfig) error {
 	}
 	stepText := strings.TrimSpace(cfg.Step)
 	if stepText == "" {
-		stepText = "0.01"
+		return invalidActivityf("rewards[%d].rewardConfig.step is required", index)
 	}
 	step, err := decimal.Parse(stepText)
 	if err != nil || !step.IsPositive() {
 		return invalidActivityf("rewards[%d].rewardConfig.step must be positive decimal", index)
-	}
-	if min.Cmp(max) < 0 && step.Cmp(max.Sub(min)) > 0 {
-		return invalidActivityf("rewards[%d].rewardConfig.step must not exceed range", index)
 	}
 	return nil
 }
@@ -1850,8 +2036,8 @@ func validateProbabilityRewardConfig(index int, reward Reward, cfg RewardConfig)
 		}
 		seen[item.ItemCode] = struct{}{}
 		weight, err := decimal.Parse(item.Weight)
-		if err != nil || !weight.IsPositive() {
-			return invalidActivityf("rewards[%d].rewardConfig.items[%d].weight must be positive decimal", index, i)
+		if err != nil || weight.IsNegative() {
+			return invalidActivityf("rewards[%d].rewardConfig.items[%d].weight must be non-negative decimal", index, i)
 		}
 		total = total.Add(weight)
 		if err := validateNonNegativeDecimal(fmt.Sprintf("rewards[%d].rewardConfig.items[%d].amount", index, i), item.Amount); err != nil {
@@ -1869,8 +2055,8 @@ func validateProbabilityRewardConfig(index int, reward Reward, cfg RewardConfig)
 			return invalidActivityf("rewards[%d].rewardConfig.currency is required", index)
 		}
 	}
-	if !total.IsPositive() {
-		return invalidActivityf("rewards[%d].rewardConfig.items total weight must be positive", index)
+	if total.Cmp(decimal.MustParse("100")) != 0 {
+		return invalidActivityf("rewards[%d].rewardConfig.items total weight must equal 100.0000", index)
 	}
 	return nil
 }
@@ -1885,11 +2071,12 @@ func validatePoolSplitRewardConfig(index int, cfg RewardConfig, pluginCode strin
 	}
 	switch strings.ToUpper(strings.TrimSpace(splitBy)) {
 	case "COUNT":
-		if strings.TrimSpace(cfg.ParticipantCountField) == "" {
-			return invalidActivityf("rewards[%d].rewardConfig.participantCountField is required", index)
+		countField := firstNonEmptyString(cfg.CountField, cfg.ParticipantCountField)
+		if strings.TrimSpace(countField) == "" {
+			return invalidActivityf("rewards[%d].rewardConfig.countField is required", index)
 		}
-		if !supportedConfiguredField(cfg.ParticipantCountField, pluginCode) {
-			return invalidActivityf("rewards[%d].rewardConfig.participantCountField is unsupported", index)
+		if !supportedConfiguredField(countField, pluginCode) {
+			return invalidActivityf("rewards[%d].rewardConfig.countField is unsupported", index)
 		}
 	case "WEIGHT":
 		if strings.TrimSpace(cfg.WeightField) == "" || strings.TrimSpace(cfg.TotalWeightField) == "" {
@@ -1909,8 +2096,8 @@ func validatePositiveIntConfig(field string, value string) error {
 	if text == "" {
 		return invalidActivityf("%s is required", field)
 	}
-	parsed, err := strconv.Atoi(text)
-	if err != nil || parsed <= 0 {
+	parsed, err := decimal.Parse(text)
+	if err != nil || !parsed.IsPositive() || !parsed.IsInteger() {
 		return invalidActivityf("%s must be positive integer", field)
 	}
 	return nil
@@ -1933,6 +2120,69 @@ func decodeStrict(raw json.RawMessage, dst any) error {
 	decoder.UseNumber()
 	decoder.DisallowUnknownFields()
 	return decoder.Decode(dst)
+}
+
+func normalizeRawDecimalFields(raw json.RawMessage, allowed map[string]struct{}, decimalFields map[string]struct{}) (json.RawMessage, error) {
+	if emptyOrNullJSON(raw) {
+		return nil, errors.New("must be object")
+	}
+	var object map[string]json.RawMessage
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(&object); err != nil || object == nil {
+		return nil, errors.New("must be object")
+	}
+	for field, value := range object {
+		if _, ok := allowed[field]; !ok {
+			return nil, fmt.Errorf("unknown field %q", field)
+		}
+		if _, ok := decimalFields[field]; !ok || isJSONNull(value) {
+			continue
+		}
+		text, ok := rawDecimalText(value)
+		if !ok {
+			continue
+		}
+		quoted, err := json.Marshal(text)
+		if err != nil {
+			return nil, err
+		}
+		object[field] = quoted
+	}
+	normalized, err := json.Marshal(object)
+	if err != nil {
+		return nil, err
+	}
+	return normalized, nil
+}
+
+func rawDecimalText(raw json.RawMessage) (string, bool) {
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		return text, true
+	}
+	var number json.Number
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(&number); err == nil {
+		return number.String(), true
+	}
+	return "", false
+}
+
+func rewardConfigJSONFields() map[string]struct{} {
+	return map[string]struct{}{
+		"amount": {}, "points": {}, "quantity": {}, "chanceCount": {}, "durationDays": {},
+		"baseField": {}, "rate": {}, "maxAmount": {}, "field": {}, "ladders": {},
+		"minAmount": {}, "step": {}, "seedSalt": {}, "items": {}, "poolAmount": {},
+		"splitBy": {}, "splitMode": {}, "countField": {}, "participantCountField": {}, "weightField": {},
+		"totalWeightField": {}, "currency": {}, "unit": {}, "pointType": {},
+		"couponTemplateId": {}, "couponType": {}, "faceValue": {}, "discountRate": {},
+		"giftSkuId": {}, "giftCode": {}, "deliveryMode": {}, "drawPoolCode": {},
+		"lotteryCode": {}, "membershipTier": {}, "membershipPlanId": {},
+		"benefitPackageId": {}, "durationType": {}, "valuationAmount": {},
+		"expireAt": {}, "flowMultiple": {}, "targetRef": {}, "rewardPayload": {},
+	}
 }
 
 func emptyOrNullJSON(raw json.RawMessage) bool {
@@ -1968,6 +2218,20 @@ func validateHTTPURL(name, value string, required bool) error {
 		return invalidActivityf("%s must be http or https URL", name)
 	}
 	return nil
+}
+
+func validateRewardTargetRef(name, value string, channel GrantChannel) error {
+	switch channel {
+	case GrantHTTP, GrantWebhook:
+		return validateHTTPURL(name, value, true)
+	case GrantMQ:
+		if _, err := mqtarget.Parse(value); err != nil {
+			return invalidActivityf("%s is invalid for MQ: %v", name, err)
+		}
+		return nil
+	default:
+		return invalidActivityf("%s has unsupported grant channel %s", name, channel)
+	}
 }
 
 func parseOptionalTime(name, value string) (time.Time, bool, error) {
@@ -2341,9 +2605,24 @@ func (cmd CreateQuotaCommand) Validate() error {
 	if cmd.Type == "" || cmd.Scope == "" || strings.TrimSpace(cmd.ScopeKey) == "" {
 		return errors.New("quotaType, scope and scopeKey are required")
 	}
+	switch cmd.Type {
+	case QuotaBudget, QuotaStock, QuotaUserLimit, QuotaDailyLimit:
+	default:
+		return errors.New("quotaType is invalid")
+	}
+	switch cmd.Scope {
+	case QuotaScopeActivity, QuotaScopeUser, QuotaScopeIP, QuotaScopeDevice:
+	default:
+		return errors.New("scope is invalid")
+	}
 	value, err := decimal.Parse(cmd.TotalValue)
-	if err != nil || value.Cmp(decimal.Zero()) <= 0 {
-		return errors.New("totalValue must be a positive decimal")
+	if err != nil || value.IsNegative() {
+		return errors.New("totalValue must be a non-negative decimal")
+	}
+	if cmd.Type == QuotaStock || cmd.Type == QuotaUserLimit || cmd.Type == QuotaDailyLimit {
+		if !value.IsInteger() {
+			return errors.New("totalValue must be a non-negative integer decimal for stock and limit quotas")
+		}
 	}
 	return nil
 }

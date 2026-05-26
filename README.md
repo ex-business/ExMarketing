@@ -40,7 +40,7 @@ Enable the Outbox sender:
 export EX_MARKETING_OUTBOX_WORKER=true
 ```
 
-The worker sends `HTTP` and `WEBHOOK` reward commands to `rewardConfig.targetRef`, retries retryable failures with exponential backoff, then marks exhausted or non-retryable messages as `DLQ`. `MQ` outbox delivery is intentionally outside the current worker scope.
+The worker sends `HTTP`, `WEBHOOK`, and configured `MQ` reward commands to `rewardConfig.targetRef`, retries retryable failures with exponential backoff, then marks exhausted or non-retryable messages as `DLQ`. MQ delivery uses an adapter boundary for Kafka/RabbitMQ/Pulsar; broker credentials stay in runtime configuration and never in activity config or outbox payload.
 
 DLQ messages can be inspected and operated from the admin API:
 
@@ -73,6 +73,8 @@ POST /openapi/v1/events
 POST /openapi/v1/facts/query
 POST /openapi/v1/reward/callback
 ```
+
+Reward callbacks accept signed JSON from external grant systems. A callback is scoped by `tenantId` and can locate a grant order by `billNo` / `commandId` or `idempotencyKey`; conflicting locators return `CALLBACK_LOCATOR_CONFLICT`, and configured tenants must pass `X-ExMarketing-Timestamp` plus HMAC-SHA256 `X-ExMarketing-Signature` verification before any grant, participation, or quota state changes.
 
 Create activity example:
 
@@ -182,7 +184,7 @@ internal/marketing    domain model and repository contracts
 internal/rule         condition rule evaluator
 internal/reward       reward calculator and reward schema validation helpers
 internal/decimal      decimal money helper, no float64 for amount math
-internal/worker       outbox HTTP/Webhook sender with retry and DLQ
+internal/worker       outbox HTTP/Webhook/MQ sender with retry and DLQ
 internal/fact         HTTP fact provider client
 internal/plugin       activity plugin registry contract
 db/migration          first-phase schema

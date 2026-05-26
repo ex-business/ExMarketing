@@ -1,6 +1,7 @@
 package rule
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -214,7 +215,9 @@ type ConditionEvaluator struct{}
 
 func (e ConditionEvaluator) Evaluate(ctx Context, rule marketing.Rule) Result {
 	var config marketing.ConditionRuleConfig
-	if err := json.Unmarshal(rule.Config, &config); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(rule.Config))
+	decoder.UseNumber()
+	if err := decoder.Decode(&config); err != nil {
 		return Result{Passed: false, ReasonCode: ReasonInvalidConfig, Reason: "invalid rule config"}
 	}
 
@@ -226,18 +229,20 @@ func (e ConditionEvaluator) Evaluate(ctx Context, rule marketing.Rule) Result {
 		return Result{Passed: false, ReasonCode: ReasonInvalidConfig, Reason: "invalid rule logic"}
 	}
 	if len(config.Conditions) == 0 {
-		return Result{Passed: true}
+		return Result{Passed: false, ReasonCode: ReasonInvalidConfig, Reason: "rule conditions are required"}
 	}
 
 	anyPassed := false
+	conditionDetails := make([]map[string]any, 0, len(config.Conditions))
+	var firstFailure Result
 	var lastFailure Result
 	for _, condition := range config.Conditions {
 		result := evaluateCondition(ctx, condition)
+		conditionDetails = append(conditionDetails, conditionDetail(condition, result))
 		if logic == "AND" && !result.Passed {
-			return result
-		}
-		if logic == "OR" && result.Passed {
-			return Result{Passed: true}
+			if firstFailure.Reason == "" {
+				firstFailure = result
+			}
 		}
 		if !result.Passed {
 			lastFailure = result
@@ -245,14 +250,25 @@ func (e ConditionEvaluator) Evaluate(ctx Context, rule marketing.Rule) Result {
 		anyPassed = anyPassed || result.Passed
 	}
 
+	detail := map[string]any{
+		"logic":      logic,
+		"conditions": conditionDetails,
+	}
+	if logic == "AND" && firstFailure.Reason != "" {
+		firstFailure.Detail = detail
+		return firstFailure
+	}
 	if logic == "OR" {
+		if anyPassed {
+			return Result{Passed: true, Detail: detail}
+		}
 		if lastFailure.Reason == "" {
 			lastFailure = Result{Passed: false, ReasonCode: ReasonConditionFailed, Reason: "no OR condition passed"}
 		}
-		lastFailure.Passed = anyPassed
+		lastFailure.Detail = detail
 		return lastFailure
 	}
-	return Result{Passed: true}
+	return Result{Passed: true, Detail: detail}
 }
 
 func evaluateCondition(ctx Context, condition marketing.Condition) Result {
@@ -274,9 +290,9 @@ func evaluateCondition(ctx Context, condition marketing.Condition) Result {
 	case ">=", ">", "<=", "<":
 		return compareDecimal(condition, actual, condition.Value, op)
 	case "IN":
-		return conditionResult(contains(condition.Value, actual), condition, actual, ReasonConditionFailed, fmt.Sprintf("%s not in %v", condition.Field, condition.Value))
+		return conditionResult(matchesMembership(condition.Value, actual), condition, actual, ReasonConditionFailed, fmt.Sprintf("%s not in %v", condition.Field, condition.Value))
 	case "NOT_IN":
-		return conditionResult(!contains(condition.Value, actual), condition, actual, ReasonConditionFailed, fmt.Sprintf("%s in %v", condition.Field, condition.Value))
+		return conditionResult(!matchesMembership(condition.Value, actual), condition, actual, ReasonConditionFailed, fmt.Sprintf("%s in %v", condition.Field, condition.Value))
 	default:
 		return Result{Passed: false, ReasonCode: ReasonUnsupportedOp, Reason: fmt.Sprintf("unsupported op %s", condition.Op), Field: condition.Field, Expected: condition.Value, Actual: actual}
 	}
@@ -284,9 +300,26 @@ func evaluateCondition(ctx Context, condition marketing.Condition) Result {
 
 func conditionResult(passed bool, condition marketing.Condition, actual any, reasonCode string, reason string) Result {
 	if passed {
-		return Result{Passed: true}
+		return Result{Passed: true, Field: condition.Field, Expected: condition.Value, Actual: actual}
 	}
 	return Result{Passed: false, ReasonCode: reasonCode, Reason: reason, Field: condition.Field, Expected: condition.Value, Actual: actual}
+}
+
+func conditionDetail(condition marketing.Condition, result Result) map[string]any {
+	detail := map[string]any{
+		"field":    condition.Field,
+		"op":       condition.Op,
+		"expected": condition.Value,
+		"actual":   result.Actual,
+		"passed":   result.Passed,
+	}
+	if result.ReasonCode != "" {
+		detail["reasonCode"] = result.ReasonCode
+	}
+	if result.Reason != "" {
+		detail["reason"] = result.Reason
+	}
+	return detail
 }
 
 func fieldValue(ctx Context, path string) (any, bool) {
@@ -374,11 +407,20 @@ func compareDecimal(condition marketing.Condition, actual any, expected any, op 
 	return conditionResult(passed, condition, actual, ReasonConditionFailed, reason)
 }
 
-func contains(haystack any, needle any) bool {
-	values := sliceValues(haystack)
-	return slices.ContainsFunc(values, func(value any) bool {
-		return valuesEqual(value, needle)
-	})
+func matchesMembership(expected any, actual any) bool {
+	expectedValues := sliceValues(expected)
+	actualValues := sliceValues(actual)
+	if len(actualValues) == 0 {
+		actualValues = []any{actual}
+	}
+	for _, actualValue := range actualValues {
+		if slices.ContainsFunc(expectedValues, func(expectedValue any) bool {
+			return valuesEqual(expectedValue, actualValue)
+		}) {
+			return true
+		}
+	}
+	return false
 }
 
 func sliceValues(value any) []any {
@@ -417,9 +459,6 @@ func toDecimal(value any) (decimal.Decimal, bool) {
 		return d, err == nil
 	case int64:
 		d, err := decimal.Parse(strconv.FormatInt(typed, 10))
-		return d, err == nil
-	case float64:
-		d, err := decimal.Parse(strconv.FormatFloat(typed, 'f', -1, 64))
 		return d, err == nil
 	default:
 		return decimal.Decimal{}, false

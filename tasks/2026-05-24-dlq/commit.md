@@ -1,39 +1,45 @@
 # Commit
 
-## Agent 指令
+## Result
 
-你是 Commit Agent。只有 review.md 为 PASS 且 test.md 为 PASS 时才能提交。
+```text
+BLOCK
+```
 
-提交前必须检查：
+## Gate
 
-~~~bash
-git status -sb
-go test ./...
-go build ./...
-~~~
+```text
+review.md: PASS
+test.md: PASS
+```
 
 ## Scope
 
-待填写。
+未提交。
 
-## Review
+原因：提交前检查 `git diff --check` 失败，且失败位置不在本轮允许写入范围内。
 
-~~~text
-PASS / BLOCK
-~~~
+```text
+tasks/2026-05-24-qualify/analysis.md:396: new blank line at EOF.
+```
 
-## Test
+根据 Commit Agent 约束，本轮只允许写 `tasks/2026-05-24-dlq/commit.md`，不能修改 `tasks/2026-05-24-qualify/analysis.md` 或其他文件，因此必须打回 Dev Agent 修复后再提交。
 
-~~~text
-PASS / FAIL
-~~~
+## Pre-Commit Checks
+
+```text
+git status -sb: PASS，已执行；工作区存在多项修改和未跟踪文件。
+git diff --check: FAIL，见 BLOCK 原因。
+go test ./...: PASS。
+go build ./...: PASS。
+```
 
 ## Commit
 
-~~~text
-hash:
-message:
-remote:
-~~~
+```text
+hash: N/A
+message: N/A
+remote: N/A
+```
 
 需求：2026-05-24-dlq

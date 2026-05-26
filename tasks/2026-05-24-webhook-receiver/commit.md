@@ -14,26 +14,38 @@ go build ./...
 
 ## Scope
 
-待填写。
+- Commit Agent checked `review.md` and `test.md`: both PASS.
+- Submitted Webhook Receiver implementation and task artifacts.
+- Excluded `tasks/*/runs/` execution logs from the commit.
+- Left unrelated pre-existing worktree changes unstaged.
 
 ## Review
 
 ~~~text
-PASS / BLOCK
+PASS
 ~~~
 
 ## Test
 
 ~~~text
-PASS / FAIL
+PASS
+~~~
+
+## Pre-Commit Checks
+
+~~~text
+git status -sb: PASS
+git diff --check: PASS
+go test ./...: PASS
+go build ./...: PASS
 ~~~
 
 ## Commit
 
 ~~~text
-hash:
-message:
-remote:
+hash: 3b48d456e46a7b43c7b150058698f0790a76c9ca
+message: Implement webhook receiver
+remote: not pushed
 ~~~
 
 需求：2026-05-24-webhook-receiver

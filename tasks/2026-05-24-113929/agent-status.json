@@ -1,6 +1,6 @@
 {
   "requirementId": "2026-05-24-113929",
-  "updatedAt": "2026-05-26T07:59:08.971144Z",
+  "updatedAt": "2026-05-26T08:00:56.482258Z",
   "agents": {
     "analysis": {
       "status": "DONE",
@@ -11,11 +11,12 @@
       "nextStatus": "REVIEW_READY"
     },
     "commit": {
-      "status": "RUNNING",
+      "status": "DONE",
       "startedAt": "2026-05-26T07:59:08.97114Z",
+      "finishedAt": "2026-05-26T08:00:56.482255Z",
       "output": "tasks/2026-05-24-113929/commit.md",
       "log": "tasks/2026-05-24-113929/runs/20260526T075908Z-commit.log",
-      "pid": 97110
+      "nextStatus": "COMMITTED"
     },
     "dev": {
       "status": "DONE",

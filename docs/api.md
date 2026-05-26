@@ -287,7 +287,7 @@ rewards           奖励配置
 - `entry.audience.riskLevels` 读取 `attributes.riskLevel`，非空且不命中时返回 `AUDIENCE_RISK_LEVEL_NOT_ALLOWED`。
 - 旧配置字段 `entry.entranceCodes`、`entry.landingUrl`、顶层 `audience.segmentCodes/tags/countries` 仍可保存和读回；新入口匹配只依赖通用 `entry.*` 与标准事件字段。
 
-创建阶段会进行基础 Schema 校验。`tenantId + activityCode` 在同一租户内唯一，重复创建返回 `409 Conflict`；不同租户可以复用同一 `activityCode`。`startTime` / `endTime` 必须是带时区偏移的 RFC3339 时间，且 `startTime < endTime`；`timezone` 必须是可识别的 IANA 时区名或 `UTC`。当前普通活动只允许已注册 evaluator 的 `CONDITION` 规则；`FORMULA`、`LIMIT`、`SCRIPT` 只保留配置 Schema，未注册 evaluator 前即使结构合法也会返回 `400 Bad Request`。奖励类型允许 `BONUS` / `CASH` / `COUPON` / `POINT` / `GIFT` / `DRAW_CHANCE` / `MEMBERSHIP`。金额类 `BONUS` / `CASH` 允许 `FIXED` / `RATIO` / `LADDER` / `RANDOM` / `PROBABILITY` / `POOL_SPLIT`；非金额类当前最小可上线口径只允许 `FIXED`，其他组合返回 `400 Bad Request`。发奖模式允许 `AUTO`，发奖通道允许 `HTTP` / `WEBHOOK`；`rewardConfig.targetRef` 对可执行发奖必填且必须是 `http` 或 `https` URL。`MQ`、`MANUAL_EXPORT`、`MANUAL`、未知配置字段、非法版本或不可解析 Decimal 会返回 `400 Bad Request`。配置 `pluginCode` 时必须命中服务内注册的 ActivityPlugin，且与 `activityType` 兼容；未知插件会在创建或上线前校验阶段拒绝。
+创建阶段会进行基础 Schema 校验。`tenantId + activityCode` 在同一租户内唯一，重复创建返回 `409 Conflict`；不同租户可以复用同一 `activityCode`。`startTime` / `endTime` 必须是带时区偏移的 RFC3339 时间，且 `startTime < endTime`；`timezone` 必须是可识别的 IANA 时区名或 `UTC`。当前普通活动只允许已注册 evaluator 的 `CONDITION` 规则；`FORMULA`、`LIMIT`、`SCRIPT` 只保留配置 Schema，未注册 evaluator 前即使结构合法也会返回 `400 Bad Request`。奖励类型允许 `BONUS` / `CASH` / `COUPON` / `POINT` / `GIFT` / `DRAW_CHANCE` / `MEMBERSHIP`。金额类 `BONUS` / `CASH` 允许 `FIXED` / `RATIO` / `LADDER` / `RANDOM` / `PROBABILITY` / `POOL_SPLIT`；非金额类当前最小可上线口径只允许 `FIXED`，其他组合返回 `400 Bad Request`。发奖模式允许 `AUTO`，发奖通道允许 `HTTP` / `WEBHOOK` / `MQ`；`rewardConfig.targetRef` 对可执行发奖必填，HTTP / WEBHOOK 必须是 `http` 或 `https` URL，MQ 必须是 `kafka://<topic>`、`rabbitmq://<exchange>/<routingKey>`、`rabbitmq:///<routingKey>` 或 `pulsar://<tenant>/<namespace>/<topic>`。MQ `targetRef` 不允许包含凭据、query 或 fragment。`MANUAL_EXPORT`、`MANUAL`、未知配置字段、非法版本或不可解析 Decimal 会返回 `400 Bad Request`。配置 `pluginCode` 时必须命中服务内注册的 ActivityPlugin，且与 `activityType` 兼容；未知插件会在创建或上线前校验阶段拒绝。
 
 奖励计算使用 Decimal 语义并输出 4 位小数。`RATIO` 支持 `maxAmount` 封顶，`LADDER` 使用闭区间且拒绝重叠阶梯，`RANDOM` / `PROBABILITY` 使用 tenant、activity、rewardCode、幂等键、配置版本和 `seedSalt` 形成稳定 seed，`POOL_SPLIT` 支持事件即时 `splitBy` 或兼容别名 `splitMode` 的 `COUNT` / `WEIGHT` 分摊。金额结果为 0 时不会生成发奖单、outbox 或 quota 扣减；非金额类 `FIXED` 奖励使用 `reward_amount=0.0000` 并在 `reward_payload_json` 中保存 `points`、`quantity`、`chanceCount`、`durationDays` 等权益字段。
 
@@ -383,7 +383,7 @@ curl -X POST http://localhost:8080/admin/v1/quotas \
 BUDGET       活动预算
 STOCK        奖品库存，scopeKey 固定为 rewardCode，每个 enabled reward 默认扣 1
 USER_LIMIT   用户次数限制
-DAILY_LIMIT  每日次数限制，模型已定义，业务流程待扩展
+DAILY_LIMIT  用户每日次数限制，scopeKey 固定为 subject.id:活动时区自然日
 ```
 
 当前支持的 scope：
@@ -478,14 +478,20 @@ POST /admin/v1/outbox/{id}/close
 
 - `replay` 只允许当前状态为 `DLQ`，成功后同一 outbox 回到 `PENDING`，payload 不变。
 - `close` 只允许当前状态为 `DLQ`，成功后同一 outbox 进入 `DLQ_CLOSED`。
+- `close` 只关闭 DLQ outbox，不修改 participation、grant_order 或 quota reservation；真实发奖终态和冻结释放由 callback、对账或 quota 超时释放流程处理。
 - `DLQ_CLOSED` 不允许 replay。
 - `operator` 和 `reason` 必填。
+
+MQ outbox 的 `SENT` 只表示 Kafka ack、RabbitMQ publisher confirm 或 Pulsar send ack 已由 sender adapter 确认，不表示真实权益已发放；发奖成功仍以 `/openapi/v1/reward/callback` 为准。MQ 失败、超时或 sender 未配置时保留原 outbox payload，并按相同 retry / DLQ / replay 规则处理。
 - 操作会写入 `marketing_audit`。
 
 ## 发奖回调与对账
 
 ```http
 POST /openapi/v1/reward/callback
+Content-Type: application/json
+X-ExMarketing-Timestamp: <unix_seconds>
+X-ExMarketing-Signature: <hex hmac-sha256>
 ```
 
 请求：
@@ -493,7 +499,8 @@ POST /openapi/v1/reward/callback
 ```json
 {
   "tenantId": "site_001",
-  "commandId": "cmd_xxx",
+  "billNo": "cmd_xxx",
+  "idempotencyKey": "site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:pay_123:rewardCode",
   "status": "SUCCESS",
   "externalGrantId": "wallet_001",
   "message": "paid",
@@ -503,10 +510,14 @@ POST /openapi/v1/reward/callback
 
 规则：
 
-- `tenantId + commandId` 唯一定位 `marketing_grant_order`，不会跨 tenant 更新。
+- `billNo` / `bill_no` / `commandId` 均表示 `marketing_grant_order.bill_no`；`idempotencyKey` / `idempotency_key` 表示 `marketing_grant_order.idempotency_key`。
+- `billNo` / `commandId` 与 `idempotencyKey` 至少提供一个；同时提供时必须指向同一 tenant 下同一 grant order，否则返回 `CALLBACK_LOCATOR_CONFLICT`。
+- `tenantId` 必须参与定位，不会跨 tenant 更新。
+- 配置 callback secret 的 tenant 必须使用 `X-ExMarketing-Timestamp + "." + raw_body` 做 HMAC-SHA256 签名；缺失、过期或不匹配的签名不会进入业务更新。
 - `status` 只接受 `SUCCESS` / `FAILED`；`SUCCESS` 必须提供 `externalGrantId`。
 - 首次 `SUCCESS` 会把该 grant_order 关联的 quota reservation 从 `FROZEN` 置为 `CONFIRMED`，并将 quota 聚合从 `frozen_value` 转入 `used_value`。
 - 首次 `FAILED` 会把该 grant_order 关联的 quota reservation 从 `FROZEN` 置为 `RELEASED`，并释放 quota 聚合 `frozen_value`。
+- 完全未配置 quota 的不限额 grant_order 可以没有 reservation，callback 正常终结且不移动 quota。
 - 相同最终态的重复回调返回 `duplicate=true`，不会重复确认或释放。
 - 相反最终态、`externalGrantId` 冲突、缺少 reservation 或 quota 聚合不一致会返回机器可识别错误。
 
@@ -514,7 +525,11 @@ POST /openapi/v1/reward/callback
 
 ```text
 400  INVALID_CALLBACK_REQUEST
+401  CALLBACK_SIGNATURE_MISSING
+401  CALLBACK_TIMESTAMP_INVALID
+401  CALLBACK_SIGNATURE_INVALID
 404  GRANT_ORDER_NOT_FOUND
+409  CALLBACK_LOCATOR_CONFLICT
 409  CALLBACK_STATUS_CONFLICT
 409  GRANT_ORDER_CLOSED
 409  QUOTA_RESERVATION_MISSING
@@ -542,6 +557,33 @@ GET /admin/v1/reward/reconciliation?tenantId=site_001&idempotencyKey=site_001:pa
 - `limit`：分页上限，默认 100。
 
 返回 grant_order、participation 状态、event inbox、outbox、回调信息、quota reservations 以及相关审计时间线，供排查长期冻结悬挂、回调异常、活动/用户/事件维度链路。
+
+超时释放：
+
+```http
+POST /admin/v1/quota-reservations/timeout-release
+```
+
+请求：
+
+```json
+{
+  "tenantId": "site_001",
+  "olderThan": "2026-05-24T10:00:00Z",
+  "limit": 100,
+  "dryRun": true,
+  "operator": "ops-a",
+  "reason": "provider timeout"
+}
+```
+
+规则：
+
+- `tenantId`、`operator`、`reason` 必填；`olderThan` 不传时默认当前时间前 2 小时；`limit` 不传时默认 100。
+- `dryRun=true` 只返回候选发奖单和仍为 `FROZEN` 的 reservations，不修改 grant_order、participation 或 quota。
+- 实际释放会把超时且未终结的 grant_order 标记为 `FAILED`，错误信息带 `TIMEOUT_RELEASE`，并释放对应 `FROZEN` quota。
+- 重复释放或 callback 已先终结时不会二次移动 quota。
+- 操作写入 `QUOTA_TIMEOUT_RELEASE_DRY_RUN` 或 `QUOTA_TIMEOUT_RELEASE` 审计。
 
 ## Webhook Receiver
 
@@ -680,7 +722,7 @@ curl -X POST http://localhost:8080/openapi/v1/events \
 5. 按 MATCH -> QUALIFY -> REWARD -> RISK_LIMIT_BUDGET 执行规则
 6. 规则拒绝时写 REJECTED participation
 7. 规则通过后计算全部奖励
-8. 在同一 activity 级事务内写 REWARDABLE participation、扣 BUDGET/STOCK/USER_LIMIT、写 grant_order、写 outbox
+8. 在同一 activity 级事务内写 REWARDABLE participation、扣 BUDGET/STOCK/USER_LIMIT/DAILY_LIMIT、写 grant_order、写 outbox
 9. quota 不足时回滚 participation/grant_order/outbox，写 QUOTA_EXCEEDED 审计
 ```
 
@@ -766,9 +808,33 @@ Quota 不足响应体：
 POST /openapi/v1/facts/query
 ```
 
-Fact Query 是可选能力。能通过事件 `attributes` 携带的数据，不要实时查询外部系统。
+Fact Query 是可选能力。能通过事件 `attributes` 携带的数据，不要实时查询外部系统；活动规则没有引用 `facts.*` 时事件处理链不会触发 Fact Query。
 
-`/openapi/v1/facts/query` 只接受 registry key 和事件上下文。服务端按 `tenantId + factCode` 查找 enabled Fact Provider，禁止在请求中传 inline endpoint、auth、mapping 或 provider 配置。
+`/openapi/v1/facts/query` 只接受 registry key 和标准事件上下文。服务端按 `tenantId + factCode` 查找 enabled Fact Provider，禁止在请求中传 inline endpoint、auth、mapping、timeout、TTL 或 provider 配置。允许的顶层字段只有 `eventId`、`eventType`、`sourceSystem`、`tenantId`、`factCode`、`subject`、`biz`、`occurredAt`、`attributes`、`traceId`；未知字段会返回 `INVALID_FACT_QUERY`。
+
+Provider `mapping_json` 必须是非空对象，结构为：
+
+```json
+{
+  "vipLevel": {"source": "$.data.vipLevel", "type": "string"},
+  "risk.score": {"source": "$.risk.score", "type": "number", "required": false}
+}
+```
+
+mapping key 是输出到 `facts.<factCode>.*` 的相对路径，不能包含 `facts.` 前缀。`source` 只支持 `$` 起始的简单对象路径和数字数组下标，例如 `$.data.tags[0]`；不支持通配、过滤、脚本或递归搜索。`required` 省略时默认为 `true`。
+
+mapping 失败统一返回 `FACT_MAPPING_FAILED`，并通过 `reason` 稳定区分 `MAPPING_REQUIRED_MISSING`、`MAPPING_TYPE_MISMATCH`、`MAPPING_KEY_INVALID`、`MAPPING_SOURCE_INVALID`、`MAPPING_CONFIG_INVALID`。非 required 字段缺失时从输出中省略。
+
+缓存规则：
+
+```text
+cache_ttl_seconds = 0 不缓存
+cache_ttl_seconds = 1..3600 只缓存成功 mapping 后的 facts
+cache key = provider 配置版本 + 规范化 provider 输入上下文
+provider 配置版本优先使用 updated_at；updated_at 不可用时使用 provider_type、endpoint、method、auth_ref、mapping_json、cache_ttl_seconds、enabled、timeout_ms 的配置指纹
+provider 输入上下文包含 tenantId、factCode、subject、biz、attributes，以及实际存在的 eventId、eventType、sourceSystem、occurredAt
+traceId、请求时间、调用方 header、Authorization、随机数不参与缓存 key，且 traceId 不传给 provider
+```
 
 必须配置：
 
@@ -817,7 +883,7 @@ curl -X POST http://localhost:8080/openapi/v1/facts/query \
 }
 ```
 
-失败响应会返回稳定 `errorCode`，例如 `FACT_PROVIDER_NOT_CONFIGURED`、`FACT_PROVIDER_DISABLED`、`FACT_PROVIDER_HTTP_FAILED`、`FACT_PROVIDER_TIMEOUT`、`FACT_MAPPING_FAILED`。
+失败响应会返回稳定 `errorCode` 和可选 `reason`，例如 `INVALID_FACT_QUERY`、`FACT_PROVIDER_NOT_CONFIGURED`、`FACT_PROVIDER_DISABLED`、`FACT_PROVIDER_HOST_NOT_ALLOWLISTED`、`FACT_PROVIDER_PRIVATE_IP_BLOCKED`、`FACT_PROVIDER_HTTP_FAILED`、`FACT_PROVIDER_TIMEOUT`、`FACT_MAPPING_FAILED`、`FACT_CACHE_UNAVAILABLE`。失败响应不得暴露 secret、完整 token、完整 Authorization header 或 provider 明文凭据。
 
 ## 发奖回调
 

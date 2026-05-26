@@ -1,6 +1,7 @@
 package marketing
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -30,24 +31,97 @@ func TestValidatePrelaunchBlocksInvalidProbabilityReward(t *testing.T) {
 	}
 }
 
-func TestValidatePrelaunchRequiresApprovalForAutoFundReward(t *testing.T) {
+func TestCreateActivityCommandValidatesProbabilityTotalWeight(t *testing.T) {
+	now := time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
+	cmd := validPrelaunchActivity()
+	cmd.Rewards[0].CalculateType = CalculateProbability
+	cmd.Rewards[0].Config = []byte(`{
+		"currency":"USD",
+		"targetRef":"https://wallet.example.com/reward",
+		"items":[
+			{"itemCode":"A","weight":"80","amount":"10"},
+			{"itemCode":"EMPTY","weight":"0","amount":"0"},
+			{"itemCode":"B","weight":"20","amount":"20"}
+		]
+	}`)
+	if err := cmd.Validate(now); err != nil {
+		t.Fatalf("expected probability weight total 100 with zero item to validate: %v", err)
+	}
+
+	cmd.Rewards[0].Config = []byte(`{
+		"currency":"USD",
+		"targetRef":"https://wallet.example.com/reward",
+		"items":[
+			{"itemCode":"A","weight":"80","amount":"10"},
+			{"itemCode":"B","weight":"19.9999","amount":"20"}
+		]
+	}`)
+	if err := cmd.Validate(now); err == nil || !strings.Contains(err.Error(), "total weight must equal 100.0000") {
+		t.Fatalf("expected probability total weight validation error, got %v", err)
+	}
+}
+
+func TestCreateActivityCommandAllowsMQRewardTargets(t *testing.T) {
+	now := time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
+	for name, targetRef := range map[string]string{
+		"kafka":           "kafka://reward.commands",
+		"rabbit exchange": "rabbitmq://reward-exchange/reward.commands",
+		"rabbit default":  "rabbitmq:///reward.commands",
+		"pulsar":          "pulsar://tenant-a/rewards/commands",
+	} {
+		t.Run(name, func(t *testing.T) {
+			cmd := validPrelaunchActivity()
+			cmd.Rewards[0].GrantChannel = GrantMQ
+			cmd.Rewards[0].CalculateType = CalculateFixed
+			cmd.Rewards[0].Config = []byte(`{"amount":"10.00","currency":"USD","targetRef":"` + targetRef + `"}`)
+
+			if err := cmd.Validate(now); err != nil {
+				t.Fatalf("expected MQ targetRef to validate: %v", err)
+			}
+		})
+	}
+}
+
+func TestCreateActivityCommandRejectsInvalidMQRewardTargets(t *testing.T) {
+	now := time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
+	for name, targetRef := range map[string]string{
+		"http":        "https://wallet.example.com/reward",
+		"credentials": "kafka://user:pass@reward.commands",
+		"missing":     "kafka://",
+		"rabbit":      "rabbitmq://reward-exchange",
+		"pulsar":      "pulsar://tenant-a/rewards",
+	} {
+		t.Run(name, func(t *testing.T) {
+			cmd := validPrelaunchActivity()
+			cmd.Rewards[0].GrantChannel = GrantMQ
+			cmd.Rewards[0].CalculateType = CalculateFixed
+			cmd.Rewards[0].Config = []byte(`{"amount":"10.00","currency":"USD","targetRef":"` + targetRef + `"}`)
+
+			if err := cmd.Validate(now); err == nil || !strings.Contains(err.Error(), "targetRef") {
+				t.Fatalf("expected MQ targetRef validation error, got %v", err)
+			}
+		})
+	}
+}
+
+func TestValidatePrelaunchBlocksAutoFundRewardWithoutApprovalFlow(t *testing.T) {
 	now := time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
 	cmd := validPrelaunchActivity()
 
 	result := ValidatePrelaunch(PrelaunchValidationRequest{Activity: cmd, Actor: "operator", TargetAction: "GO_LIVE"}, now)
 
-	if result.Conclusion != PrelaunchApprovalRequired || result.AllowGoLive {
-		t.Fatalf("conclusion=%s allow=%v, want APPROVAL_REQUIRED false", result.Conclusion, result.AllowGoLive)
+	if result.Conclusion != PrelaunchBlock || result.AllowGoLive {
+		t.Fatalf("conclusion=%s allow=%v, want BLOCK false", result.Conclusion, result.AllowGoLive)
 	}
 	if !result.RequireApproval || len(result.HighRiskItems) == 0 {
 		t.Fatalf("expected approval and high-risk items, got %+v", result)
 	}
-	if !hasPrelaunchCode(result.Items, "BUDGET_MISSING_AUTO_FUND") {
+	if !hasPrelaunchCode(result.Items, "HIGH_RISK_MISSING_BUDGET") {
 		t.Fatalf("expected budget high-risk item, got %+v", result.Items)
 	}
 }
 
-func TestValidatePrelaunchAllowsApprovedHighRiskVersion(t *testing.T) {
+func TestValidatePrelaunchBlocksApprovedHighRiskVersionUntilApprovalFlowExists(t *testing.T) {
 	now := time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
 	cmd := validPrelaunchActivity()
 	req := PrelaunchValidationRequest{
@@ -70,14 +144,83 @@ func TestValidatePrelaunchAllowsApprovedHighRiskVersion(t *testing.T) {
 
 	result := ValidatePrelaunch(req, now)
 
-	if !result.AllowGoLive {
-		t.Fatalf("expected approved high-risk request to allow go-live, got %+v", result)
+	if result.AllowGoLive || result.Conclusion != PrelaunchBlock {
+		t.Fatalf("expected high-risk request to stay blocked, got %+v", result)
 	}
-	if result.Conclusion != PrelaunchWarn {
-		t.Fatalf("conclusion=%s, want WARN because optional stock remains a warning", result.Conclusion)
+	if !hasPrelaunchCode(result.Items, "HIGH_RISK_AUTO_FUND_REWARD") {
+		t.Fatalf("expected high-risk auto fund item, got %+v", result.Items)
 	}
-	if !hasPrelaunchCode(result.Items, "APPROVAL_VALID") {
-		t.Fatalf("expected approval validation item, got %+v", result.Items)
+}
+
+func TestValidatePrelaunchUsesAvailableBudgetAfterUsedAndFrozen(t *testing.T) {
+	now := time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
+	cmd := validPrelaunchActivity()
+	cmd.Rewards[0].CalculateType = CalculateFixed
+	cmd.Rewards[0].Config = []byte(`{"amount":"50.00","currency":"USD","targetRef":"https://wallet.example.com/reward"}`)
+
+	result := ValidatePrelaunch(PrelaunchValidationRequest{
+		Activity: cmd,
+		Quotas: []Quota{{
+			Type:        QuotaBudget,
+			Scope:       QuotaScopeActivity,
+			ScopeKey:    "TOTAL",
+			TotalValue:  "100.00",
+			UsedValue:   "30.00",
+			FrozenValue: "30.00",
+		}},
+		TargetAction: "GO_LIVE",
+	}, now)
+
+	if result.Conclusion != PrelaunchBlock || !hasPrelaunchCode(result.Items, "BUDGET_EXCEEDED") {
+		t.Fatalf("expected budget exceeded against available budget, got %+v", result)
+	}
+}
+
+func TestValidatePrelaunchRequiresStockForInventoryRewardType(t *testing.T) {
+	now := time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
+	cmd := validPrelaunchActivity()
+	cmd.Rewards[0] = Reward{
+		Code:          "WELCOME_COUPON",
+		Type:          RewardCoupon,
+		CalculateType: CalculateFixed,
+		Config:        []byte(`{"couponTemplateId":"WELCOME_10","quantity":"1","targetRef":"https://coupon.example.com/reward"}`),
+		GrantMode:     GrantAuto,
+		GrantChannel:  GrantHTTP,
+		Enabled:       true,
+		Version:       1,
+	}
+
+	result := ValidatePrelaunch(PrelaunchValidationRequest{Activity: cmd, TargetAction: "GO_LIVE"}, now)
+
+	if result.Conclusion != PrelaunchBlock || !hasPrelaunchCode(result.Items, "STOCK_MISSING") {
+		t.Fatalf("expected coupon reward to require stock quota, got %+v", result)
+	}
+}
+
+func TestValidatePrelaunchWarnOnlyStillAllowsGoLive(t *testing.T) {
+	now := time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
+	cmd := validPrelaunchActivity()
+	cmd.Rewards[0] = Reward{
+		Code:          "WELCOME_POINTS",
+		Type:          RewardPoint,
+		CalculateType: CalculateFixed,
+		Config:        []byte(`{"points":"10","unit":"POINT","targetRef":"https://points.example.com/reward"}`),
+		GrantMode:     GrantAuto,
+		GrantChannel:  GrantHTTP,
+		Enabled:       true,
+		Version:       1,
+	}
+
+	result := ValidatePrelaunch(PrelaunchValidationRequest{Activity: cmd, TargetAction: "GO_LIVE"}, now)
+
+	if result.Conclusion != PrelaunchPass || !result.AllowGoLive {
+		t.Fatalf("conclusion=%s allow=%v, want PASS true; items=%+v", result.Conclusion, result.AllowGoLive, result.Items)
+	}
+	if result.AuditSummary.Conclusion != PrelaunchPass || !result.AuditSummary.AllowGoLive {
+		t.Fatalf("audit conclusion=%s allow=%v, want PASS true", result.AuditSummary.Conclusion, result.AuditSummary.AllowGoLive)
+	}
+	if !hasPrelaunchCode(result.Items, "BUDGET_OPTIONAL") || !hasPrelaunchCode(result.Items, "STOCK_OPTIONAL") {
+		t.Fatalf("expected warning items to remain itemized, got %+v", result.Items)
 	}
 }
 
@@ -351,6 +494,48 @@ func TestCreateActivityCommandValidatesRewardSchemaBoundaries(t *testing.T) {
 				t.Fatal("expected reward schema validation error")
 			}
 		})
+	}
+}
+
+func TestCreateActivityCommandAcceptsRewardDecimalJSONNumbers(t *testing.T) {
+	now := time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
+	cmd := validPrelaunchActivity()
+	cmd.Rewards[0].Config = []byte(`{
+		"baseField":"attributes.amount",
+		"rate":0.20,
+		"maxAmount":500.00,
+		"currency":"USD",
+		"targetRef":"https://wallet.example.com/reward"
+	}`)
+
+	if err := cmd.Validate(now); err != nil {
+		t.Fatalf("expected JSON number decimal reward config to validate: %v", err)
+	}
+}
+
+func TestCreateQuotaCommandValidatesDecimalAndIntegerSemantics(t *testing.T) {
+	var budget CreateQuotaCommand
+	if err := json.Unmarshal([]byte(`{"activityId":"act_1","quotaType":"BUDGET","scope":"ACTIVITY","scopeKey":"TOTAL","totalValue":100.25}`), &budget); err != nil {
+		t.Fatalf("unmarshal budget quota: %v", err)
+	}
+	if budget.TotalValue != "100.25" {
+		t.Fatalf("expected totalValue to preserve JSON number text, got %q", budget.TotalValue)
+	}
+	if err := budget.Validate(); err != nil {
+		t.Fatalf("expected decimal budget quota to validate: %v", err)
+	}
+
+	stock := CreateQuotaCommand{ActivityID: "act_1", Type: QuotaStock, Scope: QuotaScopeActivity, ScopeKey: "REWARD_A", TotalValue: "1.5"}
+	if err := stock.Validate(); err == nil {
+		t.Fatal("expected fractional stock quota to be rejected")
+	}
+	userLimit := CreateQuotaCommand{ActivityID: "act_1", Type: QuotaUserLimit, Scope: QuotaScopeUser, ScopeKey: "user_1", TotalValue: "2.0000"}
+	if err := userLimit.Validate(); err != nil {
+		t.Fatalf("expected integer decimal user limit to validate: %v", err)
+	}
+	zeroStock := CreateQuotaCommand{ActivityID: "act_1", Type: QuotaStock, Scope: QuotaScopeActivity, ScopeKey: "REWARD_A", TotalValue: "0.0000"}
+	if err := zeroStock.Validate(); err != nil {
+		t.Fatalf("expected zero stock quota to validate as immediate cap: %v", err)
 	}
 }
 

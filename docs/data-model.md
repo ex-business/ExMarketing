@@ -186,11 +186,11 @@ POOL_SPLIT
 
 ```text
 grant_mode    AUTO
-grant_channel HTTP / WEBHOOK
-targetRef     reward_config_json 内必填，且必须是 http(s) URL
+grant_channel HTTP / WEBHOOK / MQ
+targetRef     reward_config_json 内必填；HTTP/WEBHOOK 必须是 http(s) URL，MQ 必须是 destination URI
 ```
 
-`MQ`、`MANUAL_EXPORT` 和 `MANUAL` 发奖模式尚无完整 sender、导出或人工状态机，创建活动时会被拒绝。
+MQ destination URI 支持 `kafka://<topic>`、`rabbitmq://<exchange>/<routingKey>`、`rabbitmq:///<routingKey>`（默认 exchange）和 `pulsar://<tenant>/<namespace>/<topic>`。`targetRef` 不允许包含 broker 地址、账号、密码、token、query 或 fragment。`MANUAL_EXPORT` 和 `MANUAL` 发奖模式尚无完整导出或人工状态机，创建活动时会被拒绝。
 
 奖励计算统一使用 Decimal 语义，输出金额保留 4 位小数。金额类 `BONUS` / `CASH` 支持 `FIXED`、`RATIO`、`LADDER`、`RANDOM`、`PROBABILITY`、`POOL_SPLIT`：`FIXED` 使用 `amount`；`RATIO` 使用 `baseField * rate` 并支持 `maxAmount` 封顶；`LADDER` 使用 `field` 和闭区间 `ladders`；`RANDOM` 使用 `minAmount/maxAmount/step` 和稳定 seed；`PROBABILITY` 使用 `items[].weight` 抽取奖项；`POOL_SPLIT` 支持 `splitBy` 或兼容别名 `splitMode` 的 `COUNT` / `WEIGHT` 即时分摊。非金额类当前最小可上线口径只支持 `FIXED`，并通过标准 payload 发给外部系统：
 
@@ -206,7 +206,7 @@ targetRef     reward_config_json 内必填，且必须是 http(s) URL
 
 非金额 reward 的 `marketing_grant_order.reward_amount` 固定为 `0.0000`，不表示现金金额；实际权益数量、外部引用和可选估值写入 `reward_payload_json`。`valuationAmount` 只用于预算暴露预估，不得当作实际发奖金额。
 
-金额计算结果为 `0.0000` 时按无实际奖励处理，不生成 grant_order/outbox，不扣 BUDGET/STOCK/USER_LIMIT；非金额 reward 只要数量类字段为正整数，即使 `reward_amount=0.0000` 也会生成 grant_order/outbox。`POOL_SPLIT` 是事件即时分摊模型，不表示活动结束后整池只扣一次。
+金额计算结果为 `0.0000` 且无其他实际权益时按无实际奖励处理，不生成 grant_order/outbox，不扣 BUDGET/STOCK/USER_LIMIT/DAILY_LIMIT；非金额 reward 只要数量类字段为正整数，即使 `reward_amount=0.0000` 也会生成 grant_order/outbox，并按活动配置扣减 STOCK、USER_LIMIT 和 DAILY_LIMIT。`POOL_SPLIT` 是事件即时分摊模型，不表示活动结束后整池只扣一次。
 
 ## marketing_event_inbox
 
@@ -392,25 +392,29 @@ DEVICE
 BUDGET + ACTIVITY + TOTAL
 STOCK + ACTIVITY + rewardCode
 USER_LIMIT + USER + subject.id
+DAILY_LIMIT + USER + subject.id:activityLocalDate
 ```
 
 约定：
 
 ```text
-BUDGET 扣减金额 = 同一 activity 本次所有 reward_amount 合计。
-STOCK 每个 enabled reward 默认扣减 1，scope_key 固定使用 rewardCode。
-USER_LIMIT 每个 rewardable participation 默认扣减 1。
+BUDGET 冻结金额 = grant_order 对应 reward_amount。
+STOCK 每个 enabled reward 默认冻结 1，scope_key 固定使用 rewardCode。
+USER_LIMIT 每个 rewardable participation 默认冻结 1。
+DAILY_LIMIT 每个 rewardable participation 默认冻结 1，scope_key 使用 subject.id 加活动 timezone 自然日。
 缺少对应 quota 行表示不限制，兼容未配置预算、库存或次数限制的活动。
 ```
 
-PostgreSQL 扣减必须使用条件更新：
+冻结、确认和释放都必须使用条件更新。冻结时：
 
 ```sql
 UPDATE marketing_quota
-SET used_value = used_value + $amount,
+SET frozen_value = frozen_value + $amount,
     version = version + 1
-WHERE used_value + $amount <= total_value;
+WHERE used_value + frozen_value + $amount <= total_value;
 ```
+
+`SUCCESS` callback 将 reservation 从 `FROZEN` 置为 `CONFIRMED`，并把同额 `frozen_value` 转入 `used_value`；`FAILED` callback 和 Admin 超时释放入口将 reservation 置为 `RELEASED`，只减少 `frozen_value`。不限额活动没有 quota row，也可以没有 reservation。
 
 ## marketing_outbox
 
@@ -422,7 +426,7 @@ WHERE used_value + $amount <= total_value;
 | `tenant_id` | 租户 ID |
 | `message_type` | 消息类型 |
 | `target_channel` | 目标通道 |
-| `target_ref` | 目标地址或引用 |
+| `target_ref` | 目标地址或引用；MQ 为 provider destination URI |
 | `payload_json` | 消息 payload |
 | `send_status` | 发送状态 |
 | `retry_count` | 重试次数 |
@@ -439,6 +443,7 @@ SENDING
 SENT
 FAILED
 DLQ
+DLQ_CLOSED
 ```
 
 PostgreSQL worker 必须使用：
@@ -491,3 +496,7 @@ Fact Provider registry。运行时 Fact Query 和活动规则校验只按 `tenan
 | `timeout_ms` | Provider 请求超时配置 |
 | `created_at` | 创建时间 |
 | `updated_at` | 更新时间 |
+
+`mapping_json` 最小结构为 `{ "<outputPath>": { "source": "$.<providerResponsePath>", "type": "string|number|boolean|array|object", "required": true|false } }`。`outputPath` 是相对路径，例如 `vipLevel` 或 `risk.score`，不得包含 `facts.` 前缀；`required` 可省略，默认 `true`。
+
+Fact Query 缓存只缓存成功 mapping 后的 facts。缓存 key 必须包含 `tenant_id`、`fact_code`、规范化 provider 输入上下文和 provider 配置版本。provider 配置版本优先使用 `updated_at`；如果运行时没有可靠 `updated_at`，使用 `provider_type + endpoint + method + auth_ref + mapping_json + cache_ttl_seconds + enabled + timeout_ms` 的规范化配置指纹。配置变更后不要求主动清理旧缓存，后续请求会因版本 key 变化自然绕过旧缓存。

@@ -14,26 +14,48 @@ go build ./...
 
 ## Scope
 
-待填写。
+BLOCKED before commit. No git commit was created.
+
+提交范围未暂存；当前工作区包含 decimal 任务相关变更，也包含其他任务目录与文档变更。按提交前检查结果，本轮禁止提交。
 
 ## Review
 
 ~~~text
-PASS / BLOCK
+PASS
 ~~~
 
 ## Test
 
 ~~~text
-PASS / FAIL
+PASS
+~~~
+
+## Pre-Commit Checks
+
+~~~text
+git status -sb: executed
+git diff --check: FAIL
+go test ./...: PASS
+go build ./...: PASS
+~~~
+
+## Blocker
+
+~~~text
+BLOCK
+
+git diff --check failed:
+tasks/2026-05-24-qualify/analysis.md:396: new blank line at EOF.
+
+Commit Agent is only allowed to write tasks/2026-05-24-decimal/commit.md, so this file was not fixed here. Return to Dev Agent to remove the trailing blank line or otherwise resolve the whitespace error, then rerun the commit gate.
 ~~~
 
 ## Commit
 
 ~~~text
-hash:
-message:
-remote:
+hash: none
+message: none
+remote: not pushed
 ~~~
 
 需求：2026-05-24-decimal

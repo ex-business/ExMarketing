@@ -1,30 +1,54 @@
 {
   "requirementId": "2026-05-24-quota",
-  "updatedAt": "2026-05-24T11:39:29.033744Z",
+  "updatedAt": "2026-05-26T12:41:52.295781Z",
   "agents": {
     "analysis": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-quota/analysis.md"
+      "status": "DONE",
+      "startedAt": "2026-05-26T12:20:18.307254Z",
+      "finishedAt": "2026-05-26T12:23:04.041618Z",
+      "output": "tasks/2026-05-24-quota/analysis.md",
+      "log": "tasks/2026-05-24-quota/runs/20260526T122018Z-analysis.log",
+      "nextStatus": "REVIEW_READY"
     },
     "commit": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-quota/commit.md"
+      "status": "DONE",
+      "startedAt": "2026-05-26T12:41:04.783156Z",
+      "finishedAt": "2026-05-26T12:41:52.295776Z",
+      "output": "tasks/2026-05-24-quota/commit.md",
+      "log": "tasks/2026-05-24-quota/runs/20260526T124104Z-commit.log",
+      "nextStatus": "COMMITTED"
     },
     "dev": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-quota/implementation.md"
+      "status": "DONE",
+      "startedAt": "2026-05-26T12:32:39.56331Z",
+      "finishedAt": "2026-05-26T12:38:55.845673Z",
+      "output": "tasks/2026-05-24-quota/implementation.md",
+      "log": "tasks/2026-05-24-quota/runs/20260526T123239Z-dev.log",
+      "nextStatus": "REVIEW_PASS"
     },
     "review": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-quota/review.md"
+      "status": "DONE",
+      "startedAt": "2026-05-26T12:23:05.068442Z",
+      "finishedAt": "2026-05-26T12:23:58.717831Z",
+      "output": "tasks/2026-05-24-quota/review.md",
+      "log": "tasks/2026-05-24-quota/runs/20260526T122305Z-review.log",
+      "nextStatus": "REVIEW_PASS"
     },
     "test": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-quota/test.md"
+      "status": "DONE",
+      "startedAt": "2026-05-26T12:38:55.909695Z",
+      "finishedAt": "2026-05-26T12:41:04.746182Z",
+      "output": "tasks/2026-05-24-quota/test.md",
+      "log": "tasks/2026-05-24-quota/runs/20260526T123855Z-test.log",
+      "nextStatus": "COMMIT_READY"
     },
     "test-plan": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-quota/test-plan.md"
+      "status": "DONE",
+      "startedAt": "2026-05-26T12:23:58.744398Z",
+      "finishedAt": "2026-05-26T12:25:53.139791Z",
+      "output": "tasks/2026-05-24-quota/test-plan.md",
+      "log": "tasks/2026-05-24-quota/runs/20260526T122358Z-test-plan.log",
+      "nextStatus": "REVIEW_PASS"
     }
   }
 }

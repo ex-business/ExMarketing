@@ -80,16 +80,23 @@ Local PostgreSQL is provided by `docker-compose.yml` and initializes the first-p
 
 ```text
 Quota reservation:
-  marketing_quota supports BUDGET, STOCK and USER_LIMIT reservations.
+  marketing_quota supports BUDGET, STOCK, USER_LIMIT and DAILY_LIMIT reservations.
   For rewardable events, participation creation, quota reservation, grant_order
   creation and outbox creation are committed in one activity-level transaction.
   PostgreSQL uses conditional UPDATE statements to avoid read-after-write races.
   STOCK uses ACTIVITY scope with rewardCode as scopeKey; missing quota rows mean
   unlimited quota for backward compatibility.
+  SUCCESS callbacks confirm frozen reservations into used quota. FAILED callbacks
+  and the Admin timeout-release operation release frozen quota. USER_LIMIT and
+  DAILY_LIMIT are participation-level reservations and finalize once per
+  participation based on the aggregate grant result.
 
 Outbox sender:
-  EX_MARKETING_OUTBOX_WORKER=true enables HTTP/WEBHOOK delivery.
-  Failed messages retry with backoff and then move to DLQ.
+  EX_MARKETING_OUTBOX_WORKER=true enables HTTP/WEBHOOK/MQ delivery.
+  MQ delivery is behind a sender adapter boundary for Kafka ack, RabbitMQ
+  publisher confirm, and Pulsar send ack. SENT means the command reached the
+  broker, not that the reward succeeded. Failed messages retry with backoff and
+  then move to DLQ.
 
 Simulation:
   POST /admin/v1/simulate evaluates matching activities without writing inbox,
@@ -106,7 +113,11 @@ Rule execution:
   executor.
 
 Fact query:
-  POST /openapi/v1/facts/query proxies a standard event payload to an HTTP provider.
+  POST /openapi/v1/facts/query queries an enabled registry provider by tenantId
+  and factCode, maps provider JSON into facts.<factCode>.*, and caches only
+  successful mapped facts by provider configuration version plus normalized
+  standard event context. Event attributes remain the preferred source when
+  rules do not reference facts.*.
 
 Audit:
   activity creation, quota creation, event intake and quota rejection are recorded

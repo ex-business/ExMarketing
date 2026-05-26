@@ -1,7 +1,11 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +17,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ex-stack/ExMarketing/internal/engine"
 	"github.com/ex-stack/ExMarketing/internal/marketing"
@@ -33,9 +38,16 @@ type OpenAPIEventCredential struct {
 }
 
 type Handler struct {
-	engine          *engine.Service
-	openAPIEventCfg OpenAPIEventConfig
-	webhookCfg      WebhookReceiverConfig
+	engine            *engine.Service
+	openAPIEventCfg   OpenAPIEventConfig
+	webhookCfg        WebhookReceiverConfig
+	rewardCallbackCfg RewardCallbackConfig
+}
+
+type RewardCallbackConfig struct {
+	Secrets      map[string]string
+	MaxSkew      time.Duration
+	MaxBodyBytes int64
 }
 
 func NewHandler(engine *engine.Service) *Handler {
@@ -53,7 +65,20 @@ func NewHandlerWithConfigs(engine *engine.Service, cfg OpenAPIEventConfig, webho
 	if webhookCfg.MaxBodyBytes <= 0 {
 		webhookCfg.MaxBodyBytes = defaultEventMaxBodyBytes
 	}
-	return &Handler{engine: engine, openAPIEventCfg: cfg, webhookCfg: webhookCfg}
+	rewardCallbackCfg := RewardCallbackConfig{MaxSkew: 5 * time.Minute, MaxBodyBytes: defaultEventMaxBodyBytes}
+	return &Handler{engine: engine, openAPIEventCfg: cfg, webhookCfg: webhookCfg, rewardCallbackCfg: rewardCallbackCfg}
+}
+
+func NewHandlerWithRewardCallbackConfig(engine *engine.Service, cfg OpenAPIEventConfig, webhookCfg WebhookReceiverConfig, rewardCallbackCfg RewardCallbackConfig) *Handler {
+	handler := NewHandlerWithConfigs(engine, cfg, webhookCfg)
+	if rewardCallbackCfg.MaxSkew <= 0 {
+		rewardCallbackCfg.MaxSkew = 5 * time.Minute
+	}
+	if rewardCallbackCfg.MaxBodyBytes <= 0 {
+		rewardCallbackCfg.MaxBodyBytes = defaultEventMaxBodyBytes
+	}
+	handler.rewardCallbackCfg = rewardCallbackCfg
+	return handler
 }
 
 func LoadOpenAPIEventConfigFromEnv(logger *slog.Logger) (OpenAPIEventConfig, error) {
@@ -139,6 +164,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("PUT /admin/v1/activities/{id}", h.updateActivity)
 	mux.HandleFunc("POST /admin/v1/activities/prelaunch-validation", h.validatePrelaunch)
 	mux.HandleFunc("POST /admin/v1/quotas", h.createQuota)
+	mux.HandleFunc("POST /admin/v1/quota-reservations/timeout-release", h.releaseExpiredQuotaReservations)
 	mux.HandleFunc("GET /admin/v1/audit", h.listAudit)
 	mux.HandleFunc("GET /admin/v1/outbox/dlq", h.listOutboxDLQ)
 	mux.HandleFunc("POST /admin/v1/outbox/{id}/replay", h.replayOutboxDLQ)
@@ -315,11 +341,43 @@ func (h *Handler) listAudit(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"items": records})
 }
 
+func (h *Handler) releaseExpiredQuotaReservations(w http.ResponseWriter, r *http.Request) {
+	var cmd marketing.QuotaTimeoutReleaseCommand
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&cmd); err != nil {
+		writeErrorCode(w, http.StatusBadRequest, "INVALID_TIMEOUT_RELEASE_REQUEST", "invalid json body")
+		return
+	}
+	result, err := h.engine.ReleaseExpiredQuotaReservations(r.Context(), cmd)
+	if err != nil {
+		if errors.Is(err, marketing.ErrInvalidOperation) {
+			writeErrorCode(w, http.StatusBadRequest, "INVALID_TIMEOUT_RELEASE_REQUEST", err.Error())
+			return
+		}
+		if errors.Is(err, marketing.ErrQuotaReservationConflict) {
+			writeErrorCode(w, http.StatusConflict, "QUOTA_RESERVATION_CONFLICT", err.Error())
+			return
+		}
+		if errors.Is(err, marketing.ErrQuotaAggregateConflict) {
+			writeErrorCode(w, http.StatusConflict, "QUOTA_AGGREGATE_CONFLICT", err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
 func (h *Handler) listOutboxDLQ(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	includeClosed := r.URL.Query().Get("includeClosed") == "true"
 	messages, err := h.engine.ListOutboxDLQ(r.Context(), r.URL.Query().Get("tenantId"), includeClosed, limit)
 	if err != nil {
+		if errors.Is(err, marketing.ErrInvalidOperation) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -494,11 +552,37 @@ func (h *Handler) createEvent(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) rewardCallback(w http.ResponseWriter, r *http.Request) {
+	if !isJSONContentType(r.Header.Get("Content-Type")) {
+		writeErrorCode(w, http.StatusBadRequest, "INVALID_CALLBACK_REQUEST", "unsupported media type")
+		return
+	}
+	maxBodyBytes := h.rewardCallbackCfg.MaxBodyBytes
+	if maxBodyBytes <= 0 {
+		maxBodyBytes = defaultEventMaxBodyBytes
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
+	if err != nil {
+		writeErrorCode(w, http.StatusBadRequest, "INVALID_CALLBACK_REQUEST", "invalid request body")
+		return
+	}
 	var callback marketing.RewardCallback
-	decoder := json.NewDecoder(r.Body)
+	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&callback); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json body")
+		writeErrorCode(w, http.StatusBadRequest, "INVALID_CALLBACK_REQUEST", "invalid json body")
+		return
+	}
+	callback = callback.Normalized()
+	if err := h.verifyRewardCallbackSignature(r, callback.TenantID, body); err != nil {
+		status := http.StatusUnauthorized
+		code := "CALLBACK_SIGNATURE_INVALID"
+		if errors.Is(err, errCallbackSignatureMissing) {
+			code = "CALLBACK_SIGNATURE_MISSING"
+		}
+		if errors.Is(err, errCallbackTimestampInvalid) {
+			code = "CALLBACK_TIMESTAMP_INVALID"
+		}
+		writeErrorCode(w, status, code, err.Error())
 		return
 	}
 
@@ -514,6 +598,10 @@ func (h *Handler) rewardCallback(w http.ResponseWriter, r *http.Request) {
 		}
 		if errors.Is(err, marketing.ErrCallbackConflict) {
 			writeErrorCode(w, http.StatusConflict, "CALLBACK_STATUS_CONFLICT", err.Error())
+			return
+		}
+		if errors.Is(err, marketing.ErrCallbackLocatorConflict) {
+			writeErrorCode(w, http.StatusConflict, "CALLBACK_LOCATOR_CONFLICT", err.Error())
 			return
 		}
 		if errors.Is(err, marketing.ErrGrantOrderClosed) {
@@ -538,13 +626,58 @@ func (h *Handler) rewardCallback(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
+var (
+	errCallbackSignatureMissing = errors.New("callback signature missing")
+	errCallbackSignatureInvalid = errors.New("callback signature invalid")
+	errCallbackTimestampInvalid = errors.New("callback timestamp invalid")
+)
+
+func (h *Handler) verifyRewardCallbackSignature(r *http.Request, tenantID string, body []byte) error {
+	secret := ""
+	if h.rewardCallbackCfg.Secrets != nil {
+		secret = strings.TrimSpace(h.rewardCallbackCfg.Secrets[tenantID])
+	}
+	if secret == "" {
+		return nil
+	}
+	timestamp := strings.TrimSpace(r.Header.Get("X-ExMarketing-Timestamp"))
+	signature := strings.TrimSpace(r.Header.Get("X-ExMarketing-Signature"))
+	if timestamp == "" || signature == "" {
+		return errCallbackSignatureMissing
+	}
+	unixSeconds, err := strconv.ParseInt(timestamp, 10, 64)
+	if err != nil {
+		return errCallbackTimestampInvalid
+	}
+	signedAt := time.Unix(unixSeconds, 0).UTC()
+	maxSkew := h.rewardCallbackCfg.MaxSkew
+	if maxSkew <= 0 {
+		maxSkew = 5 * time.Minute
+	}
+	if time.Since(signedAt) > maxSkew || signedAt.Sub(time.Now().UTC()) > maxSkew {
+		return errCallbackTimestampInvalid
+	}
+	provided, err := hex.DecodeString(signature)
+	if err != nil {
+		return errCallbackSignatureInvalid
+	}
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(timestamp))
+	mac.Write([]byte("."))
+	mac.Write(body)
+	if !hmac.Equal(provided, mac.Sum(nil)) {
+		return errCallbackSignatureInvalid
+	}
+	return nil
+}
+
 func (h *Handler) queryFacts(w http.ResponseWriter, r *http.Request) {
 	var request marketing.FactQueryRequest
 	decoder := json.NewDecoder(r.Body)
 	decoder.UseNumber()
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&request); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json body")
+		writeJSON(w, http.StatusBadRequest, marketing.FactQueryResponse{Success: false, ErrorCode: "INVALID_FACT_QUERY", Error: "invalid json body"})
 		return
 	}
 	response, err := h.engine.QueryFacts(r.Context(), request)
@@ -659,7 +792,7 @@ func writeError(w http.ResponseWriter, status int, message string) {
 }
 
 func writeErrorCode(w http.ResponseWriter, status int, code string, message string) {
-	writeJSON(w, status, map[string]string{"code": code, "error": message})
+	writeJSON(w, status, map[string]string{"code": code, "errorCode": code, "error": message, "message": message})
 }
 
 func rejectActivityIdentityFields(body []byte) error {

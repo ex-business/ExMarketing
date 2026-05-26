@@ -14,26 +14,46 @@ go build ./...
 
 ## Scope
 
-待填写。
+BLOCKED before commit. No files were staged or committed.
+
+Pre-commit checks executed:
+
+~~~bash
+git status -sb
+git diff --check
+go test ./...
+go build ./...
+~~~
+
+Blocking failure:
+
+~~~text
+git diff --check
+tasks/2026-05-24-qualify/analysis.md:396: new blank line at EOF.
+~~~
+
+Per Commit Agent constraints, this agent is not allowed to modify business code,
+test code, documentation code, configuration files, or any file other than this
+commit.md. The newline issue must be fixed by Dev Agent before commit can proceed.
 
 ## Review
 
 ~~~text
-PASS / BLOCK
+PASS
 ~~~
 
 ## Test
 
 ~~~text
-PASS / FAIL
+PASS
 ~~~
 
 ## Commit
 
 ~~~text
-hash:
-message:
-remote:
+hash: BLOCK
+message: BLOCK - git diff --check failed
+remote: not pushed
 ~~~
 
 需求：2026-05-24-fact-query-2

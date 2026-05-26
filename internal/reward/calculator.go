@@ -377,7 +377,7 @@ func calculateRandom(ctx Context, configuredReward marketing.Reward, config mark
 	}
 	stepText := strings.TrimSpace(config.Step)
 	if stepText == "" {
-		stepText = "0.01"
+		return amountResult{}, rewardError(ReasonRandomStepInvalid, "step is required", "rewardConfig.step")
 	}
 	step, err := parsePositiveDecimal(stepText, "rewardConfig.step", ReasonRandomStepInvalid)
 	if err != nil {
@@ -386,14 +386,13 @@ func calculateRandom(ctx Context, configuredReward marketing.Reward, config mark
 	candidateCount := int64(1)
 	if minAmount.Cmp(maxAmount) < 0 {
 		diff := maxAmount.Sub(minAmount)
-		if step.Cmp(diff) > 0 {
-			return amountResult{}, rewardError(ReasonRandomStepInvalid, "step must not exceed range", "rewardConfig.step")
+		if step.Cmp(diff) <= 0 {
+			steps, err := diff.FloorDivInt64(step)
+			if err != nil {
+				return amountResult{}, rewardError(ReasonRandomStepInvalid, "random range is too large", "rewardConfig.step")
+			}
+			candidateCount = steps + 1
 		}
-		steps, err := diff.FloorDivInt64(step)
-		if err != nil {
-			return amountResult{}, rewardError(ReasonRandomStepInvalid, "random range is too large", "rewardConfig.step")
-		}
-		candidateCount = steps + 1
 	}
 	seedMaterial := seedMaterial(ctx, configuredReward, config.SeedSalt)
 	index := deterministicIndex(seedMaterial, candidateCount)
@@ -426,7 +425,7 @@ func calculateProbability(ctx Context, configuredReward marketing.Reward, config
 			return amountResult{}, rewardError(ReasonProbabilityItemInvalid, "itemCode is duplicated", fmt.Sprintf("rewardConfig.items[%d].itemCode", i))
 		}
 		seen[item.ItemCode] = struct{}{}
-		weight, err := parsePositiveDecimal(item.Weight, fmt.Sprintf("rewardConfig.items[%d].weight", i), ReasonProbabilityItemInvalid)
+		weight, err := parseConfigDecimal(item.Weight, fmt.Sprintf("rewardConfig.items[%d].weight", i), ReasonProbabilityItemInvalid)
 		if err != nil {
 			return amountResult{}, err
 		}
@@ -444,8 +443,8 @@ func calculateProbability(ctx Context, configuredReward marketing.Reward, config
 		weights[i] = weight
 		amounts[i] = amount
 	}
-	if !totalWeight.IsPositive() {
-		return amountResult{}, rewardError(ReasonProbabilityTotalInvalid, "total weight must be positive", "rewardConfig.items")
+	if totalWeight.Cmp(decimal.MustParse("100")) != 0 {
+		return amountResult{}, rewardError(ReasonProbabilityTotalInvalid, "total weight must equal 100.0000", "rewardConfig.items")
 	}
 	seedMaterial := seedMaterial(ctx, configuredReward, config.SeedSalt)
 	threshold := deterministicThreshold(seedMaterial, totalWeight)
@@ -482,16 +481,17 @@ func calculatePoolSplit(ctx Context, config marketing.RewardConfig) (amountResul
 	splitBy := strings.ToUpper(strings.TrimSpace(firstNonEmpty(config.SplitBy, config.SplitMode)))
 	switch splitBy {
 	case "COUNT":
-		count, err := decimalFromField(ctx, config.ParticipantCountField, ReasonPoolParticipantInvalid)
+		countField := firstNonEmpty(config.CountField, config.ParticipantCountField)
+		count, err := decimalFromField(ctx, countField, ReasonPoolParticipantInvalid)
 		if err != nil {
 			return amountResult{}, err
 		}
 		if !count.IsPositive() {
-			return amountResult{}, rewardError(ReasonPoolParticipantInvalid, "participant count must be positive", config.ParticipantCountField)
+			return amountResult{}, rewardError(ReasonPoolParticipantInvalid, "participant count must be positive", countField)
 		}
 		amount, err := poolAmount.Div(count)
 		if err != nil {
-			return amountResult{}, rewardError(ReasonPoolParticipantInvalid, "participant count must be positive", config.ParticipantCountField)
+			return amountResult{}, rewardError(ReasonPoolParticipantInvalid, "participant count must be positive", countField)
 		}
 		return amountResult{amount: amount, payload: map[string]any{
 			"poolAmount":       poolAmount.String(),
@@ -642,10 +642,10 @@ func parsePositiveInt(value, field string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	asText := parsed.String()
-	if !strings.HasSuffix(asText, ".0000") {
+	if !parsed.IsInteger() {
 		return 0, rewardError(ReasonInvalidRewardConfig, "value must be positive integer", field)
 	}
+	asText := parsed.String()
 	var integer int
 	if _, err := fmt.Sscanf(asText, "%d.0000", &integer); err != nil || integer <= 0 {
 		return 0, rewardError(ReasonInvalidRewardConfig, "value must be positive integer", field)

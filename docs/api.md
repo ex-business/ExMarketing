@@ -285,7 +285,7 @@ rewards           奖励配置
 - `entry.audience.subjectTypes` 读取 `subject.type`，`segments` 读取 `attributes.segments` 或 `attributes.segment`，`riskLevels` 读取 `attributes.riskLevel`。
 - 旧配置字段 `entry.entranceCodes`、`entry.landingUrl`、顶层 `audience.segmentCodes/tags/countries` 仍可保存和读回；新入口匹配只依赖通用 `entry.*` 与标准事件字段。
 
-创建阶段会进行基础 Schema 校验。`tenantId + activityCode` 在同一租户内唯一，重复创建返回 `409 Conflict`；不同租户可以复用同一 `activityCode`。`startTime` / `endTime` 必须是带时区偏移的 RFC3339 时间，且 `startTime < endTime`；`timezone` 必须是可识别的 IANA 时区名或 `UTC`。当前普通活动只允许 `CONDITION` 规则、`FIXED` / `RATIO` / `LADDER` / `RANDOM` / `PROBABILITY` / `POOL_SPLIT` 奖励计算、`AUTO` 发奖模式，以及 `HTTP` / `WEBHOOK` 发奖通道；`rewardConfig.targetRef` 对可执行发奖必填且必须是 `http` 或 `https` URL。`MQ`、`MANUAL_EXPORT`、`MANUAL`、未知配置字段、非法版本或不可解析 Decimal 会返回 `400 Bad Request`。配置 `pluginCode` 时必须命中服务内注册的 ActivityPlugin，且与 `activityType` 兼容；未知插件会在创建或上线前校验阶段拒绝。
+创建阶段会进行基础 Schema 校验。`tenantId + activityCode` 在同一租户内唯一，重复创建返回 `409 Conflict`；不同租户可以复用同一 `activityCode`。`startTime` / `endTime` 必须是带时区偏移的 RFC3339 时间，且 `startTime < endTime`；`timezone` 必须是可识别的 IANA 时区名或 `UTC`。当前普通活动只允许已注册 evaluator 的 `CONDITION` 规则；`FORMULA`、`LIMIT`、`SCRIPT` 只保留配置 Schema，未注册 evaluator 前即使结构合法也会返回 `400 Bad Request`。奖励计算允许 `FIXED` / `RATIO` / `LADDER` / `RANDOM` / `PROBABILITY` / `POOL_SPLIT`，发奖模式允许 `AUTO`，发奖通道允许 `HTTP` / `WEBHOOK`；`rewardConfig.targetRef` 对可执行发奖必填且必须是 `http` 或 `https` URL。`MQ`、`MANUAL_EXPORT`、`MANUAL`、未知配置字段、非法版本或不可解析 Decimal 会返回 `400 Bad Request`。配置 `pluginCode` 时必须命中服务内注册的 ActivityPlugin，且与 `activityType` 兼容；未知插件会在创建或上线前校验阶段拒绝。
 
 奖励计算使用 Decimal 语义并输出 4 位小数。`RATIO` 支持 `maxAmount` 封顶，`LADDER` 使用闭区间且拒绝重叠阶梯，`RANDOM` / `PROBABILITY` 使用 tenant、activity、rewardCode、幂等键、配置版本和 `seedSalt` 形成稳定 seed，`POOL_SPLIT` 只支持事件即时 `COUNT` / `WEIGHT` 分摊。计算结果为 0 时不会生成发奖单、outbox 或 quota 扣减。
 
@@ -295,7 +295,7 @@ rewards           奖励配置
 MATCH -> QUALIFY -> REWARD -> RISK_LIMIT_BUDGET
 ```
 
-`RISK_LIMIT_BUDGET` 是业务阶段名称，实际规则阶段仍使用 `RISK` 或 `LIMIT`；`BUDGET` 是 quota 类型，不是合法 `rulePhase`。`CONDITION` 字段路径支持 `attributes.*`、`facts.*`、`state.activity.*`、`state.subject.*`、`state.quota.*`、`state.exclusive.*`，以及绑定插件时唯一允许的 `state.plugin.<pluginCode>.*`。插件上下文不能使用 `plugin.*`、`state.<activityType>.*` 或短路径别名；字段缺失、类型不匹配、非法操作符或未注册 evaluator 不会默认通过。
+`RISK_LIMIT_BUDGET` 是业务阶段名称，实际规则阶段仍使用 `RISK` 或 `LIMIT`；`BUDGET` 是 quota 类型，不是合法 `rulePhase`。`CONDITION.logic` 必填且只能是 `AND` / `OR`，`conditions` 必须非空，`op` 只能是 `=`、`==`、`!=`、`<>`、`>`、`>=`、`<`、`<=`、`IN`、`NOT_IN`；比较操作符要求可解析 Decimal，`IN` / `NOT_IN` 要求非空数组。字段路径支持标准事件字段 `eventId`、`eventType`、`sourceSystem`、`tenantId`、`subject.type`、`subject.id`、`biz.bizType`、`biz.bizId`、`occurredAt`，以及 `attributes.*`、`facts.<factCode>.*`、`state.activity.*`、`state.subject.*`、`state.quota.*`、`state.exclusive.*`、绑定插件时唯一允许的 `state.plugin.<pluginCode>.*`。非标准顶层业务字段如 `orderAmount`、`deposit.amount`、`user.vipLevel` 会被拒绝；`enabled=false` 只影响运行时跳过，不放宽保存校验。插件上下文不能使用 `plugin.*`、`state.<activityType>.*` 或短路径别名；字段缺失、类型不匹配、非法操作符或未注册 evaluator 不会默认通过。
 
 ## 查询活动
 

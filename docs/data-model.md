@@ -92,6 +92,7 @@ LIMIT
 CONDITION
 FORMULA
 LIMIT
+SCRIPT
 ```
 
 当前已实现：
@@ -103,13 +104,25 @@ CONDITION
 当前 `CONDITION` 字段路径：
 
 ```text
+eventId
+eventType
+sourceSystem
+tenantId
+subject.type
+subject.id
+biz.bizType
+biz.bizId
+occurredAt
 attributes.<path>
+facts.<factCode>.<path>
 state.activity.<field>
 state.subject.<field>
 state.quota.<quotaType>.<field>
 state.exclusive.<field>
-facts.<factCode>.<path>
+state.plugin.<pluginCode>.<path>
 ```
+
+后台创建活动和上线前校验会严格校验 `rule_config_json`：未知字段、空 `conditions`、非法 `rulePhase`、非法 `op`、缺失或非法 `value` 类型、非标准顶层业务字段，以及 `enabled=false` 的非法规则都会被拒绝。`FORMULA`、`LIMIT`、`SCRIPT` 目前只保留 Schema 边界；在 evaluator / 安全能力未注册前，合法结构也不得保存为可运行规则。
 
 当前条件操作符：
 

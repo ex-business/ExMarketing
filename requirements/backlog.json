@@ -224,23 +224,23 @@
       "id": "2026-05-24-113929-2",
       "title": "活动展示与入口配置",
       "description": "来源：22-独立活动营销中台设计。将活动页面展示、入口、渠道、租户、人群入口等通用配置纳入 config_json 或独立配置结构。验收：后台可配置入口和展示字段；引擎只使用通用字段，不绑定具体业务页面。",
-      "status": "COMMIT_READY",
+      "status": "COMMITTED",
       "risk": "低",
       "score": 92,
       "taskDir": "tasks/2026-05-24-113929-2",
       "createdAt": "2026-05-24T11:39:29.019103Z",
-      "updatedAt": "2026-05-26T08:13:33.270638Z"
+      "updatedAt": "2026-05-26T08:15:11.111395Z"
     },
     {
       "id": "2026-05-24-rule-schema",
       "title": "Rule 配置 Schema",
       "description": "来源：22-独立活动营销中台设计。完善 marketing_rule 的 rule_phase、rule_type、rule_config_json、sort、enabled、version，并定义 CONDITION/FORMULA/LIMIT/SCRIPT 的 JSON Schema。验收：非法字段、非法 op、非法 value 类型会被后台校验拒绝。",
-      "status": "ANALYSIS_READY",
+      "status": "COMMIT_READY",
       "risk": "中",
-      "score": 0,
+      "score": 94,
       "taskDir": "tasks/2026-05-24-rule-schema",
       "createdAt": "2026-05-24T11:39:29.019103Z",
-      "updatedAt": "2026-05-24T11:39:29.019103Z"
+      "updatedAt": "2026-05-26T08:32:17.937555Z"
     },
     {
       "id": "2026-05-24-reward-schema",

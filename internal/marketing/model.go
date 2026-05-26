@@ -52,6 +52,7 @@ const (
 	RuleTypeCondition RuleType = "CONDITION"
 	RuleTypeFormula   RuleType = "FORMULA"
 	RuleTypeLimit     RuleType = "LIMIT"
+	RuleTypeScript    RuleType = "SCRIPT"
 
 	RuleDecisionPassed   RuleDecision = "PASSED"
 	RuleDecisionRejected RuleDecision = "REJECTED"
@@ -255,6 +256,45 @@ type Condition struct {
 	Field string `json:"field"`
 	Op    string `json:"op"`
 	Value any    `json:"value"`
+}
+
+type rawConditionRuleConfig struct {
+	Logic      string         `json:"logic"`
+	Conditions []rawCondition `json:"conditions"`
+}
+
+type rawCondition struct {
+	Field string          `json:"field"`
+	Op    string          `json:"op"`
+	Value json.RawMessage `json:"value"`
+}
+
+type formulaRuleConfig struct {
+	Formula    string       `json:"formula"`
+	ResultType string       `json:"resultType"`
+	Compare    *ruleCompare `json:"compare,omitempty"`
+	Scale      *int         `json:"scale,omitempty"`
+}
+
+type ruleCompare struct {
+	Op    string          `json:"op"`
+	Value json.RawMessage `json:"value"`
+}
+
+type limitRuleConfig struct {
+	LimitType     string `json:"limitType"`
+	Scope         string `json:"scope"`
+	Window        string `json:"window"`
+	Max           *int   `json:"max"`
+	Field         string `json:"field,omitempty"`
+	ResetTimezone string `json:"resetTimezone,omitempty"`
+}
+
+type scriptRuleConfig struct {
+	ScriptRef string   `json:"scriptRef"`
+	Language  string   `json:"language"`
+	Inputs    []string `json:"inputs"`
+	TimeoutMS *int     `json:"timeoutMs,omitempty"`
 }
 
 type Reward struct {
@@ -993,10 +1033,16 @@ func (cmd CreateActivityCommand) Validate(now time.Time) error {
 	if err := validateActivityConfig(cmd.ConfigPayload(), cmd.TenantID); err != nil {
 		return err
 	}
+	seenRules := map[string]struct{}{}
 	for i, rule := range cmd.Rules {
 		if err := validateRule(i, rule, cmd.PluginCode); err != nil {
 			return err
 		}
+		ruleCode := strings.TrimSpace(rule.Code)
+		if _, ok := seenRules[ruleCode]; ok {
+			return invalidActivityf("rules[%d].ruleCode is duplicated", i)
+		}
+		seenRules[ruleCode] = struct{}{}
 	}
 	if len(cmd.Rewards) == 0 {
 		return errors.Join(ErrInvalidActivity, errors.New("at least one reward is required"))
@@ -1234,19 +1280,46 @@ func validateRule(index int, rule Rule, pluginCode string) error {
 	if rule.Phase != RulePhaseMatch && rule.Phase != RulePhaseQualify && rule.Phase != RulePhaseReward && rule.Phase != RulePhaseRisk && rule.Phase != RulePhaseLimit {
 		return invalidActivityf("rules[%d].rulePhase is invalid", index)
 	}
-	if rule.Type != RuleTypeCondition {
-		return invalidActivityf("rules[%d].ruleType is unsupported", index)
+	if rule.Sort < 0 {
+		return invalidActivityf("rules[%d].sort must be non-negative", index)
 	}
-	if rule.Version > 1 {
+	if rule.Version < 0 || rule.Version > 1 {
 		return invalidActivityf("rules[%d].version must be 0 or 1", index)
 	}
-	var cfg ConditionRuleConfig
-	if err := decodeStrict(rule.Config, &cfg); err != nil {
+	switch rule.Type {
+	case RuleTypeCondition:
+		return validateConditionRule(index, rule.Config, pluginCode)
+	case RuleTypeFormula:
+		if err := validateFormulaRule(index, rule.Config, pluginCode); err != nil {
+			return err
+		}
+		return invalidActivityf("rules[%d].ruleType FORMULA evaluator is not registered", index)
+	case RuleTypeLimit:
+		if err := validateLimitRule(index, rule.Config, pluginCode); err != nil {
+			return err
+		}
+		return invalidActivityf("rules[%d].ruleType LIMIT evaluator is not registered", index)
+	case RuleTypeScript:
+		if err := validateScriptRule(index, rule.Config, pluginCode); err != nil {
+			return err
+		}
+		return invalidActivityf("rules[%d].ruleType SCRIPT evaluator is not registered", index)
+	default:
+		return invalidActivityf("rules[%d].ruleType is unsupported", index)
+	}
+}
+
+func validateConditionRule(index int, raw json.RawMessage, pluginCode string) error {
+	var cfg rawConditionRuleConfig
+	if err := decodeStrict(raw, &cfg); err != nil {
 		return invalidActivityf("rules[%d].ruleConfig is invalid: %v", index, err)
 	}
 	logic := strings.ToUpper(strings.TrimSpace(cfg.Logic))
-	if logic != "" && logic != "AND" && logic != "OR" {
+	if logic != "AND" && logic != "OR" {
 		return invalidActivityf("rules[%d].ruleConfig.logic is invalid", index)
+	}
+	if len(cfg.Conditions) == 0 {
+		return invalidActivityf("rules[%d].ruleConfig.conditions is required", index)
 	}
 	for i, condition := range cfg.Conditions {
 		if strings.TrimSpace(condition.Field) == "" {
@@ -1258,17 +1331,132 @@ func validateRule(index int, rule Rule, pluginCode string) error {
 		op := strings.ToUpper(strings.TrimSpace(condition.Op))
 		switch op {
 		case "=", "==", "!=", "<>":
+			if !validRuleValue(condition.Value, false) {
+				return invalidActivityf("rules[%d].ruleConfig.conditions[%d].value is invalid", index, i)
+			}
 		case ">", ">=", "<", "<=":
-			if _, err := decimal.Parse(jsonScalarString(condition.Value)); err != nil {
+			if !validRuleValue(condition.Value, false) {
+				return invalidActivityf("rules[%d].ruleConfig.conditions[%d].value is invalid", index, i)
+			}
+			value, _ := rawJSONValue(condition.Value)
+			if _, err := decimal.Parse(jsonScalarString(value)); err != nil {
 				return invalidActivityf("rules[%d].ruleConfig.conditions[%d].value must be decimal", index, i)
 			}
 		case "IN", "NOT_IN":
-			if _, ok := condition.Value.([]any); !ok {
+			values, ok := rawJSONArray(condition.Value)
+			if !ok {
 				return invalidActivityf("rules[%d].ruleConfig.conditions[%d].value must be array", index, i)
+			}
+			if len(values) == 0 {
+				return invalidActivityf("rules[%d].ruleConfig.conditions[%d].value must be non-empty array", index, i)
+			}
+			for valueIndex, value := range values {
+				if !validRuleValue(value, false) {
+					return invalidActivityf("rules[%d].ruleConfig.conditions[%d].value[%d] is invalid", index, i, valueIndex)
+				}
 			}
 		default:
 			return invalidActivityf("rules[%d].ruleConfig.conditions[%d].op is invalid", index, i)
 		}
+	}
+	return nil
+}
+
+func validateFormulaRule(index int, raw json.RawMessage, pluginCode string) error {
+	var cfg formulaRuleConfig
+	if err := decodeStrict(raw, &cfg); err != nil {
+		return invalidActivityf("rules[%d].ruleConfig is invalid: %v", index, err)
+	}
+	formula := strings.TrimSpace(cfg.Formula)
+	if formula == "" {
+		return invalidActivityf("rules[%d].ruleConfig.formula is required", index)
+	}
+	if containsUnsafeExpressionToken(formula) {
+		return invalidActivityf("rules[%d].ruleConfig.formula is unsafe", index)
+	}
+	switch strings.ToUpper(strings.TrimSpace(cfg.ResultType)) {
+	case "DECIMAL", "INTEGER", "BOOLEAN", "STRING":
+	default:
+		return invalidActivityf("rules[%d].ruleConfig.resultType is invalid", index)
+	}
+	if cfg.Scale != nil {
+		if strings.ToUpper(strings.TrimSpace(cfg.ResultType)) != "DECIMAL" {
+			return invalidActivityf("rules[%d].ruleConfig.scale is only allowed for DECIMAL", index)
+		}
+		if *cfg.Scale < 0 {
+			return invalidActivityf("rules[%d].ruleConfig.scale must be non-negative", index)
+		}
+	}
+	if cfg.Compare != nil {
+		if !validCompareOp(cfg.Compare.Op) {
+			return invalidActivityf("rules[%d].ruleConfig.compare.op is invalid", index)
+		}
+		if !validRuleValue(cfg.Compare.Value, false) {
+			return invalidActivityf("rules[%d].ruleConfig.compare.value is invalid", index)
+		}
+	}
+	_ = pluginCode
+	return nil
+}
+
+func validateLimitRule(index int, raw json.RawMessage, pluginCode string) error {
+	var cfg limitRuleConfig
+	if err := decodeStrict(raw, &cfg); err != nil {
+		return invalidActivityf("rules[%d].ruleConfig is invalid: %v", index, err)
+	}
+	switch strings.ToUpper(strings.TrimSpace(cfg.LimitType)) {
+	case "USER_COUNT", "DAILY_COUNT", "PERIOD_COUNT", "EXCLUSIVE_GROUP":
+	default:
+		return invalidActivityf("rules[%d].ruleConfig.limitType is invalid", index)
+	}
+	switch strings.ToUpper(strings.TrimSpace(cfg.Scope)) {
+	case "USER", "ACTIVITY", "TENANT", "BIZ":
+	default:
+		return invalidActivityf("rules[%d].ruleConfig.scope is invalid", index)
+	}
+	switch strings.ToUpper(strings.TrimSpace(cfg.Window)) {
+	case "ACTIVITY", "DAY", "PERIOD":
+	default:
+		return invalidActivityf("rules[%d].ruleConfig.window is invalid", index)
+	}
+	if cfg.Max == nil {
+		return invalidActivityf("rules[%d].ruleConfig.max is required", index)
+	}
+	if *cfg.Max < 0 {
+		return invalidActivityf("rules[%d].ruleConfig.max must be non-negative", index)
+	}
+	if strings.TrimSpace(cfg.Field) != "" && !supportedConfiguredField(cfg.Field, pluginCode) {
+		return invalidActivityf("rules[%d].ruleConfig.field is unsupported", index)
+	}
+	if strings.TrimSpace(cfg.ResetTimezone) != "" {
+		if _, err := time.LoadLocation(cfg.ResetTimezone); err != nil {
+			return invalidActivityf("rules[%d].ruleConfig.resetTimezone is invalid", index)
+		}
+	}
+	return nil
+}
+
+func validateScriptRule(index int, raw json.RawMessage, pluginCode string) error {
+	var cfg scriptRuleConfig
+	if err := decodeStrict(raw, &cfg); err != nil {
+		return invalidActivityf("rules[%d].ruleConfig is invalid: %v", index, err)
+	}
+	if strings.TrimSpace(cfg.ScriptRef) == "" {
+		return invalidActivityf("rules[%d].ruleConfig.scriptRef is required", index)
+	}
+	if strings.ToUpper(strings.TrimSpace(cfg.Language)) != "CEL" {
+		return invalidActivityf("rules[%d].ruleConfig.language is invalid", index)
+	}
+	if len(cfg.Inputs) == 0 {
+		return invalidActivityf("rules[%d].ruleConfig.inputs is required", index)
+	}
+	for inputIndex, input := range cfg.Inputs {
+		if !supportedConfiguredField(input, pluginCode) {
+			return invalidActivityf("rules[%d].ruleConfig.inputs[%d] is unsupported", index, inputIndex)
+		}
+	}
+	if cfg.TimeoutMS != nil && (*cfg.TimeoutMS <= 0 || *cfg.TimeoutMS > 5000) {
+		return invalidActivityf("rules[%d].ruleConfig.timeoutMs is invalid", index)
 	}
 	return nil
 }
@@ -1558,13 +1746,14 @@ func parseOptionalTime(name, value string) (time.Time, bool, error) {
 }
 
 func supportedConfiguredField(field string, pluginCode string) bool {
+	field = strings.TrimSpace(field)
 	if strings.HasPrefix(field, "attributes.") && len(field) > len("attributes.") {
 		return true
 	}
 	if supportedStateField(field, pluginCode) {
 		return true
 	}
-	if strings.HasPrefix(field, "facts.") && len(field) > len("facts.") {
+	if _, _, ok := splitFactField(field); ok {
 		return true
 	}
 	switch field {
@@ -1587,6 +1776,64 @@ func supportedStateField(field string, pluginCode string) bool {
 	}
 	prefix := "state.plugin." + pluginCode + "."
 	return strings.HasPrefix(field, prefix) && len(field) > len(prefix)
+}
+
+func validCompareOp(op string) bool {
+	switch strings.ToUpper(strings.TrimSpace(op)) {
+	case "=", "==", "!=", "<>", ">", ">=", "<", "<=":
+		return true
+	default:
+		return false
+	}
+}
+
+func validRuleValue(raw json.RawMessage, allowArray bool) bool {
+	value, ok := rawJSONValue(raw)
+	if !ok {
+		return false
+	}
+	switch value.(type) {
+	case string, bool, json.Number:
+		return true
+	case []any:
+		return allowArray
+	default:
+		return false
+	}
+}
+
+func rawJSONValue(raw json.RawMessage) (any, bool) {
+	if len(raw) == 0 || strings.TrimSpace(string(raw)) == "null" {
+		return nil, false
+	}
+	var value any
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(&value); err != nil {
+		return nil, false
+	}
+	return value, true
+}
+
+func rawJSONArray(raw json.RawMessage) ([]json.RawMessage, bool) {
+	if len(raw) == 0 || strings.TrimSpace(string(raw)) == "null" {
+		return nil, false
+	}
+	var values []json.RawMessage
+	if err := json.Unmarshal(raw, &values); err != nil {
+		return nil, false
+	}
+	return values, true
+}
+
+func containsUnsafeExpressionToken(expression string) bool {
+	upper := strings.ToUpper(expression)
+	for _, token := range []string{"SELECT", "INSERT", "UPDATE", "DELETE", "DROP", "HTTP", "FILE", "ENV", "SECRET", "RANDOM", "NOW(", "TIME("} {
+		if strings.Contains(upper, token) {
+			return true
+		}
+	}
+	return false
 }
 
 func jsonScalarString(value any) string {

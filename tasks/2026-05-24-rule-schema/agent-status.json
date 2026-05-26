@@ -1,30 +1,53 @@
 {
   "requirementId": "2026-05-24-rule-schema",
-  "updatedAt": "2026-05-24T11:39:29.025919Z",
+  "updatedAt": "2026-05-26T08:32:17.963415Z",
   "agents": {
     "analysis": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-rule-schema/analysis.md"
+      "status": "DONE",
+      "startedAt": "2026-05-26T08:20:32.553234Z",
+      "finishedAt": "2026-05-26T08:23:41.114335Z",
+      "output": "tasks/2026-05-24-rule-schema/analysis.md",
+      "log": "tasks/2026-05-24-rule-schema/runs/20260526T082032Z-analysis.log",
+      "nextStatus": "REVIEW_READY"
     },
     "commit": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-rule-schema/commit.md"
+      "status": "RUNNING",
+      "startedAt": "2026-05-26T08:32:17.963412Z",
+      "output": "tasks/2026-05-24-rule-schema/commit.md",
+      "log": "tasks/2026-05-24-rule-schema/runs/20260526T083217Z-commit.log",
+      "pid": 32588
     },
     "dev": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-rule-schema/implementation.md"
+      "status": "DONE",
+      "startedAt": "2026-05-26T08:25:07.851803Z",
+      "finishedAt": "2026-05-26T08:30:17.789193Z",
+      "output": "tasks/2026-05-24-rule-schema/implementation.md",
+      "log": "tasks/2026-05-24-rule-schema/runs/20260526T082507Z-dev.log",
+      "nextStatus": "REVIEW_PASS"
     },
     "review": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-rule-schema/review.md"
+      "status": "DONE",
+      "startedAt": "2026-05-26T08:23:41.46296Z",
+      "finishedAt": "2026-05-26T08:25:07.848663Z",
+      "output": "tasks/2026-05-24-rule-schema/review.md",
+      "log": "tasks/2026-05-24-rule-schema/runs/20260526T082341Z-review.log",
+      "nextStatus": "REVIEW_PASS"
     },
     "test": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-rule-schema/test.md"
+      "status": "DONE",
+      "startedAt": "2026-05-26T08:30:17.831729Z",
+      "finishedAt": "2026-05-26T08:32:17.93738Z",
+      "output": "tasks/2026-05-24-rule-schema/test.md",
+      "log": "tasks/2026-05-24-rule-schema/runs/20260526T083017Z-test.log",
+      "nextStatus": "COMMIT_READY"
     },
     "test-plan": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-rule-schema/test-plan.md"
+      "status": "DONE",
+      "startedAt": "2026-05-26T08:25:07.873863Z",
+      "finishedAt": "2026-05-26T08:26:33.429949Z",
+      "output": "tasks/2026-05-24-rule-schema/test-plan.md",
+      "log": "tasks/2026-05-24-rule-schema/runs/20260526T082507Z-test-plan.log",
+      "nextStatus": "REVIEW_PASS"
     }
   }
 }

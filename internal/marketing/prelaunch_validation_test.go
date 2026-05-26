@@ -168,6 +168,110 @@ func TestValidatePrelaunchAllowsRegisteredCompatiblePlugin(t *testing.T) {
 	}
 }
 
+func TestCreateActivityCommandValidatesRuleSchema(t *testing.T) {
+	now := time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
+	cmd := validPrelaunchActivity()
+	cmd.Rules[0].Config = []byte(`{"logic":"AND","conditions":[{"field":"eventType","op":"=","value":"DEPOSIT_SUCCESS"},{"field":"subject.id","op":"=","value":"10001"},{"field":"biz.bizId","op":"=","value":"pay_1"},{"field":"attributes.amount","op":">=","value":"100"}]}`)
+	if err := cmd.Validate(now); err != nil {
+		t.Fatalf("expected standard event and attributes fields to validate: %v", err)
+	}
+
+	for name, mutate := range map[string]func(*CreateActivityCommand){
+		"budget phase": func(cmd *CreateActivityCommand) {
+			cmd.Rules[0].Phase = RulePhase("BUDGET")
+		},
+		"risk limit budget phase": func(cmd *CreateActivityCommand) {
+			cmd.Rules[0].Phase = RulePhase("RISK_LIMIT_BUDGET")
+		},
+		"missing logic": func(cmd *CreateActivityCommand) {
+			cmd.Rules[0].Config = []byte(`{"conditions":[{"field":"eventType","op":"=","value":"DEPOSIT_SUCCESS"}]}`)
+		},
+		"empty conditions": func(cmd *CreateActivityCommand) {
+			cmd.Rules[0].Config = []byte(`{"logic":"AND","conditions":[]}`)
+		},
+		"unknown config field": func(cmd *CreateActivityCommand) {
+			cmd.Rules[0].Config = []byte(`{"logic":"AND","conditions":[{"field":"eventType","op":"=","value":"DEPOSIT_SUCCESS"}],"extra":true}`)
+		},
+		"business short path": func(cmd *CreateActivityCommand) {
+			cmd.Rules[0].Config = []byte(`{"logic":"AND","conditions":[{"field":"user.vipLevel","op":"=","value":3}]}`)
+		},
+		"non standard top-level": func(cmd *CreateActivityCommand) {
+			cmd.Rules[0].Config = []byte(`{"logic":"AND","conditions":[{"field":"orderAmount","op":"=","value":"100"}]}`)
+		},
+		"bad op": func(cmd *CreateActivityCommand) {
+			cmd.Rules[0].Config = []byte(`{"logic":"AND","conditions":[{"field":"eventType","op":"LIKE","value":"DEPOSIT"}]}`)
+		},
+		"missing value": func(cmd *CreateActivityCommand) {
+			cmd.Rules[0].Config = []byte(`{"logic":"AND","conditions":[{"field":"eventType","op":"="}]}`)
+		},
+		"boolean comparison": func(cmd *CreateActivityCommand) {
+			cmd.Rules[0].Config = []byte(`{"logic":"AND","conditions":[{"field":"attributes.isFirstDeposit","op":">","value":true}]}`)
+		},
+		"in scalar": func(cmd *CreateActivityCommand) {
+			cmd.Rules[0].Config = []byte(`{"logic":"AND","conditions":[{"field":"eventType","op":"IN","value":"DEPOSIT_SUCCESS"}]}`)
+		},
+		"in empty": func(cmd *CreateActivityCommand) {
+			cmd.Rules[0].Config = []byte(`{"logic":"AND","conditions":[{"field":"eventType","op":"IN","value":[]}]}`)
+		},
+		"disabled invalid schema": func(cmd *CreateActivityCommand) {
+			cmd.Rules[0].Enabled = false
+			cmd.Rules[0].Config = []byte(`{"logic":"AND","conditions":[{"field":"eventType","op":"LIKE","value":"DEPOSIT"}]}`)
+		},
+		"duplicate rule code": func(cmd *CreateActivityCommand) {
+			cmd.Rules = append(cmd.Rules, cmd.Rules[0])
+		},
+		"negative sort": func(cmd *CreateActivityCommand) {
+			cmd.Rules[0].Sort = -1
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := validPrelaunchActivity()
+			mutate(&candidate)
+			if err := candidate.Validate(now); err == nil {
+				t.Fatal("expected rule schema validation error")
+			}
+		})
+	}
+}
+
+func TestCreateActivityCommandRejectsUnregisteredRuleEvaluatorsAfterSchemaValidation(t *testing.T) {
+	now := time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
+	for name, rule := range map[string]Rule{
+		"formula": {
+			Code:    "FORMULA_RULE",
+			Phase:   RulePhaseQualify,
+			Type:    RuleTypeFormula,
+			Config:  []byte(`{"formula":"attributes.amount * 0.2","resultType":"DECIMAL","compare":{"op":">=","value":"100.00"},"scale":2}`),
+			Enabled: true,
+			Version: 1,
+		},
+		"limit": {
+			Code:    "LIMIT_RULE",
+			Phase:   RulePhaseLimit,
+			Type:    RuleTypeLimit,
+			Config:  []byte(`{"limitType":"USER_COUNT","scope":"USER","window":"ACTIVITY","max":1,"field":"subject.id"}`),
+			Enabled: true,
+			Version: 1,
+		},
+		"script": {
+			Code:    "SCRIPT_RULE",
+			Phase:   RulePhaseRisk,
+			Type:    RuleTypeScript,
+			Config:  []byte(`{"scriptRef":"risk_rule_v1","language":"CEL","inputs":["eventType","attributes.amount"],"timeoutMs":1000}`),
+			Enabled: true,
+			Version: 1,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cmd := validPrelaunchActivity()
+			cmd.Rules = []Rule{rule}
+			if err := cmd.Validate(now); err == nil || !strings.Contains(err.Error(), "evaluator is not registered") {
+				t.Fatalf("expected unregistered evaluator rejection, got %v", err)
+			}
+		})
+	}
+}
+
 func validPrelaunchActivity() CreateActivityCommand {
 	return CreateActivityCommand{
 		TenantID:       "site_001",

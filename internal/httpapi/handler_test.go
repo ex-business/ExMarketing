@@ -183,6 +183,82 @@ func TestUpdateActivityRejectsIdentityFieldsAndMissingActivity(t *testing.T) {
 	}
 }
 
+func TestActivityApprovalFlowBlocksGoLiveUntilRequiredApprovals(t *testing.T) {
+	handler := newTestHandler()
+	rec := postActivity(t, handler, validActivityBody())
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected create status %d, got %d: %s", http.StatusCreated, rec.Code, rec.Body.String())
+	}
+	var activity marketing.Activity
+	if err := json.NewDecoder(rec.Body).Decode(&activity); err != nil {
+		t.Fatalf("decode activity: %v", err)
+	}
+
+	updateRec := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(updateRec, httptest.NewRequest(http.MethodPut, "/admin/v1/activities/"+activity.ID, strings.NewReader(`{"operator":"ops","status":"ACTIVE"}`)))
+	if updateRec.Code != http.StatusBadRequest || !strings.Contains(updateRec.Body.String(), "APPROVAL_REQUIRED") {
+		t.Fatalf("expected unapproved activation block, got %d: %s", updateRec.Code, updateRec.Body.String())
+	}
+
+	submitRec := postApprovalAction(t, handler, "/admin/v1/activities/"+activity.ID+"/approval/submit", `{"operator":"ops","expectedVersion":1}`)
+	if submitRec.Code != http.StatusOK || !strings.Contains(submitRec.Body.String(), `"status":"PENDING_L1"`) || !strings.Contains(submitRec.Body.String(), `"highRisk":true`) {
+		t.Fatalf("expected PENDING_L1 high-risk approval, got %d: %s", submitRec.Code, submitRec.Body.String())
+	}
+	selfRec := postApprovalAction(t, handler, "/admin/v1/activities/"+activity.ID+"/approval/approve", `{"operator":"ops"}`)
+	if selfRec.Code != http.StatusBadRequest || !strings.Contains(selfRec.Body.String(), "APPROVAL_SAME_OPERATOR") {
+		t.Fatalf("expected self approval block, got %d: %s", selfRec.Code, selfRec.Body.String())
+	}
+	l1Rec := postApprovalAction(t, handler, "/admin/v1/activities/"+activity.ID+"/approval/approve", `{"operator":"lead"}`)
+	if l1Rec.Code != http.StatusOK || !strings.Contains(l1Rec.Body.String(), `"status":"PENDING_L2"`) {
+		t.Fatalf("expected high-risk l1 to require l2, got %d: %s", l1Rec.Code, l1Rec.Body.String())
+	}
+	updateRec = httptest.NewRecorder()
+	handler.Routes().ServeHTTP(updateRec, httptest.NewRequest(http.MethodPut, "/admin/v1/activities/"+activity.ID, strings.NewReader(`{"operator":"ops","status":"ACTIVE"}`)))
+	if updateRec.Code != http.StatusBadRequest || !strings.Contains(updateRec.Body.String(), "APPROVAL_REQUIRED") {
+		t.Fatalf("expected l1-only activation block, got %d: %s", updateRec.Code, updateRec.Body.String())
+	}
+	l2Rec := postApprovalAction(t, handler, "/admin/v1/activities/"+activity.ID+"/approval/approve", `{"operator":"director","reason":"ok"}`)
+	if l2Rec.Code != http.StatusOK || !strings.Contains(l2Rec.Body.String(), `"status":"APPROVED"`) {
+		t.Fatalf("expected final approval, got %d: %s", l2Rec.Code, l2Rec.Body.String())
+	}
+	updateRec = httptest.NewRecorder()
+	handler.Routes().ServeHTTP(updateRec, httptest.NewRequest(http.MethodPut, "/admin/v1/activities/"+activity.ID, strings.NewReader(`{"operator":"ops","status":"ACTIVE"}`)))
+	if updateRec.Code != http.StatusOK || !strings.Contains(updateRec.Body.String(), `"status":"ACTIVE"`) {
+		t.Fatalf("expected approved activation, got %d: %s", updateRec.Code, updateRec.Body.String())
+	}
+
+	recordsRec := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(recordsRec, httptest.NewRequest(http.MethodGet, "/admin/v1/activities/"+activity.ID+"/approval-records", nil))
+	if recordsRec.Code != http.StatusOK || !strings.Contains(recordsRec.Body.String(), `"action":"APPROVAL_SUBMITTED"`) || !strings.Contains(recordsRec.Body.String(), `"action":"APPROVAL_APPROVED"`) {
+		t.Fatalf("expected auditable approval records, got %d: %s", recordsRec.Code, recordsRec.Body.String())
+	}
+}
+
+func TestApprovedScheduledActivityIsNotMatchedByFormalEvent(t *testing.T) {
+	handler := newTestHandler()
+	rec := postActivity(t, handler, validActivityBody())
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected create status %d, got %d: %s", http.StatusCreated, rec.Code, rec.Body.String())
+	}
+	var activity marketing.Activity
+	if err := json.NewDecoder(rec.Body).Decode(&activity); err != nil {
+		t.Fatalf("decode activity: %v", err)
+	}
+	approveAndActivateActivity(t, handler, activity.ID, activity.Version)
+	updateRec := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(updateRec, httptest.NewRequest(http.MethodPut, "/admin/v1/activities/"+activity.ID, strings.NewReader(`{"operator":"ops","status":"SCHEDULED"}`)))
+	if updateRec.Code != http.StatusOK {
+		t.Fatalf("expected scheduled status update, got %d: %s", updateRec.Code, updateRec.Body.String())
+	}
+	eventRec := postRawEvent(t, handler, depositEventJSON("evt_scheduled_approved", "pay_scheduled_approved", `"amount":"299.00","vipLevel":3,"isFirstDeposit":true`), "site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:pay_scheduled_approved")
+	if eventRec.Code != http.StatusAccepted {
+		t.Fatalf("expected accepted event, got %d: %s", eventRec.Code, eventRec.Body.String())
+	}
+	if strings.Contains(eventRec.Body.String(), `"grantOrders":[{`) || strings.Contains(eventRec.Body.String(), `"participations":[{`) {
+		t.Fatalf("scheduled activity must not be formally matched, got: %s", eventRec.Body.String())
+	}
+}
+
 func TestAuditQueryFiltersAndSnapshots(t *testing.T) {
 	handler := newTestHandler()
 	body := strings.Replace(validActivityBody(), "{", `{"operator":"ops-a",`, 1)
@@ -692,6 +768,7 @@ func TestEntryConfigFiltersSimulationAndProcessEvent(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("expected activity create, got %d: %s", rec.Code, rec.Body.String())
 	}
+	approveAndActivateCreatedActivity(t, handler, rec)
 
 	event := depositEventJSON("evt_entry_disabled", "pay_entry_disabled", `"amount":"299.00","vipLevel":3,"isFirstDeposit":true`)
 	simRec := httptest.NewRecorder()
@@ -755,6 +832,7 @@ func TestEntryConfigMismatchReasons(t *testing.T) {
 			if rec.Code != http.StatusCreated {
 				t.Fatalf("expected activity create, got %d: %s", rec.Code, rec.Body.String())
 			}
+			approveAndActivateCreatedActivity(t, handler, rec)
 			simRec := httptest.NewRecorder()
 			handler.Routes().ServeHTTP(simRec, httptest.NewRequest(http.MethodPost, "/admin/v1/simulate", strings.NewReader(tt.event)))
 			if simRec.Code != http.StatusOK {
@@ -774,6 +852,7 @@ func TestDisplayVisibleFalseDoesNotBlockEntryMatching(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("expected activity create, got %d: %s", rec.Code, rec.Body.String())
 	}
+	approveAndActivateCreatedActivity(t, handler, rec)
 
 	rec = postDepositEvent(t, handler, "evt_display_hidden", "pay_display_hidden")
 	if rec.Code != http.StatusAccepted {
@@ -2256,7 +2335,47 @@ func createActivity(t *testing.T, handler *Handler) string {
 	if err := json.NewDecoder(rec.Body).Decode(&activity); err != nil {
 		t.Fatalf("decode activity: %v", err)
 	}
+	approveAndActivateActivity(t, handler, activity.ID, activity.Version)
 	return activity.ID
+}
+
+func approveAndActivateActivity(t *testing.T, handler *Handler, activityID string, version int) {
+	t.Helper()
+	rec := postApprovalAction(t, handler, "/admin/v1/activities/"+activityID+"/approval/submit", `{"operator":"ops","expectedVersion":`+strconv.Itoa(version)+`}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected submit approval status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	rec = postApprovalAction(t, handler, "/admin/v1/activities/"+activityID+"/approval/approve", `{"operator":"lead"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected l1 approval status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	rec = postApprovalAction(t, handler, "/admin/v1/activities/"+activityID+"/approval/approve", `{"operator":"director"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected l2 approval status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	updateRec := httptest.NewRecorder()
+	updateReq := httptest.NewRequest(http.MethodPut, "/admin/v1/activities/"+activityID, strings.NewReader(`{"operator":"ops","status":"ACTIVE"}`))
+	handler.Routes().ServeHTTP(updateRec, updateReq)
+	if updateRec.Code != http.StatusOK {
+		t.Fatalf("expected activate status %d, got %d: %s", http.StatusOK, updateRec.Code, updateRec.Body.String())
+	}
+}
+
+func approveAndActivateCreatedActivity(t *testing.T, handler *Handler, rec *httptest.ResponseRecorder) {
+	t.Helper()
+	var activity marketing.Activity
+	if err := json.NewDecoder(strings.NewReader(rec.Body.String())).Decode(&activity); err != nil {
+		t.Fatalf("decode created activity: %v", err)
+	}
+	approveAndActivateActivity(t, handler, activity.ID, activity.Version)
+}
+
+func postApprovalAction(t *testing.T, handler *Handler, path string, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(rec, req)
+	return rec
 }
 
 func TestValidatePrelaunchEndpointReturnsItemizedHighRiskBlock(t *testing.T) {
@@ -2407,7 +2526,7 @@ func validActivityBody() string {
 		"activityCode": "FIRST_DEPOSIT_BONUS",
 		"activityName": "First Deposit Bonus",
 		"activityType": "FIRST_DEPOSIT",
-		"status": "ACTIVE",
+		"status": "DRAFT",
 		"triggerEvents": ["DEPOSIT_SUCCESS"],
 		"startTime": "2026-05-01T00:00:00Z",
 		"endTime": "2026-06-01T00:00:00Z",

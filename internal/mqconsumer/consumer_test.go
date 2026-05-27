@@ -188,7 +188,7 @@ func createTestActivity(t *testing.T, service *engine.Service) marketing.Activit
 		Code:          "FIRST_DEPOSIT_BONUS",
 		Name:          "First Deposit Bonus",
 		Type:          "FIRST_DEPOSIT",
-		Status:        marketing.ActivityActive,
+		Status:        marketing.ActivityDraft,
 		TriggerEvents: []string{"DEPOSIT_SUCCESS"},
 		StartTime:     eventTime.Add(-24 * time.Hour),
 		EndTime:       eventTime.Add(96 * time.Hour),
@@ -218,6 +218,20 @@ func createTestActivity(t *testing.T, service *engine.Service) marketing.Activit
 	})
 	if err != nil {
 		t.Fatalf("create activity: %v", err)
+	}
+	if _, err := service.SubmitActivityApproval(context.Background(), activity.ID, marketing.SubmitApprovalCommand{Operator: "ops", ExpectedVersion: activity.Version}); err != nil {
+		t.Fatalf("submit approval: %v", err)
+	}
+	if _, err := service.ApproveActivity(context.Background(), activity.ID, marketing.ApprovalActionCommand{Operator: "lead"}); err != nil {
+		t.Fatalf("l1 approval: %v", err)
+	}
+	if _, err := service.ApproveActivity(context.Background(), activity.ID, marketing.ApprovalActionCommand{Operator: "director"}); err != nil {
+		t.Fatalf("l2 approval: %v", err)
+	}
+	active := marketing.ActivityActive
+	activity, err = service.UpdateActivity(context.Background(), activity.ID, marketing.UpdateActivityCommand{Operator: "ops", Status: &active})
+	if err != nil {
+		t.Fatalf("activate activity: %v", err)
 	}
 	return activity
 }

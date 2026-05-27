@@ -287,7 +287,39 @@ rewards           奖励配置
 - `entry.audience.riskLevels` 读取 `attributes.riskLevel`，非空且不命中时返回 `AUDIENCE_RISK_LEVEL_NOT_ALLOWED`。
 - 旧配置字段 `entry.entranceCodes`、`entry.landingUrl`、顶层 `audience.segmentCodes/tags/countries` 仍可保存和读回；新入口匹配只依赖通用 `entry.*` 与标准事件字段。
 
-创建阶段会进行基础 Schema 校验。`tenantId + activityCode` 在同一租户内唯一，重复创建返回 `409 Conflict`；不同租户可以复用同一 `activityCode`。`startTime` / `endTime` 必须是带时区偏移的 RFC3339 时间，且 `startTime < endTime`；`timezone` 必须是可识别的 IANA 时区名或 `UTC`。当前普通活动只允许已注册 evaluator 的 `CONDITION` 规则；`FORMULA`、`LIMIT`、`SCRIPT` 只保留配置 Schema，未注册 evaluator 前即使结构合法也会返回 `400 Bad Request`。奖励类型允许 `BONUS` / `CASH` / `COUPON` / `POINT` / `GIFT` / `DRAW_CHANCE` / `MEMBERSHIP`。金额类 `BONUS` / `CASH` 允许 `FIXED` / `RATIO` / `LADDER` / `RANDOM` / `PROBABILITY` / `POOL_SPLIT`；非金额类当前最小可上线口径只允许 `FIXED`，其他组合返回 `400 Bad Request`。发奖模式允许 `AUTO`，发奖通道允许 `HTTP` / `WEBHOOK` / `MQ`；`rewardConfig.targetRef` 对可执行发奖必填，HTTP / WEBHOOK 必须是 `http` 或 `https` URL，MQ 必须是 `kafka://<topic>`、`rabbitmq://<exchange>/<routingKey>`、`rabbitmq:///<routingKey>` 或 `pulsar://<tenant>/<namespace>/<topic>`。MQ `targetRef` 不允许包含凭据、query 或 fragment。`MANUAL_EXPORT`、`MANUAL`、未知配置字段、非法版本或不可解析 Decimal 会返回 `400 Bad Request`。配置 `pluginCode` 时必须命中服务内注册的 ActivityPlugin，且与 `activityType` 兼容；未知插件会在创建或上线前校验阶段拒绝。
+创建阶段会进行基础 Schema 校验。`tenantId + activityCode` 在同一租户内唯一，重复创建返回 `409 Conflict`；不同租户可以复用同一 `activityCode`。`startTime` / `endTime` 必须是带时区偏移的 RFC3339 时间，且 `startTime < endTime`；`timezone` 必须是可识别的 IANA 时区名或 `UTC`。未审批活动不能创建或更新为 `SCHEDULED` / `ACTIVE`，上线前必须先提交审批并通过当前版本审批。当前普通活动只允许已注册 evaluator 的 `CONDITION` 规则；`FORMULA`、`LIMIT`、`SCRIPT` 只保留配置 Schema，未注册 evaluator 前即使结构合法也会返回 `400 Bad Request`。奖励类型允许 `BONUS` / `CASH` / `COUPON` / `POINT` / `GIFT` / `DRAW_CHANCE` / `MEMBERSHIP`。金额类 `BONUS` / `CASH` 允许 `FIXED` / `RATIO` / `LADDER` / `RANDOM` / `PROBABILITY` / `POOL_SPLIT`；非金额类当前最小可上线口径只允许 `FIXED`，其他组合返回 `400 Bad Request`。发奖模式允许 `AUTO`，发奖通道允许 `HTTP` / `WEBHOOK` / `MQ`；`rewardConfig.targetRef` 对可执行发奖必填，HTTP / WEBHOOK 必须是 `http` 或 `https` URL，MQ 必须是 `kafka://<topic>`、`rabbitmq://<exchange>/<routingKey>`、`rabbitmq:///<routingKey>` 或 `pulsar://<tenant>/<namespace>/<topic>`。MQ `targetRef` 不允许包含凭据、query 或 fragment。`MANUAL_EXPORT`、`MANUAL`、未知配置字段、非法版本或不可解析 Decimal 会返回 `400 Bad Request`。配置 `pluginCode` 时必须命中服务内注册的 ActivityPlugin，且与 `activityType` 兼容；未知插件会在创建或上线前校验阶段拒绝。
+
+## 活动审批
+
+审批状态为 `NONE / PENDING_L1 / PENDING_L2 / APPROVED / REJECTED / WITHDRAWN`。普通活动一级审批通过后可上线；高危活动一级通过后进入 `PENDING_L2`，必须由不同的二级审批人通过后才可上线。提交人不能审批自己提交的活动，二级审批人不能与一级审批人相同。活动配置版本变化后，旧审批不再允许上线。
+
+```http
+POST /admin/v1/activities/{id}/approval/submit
+POST /admin/v1/activities/{id}/approval/approve
+POST /admin/v1/activities/{id}/approval/reject
+GET /admin/v1/activities/{id}/approval-records
+```
+
+提交审批：
+
+```json
+{
+  "operator": "ops",
+  "expectedVersion": 1,
+  "reason": "ready"
+}
+```
+
+审批或驳回：
+
+```json
+{
+  "operator": "lead",
+  "reason": "approved"
+}
+```
+
+审批记录来自统一审计，包含动作、操作人、审批前后状态、锁定版本、高危标记和原因。即使审批通过，`SCHEDULED` 仍只是待生效状态；正式事件处理只会匹配审批通过、版本一致且 `status=ACTIVE` 的活动。
 
 奖励计算使用 Decimal 语义并输出 4 位小数。`RATIO` 支持 `maxAmount` 封顶，`LADDER` 使用闭区间且拒绝重叠阶梯，`RANDOM` / `PROBABILITY` 使用 tenant、activity、rewardCode、幂等键、配置版本和 `seedSalt` 形成稳定 seed，`POOL_SPLIT` 支持事件即时 `splitBy` 或兼容别名 `splitMode` 的 `COUNT` / `WEIGHT` 分摊。金额结果为 0 时不会生成发奖单、outbox 或 quota 扣减；非金额类 `FIXED` 奖励使用 `reward_amount=0.0000` 并在 `reward_payload_json` 中保存 `points`、`quantity`、`chanceCount`、`durationDays` 等权益字段。
 

@@ -506,9 +506,15 @@ func matchTestActivity(id string, code string, status marketing.ActivityStatus, 
 		Timezone:      "UTC",
 		Priority:      priority,
 		Version:       1,
-		Config:        []byte(`{"display":{"visible":false}}`),
-		CreatedAt:     base,
-		UpdatedAt:     base,
+		Approval: marketing.ApprovalSnapshot{
+			Status:          marketing.ApprovalApproved,
+			Submitter:       "ops",
+			L1Approver:      "lead",
+			ActivityVersion: 1,
+		},
+		Config:    []byte(`{"display":{"visible":false}}`),
+		CreatedAt: base,
+		UpdatedAt: base,
 	}
 }
 

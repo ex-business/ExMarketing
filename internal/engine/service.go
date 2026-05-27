@@ -115,6 +115,9 @@ func (s *Service) CreateActivity(ctx context.Context, cmd marketing.CreateActivi
 		CreatedAt:      now,
 		UpdatedAt:      now,
 	}
+	if activity.Status == marketing.ActivityScheduled || activity.Status == marketing.ActivityActive {
+		return marketing.Activity{}, errors.Join(marketing.ErrInvalidOperation, errors.New("APPROVAL_REQUIRED: activity must be approved before SCHEDULED or ACTIVE"))
+	}
 
 	created, err := s.repository.CreateActivity(ctx, activity)
 	if err != nil {
@@ -153,7 +156,14 @@ func (s *Service) validateActivityFactReferences(ctx context.Context, tenantID s
 }
 
 func (s *Service) ListActivities(ctx context.Context) ([]marketing.Activity, error) {
-	return s.repository.ListActivities(ctx)
+	activities, err := s.repository.ListActivities(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for i := range activities {
+		activities[i] = s.hydrateApproval(ctx, activities[i])
+	}
+	return activities, nil
 }
 
 func (s *Service) GetActivity(ctx context.Context, id string) (marketing.Activity, error) {
@@ -161,7 +171,11 @@ func (s *Service) GetActivity(ctx context.Context, id string) (marketing.Activit
 	if id == "" {
 		return marketing.Activity{}, marketing.ErrNotFound
 	}
-	return s.repository.GetActivity(ctx, id)
+	activity, err := s.repository.GetActivity(ctx, id)
+	if err != nil {
+		return marketing.Activity{}, err
+	}
+	return s.hydrateApproval(ctx, activity), nil
 }
 
 func (s *Service) UpdateActivity(ctx context.Context, id string, cmd marketing.UpdateActivityCommand) (marketing.Activity, error) {
@@ -173,16 +187,188 @@ func (s *Service) UpdateActivity(ctx context.Context, id string, cmd marketing.U
 	if err != nil {
 		return marketing.Activity{}, err
 	}
+	before = s.hydrateApproval(ctx, before)
 	updated, err := cmd.ApplyTo(before, s.now())
 	if err != nil {
 		return marketing.Activity{}, err
+	}
+	if cmd.ConfigVersionChanging() && updated.Approval.Status != "" {
+		updated.Approval = marketing.ApprovalSnapshot{Status: marketing.ApprovalNone}
+	}
+	if (updated.Status == marketing.ActivityScheduled || updated.Status == marketing.ActivityActive) && !activityApprovalValid(updated) {
+		_ = s.audit(ctx, before.TenantID, actorOrSystem(cmd.Operator), "ACTIVITY_GO_LIVE_BLOCKED", "activity", before.ID, approvalAuditPayload(before, before.Approval, before.Approval, "APPROVAL_REQUIRED", nil))
+		return marketing.Activity{}, errors.Join(marketing.ErrInvalidOperation, errors.New("APPROVAL_REQUIRED: activity version is not approved"))
 	}
 	saved, err := s.repository.UpdateActivity(ctx, updated)
 	if err != nil {
 		return marketing.Activity{}, err
 	}
+	saved.Approval = updated.Approval
 	_ = s.audit(ctx, saved.TenantID, actorOrSystem(cmd.Operator), "UPDATE_ACTIVITY", "activity", saved.ID, auditSnapshot(before, saved, nil))
 	return saved, nil
+}
+
+func (s *Service) SubmitActivityApproval(ctx context.Context, id string, cmd marketing.SubmitApprovalCommand) (marketing.Activity, error) {
+	operator := strings.TrimSpace(cmd.Operator)
+	if operator == "" || cmd.ExpectedVersion <= 0 {
+		return marketing.Activity{}, errors.Join(marketing.ErrInvalidOperation, errors.New("operator and expectedVersion are required"))
+	}
+	activity, err := s.repository.GetActivity(ctx, strings.TrimSpace(id))
+	if err != nil {
+		return marketing.Activity{}, err
+	}
+	activity = s.hydrateApproval(ctx, activity)
+	if activity.Status == marketing.ActivityEnded {
+		return marketing.Activity{}, errors.Join(marketing.ErrInvalidOperation, errors.New("ENDED activity cannot be submitted for approval"))
+	}
+	if activity.Version != cmd.ExpectedVersion {
+		return marketing.Activity{}, errors.Join(marketing.ErrInvalidOperation, errors.New("APPROVAL_VERSION_MISMATCH: activity version changed"))
+	}
+	if activity.Approval.Status == marketing.ApprovalPendingL1 || activity.Approval.Status == marketing.ApprovalPendingL2 {
+		return activity, nil
+	}
+	if activity.Approval.Status == marketing.ApprovalApproved && activity.Approval.ActivityVersion == activity.Version {
+		return activity, nil
+	}
+	now := s.now()
+	before := activity.Approval
+	activity.Approval = marketing.ApprovalSnapshot{
+		Status:          marketing.ApprovalPendingL1,
+		Submitter:       operator,
+		Opinion:         strings.TrimSpace(cmd.Reason),
+		HighRisk:        activityRequiresSecondApproval(activity),
+		ActivityVersion: activity.Version,
+		SubmittedAt:     &now,
+	}
+	saved, err := s.repository.UpdateActivity(ctx, activity)
+	if err != nil {
+		return marketing.Activity{}, err
+	}
+	saved.Approval = activity.Approval
+	_ = s.audit(ctx, saved.TenantID, operator, "APPROVAL_SUBMITTED", "activity", saved.ID, approvalAuditPayload(saved, before, saved.Approval, strings.TrimSpace(cmd.Reason), nil))
+	return saved, nil
+}
+
+func (s *Service) ApproveActivity(ctx context.Context, id string, cmd marketing.ApprovalActionCommand) (marketing.Activity, error) {
+	operator := strings.TrimSpace(cmd.Operator)
+	if operator == "" {
+		return marketing.Activity{}, errors.Join(marketing.ErrInvalidOperation, errors.New("operator is required"))
+	}
+	activity, err := s.repository.GetActivity(ctx, strings.TrimSpace(id))
+	if err != nil {
+		return marketing.Activity{}, err
+	}
+	activity = s.hydrateApproval(ctx, activity)
+	before := activity.Approval
+	if activity.Version != before.ActivityVersion {
+		return marketing.Activity{}, errors.Join(marketing.ErrInvalidOperation, errors.New("APPROVAL_VERSION_MISMATCH: activity version changed"))
+	}
+	if operator == before.Submitter || operator == before.L1Approver {
+		return marketing.Activity{}, errors.Join(marketing.ErrInvalidOperation, errors.New("APPROVAL_SAME_OPERATOR: approval operators must be different"))
+	}
+	now := s.now()
+	switch before.Status {
+	case marketing.ApprovalPendingL1:
+		activity.Approval.L1Approver = operator
+		activity.Approval.Approver = operator
+		if before.HighRisk {
+			activity.Approval.Status = marketing.ApprovalPendingL2
+		} else {
+			activity.Approval.Status = marketing.ApprovalApproved
+			activity.Approval.ReviewedAt = &now
+		}
+	case marketing.ApprovalPendingL2:
+		activity.Approval.L2Approver = operator
+		activity.Approval.Approver = operator
+		activity.Approval.Status = marketing.ApprovalApproved
+		activity.Approval.ReviewedAt = &now
+	case marketing.ApprovalApproved:
+		return activity, nil
+	default:
+		return marketing.Activity{}, errors.Join(marketing.ErrInvalidOperation, errors.New("APPROVAL_STATE_INVALID: approval is not pending"))
+	}
+	activity.Approval.Opinion = strings.TrimSpace(cmd.Reason)
+	saved, err := s.repository.UpdateActivity(ctx, activity)
+	if err != nil {
+		return marketing.Activity{}, err
+	}
+	saved.Approval = activity.Approval
+	_ = s.audit(ctx, saved.TenantID, operator, "APPROVAL_APPROVED", "activity", saved.ID, approvalAuditPayload(saved, before, saved.Approval, strings.TrimSpace(cmd.Reason), nil))
+	return saved, nil
+}
+
+func (s *Service) RejectActivityApproval(ctx context.Context, id string, cmd marketing.ApprovalActionCommand) (marketing.Activity, error) {
+	operator := strings.TrimSpace(cmd.Operator)
+	reason := strings.TrimSpace(cmd.Reason)
+	if operator == "" || reason == "" {
+		return marketing.Activity{}, errors.Join(marketing.ErrInvalidOperation, errors.New("operator and reason are required"))
+	}
+	activity, err := s.repository.GetActivity(ctx, strings.TrimSpace(id))
+	if err != nil {
+		return marketing.Activity{}, err
+	}
+	activity = s.hydrateApproval(ctx, activity)
+	before := activity.Approval
+	if before.Status != marketing.ApprovalPendingL1 && before.Status != marketing.ApprovalPendingL2 {
+		return marketing.Activity{}, errors.Join(marketing.ErrInvalidOperation, errors.New("APPROVAL_STATE_INVALID: approval is not pending"))
+	}
+	if operator == before.Submitter || operator == before.L1Approver {
+		return marketing.Activity{}, errors.Join(marketing.ErrInvalidOperation, errors.New("APPROVAL_SAME_OPERATOR: approval operators must be different"))
+	}
+	now := s.now()
+	activity.Approval.Status = marketing.ApprovalRejected
+	activity.Approval.Approver = operator
+	activity.Approval.RejectReason = reason
+	activity.Approval.Opinion = reason
+	activity.Approval.ReviewedAt = &now
+	saved, err := s.repository.UpdateActivity(ctx, activity)
+	if err != nil {
+		return marketing.Activity{}, err
+	}
+	saved.Approval = activity.Approval
+	_ = s.audit(ctx, saved.TenantID, operator, "APPROVAL_REJECTED", "activity", saved.ID, approvalAuditPayload(saved, before, saved.Approval, reason, nil))
+	return saved, nil
+}
+
+func (s *Service) ListApprovalRecords(ctx context.Context, id string) ([]marketing.ApprovalRecord, error) {
+	activity, err := s.repository.GetActivity(ctx, strings.TrimSpace(id))
+	if err != nil {
+		return nil, err
+	}
+	audits, err := s.repository.ListAudit(ctx, marketing.AuditQuery{TenantID: activity.TenantID, Resource: "activity", ResourceID: activity.ID, Limit: 200})
+	if err != nil {
+		return nil, err
+	}
+	records := make([]marketing.ApprovalRecord, 0, len(audits))
+	for _, audit := range audits {
+		if !strings.HasPrefix(audit.Action, "APPROVAL_") && audit.Action != "ACTIVITY_GO_LIVE_BLOCKED" && audit.Action != "ACTIVITY_GO_LIVE_ALLOWED" {
+			continue
+		}
+		record := marketing.ApprovalRecord{
+			ID:           audit.ID,
+			TenantID:     audit.TenantID,
+			ActivityID:   activity.ID,
+			ActivityCode: activity.Code,
+			Action:       audit.Action,
+			Operator:     audit.Actor,
+			CreatedAt:    audit.CreatedAt,
+		}
+		var payload struct {
+			BeforeStatus    marketing.ApprovalStatus `json:"beforeStatus"`
+			AfterStatus     marketing.ApprovalStatus `json:"afterStatus"`
+			ActivityVersion int                      `json:"activityVersion"`
+			HighRisk        bool                     `json:"highRisk"`
+			Reason          string                   `json:"reason"`
+		}
+		_ = json.Unmarshal(audit.Payload, &payload)
+		record.BeforeStatus = payload.BeforeStatus
+		record.AfterStatus = payload.AfterStatus
+		record.ActivityVersion = payload.ActivityVersion
+		record.HighRisk = payload.HighRisk
+		record.Reason = payload.Reason
+		records = append(records, record)
+	}
+	return records, nil
 }
 
 func (s *Service) ValidatePrelaunch(ctx context.Context, req marketing.PrelaunchValidationRequest) (marketing.PrelaunchValidationResult, error) {
@@ -340,6 +526,9 @@ func (s *Service) ProcessEventFrom(ctx context.Context, event marketing.Activity
 	if err != nil {
 		return marketing.ProcessEventResult{}, err
 	}
+	for i := range activities {
+		activities[i] = s.hydrateApproval(ctx, activities[i])
+	}
 	sortActivitiesForMatch(activities)
 	exclusiveSingleSelect := exclusiveSingleSelectGroups(activities)
 
@@ -411,6 +600,9 @@ func (s *Service) SimulateEvent(ctx context.Context, event marketing.ActivityEve
 	activities, err := s.repository.FindMatchingActivities(ctx, event.TenantID, event.EventType)
 	if err != nil {
 		return marketing.SimulationResult{}, err
+	}
+	for i := range activities {
+		activities[i] = s.hydrateApproval(ctx, activities[i])
 	}
 	sortActivitiesForMatch(activities)
 
@@ -692,6 +884,13 @@ func matchWindowDecision(activity marketing.Activity, occurredAt time.Time) matc
 			Reason:     "activity status is not ACTIVE",
 		}
 	}
+	if !activityApprovalValid(activity) {
+		return matchDecision{
+			Decision:   marketing.RuleDecisionRejected,
+			ReasonCode: "APPROVAL_REQUIRED",
+			Reason:     "activity version is not approved",
+		}
+	}
 	if activity.StartTime.IsZero() || activity.EndTime.IsZero() || !activity.StartTime.Before(activity.EndTime) {
 		return matchDecision{
 			Decision:   marketing.RuleDecisionError,
@@ -714,6 +913,85 @@ func matchWindowDecision(activity marketing.Activity, occurredAt time.Time) matc
 		}
 	}
 	return matchDecision{Decision: marketing.RuleDecisionPassed}
+}
+
+func activityApprovalValid(activity marketing.Activity) bool {
+	return activity.Approval.Status == marketing.ApprovalApproved && activity.Approval.ActivityVersion == activity.Version
+}
+
+func activityRequiresSecondApproval(activity marketing.Activity) bool {
+	for _, reward := range activity.Rewards {
+		if !reward.Enabled {
+			continue
+		}
+		if reward.Type == marketing.RewardBonus || reward.Type == marketing.RewardCash {
+			return true
+		}
+		if reward.GrantMode == marketing.GrantAuto && (reward.GrantChannel == marketing.GrantHTTP || reward.GrantChannel == marketing.GrantWebhook || reward.GrantChannel == marketing.GrantMQ) {
+			return true
+		}
+		switch reward.CalculateType {
+		case marketing.CalculateRandom, marketing.CalculateProbability, marketing.CalculatePoolSplit:
+			return true
+		}
+	}
+	for _, rule := range activity.Rules {
+		if rule.Phase == marketing.RulePhaseRisk || rule.Phase == marketing.RulePhaseLimit {
+			return true
+		}
+		if bytes.Contains(rule.Config, []byte(`facts.`)) || bytes.Contains(rule.Config, []byte(`state.quota.`)) || bytes.Contains(rule.Config, []byte(`state.plugin.`)) {
+			return true
+		}
+	}
+	return false
+}
+
+func approvalAuditPayload(activity marketing.Activity, before marketing.ApprovalSnapshot, after marketing.ApprovalSnapshot, reason string, details map[string]any) map[string]any {
+	payload := map[string]any{
+		"activityId":      activity.ID,
+		"activityCode":    activity.Code,
+		"activityVersion": activity.Version,
+		"highRisk":        after.HighRisk || before.HighRisk,
+		"beforeStatus":    before.Status,
+		"afterStatus":     after.Status,
+		"reason":          strings.TrimSpace(reason),
+		"beforeSnapshot":  before,
+		"afterSnapshot":   after,
+	}
+	for key, value := range details {
+		payload[key] = value
+	}
+	return payload
+}
+
+func (s *Service) hydrateApproval(ctx context.Context, activity marketing.Activity) marketing.Activity {
+	if activity.Approval.Status != "" && activity.Approval.Status != marketing.ApprovalNone {
+		return activity
+	}
+	audits, err := s.repository.ListAudit(ctx, marketing.AuditQuery{TenantID: activity.TenantID, Resource: "activity", ResourceID: activity.ID, Limit: 200})
+	if err != nil {
+		return activity
+	}
+	var latest time.Time
+	for _, audit := range audits {
+		if !strings.HasPrefix(audit.Action, "APPROVAL_") {
+			continue
+		}
+		if !latest.IsZero() && audit.CreatedAt.Before(latest) {
+			continue
+		}
+		var payload struct {
+			AfterSnapshot marketing.ApprovalSnapshot `json:"afterSnapshot"`
+		}
+		if err := json.Unmarshal(audit.Payload, &payload); err != nil {
+			continue
+		}
+		if payload.AfterSnapshot.Status != "" {
+			activity.Approval = payload.AfterSnapshot
+			latest = audit.CreatedAt
+		}
+	}
+	return activity
 }
 
 func sortActivitiesForMatch(activities []marketing.Activity) {

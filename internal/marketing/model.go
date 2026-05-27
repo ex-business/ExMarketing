@@ -125,26 +125,27 @@ const (
 )
 
 type Activity struct {
-	ID             string          `json:"id"`
-	TenantID       string          `json:"tenantId"`
-	Code           string          `json:"activityCode"`
-	Name           string          `json:"activityName"`
-	Type           string          `json:"activityType"`
-	Status         ActivityStatus  `json:"status"`
-	TriggerEvents  []string        `json:"triggerEvents"`
-	StartTime      time.Time       `json:"startTime"`
-	EndTime        time.Time       `json:"endTime"`
-	Timezone       string          `json:"timezone"`
-	Priority       int             `json:"priority"`
-	ExclusiveGroup string          `json:"exclusiveGroup"`
-	Stackable      bool            `json:"stackable"`
-	PluginCode     string          `json:"pluginCode,omitempty"`
-	Version        int             `json:"version"`
-	Config         json.RawMessage `json:"config,omitempty"`
-	Rules          []Rule          `json:"rules"`
-	Rewards        []Reward        `json:"rewards"`
-	CreatedAt      time.Time       `json:"createdAt"`
-	UpdatedAt      time.Time       `json:"updatedAt"`
+	ID             string           `json:"id"`
+	TenantID       string           `json:"tenantId"`
+	Code           string           `json:"activityCode"`
+	Name           string           `json:"activityName"`
+	Type           string           `json:"activityType"`
+	Status         ActivityStatus   `json:"status"`
+	TriggerEvents  []string         `json:"triggerEvents"`
+	StartTime      time.Time        `json:"startTime"`
+	EndTime        time.Time        `json:"endTime"`
+	Timezone       string           `json:"timezone"`
+	Priority       int              `json:"priority"`
+	ExclusiveGroup string           `json:"exclusiveGroup"`
+	Stackable      bool             `json:"stackable"`
+	PluginCode     string           `json:"pluginCode,omitempty"`
+	Version        int              `json:"version"`
+	Approval       ApprovalSnapshot `json:"approval,omitempty"`
+	Config         json.RawMessage  `json:"config,omitempty"`
+	Rules          []Rule           `json:"rules"`
+	Rewards        []Reward         `json:"rewards"`
+	CreatedAt      time.Time        `json:"createdAt"`
+	UpdatedAt      time.Time        `json:"updatedAt"`
 }
 
 type Rule struct {
@@ -1086,6 +1087,32 @@ type UpdateActivityCommand struct {
 	ConfigSnake    json.RawMessage `json:"config_json,omitempty"`
 }
 
+type SubmitApprovalCommand struct {
+	Operator        string `json:"operator"`
+	ExpectedVersion int    `json:"expectedVersion"`
+	Reason          string `json:"reason,omitempty"`
+}
+
+type ApprovalActionCommand struct {
+	Operator string `json:"operator"`
+	Reason   string `json:"reason,omitempty"`
+}
+
+type ApprovalRecord struct {
+	ID              string         `json:"id"`
+	TenantID        string         `json:"tenantId"`
+	ActivityID      string         `json:"activityId"`
+	ActivityCode    string         `json:"activityCode"`
+	Action          string         `json:"action"`
+	Operator        string         `json:"operator"`
+	Reason          string         `json:"reason,omitempty"`
+	BeforeStatus    ApprovalStatus `json:"beforeStatus"`
+	AfterStatus     ApprovalStatus `json:"afterStatus"`
+	ActivityVersion int            `json:"activityVersion"`
+	HighRisk        bool           `json:"highRisk"`
+	CreatedAt       time.Time      `json:"createdAt"`
+}
+
 var (
 	ErrInvalidActivity          = errors.New("invalid activity")
 	ErrInvalidEvent             = errors.New("invalid event")
@@ -1296,6 +1323,7 @@ func (cmd CreateActivityCommand) ConfigPayload() json.RawMessage {
 }
 
 func (cmd UpdateActivityCommand) ApplyTo(activity Activity, now time.Time) (Activity, error) {
+	versionChanging := cmd.ConfigVersionChanging()
 	if cmd.Name != nil {
 		name := strings.TrimSpace(*cmd.Name)
 		if name == "" {
@@ -1343,9 +1371,24 @@ func (cmd UpdateActivityCommand) ApplyTo(activity Activity, now time.Time) (Acti
 		}
 		activity.Config = config
 	}
-	activity.Version++
+	if versionChanging {
+		activity.Version++
+	}
 	activity.UpdatedAt = now
 	return activity, nil
+}
+
+func (cmd UpdateActivityCommand) ConfigVersionChanging() bool {
+	return cmd.Name != nil ||
+		cmd.StartTime != nil ||
+		cmd.EndTime != nil ||
+		cmd.Timezone != nil ||
+		cmd.Priority != nil ||
+		cmd.ExclusiveGroup != nil ||
+		cmd.Stackable != nil ||
+		cmd.Config != nil ||
+		cmd.ConfigJSON != nil ||
+		cmd.ConfigSnake != nil
 }
 
 func (cmd UpdateActivityCommand) ConfigPayloadIfSet() (json.RawMessage, bool) {

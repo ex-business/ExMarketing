@@ -14,26 +14,48 @@ go build ./...
 
 ## Scope
 
-待填写。
+- `docs/api.md`
+- `internal/engine/service.go`
+- `internal/engine/service_test.go`
+- `internal/marketing/model.go`
+- `requirements/backlog.json`
+- `tasks/2026-05-24-113929-7/agent-report.md`
+- `tasks/2026-05-24-113929-7/agent-status.json`
+- `tasks/2026-05-24-113929-7/analysis.md`
+- `tasks/2026-05-24-113929-7/implementation.md`
+- `tasks/2026-05-24-113929-7/review.md`
+- `tasks/2026-05-24-113929-7/test-plan.md`
+- `tasks/2026-05-24-113929-7/test.md`
+
+未暂存 / 未提交 `tasks/2026-05-24-113929-7/runs/` 执行日志。
 
 ## Review
 
 ~~~text
-PASS / BLOCK
+PASS
 ~~~
 
 ## Test
 
 ~~~text
-PASS / FAIL
+PASS
+~~~
+
+## Pre-Commit Checks
+
+~~~text
+git status -sb: PASS
+git diff --check: PASS
+go test ./...: PASS
+go build ./...: PASS
 ~~~
 
 ## Commit
 
 ~~~text
-hash:
-message:
-remote:
+hash: 12141a0
+message: feat: add marketing event simulation previews
+remote: not pushed; local main is ahead of origin/main by 1 commit
 ~~~
 
 需求：2026-05-24-113929-7

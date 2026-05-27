@@ -32,6 +32,8 @@ const (
 
 	ApprovalNone      ApprovalStatus = "NONE"
 	ApprovalPending   ApprovalStatus = "PENDING"
+	ApprovalPendingL1 ApprovalStatus = "PENDING_L1"
+	ApprovalPendingL2 ApprovalStatus = "PENDING_L2"
 	ApprovalApproved  ApprovalStatus = "APPROVED"
 	ApprovalRejected  ApprovalStatus = "REJECTED"
 	ApprovalWithdrawn ApprovalStatus = "WITHDRAWN"
@@ -41,8 +43,13 @@ type ApprovalSnapshot struct {
 	Status          ApprovalStatus `json:"status"`
 	Submitter       string         `json:"submitter,omitempty"`
 	Approver        string         `json:"approver,omitempty"`
+	L1Approver      string         `json:"l1Approver,omitempty"`
+	L2Approver      string         `json:"l2Approver,omitempty"`
 	Opinion         string         `json:"opinion,omitempty"`
+	RejectReason    string         `json:"rejectReason,omitempty"`
+	HighRisk        bool           `json:"highRisk,omitempty"`
 	ActivityVersion int            `json:"activityVersion,omitempty"`
+	SubmittedAt     *time.Time     `json:"submittedAt,omitempty"`
 	ReviewedAt      *time.Time     `json:"reviewedAt,omitempty"`
 }
 
@@ -112,6 +119,7 @@ func ValidatePrelaunch(req PrelaunchValidationRequest, now time.Time) PrelaunchV
 	builder.checkStock()
 	builder.checkConflicts()
 	builder.checkHighRisk()
+	builder.checkApproval()
 	return builder.result()
 }
 

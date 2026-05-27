@@ -67,7 +67,7 @@ func TestActivityPluginContextFeedsRulesRewardsAndSnapshot(t *testing.T) {
 		t.Fatalf("register plugin: %v", err)
 	}
 
-	activity, err := service.CreateActivity(ctx, pluginActivityCommand("LOTTERY_TEST"))
+	activity, err := createApprovedPluginActivity(ctx, service, pluginActivityCommand("LOTTERY_TEST"))
 	if err != nil {
 		t.Fatalf("create activity: %v", err)
 	}
@@ -121,6 +121,7 @@ func TestActivityPluginUnknownCodeRejectedAtCreateAndRuntime(t *testing.T) {
 
 	repo := marketing.NewMemoryRepository()
 	dirty := activityFromCommand(pluginActivityCommand("MISSING_PLUGIN"))
+	dirty.Status = marketing.ActivityActive
 	if _, err := repo.CreateActivity(ctx, dirty); err != nil {
 		t.Fatalf("seed dirty activity: %v", err)
 	}
@@ -152,7 +153,7 @@ func TestSimulateEventIncludesPluginPreviewWithoutPersistence(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("register plugin: %v", err)
 	}
-	if _, err := service.CreateActivity(ctx, pluginActivityCommand("LOTTERY_TEST")); err != nil {
+	if _, err := createApprovedPluginActivity(ctx, service, pluginActivityCommand("LOTTERY_TEST")); err != nil {
 		t.Fatalf("create activity: %v", err)
 	}
 
@@ -182,7 +183,7 @@ func pluginActivityCommand(pluginCode string) marketing.CreateActivityCommand {
 		Code:          "LOTTERY_PLUGIN",
 		Name:          "Lottery Plugin",
 		Type:          "LOTTERY",
-		Status:        marketing.ActivityActive,
+		Status:        marketing.ActivityDraft,
 		TriggerEvents: []string{"LOTTERY_DRAW"},
 		StartTime:     now.Add(-time.Hour),
 		EndTime:       now.Add(time.Hour),
@@ -213,6 +214,25 @@ func pluginActivityCommand(pluginCode string) marketing.CreateActivityCommand {
 	}
 }
 
+func createApprovedPluginActivity(ctx context.Context, service *Service, cmd marketing.CreateActivityCommand) (marketing.Activity, error) {
+	created, err := service.CreateActivity(ctx, cmd)
+	if err != nil {
+		return marketing.Activity{}, err
+	}
+	if _, err := service.SubmitActivityApproval(ctx, created.ID, marketing.SubmitApprovalCommand{Operator: "ops", ExpectedVersion: created.Version}); err != nil {
+		return marketing.Activity{}, err
+	}
+	if _, err := service.ApproveActivity(ctx, created.ID, marketing.ApprovalActionCommand{Operator: "lead"}); err != nil {
+		return marketing.Activity{}, err
+	}
+	approved, err := service.ApproveActivity(ctx, created.ID, marketing.ApprovalActionCommand{Operator: "director"})
+	if err != nil {
+		return marketing.Activity{}, err
+	}
+	active := marketing.ActivityActive
+	return service.UpdateActivity(ctx, approved.ID, marketing.UpdateActivityCommand{Operator: "ops", Status: &active})
+}
+
 func activityFromCommand(cmd marketing.CreateActivityCommand) marketing.Activity {
 	now := time.Now().UTC()
 	return marketing.Activity{
@@ -229,11 +249,19 @@ func activityFromCommand(cmd marketing.CreateActivityCommand) marketing.Activity
 		Priority:      cmd.Priority,
 		PluginCode:    cmd.PluginCode,
 		Version:       1,
-		Config:        cmd.Config,
-		Rules:         cmd.Rules,
-		Rewards:       cmd.Rewards,
-		CreatedAt:     now,
-		UpdatedAt:     now,
+		Approval: marketing.ApprovalSnapshot{
+			Status:          marketing.ApprovalApproved,
+			Submitter:       "ops",
+			L1Approver:      "lead",
+			L2Approver:      "director",
+			ActivityVersion: 1,
+			HighRisk:        true,
+		},
+		Config:    cmd.Config,
+		Rules:     cmd.Rules,
+		Rewards:   cmd.Rewards,
+		CreatedAt: now,
+		UpdatedAt: now,
 	}
 }
 

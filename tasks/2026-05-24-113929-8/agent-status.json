@@ -1,30 +1,53 @@
 {
   "requirementId": "2026-05-24-113929-8",
-  "updatedAt": "2026-05-24T11:39:29.042244Z",
+  "updatedAt": "2026-05-27T07:16:44.667305Z",
   "agents": {
     "analysis": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-113929-8/analysis.md"
+      "status": "DONE",
+      "startedAt": "2026-05-27T07:00:54.213638Z",
+      "finishedAt": "2026-05-27T07:03:26.631162Z",
+      "output": "tasks/2026-05-24-113929-8/analysis.md",
+      "log": "tasks/2026-05-24-113929-8/runs/20260527T070054Z-analysis.log",
+      "nextStatus": "REVIEW_READY"
     },
     "commit": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-113929-8/commit.md"
+      "status": "RUNNING",
+      "startedAt": "2026-05-27T07:16:44.667302Z",
+      "output": "tasks/2026-05-24-113929-8/commit.md",
+      "log": "tasks/2026-05-24-113929-8/runs/20260527T071644Z-commit.log",
+      "pid": 58530
     },
     "dev": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-113929-8/implementation.md"
+      "status": "DONE",
+      "startedAt": "2026-05-27T07:04:31.372943Z",
+      "finishedAt": "2026-05-27T07:14:53.053811Z",
+      "output": "tasks/2026-05-24-113929-8/implementation.md",
+      "log": "tasks/2026-05-24-113929-8/runs/20260527T070431Z-dev.log",
+      "nextStatus": "REVIEW_PASS"
     },
     "review": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-113929-8/review.md"
+      "status": "DONE",
+      "startedAt": "2026-05-27T07:03:26.657203Z",
+      "finishedAt": "2026-05-27T07:04:31.369225Z",
+      "output": "tasks/2026-05-24-113929-8/review.md",
+      "log": "tasks/2026-05-24-113929-8/runs/20260527T070326Z-review.log",
+      "nextStatus": "REVIEW_PASS"
     },
     "test": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-113929-8/test.md"
+      "status": "DONE",
+      "startedAt": "2026-05-27T07:14:53.094905Z",
+      "finishedAt": "2026-05-27T07:16:44.640353Z",
+      "output": "tasks/2026-05-24-113929-8/test.md",
+      "log": "tasks/2026-05-24-113929-8/runs/20260527T071453Z-test.log",
+      "nextStatus": "COMMIT_READY"
     },
     "test-plan": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-113929-8/test-plan.md"
+      "status": "DONE",
+      "startedAt": "2026-05-27T07:04:31.398402Z",
+      "finishedAt": "2026-05-27T07:06:01.225042Z",
+      "output": "tasks/2026-05-24-113929-8/test-plan.md",
+      "log": "tasks/2026-05-24-113929-8/runs/20260527T070431Z-test-plan.log",
+      "nextStatus": "REVIEW_PASS"
     }
   }
 }

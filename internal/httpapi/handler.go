@@ -162,6 +162,10 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /admin/v1/activities", h.createActivity)
 	mux.HandleFunc("GET /admin/v1/activities/{id}", h.getActivity)
 	mux.HandleFunc("PUT /admin/v1/activities/{id}", h.updateActivity)
+	mux.HandleFunc("POST /admin/v1/activities/{id}/approval/submit", h.submitActivityApproval)
+	mux.HandleFunc("POST /admin/v1/activities/{id}/approval/approve", h.approveActivity)
+	mux.HandleFunc("POST /admin/v1/activities/{id}/approval/reject", h.rejectActivityApproval)
+	mux.HandleFunc("GET /admin/v1/activities/{id}/approval-records", h.listActivityApprovalRecords)
 	mux.HandleFunc("POST /admin/v1/activities/prelaunch-validation", h.validatePrelaunch)
 	mux.HandleFunc("POST /admin/v1/quotas", h.createQuota)
 	mux.HandleFunc("POST /admin/v1/quota-reservations/timeout-release", h.releaseExpiredQuotaReservations)
@@ -230,6 +234,10 @@ func (h *Handler) createActivity(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusConflict, err.Error())
 			return
 		}
+		if errors.Is(err, marketing.ErrInvalidOperation) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -281,6 +289,69 @@ func (h *Handler) updateActivity(w http.ResponseWriter, r *http.Request) {
 		}
 		if errors.Is(err, marketing.ErrActivityConflict) {
 			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+		if errors.Is(err, marketing.ErrInvalidOperation) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, activity)
+}
+
+func (h *Handler) submitActivityApproval(w http.ResponseWriter, r *http.Request) {
+	var cmd marketing.SubmitApprovalCommand
+	if err := decodeStrictJSON(r.Body, &cmd); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	activity, err := h.engine.SubmitActivityApproval(r.Context(), r.PathValue("id"), cmd)
+	writeActivityApprovalResponse(w, activity, err)
+}
+
+func (h *Handler) approveActivity(w http.ResponseWriter, r *http.Request) {
+	var cmd marketing.ApprovalActionCommand
+	if err := decodeStrictJSON(r.Body, &cmd); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	activity, err := h.engine.ApproveActivity(r.Context(), r.PathValue("id"), cmd)
+	writeActivityApprovalResponse(w, activity, err)
+}
+
+func (h *Handler) rejectActivityApproval(w http.ResponseWriter, r *http.Request) {
+	var cmd marketing.ApprovalActionCommand
+	if err := decodeStrictJSON(r.Body, &cmd); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	activity, err := h.engine.RejectActivityApproval(r.Context(), r.PathValue("id"), cmd)
+	writeActivityApprovalResponse(w, activity, err)
+}
+
+func (h *Handler) listActivityApprovalRecords(w http.ResponseWriter, r *http.Request) {
+	records, err := h.engine.ListApprovalRecords(r.Context(), r.PathValue("id"))
+	if err != nil {
+		if errors.Is(err, marketing.ErrNotFound) {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": records})
+}
+
+func writeActivityApprovalResponse(w http.ResponseWriter, activity marketing.Activity, err error) {
+	if err != nil {
+		if errors.Is(err, marketing.ErrNotFound) {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		if errors.Is(err, marketing.ErrInvalidOperation) {
+			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -793,6 +864,12 @@ func writeError(w http.ResponseWriter, status int, message string) {
 
 func writeErrorCode(w http.ResponseWriter, status int, code string, message string) {
 	writeJSON(w, status, map[string]string{"code": code, "errorCode": code, "error": message, "message": message})
+}
+
+func decodeStrictJSON(r io.Reader, out any) error {
+	decoder := json.NewDecoder(r)
+	decoder.DisallowUnknownFields()
+	return decoder.Decode(out)
 }
 
 func rejectActivityIdentityFields(body []byte) error {

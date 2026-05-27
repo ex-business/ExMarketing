@@ -56,6 +56,19 @@ PAUSED
 ENDED
 ```
 
+审批状态保存在活动视图的 `approval` 快照中，并通过 `marketing_audit` 形成完整审批记录。状态包括：
+
+```text
+NONE
+PENDING_L1
+PENDING_L2
+APPROVED
+REJECTED
+WITHDRAWN
+```
+
+`APPROVED` 只对锁定的 `activity.version` 有效。未审批、审批未完成、版本不一致或被驳回的活动不能进入 `SCHEDULED` / `ACTIVE`；正式事件处理仍只匹配 `ACTIVE` 活动，`SCHEDULED` 不会生成 participation、grant_order 或 outbox。
+
 ## marketing_rule
 
 活动规则表。

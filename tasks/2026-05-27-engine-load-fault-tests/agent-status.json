@@ -1,0 +1,30 @@
+{
+  "requirementId": "2026-05-27-engine-load-fault-tests",
+  "updatedAt": "2026-05-27T15:00:29.870506Z",
+  "agents": {
+    "analysis": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-27-engine-load-fault-tests/analysis.md"
+    },
+    "commit": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-27-engine-load-fault-tests/commit.md"
+    },
+    "dev": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-27-engine-load-fault-tests/implementation.md"
+    },
+    "review": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-27-engine-load-fault-tests/review.md"
+    },
+    "test": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-27-engine-load-fault-tests/test.md"
+    },
+    "test-plan": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-27-engine-load-fault-tests/test-plan.md"
+    }
+  }
+}

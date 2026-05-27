@@ -76,13 +76,14 @@ const (
 	CalculateProbability CalculateType = "PROBABILITY"
 	CalculatePoolSplit   CalculateType = "POOL_SPLIT"
 
-	GrantAuto   GrantMode = "AUTO"
-	GrantManual GrantMode = "MANUAL"
+	GrantAuto         GrantMode = "AUTO"
+	GrantManual       GrantMode = "MANUAL"
+	GrantManualExport GrantMode = "MANUAL_EXPORT"
 
-	GrantHTTP         GrantChannel = "HTTP"
-	GrantMQ           GrantChannel = "MQ"
-	GrantWebhook      GrantChannel = "WEBHOOK"
-	GrantManualExport GrantChannel = "MANUAL_EXPORT"
+	GrantHTTP       GrantChannel = "HTTP"
+	GrantMQ         GrantChannel = "MQ"
+	GrantWebhook    GrantChannel = "WEBHOOK"
+	GrantManualFile GrantChannel = "MANUAL_EXPORT"
 
 	InboxReceived  InboxStatus = "RECEIVED"
 	InboxProcessed InboxStatus = "PROCESSED"
@@ -598,6 +599,51 @@ type GrantOrder struct {
 	UpdatedAt       time.Time       `json:"updatedAt"`
 }
 
+type ManualGrantExportStatus string
+type ManualGrantExportDetailStatus string
+
+const (
+	ManualGrantExportCreated    ManualGrantExportStatus = "CREATED"
+	ManualGrantExportGenerating ManualGrantExportStatus = "GENERATING"
+	ManualGrantExportReady      ManualGrantExportStatus = "READY"
+	ManualGrantExportFailed     ManualGrantExportStatus = "FAILED"
+	ManualGrantExportClosed     ManualGrantExportStatus = "CLOSED"
+
+	ManualGrantExportDetailLocked ManualGrantExportDetailStatus = "LOCKED"
+	ManualGrantExportDetailReady  ManualGrantExportDetailStatus = "READY"
+	ManualGrantExportDetailClosed ManualGrantExportDetailStatus = "CLOSED"
+)
+
+type ManualGrantExportFile struct {
+	ID             string                  `json:"exportId"`
+	TenantID       string                  `json:"tenantId"`
+	FileName       string                  `json:"fileName"`
+	FileFormat     string                  `json:"fileFormat"`
+	Status         ManualGrantExportStatus `json:"status"`
+	Operator       string                  `json:"operator"`
+	Reason         string                  `json:"reason"`
+	FilterSnapshot json.RawMessage         `json:"filterSnapshot"`
+	RowCount       int                     `json:"rowCount"`
+	FileChecksum   string                  `json:"fileChecksum,omitempty"`
+	StorageRef     string                  `json:"storageRef,omitempty"`
+	ErrorMessage   string                  `json:"errorMessage,omitempty"`
+	CreatedAt      time.Time               `json:"createdAt"`
+	UpdatedAt      time.Time               `json:"updatedAt"`
+}
+
+type ManualGrantExportDetail struct {
+	ID                string                        `json:"id"`
+	ExportID          string                        `json:"exportId"`
+	TenantID          string                        `json:"tenantId"`
+	GrantOrderID      string                        `json:"grantOrderId"`
+	BillNo            string                        `json:"billNo"`
+	RowNumber         int                           `json:"rowNumber"`
+	ExportGrantStatus GrantStatus                   `json:"exportGrantStatus"`
+	DetailStatus      ManualGrantExportDetailStatus `json:"detailStatus"`
+	CreatedAt         time.Time                     `json:"createdAt"`
+	UpdatedAt         time.Time                     `json:"updatedAt"`
+}
+
 type RewardCommand struct {
 	CommandID       string         `json:"commandId"`
 	TenantID        string         `json:"tenantId"`
@@ -927,6 +973,119 @@ type RewardCallback struct {
 	FinishedAt       time.Time   `json:"finishedAt"`
 }
 
+type ManualGrantDecisionCommand struct {
+	TenantID         string      `json:"tenantId"`
+	GrantOrderID     string      `json:"grantOrderId,omitempty"`
+	CommandID        string      `json:"commandId,omitempty"`
+	BillNo           string      `json:"billNo,omitempty"`
+	BillNoSnake      string      `json:"bill_no,omitempty"`
+	IdempotencyKey   string      `json:"idempotencyKey,omitempty"`
+	IdempotencySnake string      `json:"idempotency_key,omitempty"`
+	Status           GrantStatus `json:"status"`
+	ExternalGrantID  string      `json:"externalGrantId,omitempty"`
+	Operator         string      `json:"operator"`
+	Reason           string      `json:"reason"`
+	FinishedAt       time.Time   `json:"finishedAt,omitempty"`
+}
+
+func (cmd ManualGrantDecisionCommand) Normalized(now time.Time) ManualGrantDecisionCommand {
+	cmd.TenantID = strings.TrimSpace(cmd.TenantID)
+	cmd.GrantOrderID = strings.TrimSpace(cmd.GrantOrderID)
+	cmd.CommandID = strings.TrimSpace(cmd.CommandID)
+	cmd.BillNo = strings.TrimSpace(cmd.BillNo)
+	cmd.BillNoSnake = strings.TrimSpace(cmd.BillNoSnake)
+	cmd.IdempotencyKey = strings.TrimSpace(cmd.IdempotencyKey)
+	cmd.IdempotencySnake = strings.TrimSpace(cmd.IdempotencySnake)
+	cmd.ExternalGrantID = strings.TrimSpace(cmd.ExternalGrantID)
+	cmd.Operator = strings.TrimSpace(cmd.Operator)
+	cmd.Reason = strings.TrimSpace(cmd.Reason)
+	if cmd.CommandID == "" {
+		cmd.CommandID = firstNonEmpty(cmd.BillNo, cmd.BillNoSnake)
+	}
+	if cmd.BillNo == "" {
+		cmd.BillNo = firstNonEmpty(cmd.CommandID, cmd.BillNoSnake)
+	}
+	if cmd.IdempotencyKey == "" {
+		cmd.IdempotencyKey = cmd.IdempotencySnake
+	}
+	if cmd.FinishedAt.IsZero() {
+		cmd.FinishedAt = now
+	}
+	return cmd
+}
+
+func (cmd ManualGrantDecisionCommand) Validate() error {
+	if strings.TrimSpace(cmd.TenantID) == "" || strings.TrimSpace(cmd.Operator) == "" || strings.TrimSpace(cmd.Reason) == "" {
+		return errors.Join(ErrInvalidOperation, errors.New("tenantId, operator and reason are required"))
+	}
+	if strings.TrimSpace(cmd.GrantOrderID) == "" && strings.TrimSpace(cmd.CommandID) == "" && strings.TrimSpace(cmd.BillNo) == "" && strings.TrimSpace(cmd.BillNoSnake) == "" && strings.TrimSpace(cmd.IdempotencyKey) == "" && strings.TrimSpace(cmd.IdempotencySnake) == "" {
+		return errors.Join(ErrInvalidOperation, errors.New("grantOrderId, billNo/commandId or idempotencyKey is required"))
+	}
+	if cmd.Status != GrantSuccess && cmd.Status != GrantFailed && cmd.Status != GrantClosed {
+		return errors.Join(ErrInvalidOperation, errors.New("status must be SUCCESS, FAILED or CLOSED"))
+	}
+	return nil
+}
+
+type ManualGrantExportCreateCommand struct {
+	TenantID      string    `json:"tenantId"`
+	Operator      string    `json:"operator"`
+	Reason        string    `json:"reason"`
+	ActivityID    string    `json:"activityId,omitempty"`
+	RewardCode    string    `json:"rewardCode,omitempty"`
+	SubjectType   string    `json:"subjectType,omitempty"`
+	SubjectID     string    `json:"subjectId,omitempty"`
+	CreatedFrom   time.Time `json:"createdFrom,omitempty"`
+	CreatedTo     time.Time `json:"createdTo,omitempty"`
+	Limit         int       `json:"limit,omitempty"`
+	GrantOrderIDs []string  `json:"grantOrderIds,omitempty"`
+	FileFormat    string    `json:"fileFormat,omitempty"`
+}
+
+func (cmd ManualGrantExportCreateCommand) Normalized() ManualGrantExportCreateCommand {
+	cmd.TenantID = strings.TrimSpace(cmd.TenantID)
+	cmd.Operator = strings.TrimSpace(cmd.Operator)
+	cmd.Reason = strings.TrimSpace(cmd.Reason)
+	cmd.ActivityID = strings.TrimSpace(cmd.ActivityID)
+	cmd.RewardCode = strings.TrimSpace(cmd.RewardCode)
+	cmd.SubjectType = strings.TrimSpace(cmd.SubjectType)
+	cmd.SubjectID = strings.TrimSpace(cmd.SubjectID)
+	cmd.FileFormat = strings.ToUpper(strings.TrimSpace(cmd.FileFormat))
+	if cmd.FileFormat == "" {
+		cmd.FileFormat = "CSV"
+	}
+	for i := range cmd.GrantOrderIDs {
+		cmd.GrantOrderIDs[i] = strings.TrimSpace(cmd.GrantOrderIDs[i])
+	}
+	return cmd
+}
+
+func (cmd ManualGrantExportCreateCommand) Validate() error {
+	if strings.TrimSpace(cmd.TenantID) == "" || strings.TrimSpace(cmd.Operator) == "" || strings.TrimSpace(cmd.Reason) == "" {
+		return errors.Join(ErrInvalidOperation, errors.New("tenantId, operator and reason are required"))
+	}
+	if strings.ToUpper(strings.TrimSpace(cmd.FileFormat)) != "" && strings.ToUpper(strings.TrimSpace(cmd.FileFormat)) != "CSV" {
+		return errors.Join(ErrInvalidOperation, errors.New("fileFormat must be CSV"))
+	}
+	hasScope := strings.TrimSpace(cmd.ActivityID) != "" ||
+		strings.TrimSpace(cmd.RewardCode) != "" ||
+		(strings.TrimSpace(cmd.SubjectType) != "" && strings.TrimSpace(cmd.SubjectID) != "") ||
+		!cmd.CreatedFrom.IsZero() || !cmd.CreatedTo.IsZero() ||
+		cmd.Limit > 0 || len(cmd.GrantOrderIDs) > 0
+	if !hasScope {
+		return errors.Join(ErrInvalidOperation, errors.New("at least one export scope is required"))
+	}
+	if cmd.Limit < 0 {
+		return errors.Join(ErrInvalidOperation, errors.New("limit must be non-negative"))
+	}
+	return nil
+}
+
+type ManualGrantExportCreateResult struct {
+	ExportFile ManualGrantExportFile     `json:"exportFile"`
+	Details    []ManualGrantExportDetail `json:"details"`
+}
+
 func (callback RewardCallback) Normalized() RewardCallback {
 	callback.TenantID = strings.TrimSpace(callback.TenantID)
 	callback.CommandID = strings.TrimSpace(callback.CommandID)
@@ -1120,23 +1279,24 @@ type ApprovalRecord struct {
 }
 
 var (
-	ErrInvalidActivity          = errors.New("invalid activity")
-	ErrInvalidEvent             = errors.New("invalid event")
-	ErrInvalidFactProvider      = errors.New("invalid fact provider")
-	ErrFactProviderDisabled     = errors.New("fact provider disabled")
-	ErrDuplicateEvent           = errors.New("duplicate event")
-	ErrIdempotencyConflict      = errors.New("idempotency key payload conflict")
-	ErrNotFound                 = errors.New("not found")
-	ErrQuotaExceeded            = errors.New("quota exceeded")
-	ErrInvalidOperation         = errors.New("invalid operation")
-	ErrInvalidCallback          = errors.New("invalid callback request")
-	ErrCallbackConflict         = errors.New("callback status conflict")
-	ErrCallbackLocatorConflict  = errors.New("callback locator conflict")
-	ErrGrantOrderClosed         = errors.New("grant order closed")
-	ErrQuotaReservationMissing  = errors.New("quota reservation missing")
-	ErrQuotaReservationConflict = errors.New("quota reservation conflict")
-	ErrQuotaAggregateConflict   = errors.New("quota aggregate conflict")
-	ErrActivityConflict         = errors.New("activity conflict")
+	ErrInvalidActivity           = errors.New("invalid activity")
+	ErrInvalidEvent              = errors.New("invalid event")
+	ErrInvalidFactProvider       = errors.New("invalid fact provider")
+	ErrFactProviderDisabled      = errors.New("fact provider disabled")
+	ErrDuplicateEvent            = errors.New("duplicate event")
+	ErrIdempotencyConflict       = errors.New("idempotency key payload conflict")
+	ErrNotFound                  = errors.New("not found")
+	ErrQuotaExceeded             = errors.New("quota exceeded")
+	ErrInvalidOperation          = errors.New("invalid operation")
+	ErrInvalidCallback           = errors.New("invalid callback request")
+	ErrCallbackConflict          = errors.New("callback status conflict")
+	ErrCallbackLocatorConflict   = errors.New("callback locator conflict")
+	ErrGrantOrderClosed          = errors.New("grant order closed")
+	ErrQuotaReservationMissing   = errors.New("quota reservation missing")
+	ErrQuotaReservationConflict  = errors.New("quota reservation conflict")
+	ErrQuotaAggregateConflict    = errors.New("quota aggregate conflict")
+	ErrActivityConflict          = errors.New("activity conflict")
+	ErrManualGrantExportRequired = errors.New("manual export file is required before success confirmation")
 )
 
 const MaxFactCacheTTLSeconds = 3600
@@ -1787,11 +1947,17 @@ func validateReward(index int, reward Reward, pluginCode string) error {
 	if !validRewardCalculateType(reward.CalculateType) {
 		return invalidActivityf("rewards[%d].calculateType is unsupported", index)
 	}
-	if reward.GrantMode != GrantAuto {
+	if reward.GrantMode != GrantAuto && reward.GrantMode != GrantManual && reward.GrantMode != GrantManualExport {
 		return invalidActivityf("rewards[%d].grantMode is unsupported", index)
 	}
-	if reward.GrantChannel != GrantHTTP && reward.GrantChannel != GrantWebhook && reward.GrantChannel != GrantMQ {
+	if reward.GrantMode == GrantAuto && reward.GrantChannel != GrantHTTP && reward.GrantChannel != GrantWebhook && reward.GrantChannel != GrantMQ {
 		return invalidActivityf("rewards[%d].grantChannel is unsupported", index)
+	}
+	if reward.GrantMode == GrantManual && reward.GrantChannel != "" && reward.GrantChannel != GrantManualFile {
+		return invalidActivityf("rewards[%d].grantChannel is unsupported for MANUAL", index)
+	}
+	if reward.GrantMode == GrantManualExport && reward.GrantChannel != "" && reward.GrantChannel != GrantManualFile {
+		return invalidActivityf("rewards[%d].grantChannel is unsupported for MANUAL_EXPORT", index)
 	}
 	if reward.Version > 1 {
 		return invalidActivityf("rewards[%d].version must be 0 or 1", index)
@@ -1800,8 +1966,10 @@ func validateReward(index int, reward Reward, pluginCode string) error {
 	if err := decodeStrict(reward.Config, &cfg); err != nil {
 		return invalidActivityf("rewards[%d].rewardConfig is invalid: %v", index, err)
 	}
-	if err := validateRewardTargetRef(fmt.Sprintf("rewards[%d].rewardConfig.targetRef", index), cfg.TargetRef, reward.GrantChannel); err != nil {
-		return err
+	if reward.GrantMode == GrantAuto {
+		if err := validateRewardTargetRef(fmt.Sprintf("rewards[%d].rewardConfig.targetRef", index), cfg.TargetRef, reward.GrantChannel); err != nil {
+			return err
+		}
 	}
 	if (reward.Type == RewardBonus || reward.Type == RewardCash) && strings.TrimSpace(cfg.Currency) == "" {
 		return invalidActivityf("rewards[%d].rewardConfig.currency is required", index)

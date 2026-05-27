@@ -175,6 +175,8 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /admin/v1/outbox/{id}/replay", h.replayOutboxDLQ)
 	mux.HandleFunc("POST /admin/v1/outbox/{id}/close", h.closeOutboxDLQ)
 	mux.HandleFunc("GET /admin/v1/reward/reconciliation", h.listRewardReconciliation)
+	mux.HandleFunc("POST /admin/v1/manual-grants/decision", h.applyManualGrantDecision)
+	mux.HandleFunc("POST /admin/v1/manual-grant-exports", h.createManualGrantExport)
 	mux.HandleFunc("POST /admin/v1/simulate", h.simulate)
 	mux.HandleFunc("GET /admin/v1/workflow/requirements", h.listWorkflowRequirements)
 	mux.HandleFunc("GET /admin/v1/workflow/config", h.getWorkflowConfig)
@@ -488,6 +490,63 @@ func (h *Handler) listRewardReconciliation(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": items, "diagnostics": []string{}})
+}
+
+func (h *Handler) applyManualGrantDecision(w http.ResponseWriter, r *http.Request) {
+	var cmd marketing.ManualGrantDecisionCommand
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, defaultEventMaxBodyBytes))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&cmd); err != nil {
+		writeErrorCode(w, http.StatusBadRequest, "INVALID_MANUAL_GRANT_REQUEST", "invalid json body")
+		return
+	}
+	result, err := h.engine.ApplyManualGrantDecision(r.Context(), cmd)
+	if err != nil {
+		writeManualGrantError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) createManualGrantExport(w http.ResponseWriter, r *http.Request) {
+	var cmd marketing.ManualGrantExportCreateCommand
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, defaultEventMaxBodyBytes))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&cmd); err != nil {
+		writeErrorCode(w, http.StatusBadRequest, "INVALID_MANUAL_EXPORT_REQUEST", "invalid json body")
+		return
+	}
+	result, err := h.engine.CreateManualGrantExport(r.Context(), cmd)
+	if err != nil {
+		writeManualGrantError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, result)
+}
+
+func writeManualGrantError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, marketing.ErrInvalidOperation):
+		writeErrorCode(w, http.StatusBadRequest, "INVALID_MANUAL_GRANT_REQUEST", err.Error())
+	case errors.Is(err, marketing.ErrNotFound):
+		writeErrorCode(w, http.StatusNotFound, "GRANT_ORDER_NOT_FOUND", err.Error())
+	case errors.Is(err, marketing.ErrCallbackLocatorConflict):
+		writeErrorCode(w, http.StatusConflict, "GRANT_ORDER_LOCATOR_CONFLICT", err.Error())
+	case errors.Is(err, marketing.ErrManualGrantExportRequired):
+		writeErrorCode(w, http.StatusConflict, "MANUAL_EXPORT_REQUIRED", err.Error())
+	case errors.Is(err, marketing.ErrGrantOrderClosed):
+		writeErrorCode(w, http.StatusConflict, "GRANT_ORDER_CLOSED", err.Error())
+	case errors.Is(err, marketing.ErrCallbackConflict):
+		writeErrorCode(w, http.StatusConflict, "GRANT_ORDER_STATUS_CONFLICT", err.Error())
+	case errors.Is(err, marketing.ErrQuotaReservationMissing):
+		writeErrorCode(w, http.StatusConflict, "QUOTA_RESERVATION_MISSING", err.Error())
+	case errors.Is(err, marketing.ErrQuotaReservationConflict):
+		writeErrorCode(w, http.StatusConflict, "QUOTA_RESERVATION_CONFLICT", err.Error())
+	case errors.Is(err, marketing.ErrQuotaAggregateConflict):
+		writeErrorCode(w, http.StatusConflict, "QUOTA_AGGREGATE_CONFLICT", err.Error())
+	default:
+		writeError(w, http.StatusInternalServerError, err.Error())
+	}
 }
 
 func (h *Handler) handleOutboxDLQOperation(w http.ResponseWriter, r *http.Request, operation func(context.Context, string, marketing.DLQOperationCommand) (marketing.OutboxMessage, error)) {

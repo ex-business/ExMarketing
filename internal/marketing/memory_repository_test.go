@@ -653,6 +653,62 @@ func jsonNumber(value string) any {
 	return out
 }
 
+func TestMemoryManualExportRequiresReadyFileBeforeSuccess(t *testing.T) {
+	repo := NewMemoryRepository()
+	now := time.Now().UTC()
+	activityID := "act_manual_export"
+	repo.participations = append(repo.participations, testAtomicParticipation("part_manual_export", activityID, "part_idem_manual_export", now))
+	repo.grantOrders = append(repo.grantOrders, testManualGrant("grant_manual_export", activityID, "part_manual_export", "grant_idem_manual_export", "REWARD_EXPORT", "5", GrantManualExport, now))
+
+	_, err := repo.ApplyManualGrantDecision(context.Background(), ManualGrantDecisionCommand{TenantID: "site_001", CommandID: "cmd_grant_manual_export", Status: GrantSuccess, ExternalGrantID: "offline_export", Operator: "ops", Reason: "paid", FinishedAt: now.Add(time.Minute)})
+	if !errors.Is(err, ErrManualGrantExportRequired) {
+		t.Fatalf("expected export required, got %v", err)
+	}
+	exportResult, err := repo.CreateManualGrantExport(context.Background(), ManualGrantExportCreateCommand{TenantID: "site_001", Operator: "ops", Reason: "daily export", ActivityID: activityID})
+	if err != nil {
+		t.Fatalf("create export: %v", err)
+	}
+	if exportResult.ExportFile.Status != ManualGrantExportReady || len(exportResult.Details) != 1 {
+		t.Fatalf("unexpected export result: %+v", exportResult)
+	}
+	if repo.grantOrders[0].GrantStatus != GrantSending {
+		t.Fatalf("expected exported grant sending, got %s", repo.grantOrders[0].GrantStatus)
+	}
+	result, err := repo.ApplyManualGrantDecision(context.Background(), ManualGrantDecisionCommand{TenantID: "site_001", CommandID: "cmd_grant_manual_export", Status: GrantSuccess, ExternalGrantID: "offline_export", Operator: "ops", Reason: "paid", FinishedAt: now.Add(2 * time.Minute)})
+	if err != nil {
+		t.Fatalf("manual export success: %v", err)
+	}
+	if result.GrantStatus != GrantSuccess || result.ParticipationStatus != ParticipationGranted {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+}
+
+func TestMemoryTimeoutReleaseSkipsManualGrantOrders(t *testing.T) {
+	repo := NewMemoryRepository()
+	now := time.Now().UTC().Add(-3 * time.Hour)
+	activityID := "act_manual_timeout"
+	repo.quotas = []Quota{{ID: "quota_budget", ActivityID: activityID, Type: QuotaBudget, Scope: QuotaScopeActivity, ScopeKey: "TOTAL", TotalValue: "100", UsedValue: "0", FrozenValue: "10", Version: 1, CreatedAt: now, UpdatedAt: now}}
+	repo.participations = append(repo.participations, testAtomicParticipation("part_manual_timeout", activityID, "part_idem_manual_timeout", now))
+	repo.grantOrders = append(repo.grantOrders, testManualGrant("grant_manual_timeout", activityID, "part_manual_timeout", "grant_idem_manual_timeout", "REWARD_TIMEOUT", "10", GrantManual, now))
+	repo.quotaReservations = append(repo.quotaReservations, QuotaReservation{ID: "reservation_manual_timeout", TenantID: "site_001", ActivityID: activityID, GrantOrderID: "grant_manual_timeout", CommandID: "cmd_grant_manual_timeout", Type: QuotaBudget, Scope: QuotaScopeActivity, ScopeKey: "TOTAL", Amount: "10", Status: QuotaReservationFrozen, CreatedAt: now, UpdatedAt: now})
+	result, err := repo.ReleaseExpiredQuotaReservations(context.Background(), QuotaTimeoutReleaseCommand{TenantID: "site_001", OlderThan: time.Now().UTC().Add(-2 * time.Hour), Operator: "ops", Reason: "timeout"})
+	if err != nil {
+		t.Fatalf("timeout release: %v", err)
+	}
+	if len(result.Items) != 0 || repo.grantOrders[0].GrantStatus != GrantPending {
+		t.Fatalf("manual order should be skipped, result=%+v status=%s", result, repo.grantOrders[0].GrantStatus)
+	}
+}
+
+func testManualGrant(id string, activityID string, participationID string, idempotencyKey string, rewardCode string, amount string, mode GrantMode, now time.Time) GrantOrder {
+	payload, _ := json.Marshal(map[string]any{"rewardCode": rewardCode, "rewardType": RewardBonus, "calculateType": CalculateFixed, "grantMode": mode, "grantChannel": GrantManualFile})
+	order := testAtomicGrant(id, activityID, participationID, idempotencyKey, now)
+	order.RewardAmount = amount
+	order.RewardPayload = payload
+	order.GrantChannel = GrantManualFile
+	return order
+}
+
 func testAtomicParticipation(id string, activityID string, idempotencyKey string, now time.Time) Participation {
 	return Participation{
 		ID:             id,

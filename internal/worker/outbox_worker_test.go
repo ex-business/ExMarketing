@@ -452,6 +452,12 @@ func (r *workerTestRepo) UpdateGrantOrderByCommandID(_ context.Context, _ string
 func (r *workerTestRepo) ApplyRewardCallback(context.Context, marketing.RewardCallback) (marketing.RewardCallbackResult, error) {
 	panic("not implemented")
 }
+func (r *workerTestRepo) ApplyManualGrantDecision(context.Context, marketing.ManualGrantDecisionCommand) (marketing.RewardCallbackResult, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) CreateManualGrantExport(context.Context, marketing.ManualGrantExportCreateCommand) (marketing.ManualGrantExportCreateResult, error) {
+	panic("not implemented")
+}
 func (r *workerTestRepo) ReleaseExpiredQuotaReservations(context.Context, marketing.QuotaTimeoutReleaseCommand) (marketing.QuotaTimeoutReleaseResult, error) {
 	panic("not implemented")
 }

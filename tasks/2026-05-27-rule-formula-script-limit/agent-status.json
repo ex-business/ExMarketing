@@ -1,0 +1,54 @@
+{
+  "requirementId": "2026-05-27-rule-formula-script-limit",
+  "updatedAt": "2026-05-27T15:35:45.732363Z",
+  "agents": {
+    "analysis": {
+      "status": "DONE",
+      "startedAt": "2026-05-27T15:18:27.336354Z",
+      "finishedAt": "2026-05-27T15:22:06.778789Z",
+      "output": "tasks/2026-05-27-rule-formula-script-limit/analysis.md",
+      "log": "tasks/2026-05-27-rule-formula-script-limit/runs/20260527T151827Z-analysis.log",
+      "nextStatus": "REVIEW_READY"
+    },
+    "commit": {
+      "status": "DONE",
+      "startedAt": "2026-05-27T15:33:34.242583Z",
+      "finishedAt": "2026-05-27T15:35:45.732359Z",
+      "output": "tasks/2026-05-27-rule-formula-script-limit/commit.md",
+      "log": "tasks/2026-05-27-rule-formula-script-limit/runs/20260527T153334Z-commit.log",
+      "nextStatus": "COMMITTED"
+    },
+    "dev": {
+      "status": "DONE",
+      "startedAt": "2026-05-27T15:23:52.952879Z",
+      "finishedAt": "2026-05-27T15:31:18.355167Z",
+      "output": "tasks/2026-05-27-rule-formula-script-limit/implementation.md",
+      "log": "tasks/2026-05-27-rule-formula-script-limit/runs/20260527T152352Z-dev.log",
+      "nextStatus": "REVIEW_PASS"
+    },
+    "review": {
+      "status": "DONE",
+      "startedAt": "2026-05-27T15:22:07.139842Z",
+      "finishedAt": "2026-05-27T15:23:52.949799Z",
+      "output": "tasks/2026-05-27-rule-formula-script-limit/review.md",
+      "log": "tasks/2026-05-27-rule-formula-script-limit/runs/20260527T152207Z-review.log",
+      "nextStatus": "REVIEW_PASS"
+    },
+    "test": {
+      "status": "DONE",
+      "startedAt": "2026-05-27T15:31:18.383261Z",
+      "finishedAt": "2026-05-27T15:33:34.213563Z",
+      "output": "tasks/2026-05-27-rule-formula-script-limit/test.md",
+      "log": "tasks/2026-05-27-rule-formula-script-limit/runs/20260527T153118Z-test.log",
+      "nextStatus": "COMMIT_READY"
+    },
+    "test-plan": {
+      "status": "DONE",
+      "startedAt": "2026-05-27T15:23:52.978186Z",
+      "finishedAt": "2026-05-27T15:27:42.425676Z",
+      "output": "tasks/2026-05-27-rule-formula-script-limit/test-plan.md",
+      "log": "tasks/2026-05-27-rule-formula-script-limit/runs/20260527T152352Z-test-plan.log",
+      "nextStatus": "REVIEW_PASS"
+    }
+  }
+}

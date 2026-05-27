@@ -28,6 +28,15 @@ go run ./cmd/exmarketing
 export EX_MARKETING_OUTBOX_WORKER=true
 ```
 
+运行 PostgreSQL 端到端验收：
+
+```bash
+export EX_MARKETING_DATABASE_URL='postgres://exmarketing:exmarketing@localhost:54329/exmarketing?sslmode=disable'
+go run ./cmd/engine-e2e-postgres
+```
+
+该命令会在进程内启动 API handler、Outbox worker 和 reward callback stub，但所有活动、quota、event inbox、participation、grant_order、outbox、callback 和对账状态都写入 `EX_MARKETING_DATABASE_URL` 指向的 PostgreSQL。命令使用唯一 `runId` 隔离数据，可重复执行；未设置 PostgreSQL DSN 时会失败。
+
 MQ reward commands use `targetRef` values such as `kafka://reward.commands`, `rabbitmq://reward-exchange/reward.commands`, `rabbitmq:///reward.commands`, or `pulsar://tenant/rewards/commands`. Broker endpoints and credentials belong in runtime sender configuration, not in activity config, outbox payload, audit payload, or logs.
 
 配置 Fact Query allowlist：

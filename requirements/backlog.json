@@ -538,6 +538,116 @@
       "taskDir": "tasks/2026-05-24-113929-12",
       "createdAt": "2026-05-24T11:39:29.019103Z",
       "updatedAt": "2026-05-27T11:09:36.103196Z"
+    },
+    {
+      "id": "2026-05-27-engine-e2e-postgres-postgresql",
+      "title": "engine-e2e-postgres: PostgreSQL 端到端验收脚本",
+      "description": "活动引擎基础完善任务。编写真实 PostgreSQL 端到端验收脚本，串联创建活动、创建 quota、提交审批、激活活动、上报标准事件、生成 participation/grant_order/outbox、Outbox worker 发送、reward callback 成功/失败、quota 确认/释放、对账查询。验收：一条命令可重复执行；失败时输出具体环节、请求、响应和数据库状态；不得依赖管理后台页面。",
+      "status": "COMMITTED",
+      "risk": "高",
+      "score": 92,
+      "taskDir": "tasks/2026-05-27-engine-e2e-postgres-postgresql",
+      "createdAt": "2026-05-27T14:58:50.940858Z",
+      "updatedAt": "2026-05-27T15:18:01.553755Z"
+    },
+    {
+      "id": "2026-05-27-rule-formula-script-limit",
+      "title": "rule-formula-script-limit: 高级规则执行器",
+      "description": "活动引擎基础完善任务。补齐 FORMULA、SCRIPT 或高级 LIMIT 的可运行执行器设计与最小实现边界，继续保持安全沙箱和字段路径限制。验收：未注册或不安全配置必须拒绝；已支持规则有单元测试；错误原因结构化；不得让规则查询外部业务库或执行任意不受控代码。",
+      "status": "COMMITTED",
+      "risk": "高",
+      "score": 92,
+      "taskDir": "tasks/2026-05-27-rule-formula-script-limit",
+      "createdAt": "2026-05-27T14:58:50.990083Z",
+      "updatedAt": "2026-05-27T15:35:45.732679Z"
+    },
+    {
+      "id": "2026-05-27-manual-grant-export",
+      "title": "manual-grant-export: 人工发奖与导出发奖",
+      "description": "活动引擎基础完善任务。实现 MANUAL / MANUAL_EXPORT 发奖模式的状态机、导出文件模型、人工确认/关闭流程和审计记录。验收：人工发奖不绕过 participation/grant_order/quota；导出文件可追踪；重复确认幂等；失败可对账。",
+      "status": "REVIEW_PASS",
+      "risk": "中",
+      "score": 92,
+      "taskDir": "tasks/2026-05-27-manual-grant-export",
+      "createdAt": "2026-05-27T14:58:51.039387Z",
+      "updatedAt": "2026-05-27T15:47:33.948537Z"
+    },
+    {
+      "id": "2026-05-27-mq-production-config-mq",
+      "title": "mq-production-config: MQ 生产连接配置",
+      "description": "活动引擎基础完善任务。完善 Kafka/RabbitMQ/Pulsar 的生产连接配置、认证引用、发送确认、错误分类和运行时隔离，避免在 activity config 或 outbox payload 中保存 broker 凭据。验收：targetRef 只描述目标；凭据从运行时配置读取；发送成功/失败/DLQ 有测试和审计。",
+      "status": "ANALYSIS_READY",
+      "risk": "高",
+      "score": 0,
+      "taskDir": "tasks/2026-05-27-mq-production-config-mq",
+      "createdAt": "2026-05-27T14:58:51.096721Z",
+      "updatedAt": "2026-05-27T15:00:29.864884Z"
+    },
+    {
+      "id": "2026-05-27-worker-production-hardening-worker",
+      "title": "worker-production-hardening: Worker 生产化",
+      "description": "活动引擎基础完善任务。加强 Outbox worker 常驻运行、优雅停止、shutdown drain、失败恢复、claim 延迟监控、DLQ 堆积监控和日志字段。验收：停止时不丢正在处理消息；重启后可继续处理；多 worker 不重复 claim；关键指标可观测。",
+      "status": "ANALYSIS_READY",
+      "risk": "高",
+      "score": 0,
+      "taskDir": "tasks/2026-05-27-worker-production-hardening-worker",
+      "createdAt": "2026-05-27T14:58:51.146003Z",
+      "updatedAt": "2026-05-27T15:00:29.867884Z"
+    },
+    {
+      "id": "2026-05-27-engine-metrics-alerts",
+      "title": "engine-metrics-alerts: 引擎指标和告警",
+      "description": "活动引擎基础完善任务。增加核心指标和告警口径，包括 event intake 成功/失败、quota fail rate、outbox backlog、DLQ count、callback fail rate、worker claim latency、reward command latency。验收：提供 metrics endpoint 或可接入指标接口；文档列出告警阈值建议。",
+      "status": "ANALYSIS_READY",
+      "risk": "中",
+      "score": 0,
+      "taskDir": "tasks/2026-05-27-engine-metrics-alerts",
+      "createdAt": "2026-05-27T14:58:51.195183Z",
+      "updatedAt": "2026-05-27T15:00:29.868631Z"
+    },
+    {
+      "id": "2026-05-27-engine-load-fault-tests",
+      "title": "engine-load-fault-tests: 压测和故障注入",
+      "description": "活动引擎基础完善任务。补充并发事件压测、quota 并发扣减压测、outbox 重试压测、callback 重复/乱序压测、PostgreSQL 重启或网络超时故障注入。验收：脚本可本地运行；输出吞吐、错误率、数据一致性检查；失败有可复现日志。",
+      "status": "ANALYSIS_READY",
+      "risk": "高",
+      "score": 0,
+      "taskDir": "tasks/2026-05-27-engine-load-fault-tests",
+      "createdAt": "2026-05-27T14:58:51.242521Z",
+      "updatedAt": "2026-05-27T15:00:29.869441Z"
+    },
+    {
+      "id": "2026-05-27-db-migration-release-migration",
+      "title": "db-migration-release: 数据库 migration 发布流程",
+      "description": "活动引擎基础完善任务。建立正式 migration 发布流程，包括 migration version 表、up/down 或 forward-only 策略、发布前检查、失败回滚方案和本地验证脚本。验收：新环境可一键初始化；已有环境可幂等升级；schema drift 可检测。",
+      "status": "ANALYSIS_READY",
+      "risk": "高",
+      "score": 0,
+      "taskDir": "tasks/2026-05-27-db-migration-release-migration",
+      "createdAt": "2026-05-27T14:58:51.290102Z",
+      "updatedAt": "2026-05-27T15:00:29.870585Z"
+    },
+    {
+      "id": "2026-05-27-db-backup-restore",
+      "title": "db-backup-restore: 备份恢复流程",
+      "description": "活动引擎基础完善任务。补齐 PostgreSQL 备份、恢复演练、数据校验和恢复后核心链路 smoke。验收：提供备份命令、恢复命令、校验脚本；恢复后能跑 Event In 到 Outbox 的最小链路。",
+      "status": "ANALYSIS_READY",
+      "risk": "高",
+      "score": 0,
+      "taskDir": "tasks/2026-05-27-db-backup-restore",
+      "createdAt": "2026-05-27T14:58:51.351908Z",
+      "updatedAt": "2026-05-27T15:00:29.87137Z"
+    },
+    {
+      "id": "2026-05-27-business-activity-templates",
+      "title": "business-activity-templates: 业务活动配置模板",
+      "description": "活动引擎基础完善任务。在不新增 ActivityPlugin 和管理后台增强的前提下，沉淀普通配置化活动模板：签到有礼、每月充值、续存、新手任务、返水、邀请好友、VIP 周/月红利、生日红利、升级红利。验收：每个模板只使用标准事件 attributes、facts、规则、奖励、quota 和 outbox；提供模拟运行样例和边界说明。",
+      "status": "ANALYSIS_READY",
+      "risk": "中",
+      "score": 0,
+      "taskDir": "tasks/2026-05-27-business-activity-templates",
+      "createdAt": "2026-05-27T14:58:51.402523Z",
+      "updatedAt": "2026-05-27T15:00:29.872102Z"
     }
   ]
 }

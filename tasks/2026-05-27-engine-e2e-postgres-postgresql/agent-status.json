@@ -1,0 +1,54 @@
+{
+  "requirementId": "2026-05-27-engine-e2e-postgres-postgresql",
+  "updatedAt": "2026-05-27T15:18:01.553347Z",
+  "agents": {
+    "analysis": {
+      "status": "DONE",
+      "startedAt": "2026-05-27T15:01:07.670191Z",
+      "finishedAt": "2026-05-27T15:04:45.603652Z",
+      "output": "tasks/2026-05-27-engine-e2e-postgres-postgresql/analysis.md",
+      "log": "tasks/2026-05-27-engine-e2e-postgres-postgresql/runs/20260527T150107Z-analysis.log",
+      "nextStatus": "REVIEW_READY"
+    },
+    "commit": {
+      "status": "DONE",
+      "startedAt": "2026-05-27T15:17:10.93824Z",
+      "finishedAt": "2026-05-27T15:18:01.553342Z",
+      "output": "tasks/2026-05-27-engine-e2e-postgres-postgresql/commit.md",
+      "log": "tasks/2026-05-27-engine-e2e-postgres-postgresql/runs/20260527T151710Z-commit.log",
+      "nextStatus": "COMMITTED"
+    },
+    "dev": {
+      "status": "DONE",
+      "startedAt": "2026-05-27T15:06:07.04874Z",
+      "finishedAt": "2026-05-27T15:14:27.81527Z",
+      "output": "tasks/2026-05-27-engine-e2e-postgres-postgresql/implementation.md",
+      "log": "tasks/2026-05-27-engine-e2e-postgres-postgresql/runs/20260527T150607Z-dev.log",
+      "nextStatus": "REVIEW_PASS"
+    },
+    "review": {
+      "status": "DONE",
+      "startedAt": "2026-05-27T15:04:45.945111Z",
+      "finishedAt": "2026-05-27T15:06:07.045229Z",
+      "output": "tasks/2026-05-27-engine-e2e-postgres-postgresql/review.md",
+      "log": "tasks/2026-05-27-engine-e2e-postgres-postgresql/runs/20260527T150445Z-review.log",
+      "nextStatus": "REVIEW_PASS"
+    },
+    "test": {
+      "status": "DONE",
+      "startedAt": "2026-05-27T15:14:27.863257Z",
+      "finishedAt": "2026-05-27T15:17:10.910288Z",
+      "output": "tasks/2026-05-27-engine-e2e-postgres-postgresql/test.md",
+      "log": "tasks/2026-05-27-engine-e2e-postgres-postgresql/runs/20260527T151427Z-test.log",
+      "nextStatus": "COMMIT_READY"
+    },
+    "test-plan": {
+      "status": "DONE",
+      "startedAt": "2026-05-27T15:06:07.07003Z",
+      "finishedAt": "2026-05-27T15:07:56.28391Z",
+      "output": "tasks/2026-05-27-engine-e2e-postgres-postgresql/test-plan.md",
+      "log": "tasks/2026-05-27-engine-e2e-postgres-postgresql/runs/20260527T150607Z-test-plan.log",
+      "nextStatus": "REVIEW_PASS"
+    }
+  }
+}

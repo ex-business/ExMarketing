@@ -154,3 +154,34 @@ CREATE TABLE marketing_outbox (
   created_at TIMESTAMP NOT NULL,
   updated_at TIMESTAMP NOT NULL
 );
+
+CREATE TABLE marketing_manual_grant_export_file (
+  id VARCHAR(64) PRIMARY KEY,
+  tenant_id VARCHAR(64) NOT NULL,
+  file_name VARCHAR(256) NOT NULL,
+  file_format VARCHAR(32) NOT NULL,
+  status VARCHAR(32) NOT NULL,
+  operator VARCHAR(128) NOT NULL,
+  reason VARCHAR(512) NOT NULL,
+  filter_snapshot_json JSON NOT NULL,
+  row_count INT NOT NULL DEFAULT 0,
+  file_checksum VARCHAR(128),
+  storage_ref VARCHAR(512),
+  error_message TEXT,
+  created_at TIMESTAMP NOT NULL,
+  updated_at TIMESTAMP NOT NULL
+);
+
+CREATE TABLE marketing_manual_grant_export_detail (
+  id VARCHAR(64) PRIMARY KEY,
+  export_id VARCHAR(64) NOT NULL,
+  tenant_id VARCHAR(64) NOT NULL,
+  grant_order_id VARCHAR(64) NOT NULL,
+  bill_no VARCHAR(128) NOT NULL,
+  row_number INT NOT NULL,
+  export_grant_status VARCHAR(32) NOT NULL,
+  detail_status VARCHAR(32) NOT NULL,
+  created_at TIMESTAMP NOT NULL,
+  updated_at TIMESTAMP NOT NULL,
+  UNIQUE (export_id, grant_order_id)
+);

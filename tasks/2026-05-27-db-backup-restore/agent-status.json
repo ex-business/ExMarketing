@@ -1,0 +1,30 @@
+{
+  "requirementId": "2026-05-27-db-backup-restore",
+  "updatedAt": "2026-05-27T15:00:29.872031Z",
+  "agents": {
+    "analysis": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-27-db-backup-restore/analysis.md"
+    },
+    "commit": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-27-db-backup-restore/commit.md"
+    },
+    "dev": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-27-db-backup-restore/implementation.md"
+    },
+    "review": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-27-db-backup-restore/review.md"
+    },
+    "test": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-27-db-backup-restore/test.md"
+    },
+    "test-plan": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-27-db-backup-restore/test-plan.md"
+    }
+  }
+}

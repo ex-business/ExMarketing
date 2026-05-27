@@ -1,0 +1,30 @@
+{
+  "requirementId": "2026-05-27-worker-production-hardening-worker",
+  "updatedAt": "2026-05-27T15:00:29.868557Z",
+  "agents": {
+    "analysis": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-27-worker-production-hardening-worker/analysis.md"
+    },
+    "commit": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-27-worker-production-hardening-worker/commit.md"
+    },
+    "dev": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-27-worker-production-hardening-worker/implementation.md"
+    },
+    "review": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-27-worker-production-hardening-worker/review.md"
+    },
+    "test": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-27-worker-production-hardening-worker/test.md"
+    },
+    "test-plan": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-27-worker-production-hardening-worker/test-plan.md"
+    }
+  }
+}

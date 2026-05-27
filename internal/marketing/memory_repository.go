@@ -1,7 +1,11 @@
 package marketing
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/csv"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"slices"
@@ -13,16 +17,18 @@ import (
 )
 
 type MemoryRepository struct {
-	mu                 sync.RWMutex
-	activities         []Activity
-	factProviders      map[string]FactProvider
-	inboxByIdempotency map[string]EventInbox
-	participations     []Participation
-	grantOrders        []GrantOrder
-	quotaReservations  []QuotaReservation
-	outboxMessages     []OutboxMessage
-	quotas             []Quota
-	auditRecords       []AuditRecord
+	mu                  sync.RWMutex
+	activities          []Activity
+	factProviders       map[string]FactProvider
+	inboxByIdempotency  map[string]EventInbox
+	participations      []Participation
+	grantOrders         []GrantOrder
+	quotaReservations   []QuotaReservation
+	outboxMessages      []OutboxMessage
+	quotas              []Quota
+	manualExportFiles   []ManualGrantExportFile
+	manualExportDetails []ManualGrantExportDetail
+	auditRecords        []AuditRecord
 }
 
 func NewMemoryRepository() *MemoryRepository {
@@ -268,6 +274,9 @@ func (r *MemoryRepository) ApplyRewardCallback(ctx context.Context, callback Rew
 	}
 
 	order := &r.grantOrders[orderIndex]
+	if mode := grantModeFromPayload(order.RewardPayload); mode == GrantManual || mode == GrantManualExport {
+		return RewardCallbackResult{}, ErrCallbackConflict
+	}
 	if callback.CommandID != "" && order.BillNo != callback.CommandID {
 		return RewardCallbackResult{}, ErrCallbackLocatorConflict
 	}
@@ -368,6 +377,219 @@ func (r *MemoryRepository) ApplyRewardCallback(ctx context.Context, callback Rew
 	}, nil
 }
 
+func (r *MemoryRepository) ApplyManualGrantDecision(ctx context.Context, cmd ManualGrantDecisionCommand) (RewardCallbackResult, error) {
+	if err := ctx.Err(); err != nil {
+		return RewardCallbackResult{}, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	now := time.Now().UTC()
+	orderIndex := r.manualGrantOrderIndexLocked(cmd)
+	if orderIndex == -2 {
+		return RewardCallbackResult{}, ErrCallbackLocatorConflict
+	}
+	if orderIndex < 0 {
+		return RewardCallbackResult{}, ErrNotFound
+	}
+	order := &r.grantOrders[orderIndex]
+	mode := grantModeFromPayload(order.RewardPayload)
+	if mode != GrantManual && mode != GrantManualExport {
+		return RewardCallbackResult{}, ErrCallbackConflict
+	}
+	if cmd.CommandID != "" && order.BillNo != cmd.CommandID {
+		return RewardCallbackResult{}, ErrCallbackLocatorConflict
+	}
+	if cmd.IdempotencyKey != "" && order.IdempotencyKey != cmd.IdempotencyKey {
+		return RewardCallbackResult{}, ErrCallbackLocatorConflict
+	}
+	if cmd.GrantOrderID != "" && order.ID != cmd.GrantOrderID {
+		return RewardCallbackResult{}, ErrCallbackLocatorConflict
+	}
+	if isFinalGrantStatus(order.GrantStatus) {
+		if order.GrantStatus == cmd.Status && (order.ExternalGrantID == "" || cmd.ExternalGrantID == "" || order.ExternalGrantID == cmd.ExternalGrantID) {
+			return RewardCallbackResult{
+				CommandID:           order.BillNo,
+				BillNo:              order.BillNo,
+				IdempotencyKey:      order.IdempotencyKey,
+				TenantID:            order.TenantID,
+				GrantOrderID:        order.ID,
+				ParticipationID:     order.ParticipationID,
+				GrantStatus:         order.GrantStatus,
+				Status:              order.GrantStatus,
+				ParticipationStatus: r.participationStatusLocked(order.ParticipationID),
+				Duplicate:           true,
+				Reservations:        r.reservationsForGrantOrderLocked(order.ID),
+			}, nil
+		}
+		if order.GrantStatus == GrantClosed {
+			return RewardCallbackResult{}, ErrGrantOrderClosed
+		}
+		return RewardCallbackResult{}, ErrCallbackConflict
+	}
+	if mode == GrantManualExport && cmd.Status == GrantSuccess && (order.GrantStatus != GrantSending || !r.hasReadyManualExportDetailLocked(order.ID)) {
+		return RewardCallbackResult{}, ErrManualGrantExportRequired
+	}
+	if order.GrantStatus != GrantPending && order.GrantStatus != GrantSending && order.GrantStatus != GrantRetry {
+		return RewardCallbackResult{}, ErrCallbackConflict
+	}
+	reservationIndexes := r.reservationIndexesForGrantOrderLocked(order.ID)
+	if len(reservationIndexes) == 0 && r.activityHadQuotaAtLocked(order.ActivityID, order.CreatedAt) {
+		return RewardCallbackResult{}, ErrQuotaReservationMissing
+	}
+	for _, idx := range reservationIndexes {
+		reservation := r.quotaReservations[idx]
+		if reservation.Status != QuotaReservationFrozen && !isParticipationQuotaReservation(reservation) {
+			return RewardCallbackResult{}, ErrQuotaReservationConflict
+		}
+	}
+	for _, idx := range reservationIndexes {
+		reservation := &r.quotaReservations[idx]
+		if isParticipationQuotaReservation(*reservation) {
+			continue
+		}
+		if err := r.finishReservationLocked(reservation, cmd.Status, now); err != nil {
+			return RewardCallbackResult{}, err
+		}
+	}
+	order.GrantStatus = cmd.Status
+	order.ExternalGrantID = cmd.ExternalGrantID
+	order.ErrorMessage = cmd.Reason
+	order.FinishedAt = &cmd.FinishedAt
+	order.UpdatedAt = now
+
+	participationStatus := r.updateParticipationAfterCallbackLocked(order.ParticipationID, now)
+	if participationStatus == ParticipationGranted || participationStatus == ParticipationFailed {
+		finalStatus := GrantSuccess
+		if participationStatus == ParticipationFailed {
+			finalStatus = GrantFailed
+		}
+		if err := r.finishParticipationQuotaReservationsLocked(order.ParticipationID, finalStatus, now); err != nil {
+			return RewardCallbackResult{}, err
+		}
+	}
+	return RewardCallbackResult{
+		CommandID:           order.BillNo,
+		BillNo:              order.BillNo,
+		IdempotencyKey:      order.IdempotencyKey,
+		TenantID:            order.TenantID,
+		GrantOrderID:        order.ID,
+		ParticipationID:     order.ParticipationID,
+		GrantStatus:         order.GrantStatus,
+		Status:              order.GrantStatus,
+		ParticipationStatus: participationStatus,
+		Reservations:        r.reservationsForGrantOrderLocked(order.ID),
+	}, nil
+}
+
+func (r *MemoryRepository) manualGrantOrderIndexLocked(cmd ManualGrantDecisionCommand) int {
+	matches := map[int]struct{}{}
+	add := func(idx int) {
+		if idx >= 0 {
+			matches[idx] = struct{}{}
+		}
+	}
+	for i := range r.grantOrders {
+		order := r.grantOrders[i]
+		if order.TenantID != cmd.TenantID {
+			continue
+		}
+		if cmd.GrantOrderID != "" && order.ID == cmd.GrantOrderID {
+			add(i)
+		}
+		if cmd.CommandID != "" && order.BillNo == cmd.CommandID {
+			add(i)
+		}
+		if cmd.IdempotencyKey != "" && order.IdempotencyKey == cmd.IdempotencyKey {
+			add(i)
+		}
+	}
+	if len(matches) > 1 {
+		return -2
+	}
+	for idx := range matches {
+		return idx
+	}
+	return -1
+}
+
+func (r *MemoryRepository) CreateManualGrantExport(ctx context.Context, cmd ManualGrantExportCreateCommand) (ManualGrantExportCreateResult, error) {
+	if err := ctx.Err(); err != nil {
+		return ManualGrantExportCreateResult{}, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	now := time.Now().UTC()
+	candidates := r.manualGrantExportCandidatesLocked(cmd)
+	if len(candidates) == 0 {
+		return ManualGrantExportCreateResult{}, ErrNotFound
+	}
+	exportID := NewID("manual_export")
+	filterSnapshot, _ := json.Marshal(cmd)
+	candidateOrders := make([]GrantOrder, 0, len(candidates))
+	for _, orderIndex := range candidates {
+		candidateOrders = append(candidateOrders, r.grantOrders[orderIndex])
+	}
+	rows, checksum, err := manualGrantExportCSV(exportID, candidateOrders)
+	if err != nil {
+		file := ManualGrantExportFile{
+			ID:             exportID,
+			TenantID:       cmd.TenantID,
+			FileName:       exportID + ".csv",
+			FileFormat:     "CSV",
+			Status:         ManualGrantExportFailed,
+			Operator:       cmd.Operator,
+			Reason:         cmd.Reason,
+			FilterSnapshot: filterSnapshot,
+			RowCount:       len(candidates),
+			ErrorMessage:   err.Error(),
+			CreatedAt:      now,
+			UpdatedAt:      now,
+		}
+		r.manualExportFiles = append(r.manualExportFiles, file)
+		return ManualGrantExportCreateResult{ExportFile: file}, nil
+	}
+	_ = rows
+	file := ManualGrantExportFile{
+		ID:             exportID,
+		TenantID:       cmd.TenantID,
+		FileName:       exportID + ".csv",
+		FileFormat:     "CSV",
+		Status:         ManualGrantExportReady,
+		Operator:       cmd.Operator,
+		Reason:         cmd.Reason,
+		FilterSnapshot: filterSnapshot,
+		RowCount:       len(candidates),
+		FileChecksum:   checksum,
+		StorageRef:     "memory://manual-grant-exports/" + exportID + ".csv",
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	r.manualExportFiles = append(r.manualExportFiles, file)
+	details := make([]ManualGrantExportDetail, 0, len(candidates))
+	for idx, orderIndex := range candidates {
+		order := &r.grantOrders[orderIndex]
+		detail := ManualGrantExportDetail{
+			ID:                NewID("manual_export_detail"),
+			ExportID:          exportID,
+			TenantID:          cmd.TenantID,
+			GrantOrderID:      order.ID,
+			BillNo:            order.BillNo,
+			RowNumber:         idx + 1,
+			ExportGrantStatus: order.GrantStatus,
+			DetailStatus:      ManualGrantExportDetailReady,
+			CreatedAt:         now,
+			UpdatedAt:         now,
+		}
+		r.manualExportDetails = append(r.manualExportDetails, detail)
+		details = append(details, detail)
+		order.GrantStatus = GrantSending
+		order.UpdatedAt = now
+	}
+	return ManualGrantExportCreateResult{ExportFile: file, Details: details}, nil
+}
+
 func (r *MemoryRepository) rewardCallbackOrderIndexLocked(callback RewardCallback) int {
 	byCommand := -1
 	byIDem := -1
@@ -418,6 +640,10 @@ func (r *MemoryRepository) ReleaseExpiredQuotaReservations(ctx context.Context, 
 		}
 		order := &r.grantOrders[i]
 		if order.TenantID != cmd.TenantID || isFinalGrantStatus(order.GrantStatus) {
+			continue
+		}
+		mode := grantModeFromPayload(order.RewardPayload)
+		if mode == GrantManual || mode == GrantManualExport {
 			continue
 		}
 		candidateAt := order.UpdatedAt
@@ -1240,6 +1466,145 @@ func rewardCodeFromPayload(payload json.RawMessage) string {
 	}
 	_ = json.Unmarshal(payload, &body)
 	return body.RewardCode
+}
+
+func grantModeFromPayload(payload json.RawMessage) GrantMode {
+	var body struct {
+		GrantMode GrantMode `json:"grantMode"`
+	}
+	_ = json.Unmarshal(payload, &body)
+	if body.GrantMode == "" {
+		return GrantAuto
+	}
+	return body.GrantMode
+}
+
+func rewardAmountFromPayload(payload json.RawMessage) string {
+	var body struct {
+		RewardAmount string `json:"rewardAmount"`
+		Amount       string `json:"amount"`
+	}
+	_ = json.Unmarshal(payload, &body)
+	return firstNonEmpty(body.RewardAmount, body.Amount)
+}
+
+func (r *MemoryRepository) hasReadyManualExportDetailLocked(grantOrderID string) bool {
+	for _, detail := range r.manualExportDetails {
+		if detail.GrantOrderID != grantOrderID || detail.DetailStatus != ManualGrantExportDetailReady {
+			continue
+		}
+		for _, file := range r.manualExportFiles {
+			if file.ID == detail.ExportID && file.Status == ManualGrantExportReady {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (r *MemoryRepository) hasBlockingManualExportDetailLocked(grantOrderID string) bool {
+	for _, detail := range r.manualExportDetails {
+		if detail.GrantOrderID != grantOrderID {
+			continue
+		}
+		for _, file := range r.manualExportFiles {
+			if file.ID == detail.ExportID && file.Status != ManualGrantExportFailed {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (r *MemoryRepository) manualGrantExportCandidatesLocked(cmd ManualGrantExportCreateCommand) []int {
+	allowedIDs := map[string]struct{}{}
+	for _, id := range cmd.GrantOrderIDs {
+		if strings.TrimSpace(id) != "" {
+			allowedIDs[id] = struct{}{}
+		}
+	}
+	limit := cmd.Limit
+	if limit <= 0 {
+		limit = 1000
+	}
+	var candidates []int
+	for i, order := range r.grantOrders {
+		if len(candidates) >= limit {
+			break
+		}
+		if order.TenantID != cmd.TenantID || grantModeFromPayload(order.RewardPayload) != GrantManualExport {
+			continue
+		}
+		if order.GrantStatus != GrantPending && order.GrantStatus != GrantRetry {
+			continue
+		}
+		if len(allowedIDs) > 0 {
+			if _, ok := allowedIDs[order.ID]; !ok {
+				continue
+			}
+		}
+		if cmd.ActivityID != "" && order.ActivityID != cmd.ActivityID {
+			continue
+		}
+		if cmd.SubjectType != "" && order.Subject.Type != cmd.SubjectType {
+			continue
+		}
+		if cmd.SubjectID != "" && order.Subject.ID != cmd.SubjectID {
+			continue
+		}
+		if !cmd.CreatedFrom.IsZero() && order.CreatedAt.Before(cmd.CreatedFrom) {
+			continue
+		}
+		if !cmd.CreatedTo.IsZero() && !order.CreatedAt.Before(cmd.CreatedTo) {
+			continue
+		}
+		if cmd.RewardCode != "" && rewardCodeFromPayload(order.RewardPayload) != cmd.RewardCode {
+			continue
+		}
+		if r.hasBlockingManualExportDetailLocked(order.ID) {
+			continue
+		}
+		candidates = append(candidates, i)
+	}
+	return candidates
+}
+
+func manualGrantExportCSV(exportID string, orders []GrantOrder) ([]byte, string, error) {
+	var buf bytes.Buffer
+	writer := csv.NewWriter(&buf)
+	header := []string{"tenantId", "exportId", "billNo", "grantOrderId", "idempotencyKey", "activityId", "participationId", "subjectType", "subjectId", "rewardCode", "rewardType", "rewardAmount", "rewardPayload", "grantStatus", "createdAt"}
+	if err := writer.Write(header); err != nil {
+		return nil, "", err
+	}
+	for _, order := range orders {
+		amount := firstNonEmpty(order.RewardAmount, rewardAmountFromPayload(order.RewardPayload))
+		row := []string{
+			order.TenantID,
+			exportID,
+			order.BillNo,
+			order.ID,
+			order.IdempotencyKey,
+			order.ActivityID,
+			order.ParticipationID,
+			order.Subject.Type,
+			order.Subject.ID,
+			rewardCodeFromPayload(order.RewardPayload),
+			string(order.RewardType),
+			amount,
+			string(order.RewardPayload),
+			string(order.GrantStatus),
+			order.CreatedAt.Format(time.RFC3339Nano),
+		}
+		if err := writer.Write(row); err != nil {
+			return nil, "", err
+		}
+	}
+	writer.Flush()
+	if err := writer.Error(); err != nil {
+		return nil, "", err
+	}
+	sum := sha256.Sum256(buf.Bytes())
+	return buf.Bytes(), hex.EncodeToString(sum[:]), nil
 }
 
 func (r *MemoryRepository) reservationIndexesForGrantOrderLocked(grantOrderID string) []int {

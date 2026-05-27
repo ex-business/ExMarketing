@@ -1,0 +1,30 @@
+{
+  "requirementId": "2026-05-27-business-activity-templates",
+  "updatedAt": "2026-05-27T15:00:29.872718Z",
+  "agents": {
+    "analysis": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-27-business-activity-templates/analysis.md"
+    },
+    "commit": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-27-business-activity-templates/commit.md"
+    },
+    "dev": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-27-business-activity-templates/implementation.md"
+    },
+    "review": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-27-business-activity-templates/review.md"
+    },
+    "test": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-27-business-activity-templates/test.md"
+    },
+    "test-plan": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-27-business-activity-templates/test-plan.md"
+    }
+  }
+}

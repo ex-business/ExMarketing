@@ -1,0 +1,30 @@
+{
+  "requirementId": "2026-05-27-db-migration-release-migration",
+  "updatedAt": "2026-05-27T15:00:29.871278Z",
+  "agents": {
+    "analysis": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-27-db-migration-release-migration/analysis.md"
+    },
+    "commit": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-27-db-migration-release-migration/commit.md"
+    },
+    "dev": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-27-db-migration-release-migration/implementation.md"
+    },
+    "review": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-27-db-migration-release-migration/review.md"
+    },
+    "test": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-27-db-migration-release-migration/test.md"
+    },
+    "test-plan": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-27-db-migration-release-migration/test-plan.md"
+    }
+  }
+}

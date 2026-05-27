@@ -196,15 +196,15 @@ PROBABILITY
 POOL_SPLIT
 ```
 
-当前可执行发奖边界：
+当前发奖边界：
 
 ```text
-grant_mode    AUTO
-grant_channel HTTP / WEBHOOK / MQ
-targetRef     reward_config_json 内必填；HTTP/WEBHOOK 必须是 http(s) URL，MQ 必须是 destination URI
+grant_mode    AUTO / MANUAL / MANUAL_EXPORT
+grant_channel AUTO 下为 HTTP / WEBHOOK / MQ；人工发奖可为空或 MANUAL_EXPORT
+targetRef     AUTO 下在 reward_config_json 内必填；人工发奖可为空或作为处理说明
 ```
 
-MQ destination URI 支持 `kafka://<topic>`、`rabbitmq://<exchange>/<routingKey>`、`rabbitmq:///<routingKey>`（默认 exchange）和 `pulsar://<tenant>/<namespace>/<topic>`。`targetRef` 不允许包含 broker 地址、账号、密码、token、query 或 fragment。`MANUAL_EXPORT` 和 `MANUAL` 发奖模式尚无完整导出或人工状态机，创建活动时会被拒绝。
+MQ destination URI 支持 `kafka://<topic>`、`rabbitmq://<exchange>/<routingKey>`、`rabbitmq:///<routingKey>`（默认 exchange）和 `pulsar://<tenant>/<namespace>/<topic>`。`targetRef` 不允许包含 broker 地址、账号、密码、token、query 或 fragment。`MANUAL` / `MANUAL_EXPORT` 保留 participation、grant_order、quota reservation 与审计链路，但不生成自动 outbox；`MANUAL_EXPORT` 通过 `marketing_manual_grant_export_file` 与 `marketing_manual_grant_export_detail` 追踪导出文件、checksum 和 grant order 明细。
 
 奖励计算统一使用 Decimal 语义，输出金额保留 4 位小数。金额类 `BONUS` / `CASH` 支持 `FIXED`、`RATIO`、`LADDER`、`RANDOM`、`PROBABILITY`、`POOL_SPLIT`：`FIXED` 使用 `amount`；`RATIO` 使用 `baseField * rate` 并支持 `maxAmount` 封顶；`LADDER` 使用 `field` 和闭区间 `ladders`；`RANDOM` 使用 `minAmount/maxAmount/step` 和稳定 seed；`PROBABILITY` 使用 `items[].weight` 抽取奖项；`POOL_SPLIT` 支持 `splitBy` 或兼容别名 `splitMode` 的 `COUNT` / `WEIGHT` 即时分摊。非金额类当前最小可上线口径只支持 `FIXED`，并通过标准 payload 发给外部系统：
 

@@ -1,0 +1,30 @@
+{
+  "requirementId": "2026-05-27-mq-production-config-mq",
+  "updatedAt": "2026-05-27T15:00:29.867816Z",
+  "agents": {
+    "analysis": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-27-mq-production-config-mq/analysis.md"
+    },
+    "commit": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-27-mq-production-config-mq/commit.md"
+    },
+    "dev": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-27-mq-production-config-mq/implementation.md"
+    },
+    "review": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-27-mq-production-config-mq/review.md"
+    },
+    "test": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-27-mq-production-config-mq/test.md"
+    },
+    "test-plan": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-27-mq-production-config-mq/test-plan.md"
+    }
+  }
+}

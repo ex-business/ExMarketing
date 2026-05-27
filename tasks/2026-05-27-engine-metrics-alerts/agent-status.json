@@ -1,0 +1,30 @@
+{
+  "requirementId": "2026-05-27-engine-metrics-alerts",
+  "updatedAt": "2026-05-27T15:00:29.869356Z",
+  "agents": {
+    "analysis": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-27-engine-metrics-alerts/analysis.md"
+    },
+    "commit": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-27-engine-metrics-alerts/commit.md"
+    },
+    "dev": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-27-engine-metrics-alerts/implementation.md"
+    },
+    "review": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-27-engine-metrics-alerts/review.md"
+    },
+    "test": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-27-engine-metrics-alerts/test.md"
+    },
+    "test-plan": {
+      "status": "WAITING",
+      "output": "tasks/2026-05-27-engine-metrics-alerts/test-plan.md"
+    }
+  }
+}

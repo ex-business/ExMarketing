@@ -3,10 +3,14 @@ package postgres
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/csv"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/ex-stack/ExMarketing/internal/marketing"
@@ -418,7 +422,7 @@ func (r *Repository) ApplyRewardCallback(ctx context.Context, callback marketing
 	var finishedAt sql.NullTime
 	rows, err := tx.QueryContext(ctx, `
 		SELECT id, tenant_id, activity_id, participation_id, subject_type, subject_id,
-		       reward_type, reward_amount::text, bill_no, grant_status, COALESCE(error_message, ''),
+		       reward_type, reward_amount::text, reward_payload_json, bill_no, grant_status, grant_channel, COALESCE(error_message, ''),
 		       COALESCE(external_grant_id, ''), finished_at, idempotency_key, created_at, updated_at
 		FROM marketing_grant_order
 		WHERE tenant_id = $1
@@ -437,8 +441,8 @@ func (r *Repository) ApplyRewardCallback(ctx context.Context, callback marketing
 		}
 		if err := rows.Scan(
 			&order.ID, &order.TenantID, &order.ActivityID, &order.ParticipationID,
-			&order.Subject.Type, &order.Subject.ID, &order.RewardType, &order.RewardAmount,
-			&order.BillNo, &order.GrantStatus, &order.ErrorMessage, &externalGrantID, &finishedAt,
+			&order.Subject.Type, &order.Subject.ID, &order.RewardType, &order.RewardAmount, &order.RewardPayload,
+			&order.BillNo, &order.GrantStatus, &order.GrantChannel, &order.ErrorMessage, &externalGrantID, &finishedAt,
 			&order.IdempotencyKey, &order.CreatedAt, &order.UpdatedAt,
 		); err != nil {
 			return marketing.RewardCallbackResult{}, err
@@ -459,6 +463,9 @@ func (r *Repository) ApplyRewardCallback(ctx context.Context, callback marketing
 	order.ExternalGrantID = externalGrantID.String
 	if finishedAt.Valid {
 		order.FinishedAt = &finishedAt.Time
+	}
+	if mode := grantModeFromPayload(order.RewardPayload); mode == marketing.GrantManual || mode == marketing.GrantManualExport {
+		return marketing.RewardCallbackResult{}, marketing.ErrCallbackConflict
 	}
 	if order.GrantStatus == marketing.GrantClosed {
 		return marketing.RewardCallbackResult{}, marketing.ErrGrantOrderClosed
@@ -581,6 +588,219 @@ func (r *Repository) ApplyRewardCallback(ctx context.Context, callback marketing
 	}, nil
 }
 
+func (r *Repository) ApplyManualGrantDecision(ctx context.Context, cmd marketing.ManualGrantDecisionCommand) (marketing.RewardCallbackResult, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return marketing.RewardCallbackResult{}, err
+	}
+	defer rollback(tx)
+
+	order, err := manualGrantOrderForUpdateTx(ctx, tx, cmd)
+	if err != nil {
+		return marketing.RewardCallbackResult{}, err
+	}
+	mode := grantModeFromPayload(order.RewardPayload)
+	if mode != marketing.GrantManual && mode != marketing.GrantManualExport {
+		return marketing.RewardCallbackResult{}, marketing.ErrCallbackConflict
+	}
+	if marketingIsFinalGrantStatus(order.GrantStatus) {
+		if order.GrantStatus == cmd.Status && (order.ExternalGrantID == "" || cmd.ExternalGrantID == "" || order.ExternalGrantID == cmd.ExternalGrantID) {
+			status, err := participationStatusTx(ctx, tx, order.ParticipationID)
+			if err != nil {
+				return marketing.RewardCallbackResult{}, err
+			}
+			reservations, err := quotaReservationsForOrderTx(ctx, tx, order.ID)
+			if err != nil {
+				return marketing.RewardCallbackResult{}, err
+			}
+			if err := tx.Commit(); err != nil {
+				return marketing.RewardCallbackResult{}, err
+			}
+			return marketing.RewardCallbackResult{
+				CommandID:           order.BillNo,
+				BillNo:              order.BillNo,
+				IdempotencyKey:      order.IdempotencyKey,
+				TenantID:            order.TenantID,
+				GrantOrderID:        order.ID,
+				ParticipationID:     order.ParticipationID,
+				GrantStatus:         order.GrantStatus,
+				Status:              order.GrantStatus,
+				ParticipationStatus: status,
+				Duplicate:           true,
+				Reservations:        reservations,
+			}, nil
+		}
+		if order.GrantStatus == marketing.GrantClosed {
+			return marketing.RewardCallbackResult{}, marketing.ErrGrantOrderClosed
+		}
+		return marketing.RewardCallbackResult{}, marketing.ErrCallbackConflict
+	}
+	if mode == marketing.GrantManualExport && cmd.Status == marketing.GrantSuccess && (order.GrantStatus != marketing.GrantSending || !hasReadyManualExportDetailTx(ctx, tx, order.ID)) {
+		return marketing.RewardCallbackResult{}, marketing.ErrManualGrantExportRequired
+	}
+	if order.GrantStatus != marketing.GrantPending && order.GrantStatus != marketing.GrantSending && order.GrantStatus != marketing.GrantRetry {
+		return marketing.RewardCallbackResult{}, marketing.ErrCallbackConflict
+	}
+	reservations, err := quotaReservationsForOrderTx(ctx, tx, order.ID)
+	if err != nil {
+		return marketing.RewardCallbackResult{}, err
+	}
+	if len(reservations) == 0 {
+		hadQuota, err := activityHadQuotaAtTx(ctx, tx, order.ActivityID, order.CreatedAt)
+		if err != nil {
+			return marketing.RewardCallbackResult{}, err
+		}
+		if hadQuota {
+			return marketing.RewardCallbackResult{}, marketing.ErrQuotaReservationMissing
+		}
+	}
+	for _, reservation := range reservations {
+		if reservation.Status != marketing.QuotaReservationFrozen && !isParticipationQuotaReservation(reservation) {
+			return marketing.RewardCallbackResult{}, marketing.ErrQuotaReservationConflict
+		}
+		if isParticipationQuotaReservation(reservation) {
+			continue
+		}
+		if err := finishQuotaReservationTx(ctx, tx, reservation, cmd.Status); err != nil {
+			return marketing.RewardCallbackResult{}, err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE marketing_grant_order
+		SET grant_status = $1, external_grant_id = $2, error_message = $3, finished_at = $4, updated_at = NOW()
+		WHERE id = $5
+	`, cmd.Status, nullString(cmd.ExternalGrantID), nullString(cmd.Reason), cmd.FinishedAt, order.ID); err != nil {
+		return marketing.RewardCallbackResult{}, err
+	}
+	status, err := updateParticipationAfterCallbackTx(ctx, tx, order.ParticipationID)
+	if err != nil {
+		return marketing.RewardCallbackResult{}, err
+	}
+	if status == marketing.ParticipationGranted || status == marketing.ParticipationFailed {
+		finalStatus := marketing.GrantSuccess
+		if status == marketing.ParticipationFailed {
+			finalStatus = marketing.GrantFailed
+		}
+		if err := finishParticipationQuotaReservationsTx(ctx, tx, order.ParticipationID, finalStatus); err != nil {
+			return marketing.RewardCallbackResult{}, err
+		}
+	}
+	reservations, err = quotaReservationsForOrderTx(ctx, tx, order.ID)
+	if err != nil {
+		return marketing.RewardCallbackResult{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return marketing.RewardCallbackResult{}, err
+	}
+	return marketing.RewardCallbackResult{
+		CommandID:           order.BillNo,
+		BillNo:              order.BillNo,
+		IdempotencyKey:      order.IdempotencyKey,
+		TenantID:            order.TenantID,
+		GrantOrderID:        order.ID,
+		ParticipationID:     order.ParticipationID,
+		GrantStatus:         cmd.Status,
+		Status:              cmd.Status,
+		ParticipationStatus: status,
+		Reservations:        reservations,
+	}, nil
+}
+
+func (r *Repository) CreateManualGrantExport(ctx context.Context, cmd marketing.ManualGrantExportCreateCommand) (marketing.ManualGrantExportCreateResult, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return marketing.ManualGrantExportCreateResult{}, err
+	}
+	defer rollback(tx)
+
+	candidates, err := manualGrantExportCandidatesTx(ctx, tx, cmd)
+	if err != nil {
+		return marketing.ManualGrantExportCreateResult{}, err
+	}
+	if len(candidates) == 0 {
+		return marketing.ManualGrantExportCreateResult{}, marketing.ErrNotFound
+	}
+	exportID := marketing.NewID("manual_export")
+	rows, checksum, err := manualGrantExportCSV(exportID, candidates)
+	now := time.Now().UTC()
+	filterSnapshot, _ := json.Marshal(cmd)
+	status := marketing.ManualGrantExportReady
+	errorMessage := ""
+	if err != nil {
+		status = marketing.ManualGrantExportFailed
+		errorMessage = err.Error()
+	}
+	_ = rows
+	file := marketing.ManualGrantExportFile{
+		ID:             exportID,
+		TenantID:       cmd.TenantID,
+		FileName:       exportID + ".csv",
+		FileFormat:     "CSV",
+		Status:         status,
+		Operator:       cmd.Operator,
+		Reason:         cmd.Reason,
+		FilterSnapshot: filterSnapshot,
+		RowCount:       len(candidates),
+		FileChecksum:   checksum,
+		StorageRef:     "postgres://manual-grant-exports/" + exportID + ".csv",
+		ErrorMessage:   errorMessage,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO marketing_manual_grant_export_file (
+			id, tenant_id, file_name, file_format, status, operator, reason, filter_snapshot_json,
+			row_count, file_checksum, storage_ref, error_message, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+	`, file.ID, file.TenantID, file.FileName, file.FileFormat, file.Status, file.Operator, file.Reason,
+		file.FilterSnapshot, file.RowCount, nullString(file.FileChecksum), nullString(file.StorageRef), nullString(file.ErrorMessage),
+		file.CreatedAt, file.UpdatedAt); err != nil {
+		return marketing.ManualGrantExportCreateResult{}, err
+	}
+	if status == marketing.ManualGrantExportFailed {
+		if err := tx.Commit(); err != nil {
+			return marketing.ManualGrantExportCreateResult{}, err
+		}
+		return marketing.ManualGrantExportCreateResult{ExportFile: file}, nil
+	}
+	details := make([]marketing.ManualGrantExportDetail, 0, len(candidates))
+	for i, order := range candidates {
+		detail := marketing.ManualGrantExportDetail{
+			ID:                marketing.NewID("manual_export_detail"),
+			ExportID:          exportID,
+			TenantID:          cmd.TenantID,
+			GrantOrderID:      order.ID,
+			BillNo:            order.BillNo,
+			RowNumber:         i + 1,
+			ExportGrantStatus: order.GrantStatus,
+			DetailStatus:      marketing.ManualGrantExportDetailReady,
+			CreatedAt:         now,
+			UpdatedAt:         now,
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO marketing_manual_grant_export_detail (
+				id, export_id, tenant_id, grant_order_id, bill_no, row_number,
+				export_grant_status, detail_status, created_at, updated_at
+			) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		`, detail.ID, detail.ExportID, detail.TenantID, detail.GrantOrderID, detail.BillNo, detail.RowNumber,
+			detail.ExportGrantStatus, detail.DetailStatus, detail.CreatedAt, detail.UpdatedAt); err != nil {
+			return marketing.ManualGrantExportCreateResult{}, err
+		}
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE marketing_grant_order
+			SET grant_status = 'SENDING', updated_at = NOW()
+			WHERE id = $1 AND grant_status IN ('PENDING', 'RETRY')
+		`, order.ID); err != nil {
+			return marketing.ManualGrantExportCreateResult{}, err
+		}
+		details = append(details, detail)
+	}
+	if err := tx.Commit(); err != nil {
+		return marketing.ManualGrantExportCreateResult{}, err
+	}
+	return marketing.ManualGrantExportCreateResult{ExportFile: file, Details: details}, nil
+}
+
 func (r *Repository) ReleaseExpiredQuotaReservations(ctx context.Context, cmd marketing.QuotaTimeoutReleaseCommand) (marketing.QuotaTimeoutReleaseResult, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -601,7 +821,7 @@ func (r *Repository) ReleaseExpiredQuotaReservations(ctx context.Context, cmd ma
 		Reason:    cmd.Reason,
 	}
 	rows, err := tx.QueryContext(ctx, `
-		SELECT g.id, g.tenant_id, g.activity_id, g.participation_id, g.bill_no, g.grant_status
+		SELECT g.id, g.tenant_id, g.activity_id, g.participation_id, g.bill_no, g.grant_status, g.reward_payload_json
 		FROM marketing_grant_order g
 		WHERE g.tenant_id = $1
 		  AND g.grant_status NOT IN ('SUCCESS', 'FAILED', 'CLOSED')
@@ -622,8 +842,12 @@ func (r *Repository) ReleaseExpiredQuotaReservations(ctx context.Context, cmd ma
 	var orders []marketing.GrantOrder
 	for rows.Next() {
 		var order marketing.GrantOrder
-		if err := rows.Scan(&order.ID, &order.TenantID, &order.ActivityID, &order.ParticipationID, &order.BillNo, &order.GrantStatus); err != nil {
+		if err := rows.Scan(&order.ID, &order.TenantID, &order.ActivityID, &order.ParticipationID, &order.BillNo, &order.GrantStatus, &order.RewardPayload); err != nil {
 			return marketing.QuotaTimeoutReleaseResult{}, err
+		}
+		mode := grantModeFromPayload(order.RewardPayload)
+		if mode == marketing.GrantManual || mode == marketing.GrantManualExport {
+			continue
 		}
 		orders = append(orders, order)
 	}
@@ -1670,6 +1894,205 @@ func rewardCodeFromPayload(payload json.RawMessage) string {
 	}
 	_ = json.Unmarshal(payload, &body)
 	return body.RewardCode
+}
+
+func grantModeFromPayload(payload json.RawMessage) marketing.GrantMode {
+	var body struct {
+		GrantMode marketing.GrantMode `json:"grantMode"`
+	}
+	_ = json.Unmarshal(payload, &body)
+	if body.GrantMode == "" {
+		return marketing.GrantAuto
+	}
+	return body.GrantMode
+}
+
+func marketingIsFinalGrantStatus(status marketing.GrantStatus) bool {
+	return status == marketing.GrantSuccess || status == marketing.GrantFailed || status == marketing.GrantClosed
+}
+
+func manualGrantOrderForUpdateTx(ctx context.Context, tx *sql.Tx, cmd marketing.ManualGrantDecisionCommand) (marketing.GrantOrder, error) {
+	rows, err := tx.QueryContext(ctx, `
+		SELECT id, tenant_id, activity_id, participation_id, subject_type, subject_id,
+		       reward_type, reward_amount::text, reward_payload_json, bill_no, grant_status, grant_channel,
+		       COALESCE(error_message, ''), COALESCE(external_grant_id, ''), finished_at, idempotency_key, created_at, updated_at
+		FROM marketing_grant_order
+		WHERE tenant_id = $1
+		  AND (($2 <> '' AND id = $2) OR ($3 <> '' AND bill_no = $3) OR ($4 <> '' AND idempotency_key = $4))
+		FOR UPDATE
+	`, cmd.TenantID, cmd.GrantOrderID, cmd.CommandID, cmd.IdempotencyKey)
+	if err != nil {
+		return marketing.GrantOrder{}, err
+	}
+	defer rows.Close()
+
+	var order marketing.GrantOrder
+	var externalGrantID sql.NullString
+	var finishedAt sql.NullTime
+	found := 0
+	for rows.Next() {
+		found++
+		if found > 1 {
+			return marketing.GrantOrder{}, marketing.ErrCallbackLocatorConflict
+		}
+		if err := rows.Scan(&order.ID, &order.TenantID, &order.ActivityID, &order.ParticipationID,
+			&order.Subject.Type, &order.Subject.ID, &order.RewardType, &order.RewardAmount, &order.RewardPayload,
+			&order.BillNo, &order.GrantStatus, &order.GrantChannel, &order.ErrorMessage, &externalGrantID, &finishedAt,
+			&order.IdempotencyKey, &order.CreatedAt, &order.UpdatedAt); err != nil {
+			return marketing.GrantOrder{}, err
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return marketing.GrantOrder{}, err
+	}
+	if found == 0 {
+		return marketing.GrantOrder{}, marketing.ErrNotFound
+	}
+	if cmd.GrantOrderID != "" && order.ID != cmd.GrantOrderID {
+		return marketing.GrantOrder{}, marketing.ErrCallbackLocatorConflict
+	}
+	if cmd.CommandID != "" && order.BillNo != cmd.CommandID {
+		return marketing.GrantOrder{}, marketing.ErrCallbackLocatorConflict
+	}
+	if cmd.IdempotencyKey != "" && order.IdempotencyKey != cmd.IdempotencyKey {
+		return marketing.GrantOrder{}, marketing.ErrCallbackLocatorConflict
+	}
+	order.ExternalGrantID = externalGrantID.String
+	if finishedAt.Valid {
+		order.FinishedAt = &finishedAt.Time
+	}
+	return order, nil
+}
+
+func hasReadyManualExportDetailTx(ctx context.Context, tx *sql.Tx, grantOrderID string) bool {
+	var exists bool
+	_ = tx.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM marketing_manual_grant_export_detail d
+			JOIN marketing_manual_grant_export_file f ON f.id = d.export_id
+			WHERE d.grant_order_id = $1
+			  AND d.detail_status = 'READY'
+			  AND f.status = 'READY'
+		)
+	`, grantOrderID).Scan(&exists)
+	return exists
+}
+
+func manualGrantExportCandidatesTx(ctx context.Context, tx *sql.Tx, cmd marketing.ManualGrantExportCreateCommand) ([]marketing.GrantOrder, error) {
+	limit := cmd.Limit
+	if limit <= 0 {
+		limit = 1000
+	}
+	rows, err := tx.QueryContext(ctx, `
+		SELECT g.id, g.tenant_id, g.activity_id, g.participation_id, g.subject_type, g.subject_id,
+		       g.reward_type, g.reward_amount::text, g.reward_payload_json, g.bill_no, g.grant_status,
+		       g.grant_channel, COALESCE(g.error_message, ''), COALESCE(g.external_grant_id, ''),
+		       g.finished_at, g.idempotency_key, g.created_at, g.updated_at
+		FROM marketing_grant_order g
+		WHERE g.tenant_id = $1
+		  AND g.grant_status IN ('PENDING', 'RETRY')
+		  AND NOT EXISTS (
+		    SELECT 1
+		    FROM marketing_manual_grant_export_detail d
+		    JOIN marketing_manual_grant_export_file f ON f.id = d.export_id
+		    WHERE d.grant_order_id = g.id AND f.status <> 'FAILED'
+		  )
+		ORDER BY g.created_at ASC, g.id ASC
+		LIMIT $2
+		FOR UPDATE OF g
+	`, cmd.TenantID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	allowedIDs := map[string]struct{}{}
+	for _, id := range cmd.GrantOrderIDs {
+		if strings.TrimSpace(id) != "" {
+			allowedIDs[id] = struct{}{}
+		}
+	}
+	var out []marketing.GrantOrder
+	for rows.Next() {
+		var order marketing.GrantOrder
+		var externalGrantID sql.NullString
+		var finishedAt sql.NullTime
+		if err := rows.Scan(&order.ID, &order.TenantID, &order.ActivityID, &order.ParticipationID,
+			&order.Subject.Type, &order.Subject.ID, &order.RewardType, &order.RewardAmount, &order.RewardPayload,
+			&order.BillNo, &order.GrantStatus, &order.GrantChannel, &order.ErrorMessage, &externalGrantID, &finishedAt,
+			&order.IdempotencyKey, &order.CreatedAt, &order.UpdatedAt); err != nil {
+			return nil, err
+		}
+		if externalGrantID.Valid {
+			order.ExternalGrantID = externalGrantID.String
+		}
+		if finishedAt.Valid {
+			order.FinishedAt = &finishedAt.Time
+		}
+		if grantModeFromPayload(order.RewardPayload) != marketing.GrantManualExport {
+			continue
+		}
+		if len(allowedIDs) > 0 {
+			if _, ok := allowedIDs[order.ID]; !ok {
+				continue
+			}
+		}
+		if cmd.ActivityID != "" && order.ActivityID != cmd.ActivityID {
+			continue
+		}
+		if cmd.SubjectType != "" && order.Subject.Type != cmd.SubjectType {
+			continue
+		}
+		if cmd.SubjectID != "" && order.Subject.ID != cmd.SubjectID {
+			continue
+		}
+		if !cmd.CreatedFrom.IsZero() && order.CreatedAt.Before(cmd.CreatedFrom) {
+			continue
+		}
+		if !cmd.CreatedTo.IsZero() && !order.CreatedAt.Before(cmd.CreatedTo) {
+			continue
+		}
+		if cmd.RewardCode != "" && rewardCodeFromPayload(order.RewardPayload) != cmd.RewardCode {
+			continue
+		}
+		out = append(out, order)
+	}
+	return out, rows.Err()
+}
+
+func manualGrantExportCSV(exportID string, orders []marketing.GrantOrder) ([]byte, string, error) {
+	var buf bytes.Buffer
+	writer := csv.NewWriter(&buf)
+	if err := writer.Write([]string{"tenantId", "exportId", "billNo", "grantOrderId", "idempotencyKey", "activityId", "participationId", "subjectType", "subjectId", "rewardCode", "rewardType", "rewardAmount", "rewardPayload", "grantStatus", "createdAt"}); err != nil {
+		return nil, "", err
+	}
+	for _, order := range orders {
+		if err := writer.Write([]string{
+			order.TenantID,
+			exportID,
+			order.BillNo,
+			order.ID,
+			order.IdempotencyKey,
+			order.ActivityID,
+			order.ParticipationID,
+			order.Subject.Type,
+			order.Subject.ID,
+			rewardCodeFromPayload(order.RewardPayload),
+			string(order.RewardType),
+			order.RewardAmount,
+			string(order.RewardPayload),
+			string(order.GrantStatus),
+			order.CreatedAt.Format(time.RFC3339Nano),
+		}); err != nil {
+			return nil, "", err
+		}
+	}
+	writer.Flush()
+	if err := writer.Error(); err != nil {
+		return nil, "", err
+	}
+	sum := sha256.Sum256(buf.Bytes())
+	return buf.Bytes(), hex.EncodeToString(sum[:]), nil
 }
 
 func quotaReservationsForOrderTx(ctx context.Context, tx *sql.Tx, grantOrderID string) ([]marketing.QuotaReservation, error) {

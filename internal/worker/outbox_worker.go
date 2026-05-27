@@ -178,7 +178,7 @@ func (w *OutboxWorker) deliver(ctx context.Context, message marketing.OutboxMess
 			return err
 		}
 		return nil
-	case marketing.GrantManualExport:
+	case marketing.GrantManualFile:
 		return deliveryError{retryable: false, message: fmt.Sprintf("unsupported target channel %s", message.TargetChannel)}
 	default:
 		return deliveryError{retryable: false, message: fmt.Sprintf("unsupported target channel %s", message.TargetChannel)}

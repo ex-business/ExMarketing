@@ -287,7 +287,18 @@ rewards           奖励配置
 - `entry.audience.riskLevels` 读取 `attributes.riskLevel`，非空且不命中时返回 `AUDIENCE_RISK_LEVEL_NOT_ALLOWED`。
 - 旧配置字段 `entry.entranceCodes`、`entry.landingUrl`、顶层 `audience.segmentCodes/tags/countries` 仍可保存和读回；新入口匹配只依赖通用 `entry.*` 与标准事件字段。
 
-创建阶段会进行基础 Schema 校验。`tenantId + activityCode` 在同一租户内唯一，重复创建返回 `409 Conflict`；不同租户可以复用同一 `activityCode`。`startTime` / `endTime` 必须是带时区偏移的 RFC3339 时间，且 `startTime < endTime`；`timezone` 必须是可识别的 IANA 时区名或 `UTC`。未审批活动不能创建或更新为 `SCHEDULED` / `ACTIVE`，上线前必须先提交审批并通过当前版本审批。当前普通活动允许已注册 evaluator 的 `CONDITION` 和安全 `FORMULA` 规则；`FORMULA` 仅支持受控字段路径、Decimal 算术和 boolean 字段/字面量，不支持函数、脚本、SQL、HTTP、文件、环境变量、随机数或当前时间。`LIMIT`、`SCRIPT` 只保留配置 Schema，未注册 evaluator 前即使结构合法也会返回 `400 Bad Request`。奖励类型允许 `BONUS` / `CASH` / `COUPON` / `POINT` / `GIFT` / `DRAW_CHANCE` / `MEMBERSHIP`。金额类 `BONUS` / `CASH` 允许 `FIXED` / `RATIO` / `LADDER` / `RANDOM` / `PROBABILITY` / `POOL_SPLIT`；非金额类当前最小可上线口径只允许 `FIXED`，其他组合返回 `400 Bad Request`。发奖模式允许 `AUTO`，发奖通道允许 `HTTP` / `WEBHOOK` / `MQ`；`rewardConfig.targetRef` 对可执行发奖必填，HTTP / WEBHOOK 必须是 `http` 或 `https` URL，MQ 必须是 `kafka://<topic>`、`rabbitmq://<exchange>/<routingKey>`、`rabbitmq:///<routingKey>` 或 `pulsar://<tenant>/<namespace>/<topic>`。MQ `targetRef` 不允许包含凭据、query 或 fragment。`MANUAL_EXPORT`、`MANUAL`、未知配置字段、非法版本或不可解析 Decimal 会返回 `400 Bad Request`。配置 `pluginCode` 时必须命中服务内注册的 ActivityPlugin，且与 `activityType` 兼容；未知插件会在创建或上线前校验阶段拒绝。
+创建阶段会进行基础 Schema 校验。`tenantId + activityCode` 在同一租户内唯一，重复创建返回 `409 Conflict`；不同租户可以复用同一 `activityCode`。`startTime` / `endTime` 必须是带时区偏移的 RFC3339 时间，且 `startTime < endTime`；`timezone` 必须是可识别的 IANA 时区名或 `UTC`。未审批活动不能创建或更新为 `SCHEDULED` / `ACTIVE`，上线前必须先提交审批并通过当前版本审批。当前普通活动允许已注册 evaluator 的 `CONDITION` 和安全 `FORMULA` 规则；`FORMULA` 仅支持受控字段路径、Decimal 算术和 boolean 字段/字面量，不支持函数、脚本、SQL、HTTP、文件、环境变量、随机数或当前时间。`LIMIT`、`SCRIPT` 只保留配置 Schema，未注册 evaluator 前即使结构合法也会返回 `400 Bad Request`。奖励类型允许 `BONUS` / `CASH` / `COUPON` / `POINT` / `GIFT` / `DRAW_CHANCE` / `MEMBERSHIP`。金额类 `BONUS` / `CASH` 允许 `FIXED` / `RATIO` / `LADDER` / `RANDOM` / `PROBABILITY` / `POOL_SPLIT`；非金额类当前最小可上线口径只允许 `FIXED`，其他组合返回 `400 Bad Request`。发奖模式允许 `AUTO` / `MANUAL` / `MANUAL_EXPORT`。`AUTO` 发奖通道允许 `HTTP` / `WEBHOOK` / `MQ`，且 `rewardConfig.targetRef` 必填；HTTP / WEBHOOK 必须是 `http` 或 `https` URL，MQ 必须是 `kafka://<topic>`、`rabbitmq://<exchange>/<routingKey>`、`rabbitmq:///<routingKey>` 或 `pulsar://<tenant>/<namespace>/<topic>`。MQ `targetRef` 不允许包含凭据、query 或 fragment。`MANUAL` / `MANUAL_EXPORT` 不生成自动 outbox，`targetRef` 可为空或仅作为人工处理说明；未知配置字段、非法版本或不可解析 Decimal 会返回 `400 Bad Request`。配置 `pluginCode` 时必须命中服务内注册的 ActivityPlugin，且与 `activityType` 兼容；未知插件会在创建或上线前校验阶段拒绝。
+
+人工发奖接口：
+
+```http
+POST /admin/v1/manual-grants/decision
+POST /admin/v1/manual-grant-exports
+```
+
+`/manual-grants/decision` 按 `tenantId` 和 `grantOrderId` / `billNo` / `commandId` / `idempotencyKey` 定位人工发奖单，`operator` 与 `reason` 必填，`status` 允许 `SUCCESS` / `FAILED` / `CLOSED`。`MANUAL_EXPORT` 的 `SUCCESS` 确认只允许已进入 READY 导出文件明细并处于 `SENDING` 的单据；未导出单据可用 `FAILED` / `CLOSED` 作为取消处理路径。纯 `MANUAL` 审计不要求 `exportId`。
+
+`/manual-grant-exports` 只选择 `grantMode=MANUAL_EXPORT` 且 `PENDING` / `RETRY` 的 grant order，同步生成 CSV、checksum 和导出明细，导出文件 `READY` 后再把明细内单据推进到 `SENDING`。未失败 / 未作废导出明细会阻止同一 grant order 被重复纳入。
 
 ## 活动审批
 

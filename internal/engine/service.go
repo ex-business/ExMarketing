@@ -742,6 +742,53 @@ func (s *Service) ApplyRewardCallback(ctx context.Context, callback marketing.Re
 	return result, nil
 }
 
+func (s *Service) ApplyManualGrantDecision(ctx context.Context, cmd marketing.ManualGrantDecisionCommand) (marketing.RewardCallbackResult, error) {
+	cmd = cmd.Normalized(s.now())
+	if err := cmd.Validate(); err != nil {
+		return marketing.RewardCallbackResult{}, err
+	}
+	result, err := s.repository.ApplyManualGrantDecision(ctx, cmd)
+	if err != nil {
+		return marketing.RewardCallbackResult{}, err
+	}
+	action := "MANUAL_GRANT_CONFIRM_FAILED"
+	if cmd.Status == marketing.GrantSuccess {
+		action = "MANUAL_GRANT_CONFIRM_SUCCESS"
+	}
+	if cmd.Status == marketing.GrantClosed {
+		action = "MANUAL_GRANT_CLOSE"
+	}
+	_ = s.audit(ctx, cmd.TenantID, cmd.Operator, action, "GRANT_ORDER", result.GrantOrderID, auditSnapshot(nil, result, map[string]any{
+		"grantOrderId":        result.GrantOrderID,
+		"billNo":              result.BillNo,
+		"idempotencyKey":      result.IdempotencyKey,
+		"operator":            cmd.Operator,
+		"reason":              cmd.Reason,
+		"quotaReservations":   result.Reservations,
+		"participationStatus": result.ParticipationStatus,
+	}))
+	return result, nil
+}
+
+func (s *Service) CreateManualGrantExport(ctx context.Context, cmd marketing.ManualGrantExportCreateCommand) (marketing.ManualGrantExportCreateResult, error) {
+	cmd = cmd.Normalized()
+	if err := cmd.Validate(); err != nil {
+		return marketing.ManualGrantExportCreateResult{}, err
+	}
+	result, err := s.repository.CreateManualGrantExport(ctx, cmd)
+	if err != nil {
+		return marketing.ManualGrantExportCreateResult{}, err
+	}
+	_ = s.audit(ctx, cmd.TenantID, cmd.Operator, "MANUAL_GRANT_EXPORT_READY", "MANUAL_GRANT_EXPORT", result.ExportFile.ID, auditSnapshot(nil, result.ExportFile, map[string]any{
+		"exportId": result.ExportFile.ID,
+		"operator": cmd.Operator,
+		"reason":   cmd.Reason,
+		"rowCount": result.ExportFile.RowCount,
+		"details":  result.Details,
+	}))
+	return result, nil
+}
+
 func (s *Service) ReleaseExpiredQuotaReservations(ctx context.Context, cmd marketing.QuotaTimeoutReleaseCommand) (marketing.QuotaTimeoutReleaseResult, error) {
 	if cmd.OlderThan.IsZero() {
 		cmd.OlderThan = s.now().Add(-2 * time.Hour)
@@ -1257,17 +1304,20 @@ func (s *Service) evaluateActivity(ctx context.Context, inbox marketing.EventInb
 			},
 			IdempotencyKey: order.IdempotencyKey,
 		}
-		messagePayload, _ := json.Marshal(command)
-		message := marketing.OutboxMessage{
-			ID:            marketingID("outbox"),
-			TenantID:      activity.TenantID,
-			MessageType:   "REWARD_COMMAND",
-			TargetChannel: configuredReward.GrantChannel,
-			TargetRef:     targetRefFromReward(configuredReward),
-			Payload:       messagePayload,
-			SendStatus:    marketing.OutboxPending,
-			CreatedAt:     now,
-			UpdatedAt:     now,
+		var message *marketing.OutboxMessage
+		if configuredReward.GrantMode == marketing.GrantAuto {
+			messagePayload, _ := json.Marshal(command)
+			message = &marketing.OutboxMessage{
+				ID:            marketingID("outbox"),
+				TenantID:      activity.TenantID,
+				MessageType:   "REWARD_COMMAND",
+				TargetChannel: configuredReward.GrantChannel,
+				TargetRef:     targetRefFromReward(configuredReward),
+				Payload:       messagePayload,
+				SendStatus:    marketing.OutboxPending,
+				CreatedAt:     now,
+				UpdatedAt:     now,
+			}
 		}
 		amount, err := decimal.Parse(rewardResult.Amount)
 		if err != nil {
@@ -1275,7 +1325,9 @@ func (s *Service) evaluateActivity(ctx context.Context, inbox marketing.EventInb
 		}
 		totalRewardAmount = totalRewardAmount.Add(amount)
 		orders = append(orders, order)
-		messages = append(messages, message)
+		if message != nil {
+			messages = append(messages, *message)
+		}
 		rewardSummaries = append(rewardSummaries, rewardSnapshot(configuredReward, rewardResult, false))
 		stockReservations = append(stockReservations, marketing.QuotaReservation{
 			Type:     marketing.QuotaStock,
@@ -1437,18 +1489,20 @@ func (s *Service) simulateActivity(ctx context.Context, event marketing.Activity
 			},
 			IdempotencyKey: order.IdempotencyKey,
 		}
-		messagePayload, _ := json.Marshal(command)
-		outbox = append(outbox, marketing.OutboxMessage{
-			ID:            marketingID("sim_outbox"),
-			TenantID:      activity.TenantID,
-			MessageType:   "REWARD_COMMAND",
-			TargetChannel: configuredReward.GrantChannel,
-			TargetRef:     targetRefFromReward(configuredReward),
-			Payload:       messagePayload,
-			SendStatus:    marketing.OutboxPending,
-			CreatedAt:     now,
-			UpdatedAt:     now,
-		})
+		if configuredReward.GrantMode == marketing.GrantAuto {
+			messagePayload, _ := json.Marshal(command)
+			outbox = append(outbox, marketing.OutboxMessage{
+				ID:            marketingID("sim_outbox"),
+				TenantID:      activity.TenantID,
+				MessageType:   "REWARD_COMMAND",
+				TargetChannel: configuredReward.GrantChannel,
+				TargetRef:     targetRefFromReward(configuredReward),
+				Payload:       messagePayload,
+				SendStatus:    marketing.OutboxPending,
+				CreatedAt:     now,
+				UpdatedAt:     now,
+			})
+		}
 		stockReservations = append(stockReservations, marketing.QuotaReservation{
 			Type:     marketing.QuotaStock,
 			Scope:    marketing.QuotaScopeActivity,
@@ -2035,7 +2089,11 @@ func normalizeRewards(rewards []marketing.Reward, now time.Time) []marketing.Rew
 			rewards[i].GrantMode = marketing.GrantAuto
 		}
 		if rewards[i].GrantChannel == "" {
-			rewards[i].GrantChannel = marketing.GrantHTTP
+			if rewards[i].GrantMode == marketing.GrantManual || rewards[i].GrantMode == marketing.GrantManualExport {
+				rewards[i].GrantChannel = marketing.GrantManualFile
+			} else {
+				rewards[i].GrantChannel = marketing.GrantHTTP
+			}
 		}
 		if rewards[i].Version == 0 {
 			rewards[i].Version = 1
@@ -2104,6 +2162,7 @@ func rewardSnapshot(configuredReward marketing.Reward, result reward.Result, ski
 		"rewardCode":    configuredReward.Code,
 		"rewardType":    result.Type,
 		"calculateType": configuredReward.CalculateType,
+		"grantMode":     configuredReward.GrantMode,
 		"grantChannel":  configuredReward.GrantChannel,
 		"amount":        result.Amount,
 		"currency":      result.Currency,
@@ -2121,6 +2180,7 @@ func grantRewardPayload(configuredReward marketing.Reward, result reward.Result)
 	payload["rewardCode"] = configuredReward.Code
 	payload["rewardType"] = result.Type
 	payload["calculateType"] = configuredReward.CalculateType
+	payload["grantMode"] = configuredReward.GrantMode
 	payload["grantChannel"] = configuredReward.GrantChannel
 	payload["targetRef"] = targetRefFromReward(configuredReward)
 	return payload

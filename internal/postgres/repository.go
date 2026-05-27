@@ -732,9 +732,16 @@ func (r *Repository) ListRewardReconciliation(ctx context.Context, query marketi
 		  AND ($6 = '' OR go.subject_id = $6)
 		  AND ($7 = '' OR ei.event_id = $7)
 		  AND ($8 = '' OR ei.idempotency_key = $8)
+		  AND ($9 = '' OR p.id = $9)
+		  AND ($10 = '' OR EXISTS (
+		    SELECT 1 FROM marketing_outbox mo
+		    WHERE mo.tenant_id = go.tenant_id
+		      AND mo.id = $10
+		      AND (mo.payload_json::text LIKE '%' || go.bill_no || '%' OR mo.payload_json::text LIKE '%' || go.participation_id || '%')
+		  ))
 		ORDER BY go.updated_at DESC
-		LIMIT $9
-	`, query.TenantID, query.CommandID, query.GrantOrderID, query.ActivityID, query.SubjectType, query.SubjectID, query.EventID, query.IdempotencyKey, query.Limit)
+		LIMIT $11
+	`, query.TenantID, query.CommandID, query.GrantOrderID, query.ActivityID, query.SubjectType, query.SubjectID, query.EventID, query.IdempotencyKey, query.ParticipationID, query.OutboxID, query.Limit)
 	if err != nil {
 		return nil, err
 	}

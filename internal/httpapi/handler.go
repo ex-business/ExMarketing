@@ -471,21 +471,23 @@ func (h *Handler) closeOutboxDLQ(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) listRewardReconciliation(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	items, err := h.engine.ListRewardReconciliation(r.Context(), marketing.RewardReconciliationQuery{
-		TenantID:       r.URL.Query().Get("tenantId"),
-		CommandID:      r.URL.Query().Get("commandId"),
-		GrantOrderID:   r.URL.Query().Get("grantOrderId"),
-		ActivityID:     r.URL.Query().Get("activityId"),
-		SubjectType:    r.URL.Query().Get("subjectType"),
-		SubjectID:      r.URL.Query().Get("subjectId"),
-		EventID:        r.URL.Query().Get("eventId"),
-		IdempotencyKey: r.URL.Query().Get("idempotencyKey"),
-		Limit:          limit,
+		TenantID:        r.URL.Query().Get("tenantId"),
+		CommandID:       r.URL.Query().Get("commandId"),
+		GrantOrderID:    r.URL.Query().Get("grantOrderId"),
+		ActivityID:      r.URL.Query().Get("activityId"),
+		SubjectType:     r.URL.Query().Get("subjectType"),
+		SubjectID:       r.URL.Query().Get("subjectId"),
+		EventID:         r.URL.Query().Get("eventId"),
+		IdempotencyKey:  r.URL.Query().Get("idempotencyKey"),
+		ParticipationID: r.URL.Query().Get("participationId"),
+		OutboxID:        r.URL.Query().Get("outboxId"),
+		Limit:           limit,
 	})
 	if err != nil {
-		writeErrorCode(w, http.StatusBadRequest, "INVALID_RECONCILIATION_REQUEST", err.Error())
+		writeErrorCode(w, http.StatusBadRequest, "INVALID_RECONCILIATION_QUERY", err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+	writeJSON(w, http.StatusOK, map[string]any{"items": items, "diagnostics": []string{}})
 }
 
 func (h *Handler) handleOutboxDLQOperation(w http.ResponseWriter, r *http.Request, operation func(context.Context, string, marketing.DLQOperationCommand) (marketing.OutboxMessage, error)) {

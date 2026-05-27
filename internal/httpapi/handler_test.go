@@ -1496,6 +1496,65 @@ func TestRewardReconciliationSupportsActivitySubjectAndEventQueries(t *testing.T
 	}
 }
 
+func TestRewardReconciliationValidatesQueryAndSupportsPartialLinks(t *testing.T) {
+	handler := newTestHandler()
+	activityID := createActivity(t, handler)
+	createQuota(t, handler, activityID, marketing.QuotaBudget, marketing.QuotaScopeActivity, "TOTAL", "100")
+	createQuota(t, handler, activityID, marketing.QuotaStock, marketing.QuotaScopeActivity, "FIRST_DEPOSIT_RATIO", "10")
+
+	invalid := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(invalid, httptest.NewRequest(http.MethodGet, "/admin/v1/reward/reconciliation?tenantId=site_001", nil))
+	if invalid.Code != http.StatusBadRequest || !strings.Contains(invalid.Body.String(), `"code":"INVALID_RECONCILIATION_QUERY"`) {
+		t.Fatalf("expected reconciliation validation error, got %d: %s", invalid.Code, invalid.Body.String())
+	}
+
+	rejectedEvent := postRawEvent(t, handler, depositEventJSON("evt_reconcile_rejected", "pay_reconcile_rejected", `"amount":"299.00","vipLevel":3,"isFirstDeposit":false`), "site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:pay_reconcile_rejected")
+	if rejectedEvent.Code != http.StatusAccepted {
+		t.Fatalf("expected rejected event accepted, got %d: %s", rejectedEvent.Code, rejectedEvent.Body.String())
+	}
+	var rejectedResult marketing.ProcessEventResult
+	if err := json.Unmarshal(rejectedEvent.Body.Bytes(), &rejectedResult); err != nil {
+		t.Fatalf("decode rejected event result: %v", err)
+	}
+	if len(rejectedResult.Participations) != 1 {
+		t.Fatalf("expected rejected participation, got: %s", rejectedEvent.Body.String())
+	}
+
+	byParticipation := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(byParticipation, httptest.NewRequest(http.MethodGet, "/admin/v1/reward/reconciliation?tenantId=site_001&participationId="+rejectedResult.Participations[0].ID, nil))
+	if byParticipation.Code != http.StatusOK {
+		t.Fatalf("expected participation reconciliation OK, got %d: %s", byParticipation.Code, byParticipation.Body.String())
+	}
+	for _, want := range []string{`"participationId":"` + rejectedResult.Participations[0].ID + `"`, `"participationStatus":"REJECTED"`, `"diagnostics":["PARTICIPATION_REJECTED"]`} {
+		if !strings.Contains(byParticipation.Body.String(), want) {
+			t.Fatalf("expected rejected reconciliation %s, got: %s", want, byParticipation.Body.String())
+		}
+	}
+
+	successEvent := postDepositEvent(t, handler, "evt_reconcile_outbox", "pay_reconcile_outbox")
+	if successEvent.Code != http.StatusAccepted {
+		t.Fatalf("expected success event accepted, got %d: %s", successEvent.Code, successEvent.Body.String())
+	}
+	var successResult marketing.ProcessEventResult
+	if err := json.Unmarshal(successEvent.Body.Bytes(), &successResult); err != nil {
+		t.Fatalf("decode success event result: %v", err)
+	}
+	if len(successResult.OutboxMessages) != 1 {
+		t.Fatalf("expected outbox message, got: %s", successEvent.Body.String())
+	}
+
+	byOutbox := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(byOutbox, httptest.NewRequest(http.MethodGet, "/admin/v1/reward/reconciliation?tenantId=site_001&outboxId="+successResult.OutboxMessages[0].ID, nil))
+	if byOutbox.Code != http.StatusOK {
+		t.Fatalf("expected outbox reconciliation OK, got %d: %s", byOutbox.Code, byOutbox.Body.String())
+	}
+	for _, want := range []string{`"outboxMessages":[{`, `"id":"` + successResult.OutboxMessages[0].ID + `"`, `"commandId":"` + successResult.GrantOrders[0].BillNo + `"`, `"participation":{`, `"grantOrder":{`} {
+		if !strings.Contains(byOutbox.Body.String(), want) {
+			t.Fatalf("expected outbox reconciliation %s, got: %s", want, byOutbox.Body.String())
+		}
+	}
+}
+
 func TestRewardCallbackFailedReleasesQuotaAndRejectsConflictAndUnknown(t *testing.T) {
 	repo := marketing.NewMemoryRepository()
 	handler := newTestHandlerWithRepository(repo)

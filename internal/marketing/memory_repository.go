@@ -494,6 +494,94 @@ func (r *MemoryRepository) ListRewardReconciliation(ctx context.Context, query R
 		limit = 100
 	}
 	var out []RewardReconciliationItem
+	addItem := func(item RewardReconciliationItem) {
+		if len(out) >= limit {
+			return
+		}
+		out = append(out, item)
+	}
+
+	if query.OutboxID != "" {
+		for _, message := range r.outboxMessages {
+			if len(out) >= limit {
+				break
+			}
+			if message.TenantID != query.TenantID || message.ID != query.OutboxID {
+				continue
+			}
+			command := outboxRewardCommand(message.Payload)
+			var matched bool
+			if command.CommandID != "" || command.ParticipationID != "" || command.IdempotencyKey != "" {
+				for _, order := range r.grantOrders {
+					if order.TenantID != query.TenantID {
+						continue
+					}
+					if command.CommandID != "" && order.BillNo != command.CommandID {
+						continue
+					}
+					if command.ParticipationID != "" && order.ParticipationID != command.ParticipationID {
+						continue
+					}
+					if command.IdempotencyKey != "" && order.IdempotencyKey != command.IdempotencyKey {
+						continue
+					}
+					item := r.rewardReconciliationItemForOrderLocked(order)
+					item.OutboxMessages = []OutboxMessage{message}
+					item.Diagnostics = reconciliationDiagnostics(item)
+					if rewardReconciliationItemMatchesQuery(item, query) {
+						addItem(item)
+					}
+					matched = true
+				}
+			}
+			if !matched {
+				item := RewardReconciliationItem{
+					TenantID:        message.TenantID,
+					CommandID:       command.CommandID,
+					ParticipationID: command.ParticipationID,
+					ActivityID:      command.ActivityID,
+					Subject:         command.Subject,
+					ServerUpdatedAt: message.UpdatedAt,
+					OutboxMessages:  []OutboxMessage{message},
+					Diagnostics:     []string{"OUTBOX_UNLINKED"},
+				}
+				if rewardReconciliationItemMatchesQuery(item, query) {
+					addItem(item)
+				}
+			}
+		}
+		return out, nil
+	}
+
+	seenParticipations := map[string]struct{}{}
+	for _, participation := range r.participations {
+		if len(out) >= limit {
+			break
+		}
+		if participation.TenantID != query.TenantID {
+			continue
+		}
+		inbox := r.inboxByIDLocked(participation.EventInboxID)
+		if !participationMatchesReconciliationQuery(participation, inbox, query) {
+			continue
+		}
+		seenParticipations[participation.ID] = struct{}{}
+		orders := r.grantOrdersForParticipationLocked(participation.ID)
+		if len(orders) == 0 {
+			item := r.rewardReconciliationItemForParticipationLocked(participation, inbox)
+			item.Diagnostics = reconciliationDiagnostics(item)
+			addItem(item)
+			continue
+		}
+		for _, order := range orders {
+			item := r.rewardReconciliationItemForOrderLocked(order)
+			item.Diagnostics = reconciliationDiagnostics(item)
+			if rewardReconciliationItemMatchesQuery(item, query) {
+				addItem(item)
+			}
+		}
+	}
+
 	for _, order := range r.grantOrders {
 		if len(out) >= limit {
 			break
@@ -501,54 +589,225 @@ func (r *MemoryRepository) ListRewardReconciliation(ctx context.Context, query R
 		if order.TenantID != query.TenantID {
 			continue
 		}
-		if query.CommandID != "" && order.BillNo != query.CommandID {
+		if _, ok := seenParticipations[order.ParticipationID]; ok {
 			continue
 		}
-		if query.GrantOrderID != "" && order.ID != query.GrantOrderID {
-			continue
+		item := r.rewardReconciliationItemForOrderLocked(order)
+		item.Diagnostics = reconciliationDiagnostics(item)
+		if rewardReconciliationItemMatchesQuery(item, query) {
+			addItem(item)
 		}
-		if query.ActivityID != "" && order.ActivityID != query.ActivityID {
-			continue
+	}
+
+	if query.EventID != "" || query.IdempotencyKey != "" {
+		for _, inbox := range r.inboxByIdempotency {
+			if len(out) >= limit {
+				break
+			}
+			if inbox.Event.TenantID != query.TenantID {
+				continue
+			}
+			if query.EventID != "" && inbox.Event.EventID != query.EventID {
+				continue
+			}
+			if query.IdempotencyKey != "" && inbox.IdempotencyKey != query.IdempotencyKey {
+				continue
+			}
+			if r.inboxHasParticipationLocked(inbox.ID) {
+				continue
+			}
+			item := RewardReconciliationItem{
+				TenantID:        inbox.Event.TenantID,
+				Subject:         inbox.Event.Subject,
+				ServerUpdatedAt: inbox.UpdatedAt,
+				EventInbox:      &inbox,
+				Reservations:    []QuotaReservation{},
+				Diagnostics:     []string{"EVENT_RECEIVED_NO_PARTICIPATION"},
+			}
+			addItem(item)
 		}
-		if query.SubjectType != "" && order.Subject.Type != query.SubjectType {
-			continue
-		}
-		if query.SubjectID != "" && order.Subject.ID != query.SubjectID {
-			continue
-		}
-		participation := r.participationLocked(order.ParticipationID)
-		inbox := r.inboxByIDLocked(participation.EventInboxID)
-		if query.EventID != "" && inbox.Event.EventID != query.EventID {
-			continue
-		}
-		if query.IdempotencyKey != "" && inbox.IdempotencyKey != query.IdempotencyKey {
-			continue
-		}
-		item := RewardReconciliationItem{
-			TenantID:        order.TenantID,
-			CommandID:       order.BillNo,
-			GrantOrderID:    order.ID,
-			ExternalGrantID: order.ExternalGrantID,
-			ActivityID:      order.ActivityID,
-			ParticipationID: order.ParticipationID,
-			Subject:         order.Subject,
-			RewardType:      order.RewardType,
-			RewardAmount:    order.RewardAmount,
-			GrantStatus:     order.GrantStatus,
-			CallbackMessage: order.ErrorMessage,
-			FinishedAt:      order.FinishedAt,
-			ServerUpdatedAt: order.UpdatedAt,
-			Reservations:    r.reservationsForGrantOrderLocked(order.ID),
-		}
-		item.ParticipationStatus = participation.Status
-		if inbox.ID != "" {
-			item.EventInbox = &inbox
-		}
-		item.OutboxMessages = r.outboxesForRewardLocked(order.BillNo, order.ParticipationID)
-		item.AuditTimeline = r.auditTimelineLocked(order.TenantID, []string{order.ID, order.BillNo, order.ParticipationID, order.ActivityID, inbox.ID, inbox.Event.EventID, inbox.IdempotencyKey})
-		out = append(out, item)
 	}
 	return out, nil
+}
+
+func participationMatchesReconciliationQuery(participation Participation, inbox EventInbox, query RewardReconciliationQuery) bool {
+	if query.ParticipationID != "" && participation.ID != query.ParticipationID {
+		return false
+	}
+	if query.ActivityID != "" && participation.ActivityID != query.ActivityID {
+		return false
+	}
+	if query.SubjectType != "" && participation.Subject.Type != query.SubjectType {
+		return false
+	}
+	if query.SubjectID != "" && participation.Subject.ID != query.SubjectID {
+		return false
+	}
+	if query.EventID != "" && inbox.Event.EventID != query.EventID {
+		return false
+	}
+	if query.IdempotencyKey != "" && inbox.IdempotencyKey != query.IdempotencyKey && participation.IdempotencyKey != query.IdempotencyKey {
+		return false
+	}
+	return true
+}
+
+func rewardReconciliationItemMatchesQuery(item RewardReconciliationItem, query RewardReconciliationQuery) bool {
+	if query.CommandID != "" && item.CommandID != query.CommandID {
+		return false
+	}
+	if query.GrantOrderID != "" && item.GrantOrderID != query.GrantOrderID {
+		return false
+	}
+	if query.ActivityID != "" && item.ActivityID != query.ActivityID {
+		return false
+	}
+	if query.SubjectType != "" && item.Subject.Type != query.SubjectType {
+		return false
+	}
+	if query.SubjectID != "" && item.Subject.ID != query.SubjectID {
+		return false
+	}
+	if query.ParticipationID != "" && item.ParticipationID != query.ParticipationID {
+		return false
+	}
+	if query.EventID != "" {
+		if item.EventInbox == nil || item.EventInbox.Event.EventID != query.EventID {
+			return false
+		}
+	}
+	if query.IdempotencyKey != "" {
+		if item.EventInbox == nil || item.EventInbox.IdempotencyKey != query.IdempotencyKey {
+			if item.GrantOrder == nil || item.GrantOrder.IdempotencyKey != query.IdempotencyKey {
+				return false
+			}
+		}
+	}
+	if query.OutboxID != "" {
+		for _, message := range item.OutboxMessages {
+			if message.ID == query.OutboxID {
+				return true
+			}
+		}
+		return false
+	}
+	return true
+}
+
+func (r *MemoryRepository) rewardReconciliationItemForOrderLocked(order GrantOrder) RewardReconciliationItem {
+	participation := r.participationLocked(order.ParticipationID)
+	inbox := r.inboxByIDLocked(participation.EventInboxID)
+	item := RewardReconciliationItem{
+		TenantID:        order.TenantID,
+		CommandID:       order.BillNo,
+		GrantOrderID:    order.ID,
+		ExternalGrantID: order.ExternalGrantID,
+		ActivityID:      order.ActivityID,
+		ParticipationID: order.ParticipationID,
+		Subject:         order.Subject,
+		RewardType:      order.RewardType,
+		RewardAmount:    order.RewardAmount,
+		GrantStatus:     order.GrantStatus,
+		CallbackMessage: order.ErrorMessage,
+		FinishedAt:      order.FinishedAt,
+		ServerUpdatedAt: order.UpdatedAt,
+		Reservations:    r.reservationsForGrantOrderLocked(order.ID),
+		GrantOrder:      &order,
+	}
+	item.ParticipationStatus = participation.Status
+	if participation.ID != "" {
+		item.Participation = &participation
+	}
+	if inbox.ID != "" {
+		item.EventInbox = &inbox
+	}
+	item.OutboxMessages = r.outboxesForRewardLocked(order.BillNo, order.ParticipationID)
+	item.AuditTimeline = r.auditTimelineLocked(order.TenantID, []string{order.ID, order.BillNo, order.ParticipationID, order.ActivityID, inbox.ID, inbox.Event.EventID, inbox.IdempotencyKey})
+	return item
+}
+
+func (r *MemoryRepository) rewardReconciliationItemForParticipationLocked(participation Participation, inbox EventInbox) RewardReconciliationItem {
+	item := RewardReconciliationItem{
+		TenantID:            participation.TenantID,
+		ActivityID:          participation.ActivityID,
+		ParticipationID:     participation.ID,
+		Subject:             participation.Subject,
+		ParticipationStatus: participation.Status,
+		ServerUpdatedAt:     participation.UpdatedAt,
+		Reservations:        []QuotaReservation{},
+		Participation:       &participation,
+	}
+	if inbox.ID != "" {
+		item.EventInbox = &inbox
+	}
+	item.AuditTimeline = r.auditTimelineLocked(participation.TenantID, []string{participation.ID, participation.ActivityID, inbox.ID, inbox.Event.EventID, inbox.IdempotencyKey})
+	return item
+}
+
+func reconciliationDiagnostics(item RewardReconciliationItem) []string {
+	var diagnostics []string
+	if item.EventInbox != nil && item.EventInbox.ProcessStatus != InboxDuplicate && item.ParticipationID == "" {
+		diagnostics = append(diagnostics, "EVENT_RECEIVED_NO_PARTICIPATION")
+	}
+	if item.ParticipationStatus == ParticipationRejected {
+		diagnostics = append(diagnostics, "PARTICIPATION_REJECTED")
+	}
+	if item.ParticipationStatus == ParticipationQualified && strings.Contains(strings.ToUpper(item.ParticipationRejectReason()), "ZERO_REWARD") {
+		diagnostics = append(diagnostics, "ZERO_REWARD_SKIPPED")
+	}
+	if item.ParticipationStatus == ParticipationRewardable && item.GrantOrderID == "" {
+		diagnostics = append(diagnostics, "PARTICIPATION_REWARDABLE_NO_GRANT_ORDER")
+	}
+	if item.GrantOrderID != "" && len(item.OutboxMessages) == 0 {
+		diagnostics = append(diagnostics, "GRANT_ORDER_NO_OUTBOX")
+	}
+	for _, message := range item.OutboxMessages {
+		if message.SendStatus == OutboxFailed || message.SendStatus == OutboxDLQ || message.SendStatus == OutboxDLQClosed {
+			diagnostics = append(diagnostics, "OUTBOX_FAILED_OR_DLQ")
+			continue
+		}
+		if message.SendStatus == OutboxSent && (item.GrantStatus == GrantPending || item.GrantStatus == GrantSending || item.GrantStatus == GrantRetry) {
+			diagnostics = append(diagnostics, "OUTBOX_SENT_GRANT_PENDING")
+		}
+	}
+	if item.GrantStatus == GrantSuccess && item.ParticipationStatus != "" && item.ParticipationStatus != ParticipationGranted {
+		diagnostics = append(diagnostics, "GRANT_SUCCESS_PARTICIPATION_NOT_GRANTED")
+	}
+	if item.GrantStatus == GrantFailed || item.GrantStatus == GrantClosed {
+		for _, reservation := range item.Reservations {
+			if reservation.Status == QuotaReservationFrozen {
+				diagnostics = append(diagnostics, "GRANT_FAILED_QUOTA_STILL_FROZEN")
+				break
+			}
+		}
+	}
+	return diagnostics
+}
+
+func (item RewardReconciliationItem) ParticipationRejectReason() string {
+	if item.Participation == nil {
+		return ""
+	}
+	return item.Participation.RejectReason
+}
+
+func (r *MemoryRepository) grantOrdersForParticipationLocked(participationID string) []GrantOrder {
+	var out []GrantOrder
+	for _, order := range r.grantOrders {
+		if order.ParticipationID == participationID {
+			out = append(out, order)
+		}
+	}
+	return out
+}
+
+func (r *MemoryRepository) inboxHasParticipationLocked(inboxID string) bool {
+	for _, participation := range r.participations {
+		if participation.EventInboxID == inboxID {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *MemoryRepository) CreateParticipationGrantOutboxesWithQuota(ctx context.Context, cmd AtomicGrantCommand) (AtomicGrantResult, error) {
@@ -1134,11 +1393,19 @@ func (r *MemoryRepository) grantOrderByCommandIDLocked(tenantID string, commandI
 }
 
 func outboxRewardCommandID(payload json.RawMessage) string {
+	return outboxRewardCommand(payload).CommandID
+}
+
+func outboxRewardCommand(payload json.RawMessage) RewardCommand {
 	var command RewardCommand
 	if err := json.Unmarshal(payload, &command); err != nil {
-		return ""
+		return RewardCommand{}
 	}
-	return strings.TrimSpace(command.CommandID)
+	command.CommandID = strings.TrimSpace(command.CommandID)
+	command.ParticipationID = strings.TrimSpace(command.ParticipationID)
+	command.IdempotencyKey = strings.TrimSpace(command.IdempotencyKey)
+	command.ActivityID = strings.TrimSpace(command.ActivityID)
+	return command
 }
 
 func (r *MemoryRepository) participationStatusLocked(participationID string) ParticipationStatus {

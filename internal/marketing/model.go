@@ -1018,35 +1018,40 @@ type QuotaTimeoutReleaseItem struct {
 
 type RewardReconciliationItem struct {
 	TenantID            string              `json:"tenantId"`
-	CommandID           string              `json:"commandId"`
-	GrantOrderID        string              `json:"grantOrderId"`
+	CommandID           string              `json:"commandId,omitempty"`
+	GrantOrderID        string              `json:"grantOrderId,omitempty"`
 	ExternalGrantID     string              `json:"externalGrantId,omitempty"`
-	ActivityID          string              `json:"activityId"`
-	ParticipationID     string              `json:"participationId"`
+	ActivityID          string              `json:"activityId,omitempty"`
+	ParticipationID     string              `json:"participationId,omitempty"`
 	Subject             EventSubject        `json:"subject"`
-	RewardType          RewardType          `json:"rewardType"`
-	RewardAmount        string              `json:"rewardAmount"`
-	GrantStatus         GrantStatus         `json:"grantStatus"`
-	ParticipationStatus ParticipationStatus `json:"participationStatus"`
+	RewardType          RewardType          `json:"rewardType,omitempty"`
+	RewardAmount        string              `json:"rewardAmount,omitempty"`
+	GrantStatus         GrantStatus         `json:"grantStatus,omitempty"`
+	ParticipationStatus ParticipationStatus `json:"participationStatus,omitempty"`
 	CallbackMessage     string              `json:"callbackMessage,omitempty"`
 	FinishedAt          *time.Time          `json:"finishedAt,omitempty"`
 	ServerUpdatedAt     time.Time           `json:"serverUpdatedAt"`
 	Reservations        []QuotaReservation  `json:"quotaReservations"`
 	EventInbox          *EventInbox         `json:"eventInbox,omitempty"`
+	Participation       *Participation      `json:"participation,omitempty"`
+	GrantOrder          *GrantOrder         `json:"grantOrder,omitempty"`
 	OutboxMessages      []OutboxMessage     `json:"outboxMessages,omitempty"`
 	AuditTimeline       []AuditRecord       `json:"auditTimeline,omitempty"`
+	Diagnostics         []string            `json:"diagnostics,omitempty"`
 }
 
 type RewardReconciliationQuery struct {
-	TenantID       string
-	CommandID      string
-	GrantOrderID   string
-	ActivityID     string
-	SubjectType    string
-	SubjectID      string
-	EventID        string
-	IdempotencyKey string
-	Limit          int
+	TenantID        string
+	CommandID       string
+	GrantOrderID    string
+	ActivityID      string
+	SubjectType     string
+	SubjectID       string
+	EventID         string
+	IdempotencyKey  string
+	ParticipationID string
+	OutboxID        string
+	Limit           int
 }
 
 type CreateActivityCommand struct {

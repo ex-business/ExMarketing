@@ -473,8 +473,28 @@ func (s *Service) ListRewardReconciliation(ctx context.Context, query marketing.
 	if strings.TrimSpace(query.TenantID) == "" {
 		return nil, errors.New("tenantId is required")
 	}
+	if query.Limit < 0 {
+		return nil, errors.New("limit must be non-negative")
+	}
+	if query.Limit > 500 {
+		return nil, errors.New("limit must not exceed 500")
+	}
 	if strings.TrimSpace(query.SubjectID) != "" && strings.TrimSpace(query.SubjectType) == "" {
 		return nil, errors.New("subjectType is required when subjectId is provided")
+	}
+	if strings.TrimSpace(query.SubjectType) != "" && strings.TrimSpace(query.SubjectID) == "" {
+		return nil, errors.New("subjectId is required when subjectType is provided")
+	}
+	if strings.TrimSpace(query.CommandID) == "" &&
+		strings.TrimSpace(query.GrantOrderID) == "" &&
+		strings.TrimSpace(query.ActivityID) == "" &&
+		strings.TrimSpace(query.SubjectType) == "" &&
+		strings.TrimSpace(query.SubjectID) == "" &&
+		strings.TrimSpace(query.EventID) == "" &&
+		strings.TrimSpace(query.IdempotencyKey) == "" &&
+		strings.TrimSpace(query.ParticipationID) == "" &&
+		strings.TrimSpace(query.OutboxID) == "" {
+		return nil, errors.New("at least one reconciliation locator is required")
 	}
 	return s.repository.ListRewardReconciliation(ctx, query)
 }

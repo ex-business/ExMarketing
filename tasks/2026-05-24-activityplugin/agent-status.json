@@ -1,30 +1,53 @@
 {
   "requirementId": "2026-05-24-activityplugin",
-  "updatedAt": "2026-05-24T11:39:29.04442Z",
+  "updatedAt": "2026-05-27T08:24:58.66934Z",
   "agents": {
     "analysis": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-activityplugin/analysis.md"
+      "status": "DONE",
+      "startedAt": "2026-05-27T08:17:56.285318Z",
+      "finishedAt": "2026-05-27T08:20:07.224374Z",
+      "output": "tasks/2026-05-24-activityplugin/analysis.md",
+      "log": "tasks/2026-05-24-activityplugin/runs/20260527T081756Z-analysis.log",
+      "nextStatus": "REVIEW_READY"
     },
     "commit": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-activityplugin/commit.md"
+      "status": "RUNNING",
+      "startedAt": "2026-05-27T08:24:58.669336Z",
+      "output": "tasks/2026-05-24-activityplugin/commit.md",
+      "log": "tasks/2026-05-24-activityplugin/runs/20260527T082458Z-commit.log",
+      "pid": 19575
     },
     "dev": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-activityplugin/implementation.md"
+      "status": "DONE",
+      "startedAt": "2026-05-27T08:21:02.826234Z",
+      "finishedAt": "2026-05-27T08:23:14.156738Z",
+      "output": "tasks/2026-05-24-activityplugin/implementation.md",
+      "log": "tasks/2026-05-24-activityplugin/runs/20260527T082102Z-dev.log",
+      "nextStatus": "REVIEW_PASS"
     },
     "review": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-activityplugin/review.md"
+      "status": "DONE",
+      "startedAt": "2026-05-27T08:20:07.561889Z",
+      "finishedAt": "2026-05-27T08:21:02.820627Z",
+      "output": "tasks/2026-05-24-activityplugin/review.md",
+      "log": "tasks/2026-05-24-activityplugin/runs/20260527T082007Z-review.log",
+      "nextStatus": "REVIEW_PASS"
     },
     "test": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-activityplugin/test.md"
+      "status": "DONE",
+      "startedAt": "2026-05-27T08:23:14.194785Z",
+      "finishedAt": "2026-05-27T08:24:58.637587Z",
+      "output": "tasks/2026-05-24-activityplugin/test.md",
+      "log": "tasks/2026-05-24-activityplugin/runs/20260527T082314Z-test.log",
+      "nextStatus": "COMMIT_READY"
     },
     "test-plan": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-activityplugin/test-plan.md"
+      "status": "DONE",
+      "startedAt": "2026-05-27T08:21:02.851211Z",
+      "finishedAt": "2026-05-27T08:22:37.130701Z",
+      "output": "tasks/2026-05-24-activityplugin/test-plan.md",
+      "log": "tasks/2026-05-24-activityplugin/runs/20260527T082102Z-test-plan.log",
+      "nextStatus": "REVIEW_PASS"
     }
   }
 }

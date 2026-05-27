@@ -499,23 +499,23 @@
       "id": "2026-05-24-113929-10",
       "title": "对账查询能力",
       "description": "来源：22-独立活动营销中台设计。支持按活动、用户、事件、参与记录、发奖单、outbox 查询对账。验收：可定位“业务日志写了但消息失败”“发奖成功但状态未更新”等异常。",
-      "status": "COMMIT_READY",
+      "status": "COMMITTED",
       "risk": "中",
       "score": 91,
       "taskDir": "tasks/2026-05-24-113929-10",
       "createdAt": "2026-05-24T11:39:29.019103Z",
-      "updatedAt": "2026-05-27T07:45:07.452188Z"
+      "updatedAt": "2026-05-27T07:46:43.321917Z"
     },
     {
       "id": "2026-05-24-activityplugin",
       "title": "ActivityPlugin 注册表",
       "description": "来源：22-独立活动营销中台设计。建立 ActivityPlugin 注册表和生命周期接口，插件只负责特殊上下文，不负责通用风控、幂等、预算和发奖。验收：新增插件不修改主流程；普通活动优先走数据配置。",
-      "status": "ANALYSIS_READY",
+      "status": "COMMIT_READY",
       "risk": "中",
-      "score": 0,
+      "score": 95,
       "taskDir": "tasks/2026-05-24-activityplugin",
       "createdAt": "2026-05-24T11:39:29.019103Z",
-      "updatedAt": "2026-05-24T11:39:29.019103Z"
+      "updatedAt": "2026-05-27T08:24:58.637982Z"
     },
     {
       "id": "2026-05-24-113929-11",

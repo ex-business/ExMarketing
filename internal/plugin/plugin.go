@@ -85,6 +85,9 @@ func (r *Registry) Register(activityPlugin ActivityPlugin) error {
 	if r.plugins == nil {
 		r.plugins = map[string]ActivityPlugin{}
 	}
+	if _, exists := r.plugins[code]; exists {
+		return errors.New("plugin code is duplicated")
+	}
 	r.plugins[code] = activityPlugin
 	return nil
 }

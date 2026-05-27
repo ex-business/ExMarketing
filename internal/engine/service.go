@@ -28,7 +28,7 @@ type Service struct {
 }
 
 func NewService(repository marketing.Repository) *Service {
-	return &Service{
+	service := &Service{
 		repository:       repository,
 		ruleRegistry:     rule.NewRegistry(),
 		pluginRegistry:   activityplugin.NewRegistry(),
@@ -36,6 +36,8 @@ func NewService(repository marketing.Repository) *Service {
 		factClient:       fact.NewClient(),
 		now:              func() time.Time { return time.Now().UTC() },
 	}
+	_ = service.RegisterActivityPlugin(activityplugin.FirstDepositPlugin{})
+	return service
 }
 
 func (s *Service) SaveFactProvider(ctx context.Context, provider marketing.FactProvider) (marketing.FactProvider, error) {

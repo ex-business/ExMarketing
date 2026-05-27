@@ -174,6 +174,112 @@ func TestSimulateEventIncludesPluginPreviewWithoutPersistence(t *testing.T) {
 	}
 }
 
+func TestFirstDepositPluginIsRegisteredByDefaultAndFeedsRulesRewards(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	activity, err := createApprovedPluginActivity(ctx, service, firstDepositActivityCommand())
+	if err != nil {
+		t.Fatalf("create first deposit activity: %v", err)
+	}
+
+	if _, err := service.CreateQuota(ctx, marketing.CreateQuotaCommand{
+		ActivityID: activity.ID,
+		Type:       marketing.QuotaUserLimit,
+		Scope:      marketing.QuotaScopeUser,
+		ScopeKey:   "user_001",
+		TotalValue: "1",
+		Operator:   "ops",
+		TenantID:   "site_001",
+	}); err != nil {
+		t.Fatalf("create user limit quota: %v", err)
+	}
+
+	result, err := service.ProcessEvent(ctx, firstDepositEvent("evt_fd_ok", "pay_fd_ok", map[string]any{
+		"amount":         json.Number("299.00"),
+		"currency":       "CNY",
+		"isFirstDeposit": true,
+		"paymentMethod":  "BANK_CARD",
+	}))
+	if err != nil {
+		t.Fatalf("process first deposit: %v", err)
+	}
+	if len(result.Participations) != 1 || len(result.GrantOrders) != 1 || len(result.OutboxMessages) != 1 {
+		t.Fatalf("expected participation/grant/outbox, got %+v", result)
+	}
+	if result.GrantOrders[0].RewardAmount != "50.0000" {
+		t.Fatalf("reward amount=%s, want capped 50.0000", result.GrantOrders[0].RewardAmount)
+	}
+
+	var snapshot map[string]any
+	if err := json.Unmarshal(result.Participations[0].Snapshot, &snapshot); err != nil {
+		t.Fatalf("decode snapshot: %v", err)
+	}
+	pluginSnapshot, ok := snapshot["plugin"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected plugin snapshot, got %s", string(result.Participations[0].Snapshot))
+	}
+	contextSnapshot, ok := pluginSnapshot["pluginContext"].(map[string]any)
+	if !ok ||
+		contextSnapshot["amount"] != "299.00" ||
+		contextSnapshot["currency"] != "CNY" ||
+		contextSnapshot["isFirstDeposit"] != true ||
+		contextSnapshot["paymentMethod"] != "BANK_CARD" ||
+		contextSnapshot["depositBizId"] != "pay_fd_ok" {
+		t.Fatalf("unexpected first deposit context: %+v", pluginSnapshot["pluginContext"])
+	}
+	if _, exists := pluginSnapshot["stateChangeIntents"]; exists {
+		t.Fatalf("first deposit plugin must not emit state intents: %+v", pluginSnapshot)
+	}
+
+	_, err = service.ProcessEvent(ctx, firstDepositEvent("evt_fd_second", "pay_fd_second", map[string]any{
+		"amount":         "399.00",
+		"currency":       "CNY",
+		"isFirstDeposit": true,
+	}))
+	var quotaErr marketing.QuotaExceededError
+	if !errors.As(err, &quotaErr) || quotaErr.Type != marketing.QuotaUserLimit || quotaErr.ScopeKey != "user_001" {
+		t.Fatalf("expected USER_LIMIT to block second first deposit, got %T %[1]v", err)
+	}
+}
+
+func TestFirstDepositPluginPrecheckRejectsBeforeGrant(t *testing.T) {
+	ctx := context.Background()
+	service := NewService(marketing.NewMemoryRepository())
+	if _, err := createApprovedPluginActivity(ctx, service, firstDepositActivityCommand()); err != nil {
+		t.Fatalf("create first deposit activity: %v", err)
+	}
+
+	result, err := service.ProcessEvent(ctx, firstDepositEvent("evt_fd_reject", "pay_fd_reject", map[string]any{
+		"amount":         "299.00",
+		"currency":       "CNY",
+		"isFirstDeposit": false,
+	}))
+	if err != nil {
+		t.Fatalf("precheck rejection should not fail event: %v", err)
+	}
+	if len(result.GrantOrders) != 0 || len(result.OutboxMessages) != 0 {
+		t.Fatalf("expected no grant/outbox for precheck rejection, got %+v", result)
+	}
+	if len(result.Participations) != 1 || result.Participations[0].Status != marketing.ParticipationRejected {
+		t.Fatalf("expected rejected participation, got %+v", result.Participations)
+	}
+	if result.RuleResults[0].ReasonCode != activityplugin.ReasonFirstDepositNotFirst {
+		t.Fatalf("reason=%s, want %s", result.RuleResults[0].ReasonCode, activityplugin.ReasonFirstDepositNotFirst)
+	}
+}
+
+func TestFirstDepositPluginRejectsIncompatibleActivityTypeAtCreate(t *testing.T) {
+	ctx := context.Background()
+	service := NewService(marketing.NewMemoryRepository())
+	cmd := firstDepositActivityCommand()
+	cmd.Type = "LOTTERY"
+	_, err := service.CreateActivity(ctx, cmd)
+	if err == nil || !errors.Is(err, marketing.ErrInvalidActivity) {
+		t.Fatalf("expected invalid activity for incompatible first deposit plugin, got %v", err)
+	}
+}
+
 func pluginActivityCommand(pluginCode string) marketing.CreateActivityCommand {
 	now := time.Now().UTC()
 	ruleConfig := fmt.Sprintf(`{"logic":"AND","conditions":[{"field":"state.plugin.%s.drawChance","op":">","value":"0"}]}`, pluginCode)
@@ -206,6 +312,44 @@ func pluginActivityCommand(pluginCode string) marketing.CreateActivityCommand {
 			Type:          marketing.RewardBonus,
 			CalculateType: marketing.CalculateRatio,
 			Config:        []byte(rewardConfig),
+			GrantMode:     marketing.GrantAuto,
+			GrantChannel:  marketing.GrantHTTP,
+			Enabled:       true,
+			Version:       1,
+		}},
+	}
+}
+
+func firstDepositActivityCommand() marketing.CreateActivityCommand {
+	now := time.Now().UTC()
+	return marketing.CreateActivityCommand{
+		TenantID:      "site_001",
+		Code:          "FIRST_DEPOSIT_PLUGIN",
+		Name:          "First Deposit Plugin",
+		Type:          "FIRST_DEPOSIT",
+		Status:        marketing.ActivityDraft,
+		TriggerEvents: []string{"DEPOSIT_SUCCESS"},
+		StartTime:     now.Add(-time.Hour),
+		EndTime:       now.Add(time.Hour),
+		Timezone:      "UTC",
+		Priority:      100,
+		PluginCode:    activityplugin.FirstDepositPluginCode,
+		Version:       1,
+		Config:        []byte(`{"metadata":{"owner":"growth"}}`),
+		Rules: []marketing.Rule{{
+			Code:    "FIRST_DEPOSIT_AND_AMOUNT",
+			Phase:   marketing.RulePhaseQualify,
+			Type:    marketing.RuleTypeCondition,
+			Config:  []byte(`{"logic":"AND","conditions":[{"field":"state.plugin.FIRST_DEPOSIT.isFirstDeposit","op":"=","value":true},{"field":"state.plugin.FIRST_DEPOSIT.amount","op":">=","value":"100.00"}]}`),
+			Sort:    1,
+			Enabled: true,
+			Version: 1,
+		}},
+		Rewards: []marketing.Reward{{
+			Code:          "FIRST_DEPOSIT_RATIO",
+			Type:          marketing.RewardBonus,
+			CalculateType: marketing.CalculateRatio,
+			Config:        []byte(`{"baseField":"state.plugin.FIRST_DEPOSIT.amount","rate":"0.20","maxAmount":"50.00","currency":"CNY","targetRef":"https://wallet.example.com/reward"}`),
 			GrantMode:     marketing.GrantAuto,
 			GrantChannel:  marketing.GrantHTTP,
 			Enabled:       true,
@@ -275,5 +419,18 @@ func pluginEvent(eventID string, bizID string) marketing.ActivityEvent {
 		Biz:          marketing.EventBiz{BizType: "LOTTERY", BizID: bizID},
 		OccurredAt:   time.Now().UTC(),
 		Attributes:   map[string]any{"amount": "999.00"},
+	}
+}
+
+func firstDepositEvent(eventID string, bizID string, attributes map[string]any) marketing.ActivityEvent {
+	return marketing.ActivityEvent{
+		EventID:      eventID,
+		EventType:    "DEPOSIT_SUCCESS",
+		SourceSystem: "payment",
+		TenantID:     "site_001",
+		Subject:      marketing.EventSubject{Type: "USER", ID: "user_001"},
+		Biz:          marketing.EventBiz{BizType: "DEPOSIT", BizID: bizID},
+		OccurredAt:   time.Now().UTC(),
+		Attributes:   attributes,
 	}
 }

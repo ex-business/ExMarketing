@@ -510,23 +510,23 @@
       "id": "2026-05-24-activityplugin",
       "title": "ActivityPlugin 注册表",
       "description": "来源：22-独立活动营销中台设计。建立 ActivityPlugin 注册表和生命周期接口，插件只负责特殊上下文，不负责通用风控、幂等、预算和发奖。验收：新增插件不修改主流程；普通活动优先走数据配置。",
-      "status": "COMMIT_READY",
+      "status": "COMMITTED",
       "risk": "中",
       "score": 95,
       "taskDir": "tasks/2026-05-24-activityplugin",
       "createdAt": "2026-05-24T11:39:29.019103Z",
-      "updatedAt": "2026-05-27T08:24:58.637982Z"
+      "updatedAt": "2026-05-27T08:26:23.712449Z"
     },
     {
       "id": "2026-05-24-113929-11",
       "title": "首存活动插件",
       "description": "来源：22-独立活动营销中台设计。实现首存活动插件，只处理首存上下文和特殊字段，通用规则、预算、幂等、发奖仍走核心流程。验收：首存赠送可通过配置完成，插件不直接发钱。",
-      "status": "ANALYSIS_READY",
+      "status": "COMMIT_READY",
       "risk": "中",
-      "score": 0,
+      "score": 92,
       "taskDir": "tasks/2026-05-24-113929-11",
       "createdAt": "2026-05-24T11:39:29.019103Z",
-      "updatedAt": "2026-05-24T11:39:29.019103Z"
+      "updatedAt": "2026-05-27T08:54:58.064776Z"
     },
     {
       "id": "2026-05-24-113929-12",

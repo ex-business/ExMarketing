@@ -123,7 +123,7 @@ func (s *Service) CreateActivity(ctx context.Context, cmd marketing.CreateActivi
 	if err != nil {
 		return marketing.Activity{}, err
 	}
-	_ = s.audit(ctx, created.TenantID, actorOrSystem(cmd.Operator), "CREATE_ACTIVITY", "activity", created.ID, auditSnapshot(nil, created, nil))
+	_ = s.audit(ctx, created.TenantID, actorOrSystem(cmd.Operator), "CREATE_ACTIVITY", "ACTIVITY", created.ID, auditSnapshot(nil, created, nil))
 	return created, nil
 }
 
@@ -196,7 +196,7 @@ func (s *Service) UpdateActivity(ctx context.Context, id string, cmd marketing.U
 		updated.Approval = marketing.ApprovalSnapshot{Status: marketing.ApprovalNone}
 	}
 	if (updated.Status == marketing.ActivityScheduled || updated.Status == marketing.ActivityActive) && !activityApprovalValid(updated) {
-		_ = s.audit(ctx, before.TenantID, actorOrSystem(cmd.Operator), "ACTIVITY_GO_LIVE_BLOCKED", "activity", before.ID, approvalAuditPayload(before, before.Approval, before.Approval, "APPROVAL_REQUIRED", nil))
+		_ = s.audit(ctx, before.TenantID, actorOrSystem(cmd.Operator), "ACTIVITY_GO_LIVE_BLOCKED", "ACTIVITY", before.ID, approvalAuditPayload(before, before.Approval, before.Approval, "APPROVAL_REQUIRED", nil))
 		return marketing.Activity{}, errors.Join(marketing.ErrInvalidOperation, errors.New("APPROVAL_REQUIRED: activity version is not approved"))
 	}
 	saved, err := s.repository.UpdateActivity(ctx, updated)
@@ -204,7 +204,7 @@ func (s *Service) UpdateActivity(ctx context.Context, id string, cmd marketing.U
 		return marketing.Activity{}, err
 	}
 	saved.Approval = updated.Approval
-	_ = s.audit(ctx, saved.TenantID, actorOrSystem(cmd.Operator), "UPDATE_ACTIVITY", "activity", saved.ID, auditSnapshot(before, saved, nil))
+	_ = s.audit(ctx, saved.TenantID, actorOrSystem(cmd.Operator), "UPDATE_ACTIVITY", "ACTIVITY", saved.ID, auditSnapshot(before, saved, nil))
 	return saved, nil
 }
 
@@ -245,7 +245,7 @@ func (s *Service) SubmitActivityApproval(ctx context.Context, id string, cmd mar
 		return marketing.Activity{}, err
 	}
 	saved.Approval = activity.Approval
-	_ = s.audit(ctx, saved.TenantID, operator, "APPROVAL_SUBMITTED", "activity", saved.ID, approvalAuditPayload(saved, before, saved.Approval, strings.TrimSpace(cmd.Reason), nil))
+	_ = s.audit(ctx, saved.TenantID, operator, "APPROVAL_SUBMIT", "APPROVAL", saved.ID, approvalAuditPayload(saved, before, saved.Approval, strings.TrimSpace(cmd.Reason), nil))
 	return saved, nil
 }
 
@@ -293,7 +293,7 @@ func (s *Service) ApproveActivity(ctx context.Context, id string, cmd marketing.
 		return marketing.Activity{}, err
 	}
 	saved.Approval = activity.Approval
-	_ = s.audit(ctx, saved.TenantID, operator, "APPROVAL_APPROVED", "activity", saved.ID, approvalAuditPayload(saved, before, saved.Approval, strings.TrimSpace(cmd.Reason), nil))
+	_ = s.audit(ctx, saved.TenantID, operator, "APPROVAL_APPROVE", "APPROVAL", saved.ID, approvalAuditPayload(saved, before, saved.Approval, strings.TrimSpace(cmd.Reason), nil))
 	return saved, nil
 }
 
@@ -326,7 +326,7 @@ func (s *Service) RejectActivityApproval(ctx context.Context, id string, cmd mar
 		return marketing.Activity{}, err
 	}
 	saved.Approval = activity.Approval
-	_ = s.audit(ctx, saved.TenantID, operator, "APPROVAL_REJECTED", "activity", saved.ID, approvalAuditPayload(saved, before, saved.Approval, reason, nil))
+	_ = s.audit(ctx, saved.TenantID, operator, "APPROVAL_REJECT", "APPROVAL", saved.ID, approvalAuditPayload(saved, before, saved.Approval, reason, nil))
 	return saved, nil
 }
 
@@ -335,7 +335,7 @@ func (s *Service) ListApprovalRecords(ctx context.Context, id string) ([]marketi
 	if err != nil {
 		return nil, err
 	}
-	audits, err := s.repository.ListAudit(ctx, marketing.AuditQuery{TenantID: activity.TenantID, Resource: "activity", ResourceID: activity.ID, Limit: 200})
+	audits, err := s.repository.ListAudit(ctx, marketing.AuditQuery{TenantID: activity.TenantID, ResourceID: activity.ID, Limit: 200})
 	if err != nil {
 		return nil, err
 	}
@@ -399,7 +399,7 @@ func (s *Service) ValidatePrelaunch(ctx context.Context, req marketing.Prelaunch
 	if actor == "" {
 		actor = "system"
 	}
-	_ = s.audit(ctx, req.Activity.TenantID, actor, "PRELAUNCH_VALIDATE", "activity", req.Activity.Code, auditSnapshot(nil, result.AuditSummary, nil))
+	_ = s.audit(ctx, req.Activity.TenantID, actor, "PRELAUNCH_VALIDATE", "ACTIVITY", req.Activity.Code, auditSnapshot(nil, result.AuditSummary, nil))
 	return result, nil
 }
 
@@ -444,11 +444,17 @@ func (s *Service) CreateQuota(ctx context.Context, cmd marketing.CreateQuotaComm
 		return marketing.Quota{}, err
 	}
 	details := map[string]any{"activityId": created.ActivityID}
-	_ = s.audit(ctx, strings.TrimSpace(cmd.TenantID), actorOrSystem(cmd.Operator), "CREATE_QUOTA", "quota", created.ID, auditSnapshot(nil, created, details))
+	_ = s.audit(ctx, strings.TrimSpace(cmd.TenantID), actorOrSystem(cmd.Operator), "CREATE_QUOTA", "QUOTA", created.ID, auditSnapshot(nil, created, details))
 	return created, nil
 }
 
 func (s *Service) ListAudit(ctx context.Context, query marketing.AuditQuery) ([]marketing.AuditRecord, error) {
+	if strings.TrimSpace(query.TenantID) == "" {
+		return nil, errors.Join(marketing.ErrInvalidOperation, errors.New("tenantId is required"))
+	}
+	if query.Limit > 500 {
+		query.Limit = 500
+	}
 	return s.repository.ListAudit(ctx, query)
 }
 
@@ -517,7 +523,7 @@ func (s *Service) ProcessEventFrom(ctx context.Context, event marketing.Activity
 	if duplicate {
 		return marketing.ProcessEventResult{Inbox: inbox, Duplicate: true}, nil
 	}
-	_ = s.audit(ctx, event.TenantID, actor, "EVENT_IN", "event_inbox", inbox.ID, auditSnapshot(nil, event, map[string]any{
+	_ = s.audit(ctx, event.TenantID, actor, "EVENT_IN", "EVENT", inbox.ID, auditSnapshot(nil, event, map[string]any{
 		"eventId":        event.EventID,
 		"idempotencyKey": event.IdempotencyKey(),
 	}))
@@ -681,7 +687,7 @@ func (s *Service) SimulateEvent(ctx context.Context, event marketing.ActivityEve
 	result.UnmatchedActivities = append(result.UnmatchedActivities, exclusiveRejected...)
 	result.Summary.MatchedCount = len(result.MatchedActivities)
 	result.Summary.UnmatchedCount = len(result.UnmatchedActivities)
-	_ = s.audit(ctx, event.TenantID, "system", "SIMULATION_RUN", "simulation", event.IdempotencyKey(), auditSnapshot(nil, result.Summary, map[string]any{
+	_ = s.audit(ctx, event.TenantID, "system", "SIMULATION_RUN", "SIMULATION", event.IdempotencyKey(), auditSnapshot(nil, result.Summary, map[string]any{
 		"eventId":        event.EventID,
 		"idempotencyKey": event.IdempotencyKey(),
 	}))
@@ -697,7 +703,21 @@ func (s *Service) ApplyRewardCallback(ctx context.Context, callback marketing.Re
 		return marketing.RewardCallbackResult{}, err
 	}
 	callback.FinishedAt = callback.FinishedAt.UTC()
-	return s.repository.ApplyRewardCallback(ctx, callback)
+	result, err := s.repository.ApplyRewardCallback(ctx, callback)
+	if err != nil {
+		return marketing.RewardCallbackResult{}, err
+	}
+	if result.GrantStatus == marketing.GrantFailed && !result.Duplicate {
+		_ = s.audit(ctx, result.TenantID, "reward_callback", "GRANT_FAILED", "GRANT_ORDER", result.GrantOrderID, auditSnapshot(nil, nil, map[string]any{
+			"grantOrderId":   result.GrantOrderID,
+			"commandId":      result.CommandID,
+			"idempotencyKey": result.IdempotencyKey,
+			"status":         result.GrantStatus,
+			"message":        callback.Message,
+			"finishedAt":     callback.FinishedAt,
+		}))
+	}
+	return result, nil
 }
 
 func (s *Service) ReleaseExpiredQuotaReservations(ctx context.Context, cmd marketing.QuotaTimeoutReleaseCommand) (marketing.QuotaTimeoutReleaseResult, error) {
@@ -719,7 +739,7 @@ func (s *Service) ReleaseExpiredQuotaReservations(ctx context.Context, cmd marke
 	if cmd.DryRun {
 		action = "QUOTA_TIMEOUT_RELEASE_DRY_RUN"
 	}
-	_ = s.audit(ctx, cmd.TenantID, actorOrSystem(cmd.Operator), action, "quota_reservation", cmd.TenantID, auditSnapshot(nil, result.Items, map[string]any{
+	_ = s.audit(ctx, cmd.TenantID, actorOrSystem(cmd.Operator), action, "QUOTA", cmd.TenantID, auditSnapshot(nil, result.Items, map[string]any{
 		"olderThan": cmd.OlderThan,
 		"limit":     cmd.Limit,
 		"dryRun":    cmd.DryRun,
@@ -968,7 +988,7 @@ func (s *Service) hydrateApproval(ctx context.Context, activity marketing.Activi
 	if activity.Approval.Status != "" && activity.Approval.Status != marketing.ApprovalNone {
 		return activity
 	}
-	audits, err := s.repository.ListAudit(ctx, marketing.AuditQuery{TenantID: activity.TenantID, Resource: "activity", ResourceID: activity.ID, Limit: 200})
+	audits, err := s.repository.ListAudit(ctx, marketing.AuditQuery{TenantID: activity.TenantID, ResourceID: activity.ID, Limit: 200})
 	if err != nil {
 		return activity
 	}
@@ -1285,7 +1305,7 @@ func (s *Service) evaluateActivity(ctx context.Context, inbox marketing.EventInb
 				payload["scopeKey"] = quotaErr.ScopeKey
 				payload["amount"] = quotaErr.Amount
 			}
-			_ = s.audit(ctx, activity.TenantID, "engine", "QUOTA_EXCEEDED", "event_inbox", inbox.ID, auditSnapshot(nil, nil, payload))
+			_ = s.audit(ctx, activity.TenantID, "engine", "QUOTA_EXCEEDED", "QUOTA", inbox.ID, auditSnapshot(nil, nil, payload))
 		}
 		return participation, orders, messages, ruleResult, true, err
 	}
@@ -1886,6 +1906,7 @@ func dailyLimitScopeKey(activity marketing.Activity, event marketing.ActivityEve
 
 func (s *Service) audit(ctx context.Context, tenantID, actor, action, resource, resourceID string, payload any) error {
 	now := s.now()
+	payload = auditPayloadWithSource(ctx, payload)
 	bytes, _ := json.Marshal(payload)
 	return s.repository.CreateAudit(ctx, marketing.AuditRecord{
 		ID:         marketingID("audit"),
@@ -1916,6 +1937,27 @@ func auditSnapshot(before any, after any, details map[string]any) map[string]any
 		payload[key] = value
 	}
 	return payload
+}
+
+func auditPayloadWithSource(ctx context.Context, payload any) any {
+	source := marketing.AuditSourceFromContext(ctx)
+	if len(source) == 0 {
+		source = map[string]any{"component": "internal"}
+	}
+	if typed, ok := payload.(map[string]any); ok {
+		out := make(map[string]any, len(typed)+1)
+		for key, value := range typed {
+			out[key] = value
+		}
+		if _, exists := out["source"]; !exists {
+			out["source"] = source
+		}
+		return out
+	}
+	return map[string]any{
+		"source":        source,
+		"afterSnapshot": payload,
+	}
 }
 
 func normalizeActivityStatus(status marketing.ActivityStatus, now, start, end time.Time) marketing.ActivityStatus {

@@ -78,6 +78,9 @@ func TestOutboxWorkerDoesNotFollowRedirects(t *testing.T) {
 	if message.SendStatus != marketing.OutboxDLQ || !strings.Contains(message.ErrorMessage, "302") {
 		t.Fatalf("expected 302 to move to DLQ with status error, got %+v", message)
 	}
+	if len(repo.audits) != 1 || repo.audits[0].Action != "OUTBOX_ENTER_DLQ" || repo.audits[0].Resource != "OUTBOX" {
+		t.Fatalf("expected OUTBOX_ENTER_DLQ audit, got %+v", repo.audits)
+	}
 }
 
 func TestOutboxWorkerAdvancesGrantOrderState(t *testing.T) {
@@ -122,6 +125,9 @@ func TestOutboxWorkerTimeoutIsRetryableFailure(t *testing.T) {
 	}
 	if !strings.Contains(strings.ToLower(message.ErrorMessage), "timeout") {
 		t.Fatalf("expected timeout error message, got %q", message.ErrorMessage)
+	}
+	if len(repo.audits) != 1 || repo.audits[0].Action != "OUTBOX_DELIVERY_FAILED" || !strings.Contains(string(repo.audits[0].Payload), `"source"`) {
+		t.Fatalf("expected OUTBOX_DELIVERY_FAILED audit with source, got %+v", repo.audits)
 	}
 }
 
@@ -328,6 +334,7 @@ type workerTestRepo struct {
 	messages         []marketing.OutboxMessage
 	grantStatuses    map[string]marketing.GrantStatus
 	grantRetryCounts map[string]int
+	audits           []marketing.AuditRecord
 }
 
 func newWorkerTestRepo(messages ...marketing.OutboxMessage) *workerTestRepo {
@@ -475,8 +482,9 @@ func (r *workerTestRepo) ReplayOutboxDLQ(context.Context, string, string, string
 func (r *workerTestRepo) CloseOutboxDLQ(context.Context, string, string, string, string, time.Time) (marketing.OutboxMessage, error) {
 	panic("not implemented")
 }
-func (r *workerTestRepo) CreateAudit(context.Context, marketing.AuditRecord) error {
-	panic("not implemented")
+func (r *workerTestRepo) CreateAudit(_ context.Context, record marketing.AuditRecord) error {
+	r.audits = append(r.audits, record)
+	return nil
 }
 func (r *workerTestRepo) ListAudit(context.Context, marketing.AuditQuery) ([]marketing.AuditRecord, error) {
 	panic("not implemented")

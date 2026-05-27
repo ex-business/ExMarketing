@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"mime"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -199,7 +200,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /openapi/v1/facts/query", h.queryFacts)
 	mux.HandleFunc("POST /openapi/v1/reward/callback", h.rewardCallback)
 	mux.Handle("GET /admin/", http.StripPrefix("/admin/", http.FileServer(http.Dir("web/admin"))))
-	return mux
+	return withAuditSource(mux)
 }
 
 func (h *Handler) health(w http.ResponseWriter, r *http.Request) {
@@ -406,6 +407,10 @@ func (h *Handler) listAudit(w http.ResponseWriter, r *http.Request) {
 		Limit:      limit,
 	})
 	if err != nil {
+		if errors.Is(err, marketing.ErrInvalidOperation) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -864,6 +869,65 @@ func writeError(w http.ResponseWriter, status int, message string) {
 
 func writeErrorCode(w http.ResponseWriter, status int, code string, message string) {
 	writeJSON(w, status, map[string]string{"code": code, "errorCode": code, "error": message, "message": message})
+}
+
+func withAuditSource(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		source := map[string]any{
+			"method": r.Method,
+			"path":   r.URL.Path,
+		}
+		if requestID := strings.TrimSpace(r.Header.Get("X-Request-Id")); requestID != "" {
+			source["requestId"] = requestID
+		}
+		if traceID := strings.TrimSpace(r.Header.Get("X-Trace-Id")); traceID != "" {
+			source["traceId"] = traceID
+		}
+		if ip := maskedRemoteIP(r); ip != "" {
+			source["ip"] = ip
+		}
+		if ua := summarizeUserAgent(r.UserAgent()); ua != "" {
+			source["userAgent"] = ua
+		}
+		next.ServeHTTP(w, r.WithContext(marketing.WithAuditSource(r.Context(), source)))
+	})
+}
+
+func maskedRemoteIP(r *http.Request) string {
+	raw := strings.TrimSpace(r.Header.Get("X-Forwarded-For"))
+	if raw != "" {
+		raw = strings.TrimSpace(strings.Split(raw, ",")[0])
+	} else {
+		raw = strings.TrimSpace(r.RemoteAddr)
+	}
+	if raw == "" {
+		return ""
+	}
+	if host, _, err := net.SplitHostPort(raw); err == nil {
+		raw = host
+	}
+	if strings.Contains(raw, ".") {
+		parts := strings.Split(raw, ".")
+		if len(parts) == 4 {
+			parts[3] = "0"
+			return strings.Join(parts, ".")
+		}
+	}
+	if strings.Contains(raw, ":") {
+		parts := strings.Split(raw, ":")
+		if len(parts) > 4 {
+			return strings.Join(parts[:4], ":") + "::"
+		}
+	}
+	return raw
+}
+
+func summarizeUserAgent(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) > 120 {
+		return value[:120]
+	}
+	return value
 }
 
 func decodeStrictJSON(r io.Reader, out any) error {

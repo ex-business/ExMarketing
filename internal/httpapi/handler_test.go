@@ -229,7 +229,7 @@ func TestActivityApprovalFlowBlocksGoLiveUntilRequiredApprovals(t *testing.T) {
 
 	recordsRec := httptest.NewRecorder()
 	handler.Routes().ServeHTTP(recordsRec, httptest.NewRequest(http.MethodGet, "/admin/v1/activities/"+activity.ID+"/approval-records", nil))
-	if recordsRec.Code != http.StatusOK || !strings.Contains(recordsRec.Body.String(), `"action":"APPROVAL_SUBMITTED"`) || !strings.Contains(recordsRec.Body.String(), `"action":"APPROVAL_APPROVED"`) {
+	if recordsRec.Code != http.StatusOK || !strings.Contains(recordsRec.Body.String(), `"action":"APPROVAL_SUBMIT"`) || !strings.Contains(recordsRec.Body.String(), `"action":"APPROVAL_APPROVE"`) {
 		t.Fatalf("expected auditable approval records, got %d: %s", recordsRec.Code, recordsRec.Body.String())
 	}
 }
@@ -276,7 +276,7 @@ func TestAuditQueryFiltersAndSnapshots(t *testing.T) {
 	if auditRec.Code != http.StatusOK {
 		t.Fatalf("expected audit status %d, got %d: %s", http.StatusOK, auditRec.Code, auditRec.Body.String())
 	}
-	for _, want := range []string{`"actor":"ops-a"`, `"action":"CREATE_ACTIVITY"`, `"resource":"activity"`, `"resourceId":"` + activity.ID + `"`, `"beforeSnapshot":null`, `"afterSnapshot":{`} {
+	for _, want := range []string{`"actor":"ops-a"`, `"action":"CREATE_ACTIVITY"`, `"resource":"ACTIVITY"`, `"resourceId":"` + activity.ID + `"`, `"beforeSnapshot":null`, `"afterSnapshot":{`, `"source":{`} {
 		if !strings.Contains(auditRec.Body.String(), want) {
 			t.Fatalf("expected audit %s, got: %s", want, auditRec.Body.String())
 		}
@@ -1322,7 +1322,7 @@ func TestActivityEventBudgetExceededReturnsConflictAndAudit(t *testing.T) {
 		t.Fatalf("expected no grant/outbox response on quota failure, got: %s", body)
 	}
 
-	auditReq := httptest.NewRequest(http.MethodGet, "/admin/v1/audit", nil)
+	auditReq := httptest.NewRequest(http.MethodGet, "/admin/v1/audit?tenantId=site_001", nil)
 	auditRec := httptest.NewRecorder()
 	handler.Routes().ServeHTTP(auditRec, auditReq)
 	if auditRec.Code != http.StatusOK {
@@ -1352,7 +1352,7 @@ func TestActivityEventUserLimitExceededReturnsConflictAndAudit(t *testing.T) {
 	}
 
 	auditRec := httptest.NewRecorder()
-	handler.Routes().ServeHTTP(auditRec, httptest.NewRequest(http.MethodGet, "/admin/v1/audit", nil))
+	handler.Routes().ServeHTTP(auditRec, httptest.NewRequest(http.MethodGet, "/admin/v1/audit?tenantId=site_001", nil))
 	if !strings.Contains(auditRec.Body.String(), `"quotaType":"USER_LIMIT"`) {
 		t.Fatalf("expected user limit audit payload, got: %s", auditRec.Body.String())
 	}
@@ -1377,7 +1377,7 @@ func TestActivityEventStockExceededReturnsConflictAndNoRewardableResult(t *testi
 	}
 
 	auditRec := httptest.NewRecorder()
-	handler.Routes().ServeHTTP(auditRec, httptest.NewRequest(http.MethodGet, "/admin/v1/audit", nil))
+	handler.Routes().ServeHTTP(auditRec, httptest.NewRequest(http.MethodGet, "/admin/v1/audit?tenantId=site_001", nil))
 	if !strings.Contains(auditRec.Body.String(), `"quotaType":"STOCK"`) {
 		t.Fatalf("expected stock audit payload, got: %s", auditRec.Body.String())
 	}
@@ -1527,6 +1527,13 @@ func TestRewardCallbackFailedReleasesQuotaAndRejectsConflictAndUnknown(t *testin
 	for _, want := range []string{`"grantStatus":"FAILED"`, `"participationStatus":"FAILED"`, `"reservationStatus":"RELEASED"`} {
 		if !strings.Contains(rec.Body.String(), want) {
 			t.Fatalf("expected %s, got: %s", want, rec.Body.String())
+		}
+	}
+	auditRec := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(auditRec, httptest.NewRequest(http.MethodGet, "/admin/v1/audit?tenantId=site_001&action=GRANT_FAILED&commandId="+commandID, nil))
+	for _, want := range []string{`"action":"GRANT_FAILED"`, `"resource":"GRANT_ORDER"`, `"commandId":"` + commandID + `"`, `"source":{`} {
+		if !strings.Contains(auditRec.Body.String(), want) {
+			t.Fatalf("expected grant failed audit %s, got: %s", want, auditRec.Body.String())
 		}
 	}
 
@@ -1850,7 +1857,7 @@ func TestOutboxDLQQueryReplayAndClose(t *testing.T) {
 	}
 
 	auditRec := httptest.NewRecorder()
-	handler.Routes().ServeHTTP(auditRec, httptest.NewRequest(http.MethodGet, "/admin/v1/audit", nil))
+	handler.Routes().ServeHTTP(auditRec, httptest.NewRequest(http.MethodGet, "/admin/v1/audit?tenantId=site_001", nil))
 	for _, want := range []string{`"action":"OUTBOX_DLQ_REPLAY"`, `"action":"OUTBOX_DLQ_CLOSE"`, `"actor":"ops"`, `"targetChannel":"HTTP"`, `"retryCount":5`, `"commandId":"cmd_1"`} {
 		if !strings.Contains(auditRec.Body.String(), want) {
 			t.Fatalf("expected audit %s, got: %s", want, auditRec.Body.String())

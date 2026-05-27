@@ -781,7 +781,7 @@ func (r *MemoryRepository) ReplayOutboxDLQ(ctx context.Context, tenantID string,
 		item.SendStatus = OutboxPending
 		item.NextRetryAt = nil
 		item.UpdatedAt = replayedAt
-		r.auditRecords = append(r.auditRecords, outboxOperationAudit(tenantID, operator, "OUTBOX_DLQ_REPLAY", before, item.SendStatus, reason, replayedAt))
+		r.auditRecords = append(r.auditRecords, outboxOperationAudit(ctx, tenantID, operator, "OUTBOX_DLQ_REPLAY", before, item.SendStatus, reason, replayedAt))
 		return *item, nil
 	}
 	return OutboxMessage{}, ErrNotFound
@@ -804,7 +804,7 @@ func (r *MemoryRepository) CloseOutboxDLQ(ctx context.Context, tenantID string, 
 		before := *item
 		item.SendStatus = OutboxDLQClosed
 		item.UpdatedAt = closedAt
-		r.auditRecords = append(r.auditRecords, outboxOperationAudit(tenantID, operator, "OUTBOX_DLQ_CLOSE", before, item.SendStatus, reason, closedAt))
+		r.auditRecords = append(r.auditRecords, outboxOperationAudit(ctx, tenantID, operator, "OUTBOX_DLQ_CLOSE", before, item.SendStatus, reason, closedAt))
 		return *item, nil
 	}
 	return OutboxMessage{}, ErrNotFound
@@ -827,8 +827,11 @@ func (r *MemoryRepository) ListAudit(ctx context.Context, query AuditQuery) ([]A
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	limit := query.Limit
-	if limit <= 0 || limit > len(r.auditRecords) {
-		limit = len(r.auditRecords)
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 500 {
+		limit = 500
 	}
 	var out []AuditRecord
 	for _, record := range r.auditRecords {
@@ -1226,7 +1229,11 @@ func rawJSONContains(payload json.RawMessage, value string) bool {
 	return value != "" && strings.Contains(string(payload), value)
 }
 
-func outboxOperationAudit(tenantID string, operator string, action string, before OutboxMessage, after OutboxStatus, reason string, at time.Time) AuditRecord {
+func outboxOperationAudit(ctx context.Context, tenantID string, operator string, action string, before OutboxMessage, after OutboxStatus, reason string, at time.Time) AuditRecord {
+	source := AuditSourceFromContext(ctx)
+	if len(source) == 0 {
+		source = map[string]any{"component": "internal"}
+	}
 	payload, _ := json.Marshal(map[string]any{
 		"outboxId":      before.ID,
 		"operator":      operator,
@@ -1239,13 +1246,14 @@ func outboxOperationAudit(tenantID string, operator string, action string, befor
 		"errorMessage":  before.ErrorMessage,
 		"commandId":     outboxRewardCommandID(before.Payload),
 		"operatedAt":    at,
+		"source":        source,
 	})
 	return AuditRecord{
 		ID:         NewID("audit"),
 		TenantID:   tenantID,
 		Actor:      operator,
 		Action:     action,
-		Resource:   "outbox",
+		Resource:   "OUTBOX",
 		ResourceID: before.ID,
 		Payload:    payload,
 		CreatedAt:  at,

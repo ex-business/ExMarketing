@@ -967,12 +967,21 @@ GET /admin/v1/audit?tenantId=site_001&limit=100
 
 ```text
 CREATE_ACTIVITY
+UPDATE_ACTIVITY
+APPROVAL_SUBMIT
+APPROVAL_APPROVE
+APPROVAL_REJECT
 CREATE_QUOTA
 EVENT_IN
 SIMULATION_RUN
+GRANT_FAILED
 QUOTA_EXCEEDED
+OUTBOX_DELIVERY_FAILED
+OUTBOX_ENTER_DLQ
 OUTBOX_DLQ_REPLAY
 OUTBOX_DLQ_CLOSE
 ```
 
-支持按 `tenantId`、`actor`、`action`、`resource`、`resourceId`、`activityId`、`eventId`、`commandId` 和 `limit` 过滤。创建和模拟类审计 payload 包含 `beforeSnapshot` / `afterSnapshot`；失败类审计在 payload 中记录错误上下文。`QUOTA_EXCEEDED` payload 包含 `activityId`、`eventInboxId`、`subject`、`biz`、`quotaType`、`scope`、`scopeKey`、`amount`、`reason` 和 `error`，用于排查预算、库存或次数不足导致的发奖回滚。
+`tenantId` 必填。支持按 `tenantId`、`actor`、`action`、`resource`、`resourceId`、`activityId`、`eventId`、`commandId` 和 `limit` 过滤，默认 `limit=100`，最大 `500`。默认按 `createdAt` 倒序返回。
+
+创建、配置修改、审批和模拟类审计 payload 包含 `beforeSnapshot` / `afterSnapshot`；失败类审计在 payload 中记录错误上下文。所有审计 payload 包含 `source` 摘要。人工 HTTP 来源只记录 method、path、requestId/traceId、脱敏 IP 和 userAgent 摘要，不记录 Authorization、Cookie、token 或 secret。`QUOTA_EXCEEDED` payload 包含 `activityId`、`eventInboxId`、`subject`、`biz`、`quotaType`、`scope`、`scopeKey`、`amount`、`reason` 和 `error`，用于排查预算、库存或次数不足导致的发奖回滚。`GRANT_FAILED` payload 包含 `grantOrderId`、`commandId`、失败状态、消息摘要和完成时间。

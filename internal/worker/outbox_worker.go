@@ -90,6 +90,7 @@ func (w *OutboxWorker) tick(ctx context.Context) {
 			errorMessage := sanitizeError(deliveryErr.Error())
 			if !deliveryErr.retryable || retryCount >= w.maxRetries {
 				_ = w.repository.MarkOutboxDLQ(ctx, message.ID, retryCount, errorMessage)
+				_ = w.recordOutboxAudit(ctx, message, "OUTBOX_ENTER_DLQ", retryCount, errorMessage)
 				if commandID != "" {
 					_ = w.repository.UpdateGrantOrderByCommandID(ctx, message.TenantID, commandID, marketing.GrantRetry, errorMessage)
 				}
@@ -98,6 +99,7 @@ func (w *OutboxWorker) tick(ctx context.Context) {
 			}
 			nextRetry := w.nextRetryAt(retryCount, deliveryErr.retryAfter)
 			_ = w.repository.MarkOutboxFailed(ctx, message.ID, retryCount, nextRetry, errorMessage)
+			_ = w.recordOutboxAudit(ctx, message, "OUTBOX_DELIVERY_FAILED", retryCount, errorMessage)
 			if commandID != "" {
 				_ = w.repository.UpdateGrantOrderByCommandID(ctx, message.TenantID, commandID, marketing.GrantRetry, errorMessage)
 			}
@@ -106,6 +108,31 @@ func (w *OutboxWorker) tick(ctx context.Context) {
 		}
 		_ = w.repository.MarkOutboxSent(ctx, message.ID)
 	}
+}
+
+func (w *OutboxWorker) recordOutboxAudit(ctx context.Context, message marketing.OutboxMessage, action string, retryCount int, errMessage string) error {
+	payload, _ := json.Marshal(map[string]any{
+		"outboxId":      message.ID,
+		"beforeStatus":  message.SendStatus,
+		"targetChannel": message.TargetChannel,
+		"targetRef":     message.TargetRef,
+		"retryCount":    retryCount,
+		"errorMessage":  errMessage,
+		"commandId":     rewardCommandID(message),
+		"source": map[string]any{
+			"component": "outbox_worker",
+		},
+	})
+	return w.repository.CreateAudit(ctx, marketing.AuditRecord{
+		ID:         marketing.NewID("audit"),
+		TenantID:   message.TenantID,
+		Actor:      "outbox_worker",
+		Action:     action,
+		Resource:   "OUTBOX",
+		ResourceID: message.ID,
+		Payload:    payload,
+		CreatedAt:  w.now(),
+	})
 }
 
 func (w *OutboxWorker) deliver(ctx context.Context, message marketing.OutboxMessage) error {

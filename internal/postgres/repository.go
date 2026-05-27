@@ -1155,12 +1155,13 @@ func (r *Repository) updateOutboxDLQ(ctx context.Context, tenantID string, id st
 		"errorMessage":  before.ErrorMessage,
 		"commandId":     commandID,
 		"operatedAt":    at,
+		"source":        auditSourceFromContext(ctx),
 	})
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO marketing_audit (
 			id, tenant_id, actor, action, resource, resource_id, payload_json, created_at
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-	`, marketing.NewID("audit"), tenantID, operator, action, "outbox", id, auditPayload, at)
+	`, marketing.NewID("audit"), tenantID, operator, action, "OUTBOX", id, auditPayload, at)
 	if err != nil {
 		return marketing.OutboxMessage{}, err
 	}
@@ -1183,6 +1184,9 @@ func (r *Repository) CreateAudit(ctx context.Context, record marketing.AuditReco
 func (r *Repository) ListAudit(ctx context.Context, query marketing.AuditQuery) ([]marketing.AuditRecord, error) {
 	if query.Limit <= 0 {
 		query.Limit = 100
+	}
+	if query.Limit > 500 {
+		query.Limit = 500
 	}
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, tenant_id, actor, action, resource, resource_id, payload_json, created_at
@@ -1214,6 +1218,14 @@ func (r *Repository) ListAudit(ctx context.Context, query marketing.AuditQuery) 
 		records = append(records, record)
 	}
 	return records, rows.Err()
+}
+
+func auditSourceFromContext(ctx context.Context) map[string]any {
+	source := marketing.AuditSourceFromContext(ctx)
+	if len(source) == 0 {
+		return map[string]any{"component": "internal"}
+	}
+	return source
 }
 
 func (r *Repository) outboxesForReward(ctx context.Context, tenantID string, commandID string, participationID string) ([]marketing.OutboxMessage, error) {

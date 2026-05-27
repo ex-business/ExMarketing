@@ -458,6 +458,7 @@ func renderAgentPrompts(req Requirement) string {
 ~~~text
 你是 Test Agent。请根据 %s/task.md、analysis.md、review.md、test-plan.md、implementation.md 执行测试。
 只允许写 %s/test.md；禁止修改业务代码、测试代码、文档代码、配置文件或任何其他文件。
+如果需要启动本地服务，必须后台启动并记录 PID，等待健康检查通过后再执行 curl/smoke，结束时用 trap/kill 清理；禁止以前台 go run ./cmd/exmarketing 挂住 Agent。
 如果测试失败，必须在 test.md 写清失败命令、失败日志摘要、失败原因和复现方式，让流程打回 Dev Agent，不能自己修。
 执行必要测试并写 %s/test.md。
 ~~~

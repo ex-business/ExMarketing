@@ -132,6 +132,29 @@ BLOCK
 	}
 }
 
+func TestEvaluateCommitResultBlocksCommitFailure(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "commit.md"), []byte(`# Commit
+
+## Commit
+
+~~~text
+BLOCK
+hash: n/a
+~~~
+`), 0o644); err != nil {
+		t.Fatalf("write commit: %v", err)
+	}
+
+	status, _, err := EvaluateAgentResult(dir, AgentCommit)
+	if err != nil {
+		t.Fatalf("evaluate commit: %v", err)
+	}
+	if status != StatusCommitFail {
+		t.Fatalf("status=%s, want %s", status, StatusCommitFail)
+	}
+}
+
 func TestResolveAgentRoutesTestFailBackToDev(t *testing.T) {
 	agent, err := ResolveAgent(StatusTestFail, AgentAuto)
 	if err != nil {

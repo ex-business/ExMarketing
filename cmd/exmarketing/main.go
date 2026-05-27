@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -49,10 +50,16 @@ func main() {
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
+	listener, err := net.Listen("tcp", server.Addr)
+	if err != nil {
+		logger.Error("server listen failed", "addr", server.Addr, "error", err)
+		os.Exit(1)
+	}
+
 	errCh := make(chan error, 1)
 	go func() {
-		logger.Info("exmarketing listening", "addr", server.Addr)
-		errCh <- server.ListenAndServe()
+		logger.Info("exmarketing listening", "addr", listener.Addr().String(), "configuredAddr", server.Addr)
+		errCh <- server.Serve(listener)
 	}()
 
 	select {

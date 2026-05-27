@@ -1,30 +1,54 @@
 {
   "requirementId": "2026-05-24-113929-12",
-  "updatedAt": "2026-05-24T11:39:29.045817Z",
+  "updatedAt": "2026-05-27T11:08:05.075407Z",
   "agents": {
     "analysis": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-113929-12/analysis.md"
+      "status": "DONE",
+      "startedAt": "2026-05-27T08:57:56.494829Z",
+      "finishedAt": "2026-05-27T09:01:02.003691Z",
+      "output": "tasks/2026-05-24-113929-12/analysis.md",
+      "log": "tasks/2026-05-24-113929-12/runs/20260527T085756Z-analysis.log",
+      "nextStatus": "REVIEW_READY"
     },
     "commit": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-113929-12/commit.md"
+      "status": "RUNNING",
+      "startedAt": "2026-05-27T11:08:05.075402Z",
+      "output": "tasks/2026-05-24-113929-12/commit.md",
+      "log": "tasks/2026-05-24-113929-12/runs/20260527T110805Z-commit.log",
+      "pid": 12415
     },
     "dev": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-113929-12/implementation.md"
+      "status": "INTERRUPTED",
+      "startedAt": "2026-05-27T10:00:32.405528Z",
+      "finishedAt": "2026-05-27T10:12:55.870695Z",
+      "output": "tasks/2026-05-24-113929-12/implementation.md",
+      "log": "tasks/2026-05-24-113929-12/runs/20260527T100032Z-dev.log",
+      "pid": 52931,
+      "error": "agent interrupted: process 52931 is not running"
     },
     "review": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-113929-12/review.md"
+      "status": "DONE",
+      "startedAt": "2026-05-27T09:01:02.411383Z",
+      "finishedAt": "2026-05-27T09:54:34.385152Z",
+      "output": "tasks/2026-05-24-113929-12/review.md",
+      "log": "tasks/2026-05-24-113929-12/runs/20260527T090102Z-review.log",
+      "nextStatus": "REVIEW_PASS"
     },
     "test": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-113929-12/test.md"
+      "status": "DONE",
+      "startedAt": "2026-05-27T11:04:55.689392Z",
+      "finishedAt": "2026-05-27T11:04:55.717962Z",
+      "output": "tasks/2026-05-24-113929-12/test.md",
+      "log": "tasks/2026-05-24-113929-12/runs/20260527T110455Z-test.log",
+      "nextStatus": "COMMIT_READY"
     },
     "test-plan": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-24-113929-12/test-plan.md"
+      "status": "DONE",
+      "startedAt": "2026-05-27T09:54:34.410098Z",
+      "finishedAt": "2026-05-27T09:56:18.544271Z",
+      "output": "tasks/2026-05-24-113929-12/test-plan.md",
+      "log": "tasks/2026-05-24-113929-12/runs/20260527T095434Z-test-plan.log",
+      "nextStatus": "REVIEW_PASS"
     }
   }
 }

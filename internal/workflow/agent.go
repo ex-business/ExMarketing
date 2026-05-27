@@ -504,6 +504,13 @@ func EvaluateAgentResult(taskDir string, agent Agent) (string, int, error) {
 		}
 		return StatusTestFail, -1, nil
 	case AgentCommit:
+		content, err := readTaskFile(taskDir, "commit.md")
+		if err != nil {
+			return "", 0, err
+		}
+		if parseCommitResult(content) == "BLOCK" {
+			return StatusCommitFail, -1, nil
+		}
 		return StatusCommitted, -1, nil
 	default:
 		return "", 0, fmt.Errorf("unknown agent %s", agent)
@@ -542,6 +549,10 @@ func parseDecision(content string) string {
 
 func parseResult(content string) string {
 	return parseTokenAfterHeading(content, "Result", []string{"PASS", "FAIL"})
+}
+
+func parseCommitResult(content string) string {
+	return parseTokenAfterHeading(content, "Commit", []string{"PASS", "BLOCK"})
 }
 
 func parseScore(content string) int {

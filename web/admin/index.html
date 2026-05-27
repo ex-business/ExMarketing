@@ -1162,11 +1162,10 @@
     <div class="toolbar">
       <div>
         <h2 class="panel-title">活动配置</h2>
-        <div class="subtitle">通用活动模型：列表、只读摘要、新增活动和 Quota 创建。</div>
+        <div class="subtitle">通用活动模型：列表、详情、新增活动、审批、上线前校验、状态更新和 Quota 创建。</div>
       </div>
       <button class="button" onclick="loadActivities()">刷新活动</button>
     </div>
-    <div class="warning-box">活动详情接口和完整 quota 查询接口本期未明确存在；详情只展示列表或创建响应中的真实字段，缺失 quota 视为 unlimited。</div>
     <div class="admin-grid">
       <div class="panel">
         <div class="panel-head">
@@ -1179,7 +1178,7 @@
         </div>
       </div>
       <div class="panel">
-        <div class="panel-head"><h3 class="panel-title">活动详情只读</h3></div>
+        <div class="panel-head"><h3 class="panel-title">活动详情与操作</h3></div>
         <div class="detail-body" id="activityDetail">
           <div class="empty">从左侧活动列表选择一条记录。</div>
         </div>
@@ -1208,22 +1207,6 @@
               <button class="button secondary" onclick="fillQuotaSample()">填入示例</button>
             </div>
             <pre class="output" id="quotaResult"></pre>
-          </div>
-        </div>
-        <div class="panel">
-          <div class="panel-head"><h3 class="panel-title">待后端接入能力</h3></div>
-          <div class="detail-body">
-            <div class="warning-box">审批、上线、编辑发布、复制、删除、暂停、恢复、结束和版本回滚不在本期实现范围内。</div>
-            <div class="disabled-actions">
-              <button class="button secondary" disabled>提交审批</button>
-              <button class="button secondary" disabled>审批通过</button>
-              <button class="button secondary" disabled>上线</button>
-              <button class="button secondary" disabled>暂停</button>
-              <button class="button secondary" disabled>恢复</button>
-              <button class="button secondary" disabled>复制</button>
-              <button class="button secondary" disabled>删除</button>
-              <button class="button secondary" disabled>版本回滚</button>
-            </div>
           </div>
         </div>
       </div>
@@ -1509,6 +1492,7 @@ let confirmResolver = null;
 let autoRunQueue = false;
 let batchMode = false;
 let adminActivities = [];
+let selectedActivityId = '';
 
 function toggleSidebar() {
   const shell = document.getElementById('appShell');
@@ -2604,7 +2588,7 @@ async function loadActivities() {
     return;
   }
   document.getElementById('activities').innerHTML = renderActivityTable(adminActivities);
-  renderActivityDetail(adminActivities[0].id);
+  loadActivityDetail(adminActivities[0].id);
 }
 
 function renderActivityTable(items) {
@@ -2623,7 +2607,7 @@ function renderActivityTable(items) {
       </thead>
       <tbody>
         ${items.map(item => `
-          <tr onclick="renderActivityDetail('${escapeJs(item.id)}')" style="cursor:pointer">
+          <tr onclick="loadActivityDetail('${escapeJs(item.id)}')" style="cursor:pointer">
             <td>${escapeHtml(item.activityCode || '-')}</td>
             <td>${escapeHtml(item.activityName || '-')}</td>
             <td>${escapeHtml(item.activityType || '-')}</td>
@@ -2638,16 +2622,34 @@ function renderActivityTable(items) {
   `;
 }
 
-function renderActivityDetail(id) {
-  const item = adminActivities.find(activity => activity.id === id);
+async function loadActivityDetail(id) {
+  selectedActivityId = id;
+  const target = document.getElementById('activityDetail');
+  if (!target) return;
+  target.innerHTML = '<div class="empty">正在加载活动详情...</div>';
+  const data = await requestJson('/admin/v1/activities/' + encodeURIComponent(id));
+  if (!data.ok) {
+    target.innerHTML = `<div class="error-box">HTTP ${data.status}\n${escapeHtml(JSON.stringify(data.body, null, 2))}</div>`;
+    return;
+  }
+  const index = adminActivities.findIndex(activity => activity.id === id);
+  if (index >= 0) adminActivities[index] = data.body;
+  renderActivityDetail(data.body);
+}
+
+function renderActivityDetail(item) {
   const target = document.getElementById('activityDetail');
   if (!item || !target) return;
   const rules = item.rules || [];
   const rewards = item.rewards || [];
+  const approval = item.approval || {};
   target.innerHTML = `
     ${renderQuotaBoundary()}
     <div class="summary">
       ${metric('tenant', item.tenantId || '-')}
+      ${metric('状态', item.status || '-')}
+      ${metric('审批', approval.status || 'NONE')}
+      ${metric('版本', String(item.version ?? '-'))}
       ${metric('优先级', String(item.priority ?? '-'))}
       ${metric('互斥组', item.exclusiveGroup || '-')}
       ${metric('可叠加', item.stackable ? 'true' : 'false')}
@@ -2661,6 +2663,30 @@ function renderActivityDetail(id) {
     ${rules.length ? renderSmallTable(rules, ['ruleCode', 'rulePhase', 'ruleType', 'sort', 'enabled', 'version']) : '<div class="empty">后端返回中没有规则。</div>'}
     <h3 class="panel-title" style="margin-top:14px">奖励配置</h3>
     ${rewards.length ? renderSmallTable(rewards, ['rewardCode', 'rewardType', 'calculateType', 'grantMode', 'grantChannel', 'enabled', 'version']) : '<div class="empty">后端返回中没有奖励。</div>'}
+    <h3 class="panel-title" style="margin-top:14px">审批与上线校验</h3>
+    <div class="readonly-box">以下动作只调用真实 Admin API；版本不一致、审批人不合法、高危二级审批、未审批上线等拒绝原因以后端响应为准。</div>
+    <div class="field-grid">
+      <div>
+        <label for="activityOperator">operator</label>
+        <input id="activityOperator" value="ops">
+      </div>
+      <div>
+        <label for="activityReason">reason</label>
+        <input id="activityReason" placeholder="approval / go-live reason">
+      </div>
+    </div>
+    <div class="ops">
+      <button class="button secondary" onclick="validateSelectedActivity()">上线前校验</button>
+      <button class="button secondary" onclick="submitSelectedActivityApproval()">提交审批</button>
+      <button class="button secondary" onclick="approveSelectedActivity()">审批通过</button>
+      <button class="button secondary" onclick="rejectSelectedActivity()">审批驳回</button>
+      <button class="button secondary" onclick="updateSelectedActivityStatus('SCHEDULED')">设为 SCHEDULED</button>
+      <button class="button secondary" onclick="updateSelectedActivityStatus('ACTIVE')">设为 ACTIVE</button>
+      <button class="button secondary" onclick="updateSelectedActivityStatus('PAUSED')">暂停</button>
+      <button class="button secondary" onclick="loadSelectedApprovalRecords()">审批记录</button>
+      <button class="button secondary" onclick="loadSelectedActivityAudit()">活动审计</button>
+    </div>
+    <pre class="output" id="activityActionResult"></pre>
     <h3 class="panel-title" style="margin-top:14px">原始返回</h3>
     <pre class="output">${escapeHtml(JSON.stringify(item, null, 2))}</pre>
   `;
@@ -2688,6 +2714,114 @@ function metric(label, value) {
 async function createActivityFromAdmin() {
   await postJson('/admin/v1/activities', 'activity', 'activityResult');
   await loadActivities();
+}
+
+function selectedActivity() {
+  return adminActivities.find(activity => activity.id === selectedActivityId) || null;
+}
+
+function selectedActivityActionBody() {
+  const activity = selectedActivity();
+  return {
+    operator: valueOf('activityOperator') || 'ops',
+    expectedVersion: activity?.version || 1,
+    reason: valueOf('activityReason')
+  };
+}
+
+async function submitSelectedActivityApproval() {
+  if (!selectedActivityId) return;
+  const data = await requestJson('/admin/v1/activities/' + encodeURIComponent(selectedActivityId) + '/approval/submit', {
+    method: 'POST',
+    body: JSON.stringify(selectedActivityActionBody())
+  });
+  writeResult('activityActionResult', data);
+  if (data.ok) await loadActivityDetail(selectedActivityId);
+}
+
+async function approveSelectedActivity() {
+  await postSelectedActivityAction('approval/approve');
+}
+
+async function rejectSelectedActivity() {
+  await postSelectedActivityAction('approval/reject');
+}
+
+async function postSelectedActivityAction(path) {
+  if (!selectedActivityId) return;
+  const body = selectedActivityActionBody();
+  delete body.expectedVersion;
+  const data = await requestJson('/admin/v1/activities/' + encodeURIComponent(selectedActivityId) + '/' + path, {
+    method: 'POST',
+    body: JSON.stringify(body)
+  });
+  writeResult('activityActionResult', data);
+  if (data.ok) await loadActivityDetail(selectedActivityId);
+}
+
+async function updateSelectedActivityStatus(status) {
+  if (!selectedActivityId) return;
+  const body = {operator: valueOf('activityOperator') || 'ops', status};
+  const data = await requestJson('/admin/v1/activities/' + encodeURIComponent(selectedActivityId), {
+    method: 'PUT',
+    body: JSON.stringify(body)
+  });
+  writeResult('activityActionResult', data);
+  if (data.ok) await loadActivityDetail(selectedActivityId);
+}
+
+async function validateSelectedActivity() {
+  const activity = selectedActivity();
+  if (!activity) return;
+  const validationActivity = {
+    operator: valueOf('activityOperator') || 'ops',
+    tenantId: activity.tenantId,
+    activityCode: activity.activityCode,
+    activityName: activity.activityName,
+    activityType: activity.activityType,
+    status: activity.status,
+    triggerEvents: activity.triggerEvents || [],
+    startTime: activity.startTime,
+    endTime: activity.endTime,
+    timezone: activity.timezone,
+    priority: activity.priority || 0,
+    exclusiveGroup: activity.exclusiveGroup || '',
+    stackable: Boolean(activity.stackable),
+    pluginCode: activity.pluginCode || '',
+    version: activity.version || 1,
+    config: activity.config || undefined,
+    rules: activity.rules || [],
+    rewards: activity.rewards || []
+  };
+  const data = await requestJson('/admin/v1/activities/prelaunch-validation', {
+    method: 'POST',
+    body: JSON.stringify({
+      activity: validationActivity,
+      existingActivities: adminActivities.filter(item => item.id !== activity.id),
+      approval: activity.approval || {},
+      actor: valueOf('activityOperator') || 'ops',
+      reason: valueOf('activityReason'),
+      targetAction: 'GO_LIVE'
+    })
+  });
+  writeResult('activityActionResult', data);
+}
+
+async function loadSelectedApprovalRecords() {
+  if (!selectedActivityId) return;
+  const data = await requestJson('/admin/v1/activities/' + encodeURIComponent(selectedActivityId) + '/approval-records');
+  writeResult('activityActionResult', data);
+}
+
+async function loadSelectedActivityAudit() {
+  const activity = selectedActivity();
+  if (!activity) return;
+  const params = new URLSearchParams();
+  addQuery(params, 'tenantId', activity.tenantId);
+  addQuery(params, 'activityId', activity.id);
+  addQuery(params, 'limit', '100');
+  const data = await requestJson('/admin/v1/audit?' + params.toString());
+  writeResult('activityActionResult', data);
 }
 
 async function postJson(url, inputId, outputId) {
@@ -2794,7 +2928,7 @@ function fillActivitySample() {
     activityCode: 'GENERIC_RATIO_BONUS',
     activityName: 'Generic Ratio Bonus',
     activityType: 'DEPOSIT_BONUS',
-    status: 'ACTIVE',
+    status: 'DRAFT',
     triggerEvents: ['DEPOSIT_SUCCESS'],
     startTime: '2026-05-24T00:00:00Z',
     endTime: '2026-06-24T00:00:00Z',
@@ -2802,7 +2936,40 @@ function fillActivitySample() {
     priority: 100,
     exclusiveGroup: 'deposit_bonus',
     stackable: false,
+    config: {
+      entry: {
+        enabled: true,
+        channels: ['WEB'],
+        sourceSystems: ['payment'],
+        tenantIds: ['site_001']
+      },
+      display: {
+        visible: true,
+        title: 'Generic Ratio Bonus',
+        tags: ['deposit', 'first-deposit']
+      },
+      audience: {
+        segmentCodes: ['new_user']
+      },
+      metadata: {
+        owner: 'growth'
+      }
+    },
     rules: [
+      {
+        ruleCode: 'FIRST_DEPOSIT_MATCH',
+        rulePhase: 'MATCH',
+        ruleType: 'CONDITION',
+        ruleConfig: {
+          logic: 'AND',
+          conditions: [
+            {field: 'attributes.isFirstDeposit', op: '=', value: true}
+          ]
+        },
+        sort: 0,
+        enabled: true,
+        version: 1
+      },
       {
         ruleCode: 'AMOUNT_QUALIFY',
         rulePhase: 'QUALIFY',

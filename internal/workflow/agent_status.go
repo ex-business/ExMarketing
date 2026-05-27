@@ -96,6 +96,39 @@ func EnsureAgentStatus(req Requirement) (AgentStatusFile, error) {
 	if err != nil {
 		return AgentStatusFile{}, err
 	}
+	status, changed := normalizeAgentStatus(req, status)
+	for _, agent := range []Agent{AgentAnalysis, AgentReview, AgentTestPlan, AgentDev, AgentTest, AgentCommit} {
+		key := string(agent)
+		before := status.Agents[key]
+		current := markStaleRunningIfNeeded(before)
+		if agentStatusChanged(before, current) {
+			changed = true
+		}
+		status.Agents[key] = current
+	}
+	if changed {
+		if err := SaveAgentStatus(req.TaskDir, status); err != nil {
+			return AgentStatusFile{}, err
+		}
+	}
+	return status, nil
+}
+
+func loadAgentStatusForMutation(req Requirement) (AgentStatusFile, error) {
+	status, err := LoadAgentStatus(req.TaskDir)
+	if err != nil {
+		return AgentStatusFile{}, err
+	}
+	status, changed := normalizeAgentStatus(req, status)
+	if changed {
+		if err := SaveAgentStatus(req.TaskDir, status); err != nil {
+			return AgentStatusFile{}, err
+		}
+	}
+	return status, nil
+}
+
+func normalizeAgentStatus(req Requirement, status AgentStatusFile) (AgentStatusFile, bool) {
 	changed := false
 	if status.RequirementID == "" {
 		status = NewAgentStatusFile(req)
@@ -120,19 +153,9 @@ func EnsureAgentStatus(req Requirement) (AgentStatusFile, error) {
 			current.Output = filepath.Join(req.TaskDir, ArtifactForAgent(agent))
 			changed = true
 		}
-		before := current
-		current = markStaleRunningIfNeeded(current)
-		if agentStatusChanged(before, current) {
-			changed = true
-		}
 		status.Agents[key] = current
 	}
-	if changed {
-		if err := SaveAgentStatus(req.TaskDir, status); err != nil {
-			return AgentStatusFile{}, err
-		}
-	}
-	return status, nil
+	return status, changed
 }
 
 func agentStatusChanged(left AgentStatus, right AgentStatus) bool {
@@ -247,7 +270,7 @@ func MarkAgentRunning(req Requirement, agent Agent, logPath string, pid int) err
 func MarkAgentDone(req Requirement, run AgentRun) error {
 	agentStatusMu.Lock()
 	defer agentStatusMu.Unlock()
-	status, err := EnsureAgentStatus(req)
+	status, err := loadAgentStatusForMutation(req)
 	if err != nil {
 		return err
 	}
@@ -268,12 +291,12 @@ func MarkAgentDone(req Requirement, run AgentRun) error {
 func MarkAgentFailed(req Requirement, run AgentRun, runErr error) error {
 	agentStatusMu.Lock()
 	defer agentStatusMu.Unlock()
-	status, err := EnsureAgentStatus(req)
+	status, err := loadAgentStatusForMutation(req)
 	if err != nil {
 		return err
 	}
 	current := status.Agents[string(run.Agent)]
-	if current.Status == AgentStatusStale {
+	if current.Status == AgentStatusStale && strings.Contains(current.Error, "stopped by user") {
 		current.PID = 0
 		current.ExitCode = run.ExitCode
 		if current.Log == "" {

@@ -377,17 +377,53 @@ func TestCreateActivityCommandValidatesRuleSchema(t *testing.T) {
 	}
 }
 
+func TestCreateActivityCommandAcceptsRegisteredFormulaRule(t *testing.T) {
+	now := time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
+	cmd := validPrelaunchActivity()
+	cmd.Rules = []Rule{{
+		Code:    "FORMULA_RULE",
+		Phase:   RulePhaseQualify,
+		Type:    RuleTypeFormula,
+		Config:  []byte(`{"formula":"attributes.amount * 0.2","resultType":"DECIMAL","compare":{"op":">=","value":"100.00"},"scale":2}`),
+		Enabled: true,
+		Version: 1,
+	}}
+
+	if err := cmd.Validate(now); err != nil {
+		t.Fatalf("expected registered FORMULA rule to validate: %v", err)
+	}
+}
+
+func TestCreateActivityCommandRejectsUnsafeFormulaRules(t *testing.T) {
+	now := time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
+	for name, config := range map[string]string{
+		"unsupported field":      `{"formula":"orderAmount * 0.2","resultType":"DECIMAL","compare":{"op":">=","value":"100.00"}}`,
+		"function call":          `{"formula":"now()","resultType":"DECIMAL","compare":{"op":">=","value":"100.00"}}`,
+		"missing compare":        `{"formula":"attributes.amount * 0.2","resultType":"DECIMAL"}`,
+		"unsupported resultType": `{"formula":"attributes.amount","resultType":"STRING","compare":{"op":"=","value":"100.00"}}`,
+		"bad boolean op":         `{"formula":"attributes.isFirstDeposit","resultType":"BOOLEAN","compare":{"op":">","value":true}}`,
+		"bad scale":              `{"formula":"attributes.amount","resultType":"DECIMAL","compare":{"op":">","value":"0"},"scale":9}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			cmd := validPrelaunchActivity()
+			cmd.Rules = []Rule{{
+				Code:    "FORMULA_RULE",
+				Phase:   RulePhaseQualify,
+				Type:    RuleTypeFormula,
+				Config:  []byte(config),
+				Enabled: true,
+				Version: 1,
+			}}
+			if err := cmd.Validate(now); err == nil {
+				t.Fatal("expected unsafe formula validation error")
+			}
+		})
+	}
+}
+
 func TestCreateActivityCommandRejectsUnregisteredRuleEvaluatorsAfterSchemaValidation(t *testing.T) {
 	now := time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
 	for name, rule := range map[string]Rule{
-		"formula": {
-			Code:    "FORMULA_RULE",
-			Phase:   RulePhaseQualify,
-			Type:    RuleTypeFormula,
-			Config:  []byte(`{"formula":"attributes.amount * 0.2","resultType":"DECIMAL","compare":{"op":">=","value":"100.00"},"scale":2}`),
-			Enabled: true,
-			Version: 1,
-		},
 		"limit": {
 			Code:    "LIMIT_RULE",
 			Phase:   RulePhaseLimit,

@@ -112,9 +112,10 @@ SCRIPT
 
 ```text
 CONDITION
+FORMULA
 ```
 
-当前 `CONDITION` 字段路径：
+当前 `CONDITION` / `FORMULA` 字段路径：
 
 ```text
 eventId
@@ -135,7 +136,7 @@ state.exclusive.<field>
 state.plugin.<pluginCode>.<path>
 ```
 
-后台创建活动和上线前校验会严格校验 `rule_config_json`：未知字段、空 `conditions`、非法 `rulePhase`、非法 `op`、缺失或非法 `value` 类型、非标准顶层业务字段，以及 `enabled=false` 的非法规则都会被拒绝。`FORMULA`、`LIMIT`、`SCRIPT` 目前只保留 Schema 边界；在 evaluator / 安全能力未注册前，合法结构也不得保存为可运行规则。
+后台创建活动和上线前校验会严格校验 `rule_config_json`：未知字段、空 `conditions`、非法 `rulePhase`、非法 `op`、缺失或非法 `value` 类型、非标准顶层业务字段，以及 `enabled=false` 的非法规则都会被拒绝。`FORMULA` 已注册为可运行 evaluator，最小能力支持 Decimal 算术 `+ - * /`、括号、一元负号、受控字段路径、Decimal 比较，以及 boolean 字段/字面量缺省 `compare`。`FORMULA` 不支持函数、脚本、SQL、HTTP、文件、环境变量、随机数或当前时间；不安全表达式会在创建、上线前校验或运行时结构化拒绝。`LIMIT`、`SCRIPT` 目前只保留 Schema 边界；在 evaluator / 安全能力未注册前，合法结构也不得保存为可运行规则。
 
 当前条件操作符：
 

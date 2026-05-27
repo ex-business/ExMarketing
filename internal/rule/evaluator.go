@@ -3,6 +3,7 @@ package rule
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"slices"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/ex-stack/ExMarketing/internal/decimal"
 	"github.com/ex-stack/ExMarketing/internal/marketing"
+	"github.com/ex-stack/ExMarketing/internal/ruleexpr"
 )
 
 const (
@@ -54,6 +56,7 @@ type Registry struct {
 func NewRegistry() *Registry {
 	registry := &Registry{evaluators: map[marketing.RuleType]Evaluator{}}
 	registry.Register(marketing.RuleTypeCondition, ConditionEvaluator{})
+	registry.Register(marketing.RuleTypeFormula, FormulaEvaluator{})
 	return registry
 }
 
@@ -269,6 +272,124 @@ func (e ConditionEvaluator) Evaluate(ctx Context, rule marketing.Rule) Result {
 		return lastFailure
 	}
 	return Result{Passed: true, Detail: detail}
+}
+
+type FormulaEvaluator struct{}
+
+type formulaRuleConfig struct {
+	Formula    string          `json:"formula"`
+	ResultType string          `json:"resultType"`
+	Compare    *formulaCompare `json:"compare,omitempty"`
+	Scale      *int            `json:"scale,omitempty"`
+}
+
+type formulaCompare struct {
+	Op    string `json:"op"`
+	Value any    `json:"value"`
+}
+
+func (e FormulaEvaluator) Evaluate(ctx Context, rule marketing.Rule) Result {
+	var config formulaRuleConfig
+	decoder := json.NewDecoder(bytes.NewReader(rule.Config))
+	decoder.UseNumber()
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&config); err != nil {
+		return Result{Passed: false, ReasonCode: ReasonInvalidConfig, Reason: "invalid formula rule config"}
+	}
+	resultType := strings.ToUpper(strings.TrimSpace(config.ResultType))
+	expr, err := ruleexpr.Parse(config.Formula, func(field string) bool {
+		return runtimeFormulaFieldSupported(field)
+	})
+	if err != nil {
+		return Result{Passed: false, ReasonCode: ReasonInvalidConfig, Reason: "invalid formula: " + err.Error(), Field: "formula"}
+	}
+	value, err := expr.Eval(func(path string) (any, bool) {
+		return fieldValue(ctx, path)
+	})
+	if err != nil {
+		return Result{Passed: false, ReasonCode: ReasonInvalidConfig, Reason: "formula evaluation failed: " + err.Error(), Field: "formula"}
+	}
+	if err := ensureFormulaResultType(resultType, value); err != nil {
+		return Result{Passed: false, ReasonCode: ReasonTypeMismatch, Reason: err.Error(), Field: "formula", Actual: formulaActual(value)}
+	}
+	detail := map[string]any{
+		"formula": config.Formula,
+		"fields":  expr.Fields(),
+	}
+	if config.Compare == nil {
+		if resultType != "BOOLEAN" {
+			return Result{Passed: false, ReasonCode: ReasonInvalidConfig, Reason: "formula compare is required", Field: "formula", Actual: formulaActual(value), Detail: detail}
+		}
+		return Result{Passed: value.Boolean, ReasonCode: ReasonConditionFailed, Reason: "formula result is false", Field: "formula", Expected: true, Actual: value.Boolean, Detail: detail}
+	}
+
+	condition := marketing.Condition{Field: "formula", Op: config.Compare.Op, Value: config.Compare.Value}
+	actual := formulaActual(value)
+	result := evaluateFormulaCompare(condition, actual, resultType)
+	result.Detail = detail
+	return result
+}
+
+func runtimeFormulaFieldSupported(field string) bool {
+	if ruleexpr.SupportedField(field, "") {
+		return true
+	}
+	if !strings.HasPrefix(field, "state.plugin.") {
+		return false
+	}
+	rest := strings.TrimPrefix(field, "state.plugin.")
+	parts := strings.SplitN(rest, ".", 2)
+	return len(parts) == 2 && strings.TrimSpace(parts[0]) != "" && strings.TrimSpace(parts[1]) != ""
+}
+
+func ensureFormulaResultType(resultType string, value ruleexpr.Value) error {
+	switch resultType {
+	case "DECIMAL":
+		if value.Kind != ruleexpr.KindDecimal {
+			return errors.New("formula result is not decimal")
+		}
+	case "BOOLEAN":
+		if value.Kind != ruleexpr.KindBoolean {
+			return errors.New("formula result is not boolean")
+		}
+	default:
+		return fmt.Errorf("formula resultType %s is unsupported", resultType)
+	}
+	return nil
+}
+
+func formulaActual(value ruleexpr.Value) any {
+	switch value.Kind {
+	case ruleexpr.KindDecimal:
+		return value.Decimal.String()
+	case ruleexpr.KindBoolean:
+		return value.Boolean
+	case ruleexpr.KindString:
+		return value.String
+	default:
+		return nil
+	}
+}
+
+func evaluateFormulaCompare(condition marketing.Condition, actual any, resultType string) Result {
+	op := strings.ToUpper(strings.TrimSpace(condition.Op))
+	switch op {
+	case "=", "==":
+		return conditionResult(valuesEqual(actual, condition.Value), condition, actual, ReasonConditionFailed, fmt.Sprintf("formula != %v", condition.Value))
+	case "!=", "<>":
+		return conditionResult(!valuesEqual(actual, condition.Value), condition, actual, ReasonConditionFailed, fmt.Sprintf("formula == %v", condition.Value))
+	case ">=", ">", "<=", "<":
+		if resultType != "DECIMAL" {
+			return Result{Passed: false, ReasonCode: ReasonUnsupportedOp, Reason: fmt.Sprintf("unsupported formula op %s", condition.Op), Field: condition.Field, Expected: condition.Value, Actual: actual}
+		}
+		return compareDecimal(condition, actual, condition.Value, op)
+	case "IN":
+		return conditionResult(matchesMembership(condition.Value, actual), condition, actual, ReasonConditionFailed, fmt.Sprintf("formula not in %v", condition.Value))
+	case "NOT_IN":
+		return conditionResult(!matchesMembership(condition.Value, actual), condition, actual, ReasonConditionFailed, fmt.Sprintf("formula in %v", condition.Value))
+	default:
+		return Result{Passed: false, ReasonCode: ReasonUnsupportedOp, Reason: fmt.Sprintf("unsupported op %s", condition.Op), Field: condition.Field, Expected: condition.Value, Actual: actual}
+	}
 }
 
 func evaluateCondition(ctx Context, condition marketing.Condition) Result {

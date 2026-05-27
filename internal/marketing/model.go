@@ -13,6 +13,7 @@ import (
 
 	"github.com/ex-stack/ExMarketing/internal/decimal"
 	"github.com/ex-stack/ExMarketing/internal/mqtarget"
+	"github.com/ex-stack/ExMarketing/internal/ruleexpr"
 )
 
 type ActivityStatus string
@@ -1567,10 +1568,7 @@ func validateRule(index int, rule Rule, pluginCode string) error {
 	case RuleTypeCondition:
 		return validateConditionRule(index, rule.Config, pluginCode)
 	case RuleTypeFormula:
-		if err := validateFormulaRule(index, rule.Config, pluginCode); err != nil {
-			return err
-		}
-		return invalidActivityf("rules[%d].ruleType FORMULA evaluator is not registered", index)
+		return validateFormulaRule(index, rule.Config, pluginCode)
 	case RuleTypeLimit:
 		if err := validateLimitRule(index, rule.Config, pluginCode); err != nil {
 			return err
@@ -1648,31 +1646,70 @@ func validateFormulaRule(index int, raw json.RawMessage, pluginCode string) erro
 	if formula == "" {
 		return invalidActivityf("rules[%d].ruleConfig.formula is required", index)
 	}
-	if containsUnsafeExpressionToken(formula) {
-		return invalidActivityf("rules[%d].ruleConfig.formula is unsafe", index)
+	if _, err := ruleexpr.Parse(formula, func(field string) bool {
+		return supportedConfiguredField(field, pluginCode)
+	}); err != nil {
+		return invalidActivityf("rules[%d].ruleConfig.formula is invalid: %v", index, err)
 	}
-	switch strings.ToUpper(strings.TrimSpace(cfg.ResultType)) {
-	case "DECIMAL", "INTEGER", "BOOLEAN", "STRING":
+	resultType := strings.ToUpper(strings.TrimSpace(cfg.ResultType))
+	switch resultType {
+	case "DECIMAL", "BOOLEAN":
+	case "INTEGER", "STRING":
+		return invalidActivityf("rules[%d].ruleConfig.resultType is not supported", index)
 	default:
 		return invalidActivityf("rules[%d].ruleConfig.resultType is invalid", index)
 	}
 	if cfg.Scale != nil {
-		if strings.ToUpper(strings.TrimSpace(cfg.ResultType)) != "DECIMAL" {
+		if resultType != "DECIMAL" {
 			return invalidActivityf("rules[%d].ruleConfig.scale is only allowed for DECIMAL", index)
 		}
-		if *cfg.Scale < 0 {
-			return invalidActivityf("rules[%d].ruleConfig.scale must be non-negative", index)
+		if *cfg.Scale < 0 || *cfg.Scale > 8 {
+			return invalidActivityf("rules[%d].ruleConfig.scale must be between 0 and 8", index)
 		}
 	}
-	if cfg.Compare != nil {
-		if !validCompareOp(cfg.Compare.Op) {
-			return invalidActivityf("rules[%d].ruleConfig.compare.op is invalid", index)
+	if cfg.Compare == nil {
+		if resultType != "BOOLEAN" {
+			return invalidActivityf("rules[%d].ruleConfig.compare is required for non-BOOLEAN formula", index)
 		}
+		return nil
+	}
+	op := strings.ToUpper(strings.TrimSpace(cfg.Compare.Op))
+	if !validCompareOp(op) {
+		return invalidActivityf("rules[%d].ruleConfig.compare.op is invalid", index)
+	}
+	switch op {
+	case "IN", "NOT_IN":
+		values, ok := rawJSONArray(cfg.Compare.Value)
+		if !ok {
+			return invalidActivityf("rules[%d].ruleConfig.compare.value must be array", index)
+		}
+		if len(values) == 0 {
+			return invalidActivityf("rules[%d].ruleConfig.compare.value must be non-empty array", index)
+		}
+		for valueIndex, value := range values {
+			if !validRuleValue(value, false) {
+				return invalidActivityf("rules[%d].ruleConfig.compare.value[%d] is invalid", index, valueIndex)
+			}
+		}
+	default:
 		if !validRuleValue(cfg.Compare.Value, false) {
 			return invalidActivityf("rules[%d].ruleConfig.compare.value is invalid", index)
 		}
 	}
-	_ = pluginCode
+	switch resultType {
+	case "DECIMAL":
+		switch op {
+		case "=", "==", "!=", "<>", ">", ">=", "<", "<=", "IN", "NOT_IN":
+		default:
+			return invalidActivityf("rules[%d].ruleConfig.compare.op is invalid", index)
+		}
+	case "BOOLEAN":
+		switch op {
+		case "=", "==", "!=", "<>":
+		default:
+			return invalidActivityf("rules[%d].ruleConfig.compare.op is invalid for BOOLEAN", index)
+		}
+	}
 	return nil
 }
 
@@ -2312,22 +2349,7 @@ func parseOptionalTime(name, value string) (time.Time, bool, error) {
 }
 
 func supportedConfiguredField(field string, pluginCode string) bool {
-	field = strings.TrimSpace(field)
-	if strings.HasPrefix(field, "attributes.") && len(field) > len("attributes.") {
-		return true
-	}
-	if supportedStateField(field, pluginCode) {
-		return true
-	}
-	if _, _, ok := splitFactField(field); ok {
-		return true
-	}
-	switch field {
-	case "eventId", "eventType", "sourceSystem", "tenantId", "occurredAt", "subject.type", "subject.id", "biz.bizType", "biz.bizId":
-		return true
-	default:
-		return false
-	}
+	return ruleexpr.SupportedField(field, pluginCode)
 }
 
 func supportedStateField(field string, pluginCode string) bool {
@@ -2346,7 +2368,7 @@ func supportedStateField(field string, pluginCode string) bool {
 
 func validCompareOp(op string) bool {
 	switch strings.ToUpper(strings.TrimSpace(op)) {
-	case "=", "==", "!=", "<>", ">", ">=", "<", "<=":
+	case "=", "==", "!=", "<>", ">", ">=", "<", "<=", "IN", "NOT_IN":
 		return true
 	default:
 		return false
@@ -2390,16 +2412,6 @@ func rawJSONArray(raw json.RawMessage) ([]json.RawMessage, bool) {
 		return nil, false
 	}
 	return values, true
-}
-
-func containsUnsafeExpressionToken(expression string) bool {
-	upper := strings.ToUpper(expression)
-	for _, token := range []string{"SELECT", "INSERT", "UPDATE", "DELETE", "DROP", "HTTP", "FILE", "ENV", "SECRET", "RANDOM", "NOW(", "TIME("} {
-		if strings.Contains(upper, token) {
-			return true
-		}
-	}
-	return false
 }
 
 func jsonScalarString(value any) string {

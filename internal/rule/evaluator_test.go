@@ -239,9 +239,9 @@ func TestQualifyConditionExplainsMissingAttributeWithoutRewardOrQuota(t *testing
 
 func TestRegistryRejectsUnregisteredEvaluator(t *testing.T) {
 	rule := marketing.Rule{
-		Code:    "formula",
+		Code:    "limit",
 		Phase:   marketing.RulePhaseQualify,
-		Type:    marketing.RuleTypeFormula,
+		Type:    marketing.RuleTypeLimit,
 		Enabled: true,
 	}
 
@@ -252,11 +252,105 @@ func TestRegistryRejectsUnregisteredEvaluator(t *testing.T) {
 	}
 }
 
+func TestFormulaEvaluatorPassesDecimalFormulaAndRejectsFailedCompare(t *testing.T) {
+	rule := formulaRule("bonus_cap", marketing.RulePhaseQualify, 10, `{
+		"formula": "attributes.amount * 0.2",
+		"resultType": "DECIMAL",
+		"compare": {"op": "<=", "value": "500.00"},
+		"scale": 4
+	}`)
+	event := marketing.ActivityEvent{Attributes: map[string]any{"amount": "2000.00"}}
+
+	result := Execute(Context{Event: event}, []marketing.Rule{rule}, NewRegistry())
+	if result.Decision != marketing.RuleDecisionPassed {
+		t.Fatalf("expected decimal formula to pass, got %+v", result)
+	}
+	got := result.StageResults[1].RuleResults[0]
+	if got.Actual != "400.0000" || got.Expected != "500.00" {
+		t.Fatalf("expected formula actual/expected detail, got %+v", got)
+	}
+
+	event.Attributes["amount"] = "3000.00"
+	result = Execute(Context{Event: event}, []marketing.Rule{rule}, NewRegistry())
+	if result.Decision != marketing.RuleDecisionRejected || result.FailedStage != marketing.RuleStageQualify {
+		t.Fatalf("expected failed formula compare to reject, got %+v", result)
+	}
+}
+
+func TestFormulaEvaluatorSupportsBooleanFormulaWithoutCompare(t *testing.T) {
+	rule := formulaRule("first_deposit", marketing.RulePhaseMatch, 1, `{
+		"formula": "attributes.isFirstDeposit",
+		"resultType": "BOOLEAN"
+	}`)
+	event := marketing.ActivityEvent{Attributes: map[string]any{"isFirstDeposit": true}}
+
+	result := Execute(Context{Event: event}, []marketing.Rule{rule}, NewRegistry())
+	if result.Decision != marketing.RuleDecisionPassed {
+		t.Fatalf("expected boolean formula to pass, got %+v", result)
+	}
+
+	event.Attributes["isFirstDeposit"] = false
+	result = Execute(Context{Event: event}, []marketing.Rule{rule}, NewRegistry())
+	if result.Decision != marketing.RuleDecisionRejected || result.ReasonCode != ReasonConditionFailed {
+		t.Fatalf("expected false boolean formula to reject, got %+v", result)
+	}
+}
+
+func TestFormulaEvaluatorRejectsUnsafeFormulaAtRuntime(t *testing.T) {
+	rule := formulaRule("unsafe", marketing.RulePhaseQualify, 1, `{
+		"formula": "http(attributes.amount)",
+		"resultType": "DECIMAL",
+		"compare": {"op": ">", "value": "0"}
+	}`)
+
+	result := Execute(Context{Event: marketing.ActivityEvent{Attributes: map[string]any{"amount": "10"}}}, []marketing.Rule{rule}, NewRegistry())
+	if result.Decision != marketing.RuleDecisionError {
+		t.Fatalf("expected unsafe formula to error, got %+v", result)
+	}
+	got := result.StageResults[1].RuleResults[0]
+	if got.ReasonCode != ReasonInvalidConfig || got.Field != "formula" {
+		t.Fatalf("expected structured formula config error, got %+v", got)
+	}
+}
+
+func TestFormulaEvaluatorReportsTypeMismatchAndDivideByZeroAsErrors(t *testing.T) {
+	for name, rule := range map[string]marketing.Rule{
+		"type mismatch": formulaRule("bad_type", marketing.RulePhaseQualify, 1, `{
+			"formula": "attributes.channel * 2",
+			"resultType": "DECIMAL",
+			"compare": {"op": ">", "value": "0"}
+		}`),
+		"divide by zero": formulaRule("zero_div", marketing.RulePhaseQualify, 1, `{
+			"formula": "attributes.amount / 0",
+			"resultType": "DECIMAL",
+			"compare": {"op": ">", "value": "0"}
+		}`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			result := Execute(Context{Event: marketing.ActivityEvent{Attributes: map[string]any{"amount": "10", "channel": "APP"}}}, []marketing.Rule{rule}, NewRegistry())
+			if result.Decision != marketing.RuleDecisionError {
+				t.Fatalf("expected formula error, got %+v", result)
+			}
+		})
+	}
+}
+
 func conditionRule(code string, phase marketing.RulePhase, sort int, config string) marketing.Rule {
 	return marketing.Rule{
 		Code:    code,
 		Phase:   phase,
 		Type:    marketing.RuleTypeCondition,
+		Config:  []byte(config),
+		Sort:    sort,
+		Enabled: true,
+	}
+}
+
+func formulaRule(code string, phase marketing.RulePhase, sort int, config string) marketing.Rule {
+	return marketing.Rule{
+		Code:    code,
+		Phase:   phase,
+		Type:    marketing.RuleTypeFormula,
 		Config:  []byte(config),
 		Sort:    sort,
 		Enabled: true,

@@ -8,32 +8,45 @@
 
 ~~~bash
 git status -sb
+git diff --check
 go test ./...
 go build ./...
 ~~~
 
 ## Scope
 
-待填写。
+提交管理后台通用配置页面及相关工作流状态文件。
+
+未暂存或提交 `tasks/*/runs/` 执行日志。
 
 ## Review
 
 ~~~text
-PASS / BLOCK
+PASS
 ~~~
 
 ## Test
 
 ~~~text
-PASS / FAIL
+PASS
 ~~~
 
 ## Commit
 
 ~~~text
-hash:
-message:
-remote:
+PASS
+hash: 6b07a23f5173bf258abb2114e524afbaa0f08504
+message: Add generic admin activity configuration page
+remote: not pushed
+~~~
+
+## Pre-Commit Checks
+
+~~~text
+git status -sb: PASS (executed)
+git diff --check: PASS
+go test ./...: PASS
+go build ./...: PASS
 ~~~
 
 需求：2026-05-24-113929-12

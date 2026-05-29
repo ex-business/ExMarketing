@@ -147,14 +147,72 @@ docker compose down
 docker compose down -v
 ```
 
-## 应用 migration
+## Migration 发布流程
 
-首次启动容器会自动执行 `db/migration` 下的 SQL。
+正式发布使用 forward-only migration。已成功发布的 `db/migration/NNN_name.sql`
+不得修改；修复已发布 schema 必须新增更高版本 SQL。流程使用数据库内的
+`schema_migrations` 表记录版本、文件名、SHA-256 checksum、执行状态、开始/完成时间和脱敏错误摘要。
 
-已有数据卷时，新 migration 需要手动执行：
+本地 PostgreSQL：
 
 ```bash
-docker compose exec -T postgres psql -U exmarketing -d exmarketing -f /docker-entrypoint-initdb.d/002_audit_fact_outbox_indexes.sql
+docker compose up -d postgres
+export EX_MARKETING_DATABASE_URL='postgres://exmarketing:exmarketing@localhost:54329/exmarketing?sslmode=disable'
+```
+
+发布前检查：
+
+```bash
+go run ./cmd/db-migration-release --mode precheck
+```
+
+应用未执行 migration：
+
+```bash
+go run ./cmd/db-migration-release --mode apply
+```
+
+检测 schema drift：
+
+```bash
+go run ./cmd/db-migration-release --mode drift
+```
+
+查看状态：
+
+```bash
+go run ./cmd/db-migration-release --mode status
+```
+
+`precheck` 会验证 PostgreSQL 可连接、migration 目录可读、文件名和版本唯一、
+已执行版本的 checksum 与本地文件一致、没有失败未处理记录，并打印待执行版本。
+空库会自动创建 `schema_migrations` 后执行全部 migration；重复执行 `apply` 会跳过
+已成功版本。已有业务表但没有 `schema_migrations` 记录的历史环境会被阻止自动升级，
+必须先人工确认基线后再继续，避免重跑初始化 SQL 破坏数据。
+
+`drift` 至少检查 version/checksum 与核心表存在性，核心表包括
+`marketing_activity`、`marketing_rule`、`marketing_reward`、`marketing_quota`、
+`marketing_event_inbox`、`marketing_participation`、`marketing_grant_order`、
+`marketing_outbox`、`marketing_audit` 和 `marketing_fact_provider`。
+
+失败处理：
+
+- migration SQL 失败时流程停止，不会继续执行后续版本。
+- 失败版本会记录为 `failed`，错误摘要会截断并脱敏。
+- 共享环境和生产环境不执行自动 down 回滚；优先从备份恢复或新增更高版本修复 migration。
+- 如果失败发生在未成功版本且事务已回滚，修复同一未成功 migration 后，需要先人工清理或确认失败记录，再重新执行 `precheck` 和 `apply`。
+
+本地验证建议：
+
+```bash
+docker compose down -v
+docker compose up -d postgres
+export EX_MARKETING_DATABASE_URL='postgres://exmarketing:exmarketing@localhost:54329/exmarketing?sslmode=disable'
+go run ./cmd/db-migration-release --mode apply
+go run ./cmd/db-migration-release --mode apply
+go run ./cmd/db-migration-release --mode drift
+go test ./...
+go build ./...
 ```
 
 查看表：

@@ -609,23 +609,23 @@
       "id": "2026-05-27-engine-load-fault-tests",
       "title": "engine-load-fault-tests: 压测和故障注入",
       "description": "活动引擎基础完善任务。补充并发事件压测、quota 并发扣减压测、outbox 重试压测、callback 重复/乱序压测、PostgreSQL 重启或网络超时故障注入。验收：脚本可本地运行；输出吞吐、错误率、数据一致性检查；失败有可复现日志。",
-      "status": "COMMIT_READY",
+      "status": "COMMITTED",
       "risk": "高",
       "score": 91,
       "taskDir": "tasks/2026-05-27-engine-load-fault-tests",
       "createdAt": "2026-05-27T14:58:51.242521Z",
-      "updatedAt": "2026-05-29T12:02:56.992651Z"
+      "updatedAt": "2026-05-29T12:04:27.845339Z"
     },
     {
       "id": "2026-05-27-db-migration-release-migration",
       "title": "db-migration-release: 数据库 migration 发布流程",
       "description": "活动引擎基础完善任务。建立正式 migration 发布流程，包括 migration version 表、up/down 或 forward-only 策略、发布前检查、失败回滚方案和本地验证脚本。验收：新环境可一键初始化；已有环境可幂等升级；schema drift 可检测。",
-      "status": "ANALYSIS_READY",
+      "status": "COMMIT_READY",
       "risk": "高",
-      "score": 0,
+      "score": 92,
       "taskDir": "tasks/2026-05-27-db-migration-release-migration",
       "createdAt": "2026-05-27T14:58:51.290102Z",
-      "updatedAt": "2026-05-27T15:00:29.870585Z"
+      "updatedAt": "2026-05-29T12:23:04.300062Z"
     },
     {
       "id": "2026-05-27-db-backup-restore",

@@ -10,7 +10,6 @@ services:
       - "54329:5432"
     volumes:
       - exmarketing-postgres-data:/var/lib/postgresql/data
-      - ./db/migration:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U exmarketing -d exmarketing"]
       interval: 5s
@@ -19,4 +18,3 @@ services:
 
 volumes:
   exmarketing-postgres-data:
-

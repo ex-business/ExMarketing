@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ex-stack/ExMarketing/internal/dbmigration"
 	"github.com/ex-stack/ExMarketing/internal/marketing"
 	"github.com/jackc/pgx/v5/pgconn"
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -32,6 +33,10 @@ func NewRepository(ctx context.Context, databaseURL string) (*Repository, error)
 	db.SetConnMaxLifetime(30 * time.Minute)
 
 	if err := db.PingContext(ctx); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := (dbmigration.Manager{DB: db}).Drift(ctx); err != nil {
 		_ = db.Close()
 		return nil, err
 	}

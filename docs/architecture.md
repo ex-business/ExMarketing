@@ -72,9 +72,15 @@ default                         in-memory repository
 EX_MARKETING_DATABASE_URL set    PostgreSQL repository
 ```
 
-Local PostgreSQL is provided by `docker-compose.yml` and initializes the first-phase schema from `db/migration/001_marketing_core.sql`.
+Local PostgreSQL is provided by `docker-compose.yml`. Schema initialization and
+upgrades are applied through `go run ./cmd/db-migration-release --mode apply`,
+which records successful versions in `schema_migrations` and blocks checksum
+or schema drift.
 
-`db/migration/002_audit_fact_outbox_indexes.sql` adds audit records, fact provider metadata and indexes for quota/outbox processing.
+`db/migration/001_marketing_core.sql` creates the core activity, rule, reward,
+quota, event inbox, participation, grant order, outbox and manual export tables.
+`db/migration/002_audit_fact_outbox_indexes.sql` adds audit records, fact
+provider metadata and indexes for quota/outbox processing.
 
 ## Implemented Next-Step Capabilities
 

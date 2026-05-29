@@ -17,12 +17,13 @@ Start local PostgreSQL:
 
 ```bash
 docker compose up -d postgres
+export EX_MARKETING_DATABASE_URL='postgres://exmarketing:exmarketing@localhost:54329/exmarketing?sslmode=disable'
+go run ./cmd/db-migration-release --mode apply
 ```
 
 Use the Docker PostgreSQL database:
 
 ```bash
-export EX_MARKETING_DATABASE_URL='postgres://exmarketing:exmarketing@localhost:54329/exmarketing?sslmode=disable'
 go run ./cmd/exmarketing
 ```
 
@@ -61,6 +62,18 @@ Stop local PostgreSQL:
 ```bash
 docker compose down
 ```
+
+Migration release commands:
+
+```bash
+go run ./cmd/db-migration-release --mode precheck
+go run ./cmd/db-migration-release --mode apply
+go run ./cmd/db-migration-release --mode drift
+```
+
+The migration release flow records successful versions in `schema_migrations`,
+checks SHA-256 checksums, blocks failed or drifted versions, and uses a
+forward-only strategy for shared and production environments.
 
 ## APIs
 
@@ -184,6 +197,7 @@ export EX_MARKETING_WEBHOOK_RECEIVERS_JSON='[{"receiverCode":"payment-webhook","
 
 ```text
 cmd/exmarketing       service entrypoint
+cmd/db-migration-release PostgreSQL migration release command
 internal/httpapi      HTTP handlers and routing
 internal/engine       event processing pipeline
 internal/marketing    domain model and repository contracts
@@ -193,7 +207,7 @@ internal/decimal      decimal money helper, no float64 for amount math
 internal/worker       outbox HTTP/Webhook/MQ sender with retry and DLQ
 internal/fact         HTTP fact provider client
 internal/plugin       activity plugin registry contract
-db/migration          first-phase schema
+db/migration          PostgreSQL schema migrations
 docs                  design notes
 ```
 

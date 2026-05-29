@@ -1,30 +1,53 @@
 {
   "requirementId": "2026-05-27-db-migration-release-migration",
-  "updatedAt": "2026-05-27T15:00:29.871278Z",
+  "updatedAt": "2026-05-29T12:23:04.328086Z",
   "agents": {
     "analysis": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-27-db-migration-release-migration/analysis.md"
+      "status": "DONE",
+      "startedAt": "2026-05-29T12:10:43.940509Z",
+      "finishedAt": "2026-05-29T12:12:51.463663Z",
+      "output": "tasks/2026-05-27-db-migration-release-migration/analysis.md",
+      "log": "tasks/2026-05-27-db-migration-release-migration/runs/20260529T121043Z-analysis.log",
+      "nextStatus": "REVIEW_READY"
     },
     "commit": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-27-db-migration-release-migration/commit.md"
+      "status": "RUNNING",
+      "startedAt": "2026-05-29T12:23:04.328082Z",
+      "output": "tasks/2026-05-27-db-migration-release-migration/commit.md",
+      "log": "tasks/2026-05-27-db-migration-release-migration/runs/20260529T122304Z-commit.log",
+      "pid": 72670
     },
     "dev": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-27-db-migration-release-migration/implementation.md"
+      "status": "DONE",
+      "startedAt": "2026-05-29T12:13:44.989257Z",
+      "finishedAt": "2026-05-29T12:19:33.429529Z",
+      "output": "tasks/2026-05-27-db-migration-release-migration/implementation.md",
+      "log": "tasks/2026-05-27-db-migration-release-migration/runs/20260529T121344Z-dev.log",
+      "nextStatus": "REVIEW_PASS"
     },
     "review": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-27-db-migration-release-migration/review.md"
+      "status": "DONE",
+      "startedAt": "2026-05-29T12:12:51.810322Z",
+      "finishedAt": "2026-05-29T12:13:44.986137Z",
+      "output": "tasks/2026-05-27-db-migration-release-migration/review.md",
+      "log": "tasks/2026-05-27-db-migration-release-migration/runs/20260529T121251Z-review.log",
+      "nextStatus": "REVIEW_PASS"
     },
     "test": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-27-db-migration-release-migration/test.md"
+      "status": "DONE",
+      "startedAt": "2026-05-29T12:19:33.470071Z",
+      "finishedAt": "2026-05-29T12:23:04.299659Z",
+      "output": "tasks/2026-05-27-db-migration-release-migration/test.md",
+      "log": "tasks/2026-05-27-db-migration-release-migration/runs/20260529T121933Z-test.log",
+      "nextStatus": "COMMIT_READY"
     },
     "test-plan": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-27-db-migration-release-migration/test-plan.md"
+      "status": "DONE",
+      "startedAt": "2026-05-29T12:13:45.017077Z",
+      "finishedAt": "2026-05-29T12:15:44.137799Z",
+      "output": "tasks/2026-05-27-db-migration-release-migration/test-plan.md",
+      "log": "tasks/2026-05-27-db-migration-release-migration/runs/20260529T121345Z-test-plan.log",
+      "nextStatus": "REVIEW_PASS"
     }
   }
 }

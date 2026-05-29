@@ -138,7 +138,6 @@ func (r *Repository) ListActivities(ctx context.Context) ([]marketing.Activity, 
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
 	var activities []marketing.Activity
 	for rows.Next() {
@@ -146,6 +145,16 @@ func (r *Repository) ListActivities(ctx context.Context) ([]marketing.Activity, 
 		if err != nil {
 			return nil, err
 		}
+		activities = append(activities, activity)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	for i := range activities {
+		activity := &activities[i]
 		activity.Rules, err = r.rulesForActivity(ctx, activity.ID)
 		if err != nil {
 			return nil, err
@@ -154,9 +163,8 @@ func (r *Repository) ListActivities(ctx context.Context) ([]marketing.Activity, 
 		if err != nil {
 			return nil, err
 		}
-		activities = append(activities, activity)
 	}
-	return activities, rows.Err()
+	return activities, nil
 }
 
 func (r *Repository) UpdateActivity(ctx context.Context, activity marketing.Activity) (marketing.Activity, error) {
@@ -208,7 +216,6 @@ func (r *Repository) FindMatchingActivities(ctx context.Context, tenantID string
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
 	var activities []marketing.Activity
 	for rows.Next() {
@@ -216,6 +223,16 @@ func (r *Repository) FindMatchingActivities(ctx context.Context, tenantID string
 		if err != nil {
 			return nil, err
 		}
+		activities = append(activities, activity)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	for i := range activities {
+		activity := &activities[i]
 		activity.Rules, err = r.rulesForActivity(ctx, activity.ID)
 		if err != nil {
 			return nil, err
@@ -224,9 +241,8 @@ func (r *Repository) FindMatchingActivities(ctx context.Context, tenantID string
 		if err != nil {
 			return nil, err
 		}
-		activities = append(activities, activity)
 	}
-	return activities, rows.Err()
+	return activities, nil
 }
 
 func (r *Repository) SaveFactProvider(ctx context.Context, provider marketing.FactProvider) (marketing.FactProvider, error) {

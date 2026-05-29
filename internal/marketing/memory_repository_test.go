@@ -582,6 +582,94 @@ func TestMemoryConcurrentQuotaCompetitionDoesNotOverReserve(t *testing.T) {
 	assertMemoryQuotaFrozen(t, repo, activityID, QuotaStock, QuotaScopeActivity, "REWARD_A", "1.0000")
 }
 
+func TestMemoryConcurrentQuotaCompetitionCoversAllQuotaTypes(t *testing.T) {
+	tests := []struct {
+		name       string
+		bottleneck QuotaType
+	}{
+		{name: "budget", bottleneck: QuotaBudget},
+		{name: "stock", bottleneck: QuotaStock},
+		{name: "user_limit", bottleneck: QuotaUserLimit},
+		{name: "daily_limit", bottleneck: QuotaDailyLimit},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := NewMemoryRepository()
+			now := time.Now().UTC()
+			activityID := "act_concurrent_quota_" + tt.name
+			capacity := "5"
+			ample := "100"
+			total := func(quotaType QuotaType) string {
+				if quotaType == tt.bottleneck {
+					return capacity
+				}
+				return ample
+			}
+			repo.quotas = []Quota{
+				{ID: "quota_budget_" + tt.name, ActivityID: activityID, Type: QuotaBudget, Scope: QuotaScopeActivity, ScopeKey: "TOTAL", TotalValue: total(QuotaBudget), UsedValue: "0", FrozenValue: "0", Version: 1, CreatedAt: now, UpdatedAt: now},
+				{ID: "quota_stock_" + tt.name, ActivityID: activityID, Type: QuotaStock, Scope: QuotaScopeActivity, ScopeKey: "REWARD_A", TotalValue: total(QuotaStock), UsedValue: "0", FrozenValue: "0", Version: 1, CreatedAt: now, UpdatedAt: now},
+				{ID: "quota_user_" + tt.name, ActivityID: activityID, Type: QuotaUserLimit, Scope: QuotaScopeUser, ScopeKey: "user_1", TotalValue: total(QuotaUserLimit), UsedValue: "0", FrozenValue: "0", Version: 1, CreatedAt: now, UpdatedAt: now},
+				{ID: "quota_daily_" + tt.name, ActivityID: activityID, Type: QuotaDailyLimit, Scope: QuotaScopeUser, ScopeKey: "2026-05-27:user_1", TotalValue: total(QuotaDailyLimit), UsedValue: "0", FrozenValue: "0", Version: 1, CreatedAt: now, UpdatedAt: now},
+			}
+
+			const attempts = 24
+			var wg sync.WaitGroup
+			results := make(chan error, attempts)
+			for i := 0; i < attempts; i++ {
+				wg.Add(1)
+				go func(i int) {
+					defer wg.Done()
+					suffix := strings.ReplaceAll(time.Unix(0, int64(i)).Format("150405.000000000"), ".", "_")
+					participationID := "part_" + tt.name + "_" + suffix
+					grant := testAtomicGrant("grant_"+tt.name+"_"+suffix, activityID, participationID, "grant_idem_"+tt.name+"_"+suffix, now)
+					grant.RewardPayload = []byte(`{"rewardCode":"REWARD_A","rewardType":"BONUS","calculateType":"FIXED","amount":"1"}`)
+					_, err := repo.CreateParticipationGrantOutboxesWithQuota(context.Background(), AtomicGrantCommand{
+						Participation:      testAtomicParticipation(participationID, activityID, "part_idem_"+tt.name+"_"+suffix, now),
+						BudgetAmount:       "1",
+						ReserveUserLimit:   true,
+						UserScopeKey:       "user_1",
+						ReserveDailyLimit:  true,
+						DailyLimitScopeKey: "2026-05-27:user_1",
+						GrantOrders:        []GrantOrder{grant},
+						OutboxMessages:     []OutboxMessage{testAtomicOutbox("outbox_"+tt.name+"_"+suffix, now)},
+						StockReservations: []QuotaReservation{
+							{Type: QuotaStock, Scope: QuotaScopeActivity, ScopeKey: "REWARD_A", Amount: "1"},
+						},
+					})
+					results <- err
+				}(i)
+			}
+			wg.Wait()
+			close(results)
+
+			var success, quotaExceeded int
+			for err := range results {
+				switch {
+				case err == nil:
+					success++
+				case errors.Is(err, ErrQuotaExceeded):
+					quotaExceeded++
+				default:
+					t.Fatalf("unexpected concurrent quota error: %v", err)
+				}
+			}
+			if success != 5 || quotaExceeded != attempts-5 {
+				t.Fatalf("expected 5 successes and %d quota failures, got success=%d quotaExceeded=%d", attempts-5, success, quotaExceeded)
+			}
+			if len(repo.participations) != 5 || len(repo.grantOrders) != 5 || len(repo.outboxMessages) != 5 {
+				t.Fatalf("expected only successful chains to persist, participations=%d grants=%d outbox=%d", len(repo.participations), len(repo.grantOrders), len(repo.outboxMessages))
+			}
+			if len(repo.quotaReservations) != 20 {
+				t.Fatalf("expected four reservations per successful chain, got %d", len(repo.quotaReservations))
+			}
+			assertMemoryQuotaFrozen(t, repo, activityID, QuotaBudget, QuotaScopeActivity, "TOTAL", "5.0000")
+			assertMemoryQuotaFrozen(t, repo, activityID, QuotaStock, QuotaScopeActivity, "REWARD_A", "5.0000")
+			assertMemoryQuotaFrozen(t, repo, activityID, QuotaUserLimit, QuotaScopeUser, "user_1", "5.0000")
+			assertMemoryQuotaFrozen(t, repo, activityID, QuotaDailyLimit, QuotaScopeUser, "2026-05-27:user_1", "5.0000")
+		})
+	}
+}
+
 func TestMemoryCreateInboxDetectsDuplicateAndConflict(t *testing.T) {
 	repo := NewMemoryRepository()
 	now := time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)

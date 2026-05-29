@@ -598,23 +598,23 @@
       "id": "2026-05-27-engine-metrics-alerts",
       "title": "engine-metrics-alerts: 引擎指标和告警",
       "description": "活动引擎基础完善任务。增加核心指标和告警口径，包括 event intake 成功/失败、quota fail rate、outbox backlog、DLQ count、callback fail rate、worker claim latency、reward command latency。验收：提供 metrics endpoint 或可接入指标接口；文档列出告警阈值建议。",
-      "status": "COMMIT_READY",
+      "status": "COMMITTED",
       "risk": "中",
       "score": 92,
       "taskDir": "tasks/2026-05-27-engine-metrics-alerts",
       "createdAt": "2026-05-27T14:58:51.195183Z",
-      "updatedAt": "2026-05-29T10:21:16.571954Z"
+      "updatedAt": "2026-05-29T10:22:28.956262Z"
     },
     {
       "id": "2026-05-27-engine-load-fault-tests",
       "title": "engine-load-fault-tests: 压测和故障注入",
       "description": "活动引擎基础完善任务。补充并发事件压测、quota 并发扣减压测、outbox 重试压测、callback 重复/乱序压测、PostgreSQL 重启或网络超时故障注入。验收：脚本可本地运行；输出吞吐、错误率、数据一致性检查；失败有可复现日志。",
-      "status": "ANALYSIS_READY",
+      "status": "COMMIT_READY",
       "risk": "高",
-      "score": 0,
+      "score": 91,
       "taskDir": "tasks/2026-05-27-engine-load-fault-tests",
       "createdAt": "2026-05-27T14:58:51.242521Z",
-      "updatedAt": "2026-05-27T15:00:29.869441Z"
+      "updatedAt": "2026-05-29T12:02:56.992651Z"
     },
     {
       "id": "2026-05-27-db-migration-release-migration",

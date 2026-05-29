@@ -1,30 +1,53 @@
 {
   "requirementId": "2026-05-27-engine-load-fault-tests",
-  "updatedAt": "2026-05-27T15:00:29.870506Z",
+  "updatedAt": "2026-05-29T12:02:57.0194Z",
   "agents": {
     "analysis": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-27-engine-load-fault-tests/analysis.md"
+      "status": "DONE",
+      "startedAt": "2026-05-29T10:25:02.191861Z",
+      "finishedAt": "2026-05-29T10:28:08.288888Z",
+      "output": "tasks/2026-05-27-engine-load-fault-tests/analysis.md",
+      "log": "tasks/2026-05-27-engine-load-fault-tests/runs/20260529T102502Z-analysis.log",
+      "nextStatus": "REVIEW_READY"
     },
     "commit": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-27-engine-load-fault-tests/commit.md"
+      "status": "RUNNING",
+      "startedAt": "2026-05-29T12:02:57.019397Z",
+      "output": "tasks/2026-05-27-engine-load-fault-tests/commit.md",
+      "log": "tasks/2026-05-27-engine-load-fault-tests/runs/20260529T120257Z-commit.log",
+      "pid": 44614
     },
     "dev": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-27-engine-load-fault-tests/implementation.md"
+      "status": "DONE",
+      "startedAt": "2026-05-29T11:50:44.358395Z",
+      "finishedAt": "2026-05-29T12:00:16.281093Z",
+      "output": "tasks/2026-05-27-engine-load-fault-tests/implementation.md",
+      "log": "tasks/2026-05-27-engine-load-fault-tests/runs/20260529T115044Z-dev.log",
+      "nextStatus": "REVIEW_PASS"
     },
     "review": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-27-engine-load-fault-tests/review.md"
+      "status": "DONE",
+      "startedAt": "2026-05-29T10:28:08.638809Z",
+      "finishedAt": "2026-05-29T10:29:07.280721Z",
+      "output": "tasks/2026-05-27-engine-load-fault-tests/review.md",
+      "log": "tasks/2026-05-27-engine-load-fault-tests/runs/20260529T102808Z-review.log",
+      "nextStatus": "REVIEW_PASS"
     },
     "test": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-27-engine-load-fault-tests/test.md"
+      "status": "DONE",
+      "startedAt": "2026-05-29T12:00:16.653983Z",
+      "finishedAt": "2026-05-29T12:02:56.992155Z",
+      "output": "tasks/2026-05-27-engine-load-fault-tests/test.md",
+      "log": "tasks/2026-05-27-engine-load-fault-tests/runs/20260529T120016Z-test.log",
+      "nextStatus": "COMMIT_READY"
     },
     "test-plan": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-27-engine-load-fault-tests/test-plan.md"
+      "status": "DONE",
+      "startedAt": "2026-05-29T10:29:07.308457Z",
+      "finishedAt": "2026-05-29T10:30:26.914525Z",
+      "output": "tasks/2026-05-27-engine-load-fault-tests/test-plan.md",
+      "log": "tasks/2026-05-27-engine-load-fault-tests/runs/20260529T102907Z-test-plan.log",
+      "nextStatus": "REVIEW_PASS"
     }
   }
 }

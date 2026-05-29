@@ -39,6 +39,14 @@ type OutboxDLQCount struct {
 	Count         int
 }
 
+type OutboxBacklogMetric struct {
+	TenantID                 string
+	TargetChannel            GrantChannel
+	SendStatus               OutboxStatus
+	Count                    int
+	OldestEligibleAgeSeconds float64
+}
+
 const (
 	ActivityDraft     ActivityStatus = "DRAFT"
 	ActivityScheduled ActivityStatus = "SCHEDULED"

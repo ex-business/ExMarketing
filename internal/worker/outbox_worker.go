@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/ex-stack/ExMarketing/internal/marketing"
+	"github.com/ex-stack/ExMarketing/internal/metrics"
 	"github.com/ex-stack/ExMarketing/internal/mqtarget"
 )
 
@@ -35,6 +36,7 @@ type OutboxWorker struct {
 	jitter              func() float64
 	statsMu             sync.Mutex
 	stats               OutboxWorkerStats
+	metrics             *metrics.Registry
 }
 
 func NewOutboxWorker(repository marketing.Repository, logger *slog.Logger) *OutboxWorker {
@@ -54,6 +56,7 @@ func NewOutboxWorker(repository marketing.Repository, logger *slog.Logger) *Outb
 		staleClaimThreshold: 5 * time.Minute,
 		now:                 func() time.Time { return time.Now().UTC() },
 		jitter:              func() float64 { return 0.8 + rand.Float64()*0.4 },
+		metrics:             metrics.Default,
 	}
 }
 
@@ -173,18 +176,22 @@ func (w *OutboxWorker) tick(ctx context.Context) {
 	w.addClaimAttempt()
 	messages, err := w.repository.ListPendingOutbox(ctx, w.batchSize)
 	if err != nil {
+		w.recordClaimMetric("failed", "", "")
 		w.recordError(err)
 		w.logger.Warn("list outbox failed", "worker_id", w.workerID, "event", "claim_failed", "error", err)
 		return
 	}
 	if len(messages) == 0 {
+		w.recordClaimMetric("empty", "", "")
 		w.addEmptyBatch()
 		w.logger.Debug("outbox worker empty batch", "worker_id", w.workerID, "event", "claim_empty")
 		return
 	}
 	w.addClaimSuccesses(len(messages))
 	for _, message := range messages {
+		w.recordClaimMetric("success", message.TenantID, string(message.TargetChannel))
 		w.recordClaimDelay(message)
+		w.observeClaimDelay(message)
 		w.addInFlight(1)
 		w.logger.Info("outbox claimed",
 			"worker_id", w.workerID,
@@ -213,11 +220,14 @@ func (w *OutboxWorker) processMessage(ctx context.Context, message marketing.Out
 	if commandID != "" {
 		if err := w.repository.UpdateGrantOrderByCommandID(ctx, message.TenantID, commandID, marketing.GrantSending, ""); err != nil {
 			w.addClaimConflict()
+			w.recordClaimMetric("conflict", message.TenantID, string(message.TargetChannel))
 			w.logger.Warn("advance grant order to sending failed", "worker_id", w.workerID, "event", "grant_sending_failed", "tenant_id", message.TenantID, "outbox_id", message.ID, "command_id", commandID, "error", err)
 			return
 		}
 	}
+	deliveryStartedAt := w.now()
 	if err := w.deliver(ctx, message); err != nil {
+		w.observeRewardCommandDelivery(message, "failed", deliveryStartedAt)
 		deliveryErr := classifyDeliveryError(err)
 		retryCount := message.RetryCount + 1
 		errorMessage := sanitizeError(deliveryErr.Error())
@@ -229,6 +239,9 @@ func (w *OutboxWorker) processMessage(ctx context.Context, message marketing.Out
 			}
 			w.addDLQEntry()
 			w.addNonRetryableFailure()
+			w.recordDLQTotal(message, errorClass(errorMessage))
+			w.observeRewardCommand(message, "dlq", startedAt)
+			w.recordRewardCommand(message, "dlq", errorClass(errorMessage))
 			w.logger.Warn("outbox moved to dlq", w.logAttrs(message, marketing.OutboxDLQ, retryCount, startedAt, errorMessage, "outbox_dlq")...)
 			return
 		}
@@ -239,11 +252,16 @@ func (w *OutboxWorker) processMessage(ctx context.Context, message marketing.Out
 			_ = w.repository.UpdateGrantOrderByCommandID(ctx, message.TenantID, commandID, marketing.GrantRetry, errorMessage)
 		}
 		w.addRetryableFailure()
+		w.observeRewardCommand(message, "retry", startedAt)
+		w.recordRewardCommand(message, "retry", errorClass(errorMessage))
 		w.logger.Warn("outbox delivery failed", w.logAttrs(message, marketing.OutboxFailed, retryCount, startedAt, errorMessage, "outbox_failed")...)
 		return
 	}
+	w.observeRewardCommandDelivery(message, "sent", deliveryStartedAt)
 	_ = w.repository.MarkOutboxSent(ctx, message.ID)
 	w.addDeliverySuccess()
+	w.observeRewardCommand(message, "sent", startedAt)
+	w.recordRewardCommand(message, "sent", "ok")
 	w.logger.Info("outbox sent", w.logAttrs(message, marketing.OutboxSent, message.RetryCount, startedAt, "", "outbox_sent")...)
 }
 
@@ -429,6 +447,12 @@ func (w *OutboxWorker) refreshDLQCounts(ctx context.Context) {
 	for _, count := range counts {
 		key := dlqCountKey(count.TenantID, count.TargetChannel)
 		next[key] = count.Count
+		if w.metrics != nil {
+			w.metrics.SetGauge("exmarketing_outbox_dlq_count", float64(count.Count),
+				metrics.L("tenant_id", count.TenantID),
+				metrics.L("target_channel", string(count.TargetChannel)),
+			)
+		}
 		if count.Count > 0 {
 			severity := "warning"
 			if count.Count > 10 {
@@ -487,6 +511,12 @@ func (w *OutboxWorker) addInFlight(delta int) {
 	w.stats.InFlight += delta
 	if w.stats.InFlight < 0 {
 		w.stats.InFlight = 0
+	}
+	if w.metrics != nil {
+		w.metrics.SetGauge("exmarketing_worker_inflight", float64(w.stats.InFlight),
+			metrics.L("worker_id", w.workerID),
+			metrics.L("target_channel", "all"),
+		)
 	}
 }
 
@@ -577,6 +607,73 @@ func claimDelay(message marketing.OutboxMessage, now time.Time) time.Duration {
 		return 0
 	}
 	return now.Sub(eligibleAt)
+}
+
+func (w *OutboxWorker) recordClaimMetric(result, tenantID, targetChannel string) {
+	if w.metrics == nil {
+		return
+	}
+	w.metrics.IncCounter("exmarketing_worker_claim_total",
+		metrics.L("worker_id", w.workerID),
+		metrics.L("tenant_id", tenantID),
+		metrics.L("target_channel", targetChannel),
+		metrics.L("result", result),
+	)
+}
+
+func (w *OutboxWorker) observeClaimDelay(message marketing.OutboxMessage) {
+	if w.metrics == nil {
+		return
+	}
+	w.metrics.Observe("exmarketing_worker_claim_latency_seconds", claimDelay(message, w.now()).Seconds(),
+		metrics.L("tenant_id", message.TenantID),
+		metrics.L("target_channel", string(message.TargetChannel)),
+	)
+}
+
+func (w *OutboxWorker) recordRewardCommand(message marketing.OutboxMessage, result, reason string) {
+	if w.metrics == nil {
+		return
+	}
+	w.metrics.IncCounter("exmarketing_reward_command_total",
+		metrics.L("tenant_id", message.TenantID),
+		metrics.L("target_channel", string(message.TargetChannel)),
+		metrics.L("result", result),
+		metrics.L("reason", reason),
+	)
+}
+
+func (w *OutboxWorker) observeRewardCommand(message marketing.OutboxMessage, result string, startedAt time.Time) {
+	if w.metrics == nil {
+		return
+	}
+	w.metrics.Observe("exmarketing_reward_command_latency_seconds", w.now().Sub(message.CreatedAt).Seconds(),
+		metrics.L("tenant_id", message.TenantID),
+		metrics.L("target_channel", string(message.TargetChannel)),
+		metrics.L("result", result),
+	)
+}
+
+func (w *OutboxWorker) observeRewardCommandDelivery(message marketing.OutboxMessage, result string, startedAt time.Time) {
+	if w.metrics == nil {
+		return
+	}
+	w.metrics.Observe("exmarketing_reward_command_delivery_latency_seconds", w.now().Sub(startedAt).Seconds(),
+		metrics.L("tenant_id", message.TenantID),
+		metrics.L("target_channel", string(message.TargetChannel)),
+		metrics.L("result", result),
+	)
+}
+
+func (w *OutboxWorker) recordDLQTotal(message marketing.OutboxMessage, reason string) {
+	if w.metrics == nil {
+		return
+	}
+	w.metrics.IncCounter("exmarketing_outbox_dlq_total",
+		metrics.L("tenant_id", message.TenantID),
+		metrics.L("target_channel", string(message.TargetChannel)),
+		metrics.L("reason", reason),
+	)
 }
 
 func redactedTargetRef(targetRef string) string {

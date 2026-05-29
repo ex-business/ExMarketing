@@ -22,6 +22,7 @@ import (
 
 	"github.com/ex-stack/ExMarketing/internal/engine"
 	"github.com/ex-stack/ExMarketing/internal/marketing"
+	"github.com/ex-stack/ExMarketing/internal/metrics"
 	"github.com/ex-stack/ExMarketing/internal/workflow"
 )
 
@@ -159,6 +160,7 @@ func parseNonEmptyCSVSet(raw string, name string) (map[string]struct{}, error) {
 func (h *Handler) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", h.health)
+	mux.HandleFunc("GET /metrics", h.metrics)
 	mux.HandleFunc("GET /admin/v1/activities", h.listActivities)
 	mux.HandleFunc("POST /admin/v1/activities", h.createActivity)
 	mux.HandleFunc("GET /admin/v1/activities/{id}", h.getActivity)
@@ -203,6 +205,15 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /openapi/v1/reward/callback", h.rewardCallback)
 	mux.Handle("GET /admin/", http.StripPrefix("/admin/", http.FileServer(http.Dir("web/admin"))))
 	return withAuditSource(mux)
+}
+
+func (h *Handler) metrics(w http.ResponseWriter, r *http.Request) {
+	if err := h.engine.RefreshMetrics(r.Context()); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+	_, _ = w.Write(h.engine.MetricsRegistry().RenderPrometheus())
 }
 
 func (h *Handler) health(w http.ResponseWriter, r *http.Request) {
@@ -591,7 +602,13 @@ func (h *Handler) simulate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) createEvent(w http.ResponseWriter, r *http.Request) {
+	startedAt := time.Now()
+	event := marketing.ActivityEvent{}
+	record := func(result, reason string) {
+		h.recordEventIntakeMetric(event, result, reason, startedAt)
+	}
 	if !isJSONContentType(r.Header.Get("Content-Type")) {
+		record("failed", "invalid_payload")
 		writeEventError(w, http.StatusUnsupportedMediaType, "UNSUPPORTED_MEDIA_TYPE", "unsupported media type")
 		return
 	}
@@ -601,65 +618,77 @@ func (h *Handler) createEvent(w http.ResponseWriter, r *http.Request) {
 		var ok bool
 		token, ok = bearerToken(r.Header.Get("Authorization"))
 		if !ok {
+			record("auth_failed", "auth_failed")
 			writeEventError(w, http.StatusUnauthorized, "UNAUTHORIZED", "unauthorized")
 			return
 		}
 		if _, ok := h.openAPIEventCfg.Credentials[token]; !ok {
+			record("auth_failed", "auth_failed")
 			writeEventError(w, http.StatusUnauthorized, "UNAUTHORIZED", "unauthorized")
 			return
 		}
 	}
 
-	var event marketing.ActivityEvent
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, h.openAPIEventCfg.MaxBodyBytes))
 	decoder.UseNumber()
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&event); err != nil {
 		if isRequestTooLarge(err) {
+			record("failed", "invalid_payload")
 			writeEventError(w, http.StatusRequestEntityTooLarge, "REQUEST_TOO_LARGE", "request body too large")
 			return
 		}
 		if isJSONSyntaxError(err) {
+			record("failed", "invalid_payload")
 			writeEventError(w, http.StatusBadRequest, "INVALID_JSON", "invalid json")
 			return
 		}
+		record("failed", "invalid_payload")
 		writeEventError(w, http.StatusBadRequest, "INVALID_EVENT", err.Error())
 		return
 	}
 
 	key := r.Header.Get("Idempotency-Key")
 	if key == "" {
+		record("failed", "idempotency_key_mismatch")
 		writeEventError(w, http.StatusBadRequest, "INVALID_IDEMPOTENCY_KEY", "Idempotency-Key is required")
 		return
 	}
 	if err := event.Validate(); err != nil {
+		record("failed", "invalid_payload")
 		writeEventError(w, http.StatusBadRequest, "INVALID_EVENT", err.Error())
 		return
 	}
 	if h.openAPIEventCfg.RequireAuth {
 		credential := h.openAPIEventCfg.Credentials[token]
 		if _, ok := credential.TenantIDs[event.TenantID]; !ok {
+			record("auth_failed", "auth_failed")
 			writeEventError(w, http.StatusForbidden, "TENANT_FORBIDDEN", "tenant forbidden")
 			return
 		}
 		if _, ok := credential.SourceSystems[event.SourceSystem]; !ok {
+			record("auth_failed", "auth_failed")
 			writeEventError(w, http.StatusForbidden, "SOURCE_FORBIDDEN", "source forbidden")
 			return
 		}
 	}
 	if err := ensureSingleJSONValue(decoder); err != nil {
 		if isRequestTooLarge(err) {
+			record("failed", "invalid_payload")
 			writeEventError(w, http.StatusRequestEntityTooLarge, "REQUEST_TOO_LARGE", "request body too large")
 			return
 		}
 		if isJSONSyntaxError(err) {
+			record("failed", "invalid_payload")
 			writeEventError(w, http.StatusBadRequest, "INVALID_JSON", "invalid json")
 			return
 		}
+		record("failed", "invalid_payload")
 		writeEventError(w, http.StatusBadRequest, "INVALID_EVENT", err.Error())
 		return
 	}
 	if key != event.IdempotencyKey() {
+		record("failed", "idempotency_key_mismatch")
 		writeEventError(w, http.StatusBadRequest, "INVALID_IDEMPOTENCY_KEY", "Idempotency-Key does not match event payload")
 		return
 	}
@@ -667,29 +696,59 @@ func (h *Handler) createEvent(w http.ResponseWriter, r *http.Request) {
 	result, err := h.engine.ProcessEvent(r.Context(), event)
 	if err != nil {
 		if errors.Is(err, marketing.ErrInvalidEvent) {
+			record("failed", "invalid_payload")
 			writeEventError(w, http.StatusBadRequest, "INVALID_EVENT", err.Error())
 			return
 		}
 		if errors.Is(err, marketing.ErrIdempotencyConflict) {
+			record("failed", "idempotency_key_mismatch")
 			writeEventError(w, http.StatusBadRequest, "INVALID_IDEMPOTENCY_KEY", err.Error())
 			return
 		}
 		if errors.Is(err, marketing.ErrQuotaExceeded) {
+			record("rejected", "quota_exceeded")
 			writeQuotaError(w, err)
 			return
 		}
+		record("failed", "internal_error")
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	if result.Duplicate {
+		record("duplicate", "duplicate")
 		writeJSON(w, http.StatusOK, result)
 		return
 	}
+	record("success", "ok")
 	writeJSON(w, http.StatusAccepted, result)
 }
 
+func (h *Handler) recordEventIntakeMetric(event marketing.ActivityEvent, result, reason string, startedAt time.Time) {
+	registry := h.engine.MetricsRegistry()
+	labels := []metrics.Label{
+		metrics.L("tenant_id", event.TenantID),
+		metrics.L("source_system", event.SourceSystem),
+		metrics.L("event_type", event.EventType),
+		metrics.L("result", result),
+		metrics.L("reason", reason),
+	}
+	registry.IncCounter("exmarketing_event_intake_total", labels...)
+	registry.Observe("exmarketing_event_intake_latency_seconds", time.Since(startedAt).Seconds(),
+		metrics.L("tenant_id", event.TenantID),
+		metrics.L("source_system", event.SourceSystem),
+		metrics.L("event_type", event.EventType),
+		metrics.L("result", result),
+	)
+}
+
 func (h *Handler) rewardCallback(w http.ResponseWriter, r *http.Request) {
+	startedAt := time.Now()
+	callback := marketing.RewardCallback{}
+	record := func(result, reason string) {
+		h.recordRewardCallbackMetric(callback, result, reason, startedAt)
+	}
 	if !isJSONContentType(r.Header.Get("Content-Type")) {
+		record("rejected", "invalid_payload")
 		writeErrorCode(w, http.StatusBadRequest, "INVALID_CALLBACK_REQUEST", "unsupported media type")
 		return
 	}
@@ -699,13 +758,14 @@ func (h *Handler) rewardCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBodyBytes))
 	if err != nil {
+		record("rejected", "invalid_payload")
 		writeErrorCode(w, http.StatusBadRequest, "INVALID_CALLBACK_REQUEST", "invalid request body")
 		return
 	}
-	var callback marketing.RewardCallback
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&callback); err != nil {
+		record("rejected", "invalid_payload")
 		writeErrorCode(w, http.StatusBadRequest, "INVALID_CALLBACK_REQUEST", "invalid json body")
 		return
 	}
@@ -719,6 +779,7 @@ func (h *Handler) rewardCallback(w http.ResponseWriter, r *http.Request) {
 		if errors.Is(err, errCallbackTimestampInvalid) {
 			code = "CALLBACK_TIMESTAMP_INVALID"
 		}
+		record("rejected", "signature_invalid")
 		writeErrorCode(w, status, code, err.Error())
 		return
 	}
@@ -726,41 +787,73 @@ func (h *Handler) rewardCallback(w http.ResponseWriter, r *http.Request) {
 	result, err := h.engine.ApplyRewardCallback(r.Context(), callback)
 	if err != nil {
 		if errors.Is(err, marketing.ErrNotFound) {
+			record("rejected", "grant_order_not_found")
 			writeErrorCode(w, http.StatusNotFound, "GRANT_ORDER_NOT_FOUND", err.Error())
 			return
 		}
 		if errors.Is(err, marketing.ErrInvalidCallback) {
+			record("rejected", "invalid_payload")
 			writeErrorCode(w, http.StatusBadRequest, "INVALID_CALLBACK_REQUEST", err.Error())
 			return
 		}
 		if errors.Is(err, marketing.ErrCallbackConflict) {
+			record("conflict", "status_conflict")
 			writeErrorCode(w, http.StatusConflict, "CALLBACK_STATUS_CONFLICT", err.Error())
 			return
 		}
 		if errors.Is(err, marketing.ErrCallbackLocatorConflict) {
+			record("conflict", "status_conflict")
 			writeErrorCode(w, http.StatusConflict, "CALLBACK_LOCATOR_CONFLICT", err.Error())
 			return
 		}
 		if errors.Is(err, marketing.ErrGrantOrderClosed) {
+			record("conflict", "status_conflict")
 			writeErrorCode(w, http.StatusConflict, "GRANT_ORDER_CLOSED", err.Error())
 			return
 		}
 		if errors.Is(err, marketing.ErrQuotaReservationMissing) {
+			record("failed", "quota_reservation_missing")
 			writeErrorCode(w, http.StatusConflict, "QUOTA_RESERVATION_MISSING", err.Error())
 			return
 		}
 		if errors.Is(err, marketing.ErrQuotaReservationConflict) {
+			record("failed", "quota_aggregate_conflict")
 			writeErrorCode(w, http.StatusConflict, "QUOTA_RESERVATION_CONFLICT", err.Error())
 			return
 		}
 		if errors.Is(err, marketing.ErrQuotaAggregateConflict) {
+			record("failed", "quota_aggregate_conflict")
 			writeErrorCode(w, http.StatusConflict, "QUOTA_AGGREGATE_CONFLICT", err.Error())
 			return
 		}
+		record("failed", "internal_error")
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	resultLabel := "accepted"
+	reason := "ok"
+	if result.Duplicate {
+		resultLabel = "duplicate"
+		reason = "duplicate"
+	}
+	record(resultLabel, reason)
 	writeJSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) recordRewardCallbackMetric(callback marketing.RewardCallback, result, reason string, startedAt time.Time) {
+	registry := h.engine.MetricsRegistry()
+	registry.IncCounter("exmarketing_reward_callback_total",
+		metrics.L("tenant_id", callback.TenantID),
+		metrics.L("grant_channel", "unknown"),
+		metrics.L("callback_status", string(callback.Status)),
+		metrics.L("result", result),
+		metrics.L("reason", reason),
+	)
+	registry.Observe("exmarketing_reward_callback_latency_seconds", time.Since(startedAt).Seconds(),
+		metrics.L("tenant_id", callback.TenantID),
+		metrics.L("grant_channel", "unknown"),
+		metrics.L("result", result),
+	)
 }
 
 var (

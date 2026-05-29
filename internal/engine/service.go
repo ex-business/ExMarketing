@@ -13,6 +13,7 @@ import (
 	"github.com/ex-stack/ExMarketing/internal/decimal"
 	"github.com/ex-stack/ExMarketing/internal/fact"
 	"github.com/ex-stack/ExMarketing/internal/marketing"
+	"github.com/ex-stack/ExMarketing/internal/metrics"
 	activityplugin "github.com/ex-stack/ExMarketing/internal/plugin"
 	"github.com/ex-stack/ExMarketing/internal/reward"
 	"github.com/ex-stack/ExMarketing/internal/rule"
@@ -24,6 +25,7 @@ type Service struct {
 	pluginRegistry   *activityplugin.Registry
 	rewardCalculator reward.Calculator
 	factClient       *fact.Client
+	metrics          *metrics.Registry
 	now              func() time.Time
 }
 
@@ -34,10 +36,60 @@ func NewService(repository marketing.Repository) *Service {
 		pluginRegistry:   activityplugin.NewRegistry(),
 		rewardCalculator: reward.ConfigCalculator{},
 		factClient:       fact.NewClient(),
+		metrics:          metrics.Default,
 		now:              func() time.Time { return time.Now().UTC() },
 	}
 	_ = service.RegisterActivityPlugin(activityplugin.FirstDepositPlugin{})
 	return service
+}
+
+type outboxBacklogRepository interface {
+	CountOutboxBacklog(ctx context.Context, now time.Time) ([]marketing.OutboxBacklogMetric, error)
+	CountOutboxDLQ(ctx context.Context) ([]marketing.OutboxDLQCount, error)
+}
+
+func (s *Service) MetricsRegistry() *metrics.Registry {
+	return s.metrics
+}
+
+func (s *Service) RefreshMetrics(ctx context.Context) error {
+	repository, ok := s.repository.(outboxBacklogRepository)
+	if !ok || s.metrics == nil {
+		return nil
+	}
+	now := s.now()
+	s.metrics.DeleteMetric("exmarketing_outbox_backlog")
+	s.metrics.DeleteMetric("exmarketing_outbox_oldest_eligible_age_seconds")
+	s.metrics.DeleteMetric("exmarketing_outbox_dlq_count")
+	backlog, err := repository.CountOutboxBacklog(ctx, now)
+	if err != nil {
+		return err
+	}
+	for _, item := range backlog {
+		labels := []metrics.Label{
+			metrics.L("tenant_id", item.TenantID),
+			metrics.L("target_channel", string(item.TargetChannel)),
+			metrics.L("send_status", string(item.SendStatus)),
+		}
+		s.metrics.SetGauge("exmarketing_outbox_backlog", float64(item.Count), labels...)
+		if item.SendStatus != marketing.OutboxDLQClosed {
+			s.metrics.SetGauge("exmarketing_outbox_oldest_eligible_age_seconds", item.OldestEligibleAgeSeconds,
+				metrics.L("tenant_id", item.TenantID),
+				metrics.L("target_channel", string(item.TargetChannel)),
+			)
+		}
+	}
+	dlqCounts, err := repository.CountOutboxDLQ(ctx)
+	if err != nil {
+		return err
+	}
+	for _, count := range dlqCounts {
+		s.metrics.SetGauge("exmarketing_outbox_dlq_count", float64(count.Count),
+			metrics.L("tenant_id", count.TenantID),
+			metrics.L("target_channel", string(count.TargetChannel)),
+		)
+	}
+	return nil
 }
 
 func (s *Service) SaveFactProvider(ctx context.Context, provider marketing.FactProvider) (marketing.FactProvider, error) {
@@ -1351,6 +1403,7 @@ func (s *Service) evaluateActivity(ctx context.Context, inbox marketing.EventInb
 		return participation, orders, messages, ruleResult, true, err
 	}
 	participation.Snapshot = participationSnapshot(activity, inbox, ruleResult, rewardSummaries, pluginSnapshot)
+	quotaAttempts := quotaReserveAttempts(activity, inbox.Event, totalRewardAmount.String(), stockReservations)
 	atomicResult, err := s.repository.CreateParticipationGrantOutboxesWithQuota(ctx, marketing.AtomicGrantCommand{
 		Participation:      participation,
 		BudgetAmount:       totalRewardAmount.String(),
@@ -1364,6 +1417,7 @@ func (s *Service) evaluateActivity(ctx context.Context, inbox marketing.EventInb
 	})
 	if err != nil {
 		if errors.Is(err, marketing.ErrQuotaExceeded) {
+			s.recordQuotaAttempts(activity, quotaAttempts, false, err)
 			payload := map[string]any{
 				"activityId":   activity.ID,
 				"eventInboxId": inbox.ID,
@@ -1383,7 +1437,80 @@ func (s *Service) evaluateActivity(ctx context.Context, inbox marketing.EventInb
 		}
 		return participation, orders, messages, ruleResult, true, err
 	}
+	s.recordQuotaAttempts(activity, quotaAttempts, true, nil)
 	return atomicResult.Participation, atomicResult.GrantOrders, atomicResult.OutboxMessages, ruleResult, true, nil
+}
+
+type quotaAttempt struct {
+	quotaType marketing.QuotaType
+	scope     marketing.QuotaScope
+	scopeKey  string
+}
+
+func quotaReserveAttempts(activity marketing.Activity, event marketing.ActivityEvent, budgetAmount string, stockReservations []marketing.QuotaReservation) []quotaAttempt {
+	attempts := []quotaAttempt{
+		{quotaType: marketing.QuotaBudget, scope: marketing.QuotaScopeActivity, scopeKey: "TOTAL"},
+		{quotaType: marketing.QuotaUserLimit, scope: marketing.QuotaScopeUser, scopeKey: event.Subject.ID},
+		{quotaType: marketing.QuotaDailyLimit, scope: marketing.QuotaScopeUser, scopeKey: dailyLimitScopeKey(activity, event)},
+	}
+	if decimal.MustParse(budgetAmount).IsZero() {
+		attempts = attempts[1:]
+	}
+	for _, reservation := range stockReservations {
+		attempts = append(attempts, quotaAttempt{quotaType: reservation.Type, scope: reservation.Scope, scopeKey: reservation.ScopeKey})
+	}
+	return attempts
+}
+
+func (s *Service) recordQuotaAttempts(activity marketing.Activity, attempts []quotaAttempt, success bool, err error) {
+	if s.metrics == nil {
+		return
+	}
+	failedType := marketing.QuotaType("")
+	failedScope := marketing.QuotaScope("")
+	reason := "ok"
+	if err != nil {
+		reason = "internal_error"
+		var quotaErr marketing.QuotaExceededError
+		if errors.As(err, &quotaErr) {
+			failedType = quotaErr.Type
+			failedScope = quotaErr.Scope
+			reason = "quota_exceeded"
+		}
+	}
+	for _, attempt := range attempts {
+		result := "success"
+		attemptReason := "ok"
+		if !success {
+			if failedType == "" || (attempt.quotaType == failedType && attempt.scope == failedScope) {
+				result = "failed"
+				attemptReason = reason
+			} else {
+				result = "skipped"
+				attemptReason = "blocked_by_other_quota"
+			}
+		}
+		labels := []metrics.Label{
+			metrics.L("tenant_id", activity.TenantID),
+			metrics.L("activity_id", activity.ID),
+			metrics.L("quota_type", string(attempt.quotaType)),
+			metrics.L("scope", string(attempt.scope)),
+			metrics.L("action", "reserve"),
+			metrics.L("result", result),
+			metrics.L("reason", attemptReason),
+		}
+		s.metrics.IncCounter("exmarketing_quota_attempt_total", labels...)
+		if result == "failed" {
+			s.metrics.IncCounter("exmarketing_quota_fail_total",
+				metrics.L("tenant_id", activity.TenantID),
+				metrics.L("activity_id", activity.ID),
+				metrics.L("quota_type", string(attempt.quotaType)),
+				metrics.L("scope", string(attempt.scope)),
+				metrics.L("action", "reserve"),
+				metrics.L("reason", attemptReason),
+			)
+		}
+	}
 }
 
 func (s *Service) simulateActivity(ctx context.Context, event marketing.ActivityEvent, activity marketing.Activity) (marketing.Participation, []marketing.GrantOrder, []marketing.OutboxMessage, marketing.ActivityRuleResult, *marketing.ActivityPluginSnapshot, []marketing.FactQuerySimulation, []marketing.RewardPreview, []marketing.QuotaReservation, decimal.Decimal) {

@@ -576,34 +576,34 @@
       "id": "2026-05-27-mq-production-config-mq",
       "title": "mq-production-config: MQ 生产连接配置",
       "description": "活动引擎基础完善任务。完善 Kafka/RabbitMQ/Pulsar 的生产连接配置、认证引用、发送确认、错误分类和运行时隔离，避免在 activity config 或 outbox payload 中保存 broker 凭据。验收：targetRef 只描述目标；凭据从运行时配置读取；发送成功/失败/DLQ 有测试和审计。",
-      "status": "COMMIT_READY",
+      "status": "COMMITTED",
       "risk": "高",
       "score": 94,
       "taskDir": "tasks/2026-05-27-mq-production-config-mq",
       "createdAt": "2026-05-27T14:58:51.096721Z",
-      "updatedAt": "2026-05-29T08:14:28.280299Z"
+      "updatedAt": "2026-05-29T08:15:48.810398Z"
     },
     {
       "id": "2026-05-27-worker-production-hardening-worker",
       "title": "worker-production-hardening: Worker 生产化",
       "description": "活动引擎基础完善任务。加强 Outbox worker 常驻运行、优雅停止、shutdown drain、失败恢复、claim 延迟监控、DLQ 堆积监控和日志字段。验收：停止时不丢正在处理消息；重启后可继续处理；多 worker 不重复 claim；关键指标可观测。",
-      "status": "ANALYSIS_READY",
+      "status": "COMMITTED",
       "risk": "高",
-      "score": 0,
+      "score": 90,
       "taskDir": "tasks/2026-05-27-worker-production-hardening-worker",
       "createdAt": "2026-05-27T14:58:51.146003Z",
-      "updatedAt": "2026-05-27T15:00:29.867884Z"
+      "updatedAt": "2026-05-29T10:03:41.009803Z"
     },
     {
       "id": "2026-05-27-engine-metrics-alerts",
       "title": "engine-metrics-alerts: 引擎指标和告警",
       "description": "活动引擎基础完善任务。增加核心指标和告警口径，包括 event intake 成功/失败、quota fail rate、outbox backlog、DLQ count、callback fail rate、worker claim latency、reward command latency。验收：提供 metrics endpoint 或可接入指标接口；文档列出告警阈值建议。",
-      "status": "ANALYSIS_READY",
+      "status": "COMMIT_READY",
       "risk": "中",
-      "score": 0,
+      "score": 92,
       "taskDir": "tasks/2026-05-27-engine-metrics-alerts",
       "createdAt": "2026-05-27T14:58:51.195183Z",
-      "updatedAt": "2026-05-27T15:00:29.868631Z"
+      "updatedAt": "2026-05-29T10:21:16.571954Z"
     },
     {
       "id": "2026-05-27-engine-load-fault-tests",

@@ -1293,6 +1293,61 @@ func (r *MemoryRepository) CountOutboxDLQ(ctx context.Context) ([]OutboxDLQCount
 	return out, nil
 }
 
+func (r *MemoryRepository) CountOutboxBacklog(ctx context.Context, now time.Time) ([]OutboxBacklogMetric, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	counts := map[string]OutboxBacklogMetric{}
+	for _, message := range r.outboxMessages {
+		if message.SendStatus != OutboxPending && message.SendStatus != OutboxFailed && message.SendStatus != OutboxSending && message.SendStatus != OutboxDLQ && message.SendStatus != OutboxDLQClosed {
+			continue
+		}
+		key := message.TenantID + "\x00" + string(message.TargetChannel) + "\x00" + string(message.SendStatus)
+		metric := counts[key]
+		metric.TenantID = message.TenantID
+		metric.TargetChannel = message.TargetChannel
+		metric.SendStatus = message.SendStatus
+		metric.Count++
+		if age := outboxEligibleAge(message, now); age > metric.OldestEligibleAgeSeconds {
+			metric.OldestEligibleAgeSeconds = age
+		}
+		counts[key] = metric
+	}
+	out := make([]OutboxBacklogMetric, 0, len(counts))
+	for _, metric := range counts {
+		out = append(out, metric)
+	}
+	return out, nil
+}
+
+func outboxEligibleAge(message OutboxMessage, now time.Time) float64 {
+	switch message.SendStatus {
+	case OutboxPending, OutboxSending, OutboxDLQ:
+	case OutboxFailed:
+		if message.NextRetryAt != nil && message.NextRetryAt.After(now) {
+			return 0
+		}
+	case OutboxDLQClosed:
+		return 0
+	default:
+		return 0
+	}
+	eligibleAt := message.CreatedAt
+	if message.SendStatus == OutboxFailed && message.NextRetryAt != nil {
+		eligibleAt = *message.NextRetryAt
+	}
+	if eligibleAt.IsZero() || eligibleAt.After(now) {
+		return 0
+	}
+	return now.Sub(eligibleAt).Seconds()
+}
+
 func (r *MemoryRepository) ReplayOutboxDLQ(ctx context.Context, tenantID string, id string, operator string, reason string, replayedAt time.Time) (OutboxMessage, error) {
 	if err := ctx.Err(); err != nil {
 		return OutboxMessage{}, err

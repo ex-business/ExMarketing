@@ -1384,6 +1384,46 @@ func (r *Repository) CountOutboxDLQ(ctx context.Context) ([]marketing.OutboxDLQC
 	return counts, rows.Err()
 }
 
+func (r *Repository) CountOutboxBacklog(ctx context.Context, now time.Time) ([]marketing.OutboxBacklogMetric, error) {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT tenant_id,
+		       target_channel,
+		       send_status,
+		       COUNT(*),
+		       COALESCE(MAX(
+		           CASE
+		             WHEN send_status IN ('PENDING', 'SENDING', 'DLQ') THEN EXTRACT(EPOCH FROM ($1::timestamptz - created_at))
+		             WHEN send_status = 'FAILED' AND (next_retry_at IS NULL OR next_retry_at <= $1::timestamptz) THEN EXTRACT(EPOCH FROM ($1::timestamptz - COALESCE(next_retry_at, created_at)))
+		             ELSE 0
+		           END
+		       ), 0)
+		FROM marketing_outbox
+		WHERE send_status IN ('PENDING', 'FAILED', 'SENDING', 'DLQ', 'DLQ_CLOSED')
+		GROUP BY tenant_id, target_channel, send_status
+		ORDER BY tenant_id, target_channel, send_status
+	`, now)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var metrics []marketing.OutboxBacklogMetric
+	for rows.Next() {
+		var metric marketing.OutboxBacklogMetric
+		if err := rows.Scan(&metric.TenantID, &metric.TargetChannel, &metric.SendStatus, &metric.Count, &metric.OldestEligibleAgeSeconds); err != nil {
+			return nil, err
+		}
+		if metric.OldestEligibleAgeSeconds < 0 {
+			metric.OldestEligibleAgeSeconds = 0
+		}
+		metrics = append(metrics, metric)
+	}
+	return metrics, rows.Err()
+}
+
 func (r *Repository) ReplayOutboxDLQ(ctx context.Context, tenantID string, id string, operator string, reason string, replayedAt time.Time) (marketing.OutboxMessage, error) {
 	return r.updateOutboxDLQ(ctx, tenantID, id, operator, reason, replayedAt, marketing.OutboxPending, "OUTBOX_DLQ_REPLAY")
 }

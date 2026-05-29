@@ -22,6 +22,51 @@ export EX_MARKETING_DATABASE_URL='postgres://exmarketing:exmarketing@localhost:5
 go run ./cmd/exmarketing
 ```
 
+指标接口：
+
+```bash
+curl http://localhost:8080/metrics
+```
+
+`/metrics` 输出 Prometheus text format，默认用于内网或本地运维采集，不建议直接公网暴露。Counter 是进程生命周期累计值，服务重启后从 0 重新开始；outbox backlog 和 DLQ Gauge 会在抓取时从当前仓储状态刷新。
+
+核心指标：
+
+| 指标 | 类型 | 标签 | 说明 |
+| --- | --- | --- | --- |
+| `exmarketing_event_intake_total` | Counter | `tenant_id`, `source_system`, `event_type`, `result`, `reason` | Event API 成功、失败、重复、鉴权失败、quota 拒绝等结果。 |
+| `exmarketing_event_intake_latency_seconds` | Histogram | `tenant_id`, `source_system`, `event_type`, `result` | Event API 处理耗时。 |
+| `exmarketing_quota_attempt_total` | Counter | `tenant_id`, `activity_id`, `quota_type`, `scope`, `action`, `result`, `reason` | Quota 操作尝试。当前 fail rate 只用 `action="reserve"` 作为分母，避免 confirm/release 稀释 reserve 拒绝率。 |
+| `exmarketing_quota_fail_total` | Counter | `tenant_id`, `activity_id`, `quota_type`, `scope`, `action`, `reason` | Quota 失败计数。 |
+| `exmarketing_outbox_backlog` | Gauge | `tenant_id`, `target_channel`, `send_status` | 当前 outbox 状态数量，覆盖 `PENDING`, `FAILED`, `SENDING`, `DLQ`, `DLQ_CLOSED`。 |
+| `exmarketing_outbox_oldest_eligible_age_seconds` | Gauge | `tenant_id`, `target_channel` | 最老可投递 outbox 等待秒数。未到期 retry 不抬高该值。 |
+| `exmarketing_outbox_dlq_count` | Gauge | `tenant_id`, `target_channel` | 当前未关闭 DLQ 数量。 |
+| `exmarketing_outbox_dlq_total` | Counter | `tenant_id`, `target_channel`, `reason` | 新进入 DLQ 的累计数量。 |
+| `exmarketing_reward_callback_total` | Counter | `tenant_id`, `grant_channel`, `callback_status`, `result`, `reason` | Reward callback 成功、重复、冲突、拒绝和失败。 |
+| `exmarketing_reward_callback_latency_seconds` | Histogram | `tenant_id`, `grant_channel`, `result` | Callback 接收到业务状态更新完成耗时。 |
+| `exmarketing_worker_claim_total` | Counter | `worker_id`, `tenant_id`, `target_channel`, `result` | Worker claim 成功、空批次、失败和冲突。 |
+| `exmarketing_worker_claim_latency_seconds` | Histogram | `tenant_id`, `target_channel` | outbox 从 eligible 到被 claim 的延迟。 |
+| `exmarketing_worker_inflight` | Gauge | `worker_id`, `target_channel` | Worker 当前处理中 outbox 数。 |
+| `exmarketing_reward_command_total` | Counter | `tenant_id`, `target_channel`, `result`, `reason` | Reward command 投递 sent/retry/dlq 结果。 |
+| `exmarketing_reward_command_latency_seconds` | Histogram | `tenant_id`, `target_channel`, `result` | outbox 创建到投递终态耗时，不代表最终发奖成功。 |
+| `exmarketing_reward_command_delivery_latency_seconds` | Histogram | `tenant_id`, `target_channel`, `result` | 单次外部投递调用耗时。 |
+
+建议告警阈值：
+
+| 告警 | 窗口 | 阈值 |
+| --- | --- | --- |
+| Event intake failed rate | 5 分钟 | 失败率 > 5% 且失败数 >= 20。 |
+| Event intake internal error | 5 分钟 | `reason="internal_error"` >= 1。 |
+| Quota reserve fail rate | 5 分钟 | `action="reserve"` 失败率 > 20% 且失败数 >= 10。 |
+| Outbox backlog count | 5 分钟 | 单 tenant/channel 可投递 backlog > 100。 |
+| Outbox backlog age | 5 分钟 | `exmarketing_outbox_oldest_eligible_age_seconds` > 60。 |
+| DLQ count | 即时或 5 分钟 | 未关闭 DLQ > 0；单 tenant/channel >= 10 升级 High。 |
+| Callback fail rate | 5 分钟 | `result=~"rejected|failed|conflict"` 失败率 > 5% 且失败数 >= 5。 |
+| Worker claim latency P95 | 5 分钟 | P95 > 60 秒。 |
+| Reward command latency P95 | 5 分钟 | P95 > 120 秒。 |
+
+指标标签禁止包含 token、Authorization、Cookie、secret、完整 payload、完整 targetRef、eventId、bizId、subjectId、billNo、commandId 或原始错误文本；这些信息只允许进入审计、对账查询或已脱敏日志。
+
 开启 Outbox worker：
 
 ```bash

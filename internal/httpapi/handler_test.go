@@ -75,6 +75,52 @@ func TestHealth(t *testing.T) {
 	}
 }
 
+func TestMetricsEndpointRendersEventAndOutboxMetrics(t *testing.T) {
+	repo := marketing.NewMemoryRepository()
+	handler := newTestHandlerWithRepository(repo)
+	now := time.Now().UTC().Add(-2 * time.Minute)
+	_, err := repo.CreateOutbox(context.Background(), marketing.OutboxMessage{
+		ID:            "outbox_metrics_1",
+		TenantID:      "site_metrics",
+		MessageType:   "REWARD_COMMAND",
+		TargetChannel: marketing.GrantHTTP,
+		TargetRef:     "https://reward.example.com/callback",
+		Payload:       json.RawMessage(`{"commandId":"cmd_metrics"}`),
+		SendStatus:    marketing.OutboxPending,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	})
+	if err != nil {
+		t.Fatalf("create outbox: %v", err)
+	}
+
+	badEvent := httptest.NewRecorder()
+	badReq := httptest.NewRequest(http.MethodPost, "/openapi/v1/events", strings.NewReader(`{"tenantId":`))
+	badReq.Header.Set("Content-Type", "application/json")
+	handler.Routes().ServeHTTP(badEvent, badReq)
+	if badEvent.Code != http.StatusBadRequest {
+		t.Fatalf("expected bad event status %d, got %d: %s", http.StatusBadRequest, badEvent.Code, badEvent.Body.String())
+	}
+
+	rec := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected metrics status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		`# TYPE exmarketing_event_intake_total counter`,
+		`exmarketing_event_intake_total`,
+		`reason="invalid_payload"`,
+		`exmarketing_outbox_backlog{send_status="PENDING",target_channel="HTTP",tenant_id="site_metrics"} 1`,
+		`exmarketing_outbox_oldest_eligible_age_seconds`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("expected metrics body to contain %q, got:\n%s", want, body)
+		}
+	}
+}
+
 func TestCreateActivityReturnsUnifiedConfigVersions(t *testing.T) {
 	handler := newTestHandler()
 	rec := postActivity(t, handler, validActivityBody())

@@ -40,6 +40,8 @@ func NewService(repository marketing.Repository) *Service {
 		now:              func() time.Time { return time.Now().UTC() },
 	}
 	_ = service.RegisterActivityPlugin(activityplugin.FirstDepositPlugin{})
+	_ = service.RegisterActivityPlugin(activityplugin.RedEnvelopePlugin{})
+	_ = service.RegisterActivityPlugin(activityplugin.LotteryPlugin{})
 	return service
 }
 
@@ -478,6 +480,11 @@ func (s *Service) validateActivityPluginConfig(cmd marketing.CreateActivityComma
 	}
 	if err := plugin.ValidateConfig(cmd.ConfigPayload()); err != nil {
 		return errors.Join(marketing.ErrInvalidActivity, errors.New(activityplugin.ReasonPluginConfigInvalid+": "+err.Error()))
+	}
+	if validator, ok := plugin.(activityplugin.ActivityConfigValidator); ok {
+		if err := validator.ValidateActivityConfig(cmd); err != nil {
+			return errors.Join(marketing.ErrInvalidActivity, errors.New(activityplugin.ReasonPluginConfigInvalid+": "+err.Error()))
+		}
 	}
 	return nil
 }
@@ -2064,14 +2071,15 @@ func (s *Service) preparePlugin(ctx context.Context, activity marketing.Activity
 		precheck.Reason = "plugin precheck passed"
 	}
 	snapshot := &marketing.ActivityPluginSnapshot{
-		PluginCode:     pluginCode,
-		PluginVersion:  pluginVersion,
-		LifecycleStep:  "BeforeMatch",
-		Status:         "PASS",
-		PluginContext:  pluginResult.Context,
-		PrecheckResult: precheck,
-		Explain:        pluginResult.Explain,
-		RollbackToken:  pluginResult.RollbackToken,
+		PluginCode:       pluginCode,
+		PluginVersion:    pluginVersion,
+		LifecycleStep:    "BeforeMatch",
+		Status:           "PASS",
+		PluginContext:    pluginResult.Context,
+		PrecheckResult:   precheck,
+		Explain:          pluginResult.Explain,
+		CandidateResults: pluginResult.CandidateResults,
+		RollbackToken:    pluginResult.RollbackToken,
 	}
 	if !precheck.Allowed {
 		if precheck.ReasonCode == "OK" {

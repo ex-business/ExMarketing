@@ -247,6 +247,7 @@ type ActivityPluginSnapshot struct {
 	PluginContext      map[string]any            `json:"pluginContext,omitempty"`
 	PrecheckResult     PluginPrecheckResult      `json:"precheckResult,omitempty"`
 	Explain            map[string]any            `json:"explain,omitempty"`
+	CandidateResults   []map[string]any          `json:"candidateResults,omitempty"`
 	StateChangeIntents []PluginStateChangeIntent `json:"stateChangeIntents,omitempty"`
 	RollbackToken      string                    `json:"rollbackToken,omitempty"`
 }

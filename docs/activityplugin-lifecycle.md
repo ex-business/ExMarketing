@@ -121,6 +121,12 @@ card flipping progress, or plugin event streams. It must not replace
 `participation`, `grant_order`, `quota`, or `outbox`; final reward facts and
 delivery still belong to the main engine.
 
+The built-in `RED_ENVELOPE` and `LOTTERY` sample plugins follow this boundary:
+they validate gameplay configuration, produce auditable candidate context, and
+emit state-change intents only after the main engine qualifies the event. Sample
+configuration templates are documented in
+`docs/activityplugin-red-envelope-lottery.md`.
+
 ## Scheduler Events
 
 `PluginScheduleJob` models gameplay timers such as `START`, `END`, `DRAW`,

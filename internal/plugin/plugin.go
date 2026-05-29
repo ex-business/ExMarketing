@@ -50,6 +50,10 @@ type ActivityPlugin interface {
 	AfterQualified(context.Context, AfterQualifiedRequest) ([]StateChangeIntent, error)
 }
 
+type ActivityConfigValidator interface {
+	ValidateActivityConfig(marketing.CreateActivityCommand) error
+}
+
 type MetadataProvider interface {
 	Metadata() Metadata
 }

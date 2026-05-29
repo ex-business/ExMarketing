@@ -686,12 +686,12 @@
       "id": "2026-05-29-activityplugin-red-envelope-lottery",
       "title": "activityplugin-red-envelope-lottery: 红包雨与抽奖插件样板",
       "description": "ActivityPlugin 深化任务。实现 RED_ENVELOPE 与 LOTTERY 插件样板，验证插件只生产玩法上下文和抽奖结果，不直接发奖。验收：概率/库存走主引擎校验；结果可复现审计；异常不影响其他活动。",
-      "status": "ANALYSIS_READY",
+      "status": "COMMIT_READY",
       "risk": "高",
-      "score": 0,
+      "score": 91,
       "taskDir": "tasks/2026-05-29-activityplugin-red-envelope-lottery",
       "createdAt": "2026-05-29T14:13:00.680363Z",
-      "updatedAt": "2026-05-29T14:13:06.832296Z"
+      "updatedAt": "2026-05-29T15:35:14.222907Z"
     },
     {
       "id": "2026-05-29-admin-activity-config-pages",

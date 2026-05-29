@@ -653,56 +653,56 @@
       "id": "2026-05-29-activityplugin-lifecycle",
       "title": "activityplugin-lifecycle: 插件生命周期与版本契约",
       "description": "ActivityPlugin 深化任务。定义插件注册、版本、能力声明、初始化、校验、执行、回滚、禁用和兼容性契约。验收：插件不得绕过主链路；插件版本不兼容时拒绝上线；插件执行前后有审计和结构化错误。",
-      "status": "COMMIT_READY",
+      "status": "COMMITTED",
       "risk": "高",
       "score": 92,
       "taskDir": "tasks/2026-05-29-activityplugin-lifecycle",
       "createdAt": "2026-05-29T14:13:00.524185Z",
-      "updatedAt": "2026-05-29T14:30:37.065604Z"
+      "updatedAt": "2026-05-29T14:32:07.207187Z"
     },
     {
       "id": "2026-05-29-activityplugin-context-state",
       "title": "activityplugin-context-state: 插件上下文与状态隔离",
       "description": "ActivityPlugin 深化任务。设计插件可读上下文、可写状态、幂等键、租户隔离和状态存储边界。验收：插件不能直接改 quota/grant_order/outbox；状态读写有 tenant/activity/version 维度；重复事件不会重复消费插件状态。",
-      "status": "ANALYSIS_READY",
+      "status": "COMMITTED",
       "risk": "高",
-      "score": 0,
+      "score": 92,
       "taskDir": "tasks/2026-05-29-activityplugin-context-state",
       "createdAt": "2026-05-29T14:13:00.582284Z",
-      "updatedAt": "2026-05-29T14:13:06.830133Z"
+      "updatedAt": "2026-05-29T14:44:14.346999Z"
     },
     {
       "id": "2026-05-29-activityplugin-scheduler-events",
       "title": "activityplugin-scheduler-events: 插件调度与事件回传",
       "description": "ActivityPlugin 深化任务。支持玩法型活动的场次开始、结束、开奖、补偿扫描和插件事件回传。验收：调度失败可重试；插件事件仍进入标准 Event Inbox；场次状态可审计。",
-      "status": "ANALYSIS_READY",
+      "status": "COMMITTED",
       "risk": "中",
-      "score": 0,
+      "score": 91,
       "taskDir": "tasks/2026-05-29-activityplugin-scheduler-events",
       "createdAt": "2026-05-29T14:13:00.631158Z",
-      "updatedAt": "2026-05-29T14:13:06.831284Z"
+      "updatedAt": "2026-05-29T15:08:04.508846Z"
     },
     {
       "id": "2026-05-29-activityplugin-red-envelope-lottery",
       "title": "activityplugin-red-envelope-lottery: 红包雨与抽奖插件样板",
       "description": "ActivityPlugin 深化任务。实现 RED_ENVELOPE 与 LOTTERY 插件样板，验证插件只生产玩法上下文和抽奖结果，不直接发奖。验收：概率/库存走主引擎校验；结果可复现审计；异常不影响其他活动。",
-      "status": "COMMIT_READY",
+      "status": "COMMITTED",
       "risk": "高",
       "score": 91,
       "taskDir": "tasks/2026-05-29-activityplugin-red-envelope-lottery",
       "createdAt": "2026-05-29T14:13:00.680363Z",
-      "updatedAt": "2026-05-29T15:35:14.222907Z"
+      "updatedAt": "2026-05-29T15:37:15.248821Z"
     },
     {
       "id": "2026-05-29-admin-activity-config-pages",
       "title": "admin-activity-config-pages: 活动配置完整页面",
       "description": "完整管理后台业务配置页任务。补齐活动基础信息、展示入口、时间窗口、租户、互斥组、优先级、状态和版本管理页面。验收：页面可创建/编辑/查看活动；非法配置前端提示且后端仍校验；保存后可模拟运行。",
-      "status": "ANALYSIS_READY",
+      "status": "COMMIT_READY",
       "risk": "中",
-      "score": 0,
+      "score": 90,
       "taskDir": "tasks/2026-05-29-admin-activity-config-pages",
       "createdAt": "2026-05-29T14:13:00.729662Z",
-      "updatedAt": "2026-05-29T14:13:06.833501Z"
+      "updatedAt": "2026-05-29T16:02:07.38838Z"
     },
     {
       "id": "2026-05-29-admin-rule-reward-quota-editors",

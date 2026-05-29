@@ -804,6 +804,48 @@
       gap: 10px;
       margin-bottom: 10px;
     }
+    .activity-filter-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+    .activity-form-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+    .activity-form-grid .wide,
+    .activity-json-grid .wide {
+      grid-column: 1 / -1;
+    }
+    .activity-json-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+    .activity-json-grid textarea {
+      min-height: 180px;
+    }
+    .form-error {
+      color: var(--red);
+      font-size: 12px;
+      margin-top: 4px;
+      min-height: 16px;
+    }
+    .pagination {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 12px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
     .ops {
       display: flex;
       flex-wrap: wrap;
@@ -1001,7 +1043,10 @@
       .summary {
         grid-template-columns: repeat(2, minmax(0, 1fr));
       }
-      .field-grid {
+      .field-grid,
+      .activity-filter-grid,
+      .activity-form-grid,
+      .activity-json-grid {
         grid-template-columns: 1fr;
       }
     }
@@ -1173,8 +1218,51 @@
           <span class="badge" id="activityCount">0</span>
         </div>
         <div class="detail-body">
+          <div class="activity-filter-grid">
+            <div>
+              <label for="activitySearch">搜索</label>
+              <input id="activitySearch" placeholder="tenant / code / name" oninput="renderActivityList()">
+            </div>
+            <div>
+              <label for="activityStatusFilter">状态</label>
+              <select id="activityStatusFilter" onchange="renderActivityList()">
+                <option value="">全部</option>
+                <option>DRAFT</option>
+                <option>SCHEDULED</option>
+                <option>ACTIVE</option>
+                <option>PAUSED</option>
+                <option>ENDED</option>
+              </select>
+            </div>
+            <div>
+              <label for="activityTypeFilter">类型</label>
+              <input id="activityTypeFilter" placeholder="activityType" oninput="renderActivityList()">
+            </div>
+            <div>
+              <label for="activityPageSize">每页</label>
+              <select id="activityPageSize" onchange="activityPage = 1; renderActivityList()">
+                <option>5</option>
+                <option selected>10</option>
+                <option>20</option>
+                <option>50</option>
+              </select>
+            </div>
+            <div>
+              <label for="activityStartFrom">开始不早于</label>
+              <input id="activityStartFrom" type="datetime-local" onchange="renderActivityList()">
+            </div>
+            <div>
+              <label for="activityEndTo">结束不晚于</label>
+              <input id="activityEndTo" type="datetime-local" onchange="renderActivityList()">
+            </div>
+            <div>
+              <label>&nbsp;</label>
+              <button class="button secondary" onclick="resetActivityFilters()">清空筛选</button>
+            </div>
+          </div>
           <div id="activityError"></div>
           <div id="activities"></div>
+          <div class="pagination" id="activityPagination"></div>
         </div>
       </div>
       <div class="panel">
@@ -1186,11 +1274,101 @@
     </div>
     <div class="admin-grid">
       <div class="panel">
-        <div class="panel-head"><h3 class="panel-title">创建活动</h3></div>
+        <div class="panel-head"><h3 class="panel-title" id="activityFormTitle">创建活动</h3></div>
         <div class="detail-body">
-          <textarea id="activity"></textarea>
+          <div id="activityFormMessage"></div>
+          <div class="activity-form-grid">
+            <div>
+              <label for="activityTenantId">tenantId</label>
+              <input id="activityTenantId">
+              <div class="form-error" id="activityTenantIdError"></div>
+            </div>
+            <div>
+              <label for="activityCode">activityCode</label>
+              <input id="activityCode">
+              <div class="form-error" id="activityCodeError"></div>
+            </div>
+            <div>
+              <label for="activityName">activityName</label>
+              <input id="activityName">
+              <div class="form-error" id="activityNameError"></div>
+            </div>
+            <div>
+              <label for="activityType">activityType</label>
+              <input id="activityType">
+              <div class="form-error" id="activityTypeError"></div>
+            </div>
+            <div>
+              <label for="activityStatus">status</label>
+              <select id="activityStatus">
+                <option>DRAFT</option>
+                <option>SCHEDULED</option>
+                <option>ACTIVE</option>
+                <option>PAUSED</option>
+                <option>ENDED</option>
+              </select>
+              <div class="form-error" id="activityStatusError"></div>
+            </div>
+            <div>
+              <label for="activityTimezone">timezone</label>
+              <input id="activityTimezone" value="UTC">
+              <div class="form-error" id="activityTimezoneError"></div>
+            </div>
+            <div>
+              <label for="activityStartTime">startTime</label>
+              <input id="activityStartTime" placeholder="2026-05-24T00:00:00Z">
+              <div class="form-error" id="activityStartTimeError"></div>
+            </div>
+            <div>
+              <label for="activityEndTime">endTime</label>
+              <input id="activityEndTime" placeholder="2026-06-24T00:00:00Z">
+              <div class="form-error" id="activityEndTimeError"></div>
+            </div>
+            <div>
+              <label for="activityPriority">priority</label>
+              <input id="activityPriority" type="number" value="100">
+              <div class="form-error" id="activityPriorityError"></div>
+            </div>
+            <div>
+              <label for="activityExclusiveGroup">exclusiveGroup</label>
+              <input id="activityExclusiveGroup">
+            </div>
+            <div>
+              <label for="activityStackable">stackable</label>
+              <select id="activityStackable">
+                <option value="false">false</option>
+                <option value="true">true</option>
+              </select>
+            </div>
+            <div>
+              <label for="activityTriggerEvents">triggerEvents</label>
+              <input id="activityTriggerEvents" placeholder="DEPOSIT_SUCCESS, LOGIN">
+              <div class="form-error" id="activityTriggerEventsError"></div>
+            </div>
+          </div>
+          <div class="activity-json-grid">
+            <div>
+              <label for="activityConfigJson">config</label>
+              <textarea id="activityConfigJson"></textarea>
+              <div class="form-error" id="activityConfigJsonError"></div>
+            </div>
+            <div>
+              <label for="activityRulesJson">rules</label>
+              <textarea id="activityRulesJson"></textarea>
+              <div class="form-error" id="activityRulesJsonError"></div>
+            </div>
+            <div>
+              <label for="activityRewardsJson">rewards</label>
+              <textarea id="activityRewardsJson"></textarea>
+              <div class="form-error" id="activityRewardsJsonError"></div>
+            </div>
+          </div>
+          <div class="readonly-box">创建提交基础字段、config、rules、rewards；编辑只提交后端允许更新的字段，不提交 id、tenantId、activityCode、activityType、rules、rewards。后端校验失败会显示在下方结果中。</div>
           <div class="ops">
             <button class="button" onclick="createActivityFromAdmin()">创建</button>
+            <button class="button secondary" onclick="updateActivityFromAdmin()">保存编辑</button>
+            <button class="button secondary" onclick="prepareCopySelectedActivity()">复制当前</button>
+            <button class="button secondary" onclick="resetActivityForm()">新建草稿</button>
             <button class="button secondary" onclick="fillActivitySample()">填入示例</button>
           </div>
           <pre class="output" id="activityResult"></pre>
@@ -1493,6 +1671,8 @@ let autoRunQueue = false;
 let batchMode = false;
 let adminActivities = [];
 let selectedActivityId = '';
+let activityPage = 1;
+let lastSimulationByActivity = {};
 
 function toggleSidebar() {
   const shell = document.getElementById('appShell');
@@ -2581,14 +2761,72 @@ async function loadActivities() {
   }
   if (error) error.innerHTML = '';
   adminActivities = data.body.items || [];
-  if (count) count.textContent = String(adminActivities.length);
+  activityPage = 1;
+  renderActivityList();
   if (!adminActivities.length) {
-    document.getElementById('activities').innerHTML = '<div class="empty">当前没有活动。</div>';
     document.getElementById('activityDetail').innerHTML = renderQuotaBoundary();
+    if (count) count.textContent = '0';
     return;
   }
-  document.getElementById('activities').innerHTML = renderActivityTable(adminActivities);
-  loadActivityDetail(adminActivities[0].id);
+  const selectedExists = adminActivities.some(item => item.id === selectedActivityId);
+  loadActivityDetail(selectedExists ? selectedActivityId : adminActivities[0].id);
+}
+
+function renderActivityList() {
+  const count = document.getElementById('activityCount');
+  const target = document.getElementById('activities');
+  const pagination = document.getElementById('activityPagination');
+  if (!target) return;
+  const filtered = filteredActivities();
+  const pageSize = Number(valueOf('activityPageSize') || 10);
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  activityPage = Math.min(Math.max(1, activityPage), totalPages);
+  const offset = (activityPage - 1) * pageSize;
+  const pageItems = filtered.slice(offset, offset + pageSize);
+  if (count) count.textContent = `${filtered.length}/${adminActivities.length}`;
+  target.innerHTML = pageItems.length ? renderActivityTable(pageItems) : '<div class="empty">当前筛选条件没有活动。</div>';
+  if (pagination) {
+    pagination.innerHTML = `
+      <span>第 ${activityPage} / ${totalPages} 页，当前结果 ${filtered.length} 条。后端当前未返回 total，分页基于已加载 items。</span>
+      <span class="ops">
+        <button class="button secondary" ${activityPage <= 1 ? 'disabled' : ''} onclick="activityPage--; renderActivityList()">上一页</button>
+        <button class="button secondary" ${activityPage >= totalPages ? 'disabled' : ''} onclick="activityPage++; renderActivityList()">下一页</button>
+      </span>
+    `;
+  }
+}
+
+function filteredActivities() {
+  const search = valueOf('activitySearch').toLowerCase();
+  const status = valueOf('activityStatusFilter');
+  const type = valueOf('activityTypeFilter').toLowerCase();
+  const startFrom = localDateTimeValue('activityStartFrom');
+  const endTo = localDateTimeValue('activityEndTo');
+  return adminActivities.filter(item => {
+    const haystack = [item.tenantId, item.activityCode, item.activityName].join(' ').toLowerCase();
+    if (search && !haystack.includes(search)) return false;
+    if (status && item.status !== status) return false;
+    if (type && !String(item.activityType || '').toLowerCase().includes(type)) return false;
+    if (startFrom && new Date(item.startTime).getTime() < startFrom.getTime()) return false;
+    if (endTo && new Date(item.endTime).getTime() > endTo.getTime()) return false;
+    return true;
+  });
+}
+
+function localDateTimeValue(id) {
+  const raw = valueOf(id);
+  if (!raw) return null;
+  const date = new Date(raw);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function resetActivityFilters() {
+  for (const id of ['activitySearch', 'activityStatusFilter', 'activityTypeFilter', 'activityStartFrom', 'activityEndTo']) {
+    const target = document.getElementById(id);
+    if (target) target.value = '';
+  }
+  activityPage = 1;
+  renderActivityList();
 }
 
 function renderActivityTable(items) {
@@ -2596,25 +2834,31 @@ function renderActivityTable(items) {
     <table class="admin-table">
       <thead>
         <tr>
+          <th>tenant</th>
           <th>编码</th>
           <th>名称</th>
           <th>类型</th>
           <th>状态</th>
-          <th>触发事件</th>
+          <th>优先级</th>
+          <th>互斥/叠加</th>
           <th>时间</th>
           <th>版本</th>
+          <th>更新</th>
         </tr>
       </thead>
       <tbody>
         ${items.map(item => `
           <tr onclick="loadActivityDetail('${escapeJs(item.id)}')" style="cursor:pointer">
+            <td>${escapeHtml(item.tenantId || '-')}</td>
             <td>${escapeHtml(item.activityCode || '-')}</td>
             <td>${escapeHtml(item.activityName || '-')}</td>
             <td>${escapeHtml(item.activityType || '-')}</td>
             <td>${badge(item.status || '-', statusTone(item.status || ''))}</td>
-            <td>${escapeHtml((item.triggerEvents || []).join(', ') || '-')}</td>
+            <td>${escapeHtml(String(item.priority ?? '-'))}</td>
+            <td>${escapeHtml([item.exclusiveGroup || '-', item.stackable ? 'stackable' : 'exclusive'].join(' / '))}</td>
             <td>${escapeHtml(formatRange(item.startTime, item.endTime, item.timezone))}</td>
             <td>${escapeHtml(String(item.version ?? '-'))}</td>
+            <td>${escapeHtml(formatTime(item.updatedAt))}</td>
           </tr>
         `).join('')}
       </tbody>
@@ -2643,6 +2887,9 @@ function renderActivityDetail(item) {
   const rules = item.rules || [];
   const rewards = item.rewards || [];
   const approval = item.approval || {};
+  const approvalVersion = approval.activityVersion || '-';
+  const approvalCurrent = approval.status === 'APPROVED' && approval.activityVersion === item.version ? '当前版本有效' : '当前版本未批准';
+  const simulation = lastSimulationByActivity[item.id];
   target.innerHTML = `
     ${renderQuotaBoundary()}
     <div class="summary">
@@ -2650,6 +2897,8 @@ function renderActivityDetail(item) {
       ${metric('状态', item.status || '-')}
       ${metric('审批', approval.status || 'NONE')}
       ${metric('版本', String(item.version ?? '-'))}
+      ${metric('审批版本', String(approvalVersion))}
+      ${metric('审批有效性', approvalCurrent)}
       ${metric('优先级', String(item.priority ?? '-'))}
       ${metric('互斥组', item.exclusiveGroup || '-')}
       ${metric('可叠加', item.stackable ? 'true' : 'false')}
@@ -2657,12 +2906,26 @@ function renderActivityDetail(item) {
     <div class="readonly-box">
       <strong>${escapeHtml(item.activityCode || item.id)}</strong><br>
       ${escapeHtml(item.activityName || '')}<br>
-      ${escapeHtml(formatRange(item.startTime, item.endTime, item.timezone))}
+      ${escapeHtml(formatRange(item.startTime, item.endTime, item.timezone))}<br>
+      triggerEvents: ${escapeHtml((item.triggerEvents || []).join(', ') || '-')}<br>
+      updatedAt: ${escapeHtml(formatTime(item.updatedAt))}
     </div>
+    <h3 class="panel-title">配置快照</h3>
+    <pre class="output">${escapeHtml(JSON.stringify(item.config || {}, null, 2))}</pre>
     <h3 class="panel-title">规则配置</h3>
     ${rules.length ? renderSmallTable(rules, ['ruleCode', 'rulePhase', 'ruleType', 'sort', 'enabled', 'version']) : '<div class="empty">后端返回中没有规则。</div>'}
     <h3 class="panel-title" style="margin-top:14px">奖励配置</h3>
     ${rewards.length ? renderSmallTable(rewards, ['rewardCode', 'rewardType', 'calculateType', 'grantMode', 'grantChannel', 'enabled', 'version']) : '<div class="empty">后端返回中没有奖励。</div>'}
+    <h3 class="panel-title" style="margin-top:14px">版本历史</h3>
+    <div class="readonly-box">当前后端 API 返回当前版本、更新时间、审批记录和审计记录；完整历史配置快照 API 未接入本页，因此不展示旧版本配置内容。</div>
+    ${renderSmallTable([{
+      version: item.version,
+      updatedAt: formatTime(item.updatedAt),
+      approvalStatus: approval.status || 'NONE',
+      approvalVersion
+    }], ['version', 'updatedAt', 'approvalStatus', 'approvalVersion'])}
+    <h3 class="panel-title" style="margin-top:14px">最近模拟</h3>
+    <div class="readonly-box">${simulation ? escapeHtml(simulation) : '暂无页面会话内模拟结果。'}</div>
     <h3 class="panel-title" style="margin-top:14px">审批与上线校验</h3>
     <div class="readonly-box">以下动作只调用真实 Admin API；版本不一致、审批人不合法、高危二级审批、未审批上线等拒绝原因以后端响应为准。</div>
     <div class="field-grid">
@@ -2685,11 +2948,14 @@ function renderActivityDetail(item) {
       <button class="button secondary" onclick="updateSelectedActivityStatus('PAUSED')">暂停</button>
       <button class="button secondary" onclick="loadSelectedApprovalRecords()">审批记录</button>
       <button class="button secondary" onclick="loadSelectedActivityAudit()">活动审计</button>
+      <button class="button secondary" onclick="prepareCopySelectedActivity()">复制到表单</button>
+      <button class="button secondary" onclick="openSimulationForSelectedActivity()">进入模拟运行</button>
     </div>
     <pre class="output" id="activityActionResult"></pre>
     <h3 class="panel-title" style="margin-top:14px">原始返回</h3>
     <pre class="output">${escapeHtml(JSON.stringify(item, null, 2))}</pre>
   `;
+  populateActivityForm(item, 'edit');
 }
 
 function renderQuotaBoundary() {
@@ -2712,8 +2978,263 @@ function metric(label, value) {
 }
 
 async function createActivityFromAdmin() {
-  await postJson('/admin/v1/activities', 'activity', 'activityResult');
-  await loadActivities();
+  const payload = buildCreateActivityPayload();
+  if (!payload) return;
+  const confirmed = await confirmRiskyStatus(payload.status);
+  if (!confirmed) return;
+  const data = await requestJson('/admin/v1/activities', {method: 'POST', body: JSON.stringify(payload)});
+  showActivityFormResult(data);
+  if (data.ok) {
+    selectedActivityId = data.body.id || selectedActivityId;
+    await loadActivities();
+  }
+}
+
+async function updateActivityFromAdmin() {
+  if (!selectedActivityId) {
+    setActivityFormMessage('请先从列表选择一条活动。', 'error');
+    return;
+  }
+  const payload = buildUpdateActivityPayload();
+  if (!payload) return;
+  const confirmed = await confirmRiskyStatus(payload.status);
+  if (!confirmed) return;
+  const data = await requestJson('/admin/v1/activities/' + encodeURIComponent(selectedActivityId), {
+    method: 'PUT',
+    body: JSON.stringify(payload)
+  });
+  showActivityFormResult(data);
+  if (data.ok) {
+    await loadActivities();
+    await loadActivityDetail(data.body.id || selectedActivityId);
+  }
+}
+
+function buildCreateActivityPayload() {
+  clearActivityFormErrors();
+  const parsed = parseActivityJsonInputs(true);
+  if (!parsed) return null;
+  const payload = {
+    operator: 'ops',
+    tenantId: valueOf('activityTenantId'),
+    activityCode: valueOf('activityCode'),
+    activityName: valueOf('activityName'),
+    activityType: valueOf('activityType'),
+    status: valueOf('activityStatus') || 'DRAFT',
+    triggerEvents: splitCSV(valueOf('activityTriggerEvents')),
+    startTime: valueOf('activityStartTime'),
+    endTime: valueOf('activityEndTime'),
+    timezone: valueOf('activityTimezone') || 'UTC',
+    priority: Number(valueOf('activityPriority') || 0),
+    exclusiveGroup: valueOf('activityExclusiveGroup'),
+    stackable: valueOf('activityStackable') === 'true',
+    config: parsed.config,
+    rules: parsed.rules,
+    rewards: parsed.rewards
+  };
+  return validateActivityPayload(payload, true) ? payload : null;
+}
+
+function buildUpdateActivityPayload() {
+  clearActivityFormErrors();
+  const parsed = parseActivityJsonInputs(false);
+  if (!parsed) return null;
+  const payload = {
+    operator: 'ops',
+    activityName: valueOf('activityName'),
+    status: valueOf('activityStatus') || 'DRAFT',
+    startTime: valueOf('activityStartTime'),
+    endTime: valueOf('activityEndTime'),
+    timezone: valueOf('activityTimezone') || 'UTC',
+    priority: Number(valueOf('activityPriority') || 0),
+    exclusiveGroup: valueOf('activityExclusiveGroup'),
+    stackable: valueOf('activityStackable') === 'true',
+    config: parsed.config
+  };
+  return validateActivityPayload({
+    ...payload,
+    tenantId: selectedActivity()?.tenantId || valueOf('activityTenantId'),
+    activityCode: selectedActivity()?.activityCode || valueOf('activityCode'),
+    activityType: selectedActivity()?.activityType || valueOf('activityType'),
+    triggerEvents: selectedActivity()?.triggerEvents || splitCSV(valueOf('activityTriggerEvents')),
+    rules: [],
+    rewards: [{}]
+  }, false) ? payload : null;
+}
+
+function parseActivityJsonInputs(requireRulesRewards) {
+  const config = parseJSONField('activityConfigJson', {});
+  if (config === undefined) return null;
+  const rules = parseJSONField('activityRulesJson', []);
+  if (rules === undefined) return null;
+  const rewards = parseJSONField('activityRewardsJson', []);
+  if (rewards === undefined) return null;
+  if (requireRulesRewards && !Array.isArray(rules)) {
+    setFieldError('activityRulesJson', 'rules 必须是数组。');
+    return null;
+  }
+  if (requireRulesRewards && !Array.isArray(rewards)) {
+    setFieldError('activityRewardsJson', 'rewards 必须是数组。');
+    return null;
+  }
+  return {config, rules, rewards};
+}
+
+function parseJSONField(id, fallback) {
+  const raw = valueOf(id);
+  if (!raw) return fallback;
+  try {
+    return JSON.parse(raw);
+  } catch (err) {
+    setFieldError(id, 'JSON 解析失败: ' + err.message);
+    return undefined;
+  }
+}
+
+function validateActivityPayload(payload, requireCreateFields) {
+  let ok = true;
+  const required = [
+    ['activityTenantId', payload.tenantId, 'tenantId 不能为空。'],
+    ['activityCode', payload.activityCode, 'activityCode 不能为空。'],
+    ['activityName', payload.activityName, 'activityName 不能为空。'],
+    ['activityType', payload.activityType, 'activityType 不能为空。'],
+    ['activityStartTime', payload.startTime, 'startTime 不能为空。'],
+    ['activityEndTime', payload.endTime, 'endTime 不能为空。'],
+    ['activityTimezone', payload.timezone, 'timezone 不能为空。']
+  ];
+  for (const [id, value, message] of required) {
+    if (!String(value || '').trim()) {
+      setFieldError(id, message);
+      ok = false;
+    }
+  }
+  if (requireCreateFields && !payload.triggerEvents.length) {
+    setFieldError('activityTriggerEvents', 'triggerEvents 至少一个。');
+    ok = false;
+  }
+  const start = new Date(payload.startTime);
+  const end = new Date(payload.endTime);
+  if (payload.startTime && Number.isNaN(start.getTime())) {
+    setFieldError('activityStartTime', 'startTime 必须是 RFC3339 或浏览器可解析时间。');
+    ok = false;
+  }
+  if (payload.endTime && Number.isNaN(end.getTime())) {
+    setFieldError('activityEndTime', 'endTime 必须是 RFC3339 或浏览器可解析时间。');
+    ok = false;
+  }
+  if (!Number.isNaN(start.getTime()) && !Number.isNaN(end.getTime()) && start.getTime() >= end.getTime()) {
+    setFieldError('activityEndTime', 'endTime 必须晚于 startTime。');
+    ok = false;
+  }
+  if (payload.timezone && !/^(UTC|[A-Za-z_]+\/[A-Za-z0-9_+\-\/]+)$/.test(payload.timezone)) {
+    setFieldError('activityTimezone', 'timezone 必须是 UTC 或 IANA 名称。');
+    ok = false;
+  }
+  const configKeys = Object.keys(payload.config || {});
+  const illegal = configKeys.filter(key => !['entry', 'display', 'audience', 'metadata'].includes(key));
+  if (illegal.length) {
+    setFieldError('activityConfigJson', 'config 顶层只允许 entry/display/audience/metadata: ' + illegal.join(', '));
+    ok = false;
+  }
+  const tenantIds = payload.config?.entry?.tenantIds;
+  if (Array.isArray(tenantIds) && tenantIds.some(tenant => tenant !== payload.tenantId)) {
+    setFieldError('activityConfigJson', 'entry.tenantIds 只能为空或包含当前 tenantId。');
+    ok = false;
+  }
+  if (!ok) setActivityFormMessage('保存前校验未通过，请检查字段错误。', 'error');
+  return ok;
+}
+
+async function confirmRiskyStatus(status) {
+  if (status !== 'SCHEDULED' && status !== 'ACTIVE') return true;
+  return showConfirm('保存状态确认', '保存为 ' + status + ' 需要当前版本审批通过；最终是否允许以后端校验为准。', '继续保存');
+}
+
+function showActivityFormResult(data) {
+  writeResult('activityResult', data);
+  if (data.ok) {
+    setActivityFormMessage('保存成功，已刷新列表和详情。', 'success');
+    return;
+  }
+  const message = JSON.stringify(data.body || {});
+  if (data.status === 409 || /activityCode|conflict|duplicate/i.test(message)) {
+    setFieldError('activityCode', '同租户 activityCode 重复或冲突。');
+  }
+  setActivityFormMessage('后端校验失败，HTTP ' + data.status + '。', 'error');
+}
+
+function populateActivityForm(item, mode) {
+  if (!item) return;
+  document.getElementById('activityFormTitle').textContent = mode === 'copy' ? '复制活动' : '编辑活动';
+  setValue('activityTenantId', item.tenantId || '');
+  setValue('activityCode', item.activityCode || '');
+  setValue('activityName', item.activityName || '');
+  setValue('activityType', item.activityType || '');
+  setValue('activityStatus', item.status || 'DRAFT');
+  setValue('activityTimezone', item.timezone || 'UTC');
+  setValue('activityStartTime', item.startTime || '');
+  setValue('activityEndTime', item.endTime || '');
+  setValue('activityPriority', item.priority ?? 0);
+  setValue('activityExclusiveGroup', item.exclusiveGroup || '');
+  setValue('activityStackable', item.stackable ? 'true' : 'false');
+  setValue('activityTriggerEvents', (item.triggerEvents || []).join(', '));
+  setJsonSample('activityConfigJson', item.config || {});
+  setJsonSample('activityRulesJson', item.rules || []);
+  setJsonSample('activityRewardsJson', item.rewards || []);
+  clearActivityFormErrors();
+}
+
+function prepareCopySelectedActivity() {
+  const item = selectedActivity();
+  if (!item) {
+    setActivityFormMessage('请先选择要复制的活动。', 'error');
+    return;
+  }
+  const copy = JSON.parse(JSON.stringify(item));
+  copy.activityCode = '';
+  copy.activityName = (copy.activityName || copy.activityCode || 'Activity') + ' Copy';
+  copy.status = 'DRAFT';
+  copy.version = 1;
+  copy.approval = {status: 'NONE'};
+  populateActivityForm(copy, 'copy');
+  setFieldError('activityCode', '复制活动必须输入新的 activityCode。');
+}
+
+function resetActivityForm() {
+  selectedActivityId = '';
+  document.getElementById('activityFormTitle').textContent = '创建活动';
+  fillActivitySample();
+  clearActivityFormErrors();
+  setActivityFormMessage('', '');
+}
+
+function clearActivityFormErrors() {
+  for (const node of document.querySelectorAll('[id$="Error"].form-error')) node.textContent = '';
+  setActivityFormMessage('', '');
+}
+
+function setFieldError(id, message) {
+  const target = document.getElementById(id + 'Error');
+  if (target) target.textContent = message;
+}
+
+function setActivityFormMessage(message, tone) {
+  const target = document.getElementById('activityFormMessage');
+  if (!target) return;
+  if (!message) {
+    target.innerHTML = '';
+    return;
+  }
+  target.innerHTML = `<div class="${tone === 'success' ? 'success-box' : 'error-box'}">${escapeHtml(message)}</div>`;
+}
+
+function setValue(id, value) {
+  const target = document.getElementById(id);
+  if (target) target.value = value;
+}
+
+function splitCSV(value) {
+  return String(value || '').split(',').map(item => item.trim()).filter(Boolean);
 }
 
 function selectedActivity() {
@@ -2824,6 +3345,29 @@ async function loadSelectedActivityAudit() {
   writeResult('activityActionResult', data);
 }
 
+function openSimulationForSelectedActivity() {
+  const activity = selectedActivity();
+  if (!activity) return;
+  const eventType = (activity.triggerEvents || [])[0] || 'DEPOSIT_SUCCESS';
+  setJsonSample('event', {
+    eventId: 'evt_sim_' + Date.now(),
+    eventType,
+    sourceSystem: activity.config?.entry?.sourceSystems?.[0] || 'payment',
+    tenantId: activity.tenantId,
+    subject: {type: activity.config?.entry?.audience?.subjectTypes?.[0] || 'USER', id: '10001'},
+    biz: {bizType: activity.config?.metadata?.bizType || activity.activityType || 'ACTIVITY', bizId: 'biz_sim_001'},
+    occurredAt: new Date().toISOString(),
+    attributes: {
+      channel: activity.config?.entry?.channels?.[0] || 'WEB',
+      amount: '299.00',
+      currency: 'CNY',
+      activityCode: activity.activityCode
+    }
+  });
+  lastSimulationByActivity[activity.id] = '已带入模拟页上下文，尚未执行本页会话模拟。';
+  switchTab('simulate');
+}
+
 async function postJson(url, inputId, outputId) {
   const target = document.getElementById(outputId);
   try {
@@ -2834,8 +3378,28 @@ async function postJson(url, inputId, outputId) {
     return;
   }
   const data = await requestJson(url, {method: 'POST', body: document.getElementById(inputId).value});
+  if (url === '/admin/v1/simulate' && data.ok) {
+    recordSimulationSummary(inputId, data.body);
+  }
   target.textContent = 'HTTP ' + data.status + '\n' + JSON.stringify(data.body, null, 2);
   target.style.color = data.ok ? '#e5e7eb' : '#fecaca';
+}
+
+function recordSimulationSummary(inputId, body) {
+  let event = {};
+  try {
+    event = JSON.parse(document.getElementById(inputId).value || '{}');
+  } catch {
+    event = {};
+  }
+  const activityCode = event.attributes?.activityCode;
+  const matchedCodes = (body.matchedActivities || []).map(item => item.activityCode).filter(Boolean);
+  const codes = activityCode ? [activityCode] : matchedCodes;
+  const summary = `simulatedAt: ${body.simulatedAt || new Date().toISOString()}; matched: ${matchedCodes.join(', ') || '-'}; unmatched: ${(body.unmatchedActivities || []).length}`;
+  for (const code of codes) {
+    const activity = adminActivities.find(item => item.activityCode === code);
+    if (activity) lastSimulationByActivity[activity.id] = summary;
+  }
 }
 
 async function loadAudit() {
@@ -2922,7 +3486,7 @@ function setJsonSample(id, value) {
 }
 
 function fillActivitySample() {
-  setJsonSample('activity', {
+  const sample = {
     operator: 'ops',
     tenantId: 'site_001',
     activityCode: 'GENERIC_RATIO_BONUS',
@@ -3003,7 +3567,24 @@ function fillActivitySample() {
         version: 1
       }
     ]
-  });
+  };
+  document.getElementById('activityFormTitle').textContent = '创建活动';
+  setValue('activityTenantId', sample.tenantId);
+  setValue('activityCode', sample.activityCode);
+  setValue('activityName', sample.activityName);
+  setValue('activityType', sample.activityType);
+  setValue('activityStatus', sample.status);
+  setValue('activityTimezone', sample.timezone);
+  setValue('activityStartTime', sample.startTime);
+  setValue('activityEndTime', sample.endTime);
+  setValue('activityPriority', sample.priority);
+  setValue('activityExclusiveGroup', sample.exclusiveGroup);
+  setValue('activityStackable', String(sample.stackable));
+  setValue('activityTriggerEvents', sample.triggerEvents.join(', '));
+  setJsonSample('activityConfigJson', sample.config);
+  setJsonSample('activityRulesJson', sample.rules);
+  setJsonSample('activityRewardsJson', sample.rewards);
+  clearActivityFormErrors();
 }
 
 function fillQuotaSample() {
@@ -3199,6 +3780,9 @@ function localRequirementStatus(status) {
 }
 
 function statusTone(status) {
+  if (status === 'ACTIVE' || status === 'APPROVED') return 'green';
+  if (status === 'SCHEDULED' || status === 'DRAFT' || status === 'PAUSED') return 'blue';
+  if (status === 'ENDED' || status === 'REJECTED') return 'red';
   if (String(status || '').includes('PASS') || status === 'COMMITTED') return 'green';
   if (status === 'REVIEW_BLOCK' || status === 'ANALYSIS_FAIL') return 'amber';
   if (String(status || '').includes('FAIL') || String(status || '').includes('BLOCK')) return 'red';

@@ -1,41 +1,75 @@
 # Commit
 
-## Agent 指令
+## Agent
 
-你是 Commit Agent。只有 review.md 为 PASS 且 test.md 为 PASS 时才能提交。
-只允许写 commit.md；禁止修改业务代码、测试代码、文档代码、配置文件或任何其他文件。
-如果提交前检查发现代码需要修复，必须在 commit.md 写明 BLOCK 和原因，让流程打回 Dev Agent，不能自己修。
+Commit Agent
 
-提交前必须检查：
+## Gate
 
-~~~bash
-git status -sb
-go test ./...
-go build ./...
-~~~
+```text
+PASS
+```
+
+Review gate:
+
+```text
+tasks/2026-05-27-engine-load-fault-tests/review.md: PASS
+```
+
+Test gate:
+
+```text
+tasks/2026-05-27-engine-load-fault-tests/test.md: PASS
+```
+
+## Required Checks
+
+```text
+git status -sb: PASS
+git diff --check: PASS
+go test ./...: PASS
+go build ./...: PASS
+```
 
 ## Scope
 
-待填写。
+Committed staged changes for `2026-05-27-engine-load-fault-tests` only:
 
-## Review
+```text
+cmd/engine-load-fault-tests/main.go
+internal/marketing/memory_repository_test.go
+internal/postgres/repository.go
+requirements/backlog.json
+tasks/2026-05-27-engine-load-fault-tests/agent-prompts.md
+tasks/2026-05-27-engine-load-fault-tests/agent-report.md
+tasks/2026-05-27-engine-load-fault-tests/agent-status.json
+tasks/2026-05-27-engine-load-fault-tests/analysis.md
+tasks/2026-05-27-engine-load-fault-tests/implementation.md
+tasks/2026-05-27-engine-load-fault-tests/review.md
+tasks/2026-05-27-engine-load-fault-tests/test-plan.md
+tasks/2026-05-27-engine-load-fault-tests/test.md
+```
 
-~~~text
-PASS / BLOCK
-~~~
+Excluded from commit:
 
-## Test
-
-~~~text
-PASS / FAIL
-~~~
+```text
+tasks/2026-05-27-engine-load-fault-tests/runs/*
+unrelated modified task files under other tasks/
+```
 
 ## Commit
 
-~~~text
-hash:
-message:
-remote:
-~~~
+```text
+hash: 3561308
+message: test: add engine load fault runner
+remote: not pushed
+```
+
+## Post-Commit Status
+
+```text
+main...origin/main [ahead 5]
+uncommitted unrelated task files remain outside this commit
+```
 
 需求：2026-05-27-engine-load-fault-tests

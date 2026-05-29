@@ -16,26 +16,49 @@ go build ./...
 
 ## Scope
 
-待填写。
+提交数据库备份 / 恢复工具链：
+
+- 新增 `cmd/db-backup-restore` 命令，支持 backup / restore / validate / smoke。
+- 新增 `internal/dbbackup` 备份恢复 helper 与单元测试。
+- 补充 migration schema 校验能力，并让 PostgreSQL E2E runId 可重复稳定执行。
+- 更新 README、operations 文档、backlog 与本任务交付记录。
+
+未暂存或提交 `tasks/*/runs/` 执行日志。
+未提交其它任务目录的状态文件改动。
 
 ## Review
 
 ~~~text
-PASS / BLOCK
+PASS
 ~~~
 
 ## Test
 
 ~~~text
-PASS / FAIL
+PASS
+~~~
+
+## Pre-Commit Checks
+
+~~~text
+git status -sb: PASS
+git diff --check: PASS
+go test ./...: PASS
+go build ./...: PASS
 ~~~
 
 ## Commit
 
 ~~~text
-hash:
-message:
-remote:
+hash: fff3f45
+message: Add database backup restore tooling
+remote: not pushed
+~~~
+
+## Decision
+
+~~~text
+PASS
 ~~~
 
 需求：2026-05-27-db-backup-restore

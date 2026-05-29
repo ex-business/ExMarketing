@@ -16,26 +16,38 @@ go build ./...
 
 ## Scope
 
-待填写。
+- Added Prometheus-style engine metrics instrumentation and `/metrics` rendering support.
+- Covered event intake, quota reserve outcomes, outbox backlog/DLQ, callback failures, worker claim latency, and reward command latency.
+- Updated operations documentation, task artifacts, and backlog status for `2026-05-27-engine-metrics-alerts`.
+- Excluded unrelated task directory changes and did not stage any `tasks/*/runs/` execution logs.
 
 ## Review
 
 ~~~text
-PASS / BLOCK
+PASS
 ~~~
 
 ## Test
 
 ~~~text
-PASS / FAIL
+PASS
+~~~
+
+## Pre-Commit Checks
+
+~~~text
+git status -sb: PASS
+git diff --check: PASS
+go test ./...: PASS
+go build ./...: PASS
 ~~~
 
 ## Commit
 
 ~~~text
-hash:
-message:
-remote:
+hash: 3a06f6e
+message: Add engine metrics alerts
+remote: not pushed
 ~~~
 
 需求：2026-05-27-engine-metrics-alerts

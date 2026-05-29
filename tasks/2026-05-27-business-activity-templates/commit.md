@@ -16,26 +16,52 @@ go build ./...
 
 ## Scope
 
-待填写。
+- docs/api.md
+- docs/business-activity-templates.md
+- internal/marketing/business_activity_templates_test.go
+- requirements/backlog.json
+- tasks/2026-05-27-business-activity-templates/agent-prompts.md
+- tasks/2026-05-27-business-activity-templates/agent-report.md
+- tasks/2026-05-27-business-activity-templates/agent-status.json
+- tasks/2026-05-27-business-activity-templates/analysis.md
+- tasks/2026-05-27-business-activity-templates/implementation.md
+- tasks/2026-05-27-business-activity-templates/review.md
+- tasks/2026-05-27-business-activity-templates/test-plan.md
+- tasks/2026-05-27-business-activity-templates/test.md
+
+未暂存或提交 `tasks/*/runs/` 执行日志。
 
 ## Review
 
 ~~~text
-PASS / BLOCK
+PASS
 ~~~
+
+Evidence: `tasks/2026-05-27-business-activity-templates/review.md` decision is PASS.
 
 ## Test
 
 ~~~text
-PASS / FAIL
+PASS
+~~~
+
+Evidence: `tasks/2026-05-27-business-activity-templates/test.md` result is PASS.
+
+## Pre-Commit Checks
+
+~~~text
+git status -sb: PASS
+git diff --check: PASS
+go test ./...: PASS
+go build ./...: PASS
 ~~~
 
 ## Commit
 
 ~~~text
-hash:
-message:
-remote:
+hash: 98a9cce
+message: Add business activity templates
+remote: not pushed
 ~~~
 
 需求：2026-05-27-business-activity-templates

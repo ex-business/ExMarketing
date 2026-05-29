@@ -58,7 +58,7 @@ func TestConsumerProcessesEventAndAcksDuplicateWithoutNewGrants(t *testing.T) {
 			"eventId":"evt_mq_1",
 			"subject":{"id":"10001","type":"USER"},
 			"biz":{"bizId":"pay_mq_1","bizType":"DEPOSIT"},
-			"occurredAt":"2026-05-24T12:00:00Z",
+			"occurredAt":"` + mqConsumerTestEventTime.Format(time.RFC3339) + `",
 			"attributes":{"isFirstDeposit":true,"vipLevel":3,"amount":"299.00"}
 		}`),
 		Headers: map[string]string{"idempotency-key": key},
@@ -182,7 +182,6 @@ func TestConsumerClassifiesEngineSystemErrorAsRetryable(t *testing.T) {
 
 func createTestActivity(t *testing.T, service *engine.Service) marketing.Activity {
 	t.Helper()
-	eventTime := time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
 	activity, err := service.CreateActivity(context.Background(), marketing.CreateActivityCommand{
 		TenantID:      "site_001",
 		Code:          "FIRST_DEPOSIT_BONUS",
@@ -190,8 +189,8 @@ func createTestActivity(t *testing.T, service *engine.Service) marketing.Activit
 		Type:          "FIRST_DEPOSIT",
 		Status:        marketing.ActivityDraft,
 		TriggerEvents: []string{"DEPOSIT_SUCCESS"},
-		StartTime:     eventTime.Add(-24 * time.Hour),
-		EndTime:       eventTime.Add(96 * time.Hour),
+		StartTime:     mqConsumerTestEventTime.Add(-24 * time.Hour),
+		EndTime:       mqConsumerTestEventTime.Add(96 * time.Hour),
 		Timezone:      "UTC",
 		Priority:      100,
 		Version:       1,
@@ -248,10 +247,12 @@ func eventJSON(eventID string, bizID string, attributesJSON string) string {
 		"tenantId": "site_001",
 		"subject": {"type": "USER", "id": "10001"},
 		"biz": {"bizType": "DEPOSIT", "bizId": "` + bizID + `"},
-		"occurredAt": "2026-05-24T12:00:00Z",
+		"occurredAt": "` + mqConsumerTestEventTime.Format(time.RFC3339) + `",
 		"attributes": ` + attributesJSON + `
 	}`
 }
+
+var mqConsumerTestEventTime = time.Now().UTC().Add(24 * time.Hour).Truncate(time.Second)
 
 type failingRepository struct {
 	marketing.Repository

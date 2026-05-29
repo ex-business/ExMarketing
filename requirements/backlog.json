@@ -565,23 +565,23 @@
       "id": "2026-05-27-manual-grant-export",
       "title": "manual-grant-export: 人工发奖与导出发奖",
       "description": "活动引擎基础完善任务。实现 MANUAL / MANUAL_EXPORT 发奖模式的状态机、导出文件模型、人工确认/关闭流程和审计记录。验收：人工发奖不绕过 participation/grant_order/quota；导出文件可追踪；重复确认幂等；失败可对账。",
-      "status": "COMMIT_READY",
+      "status": "COMMITTED",
       "risk": "中",
       "score": 92,
       "taskDir": "tasks/2026-05-27-manual-grant-export",
       "createdAt": "2026-05-27T14:58:51.039387Z",
-      "updatedAt": "2026-05-29T07:11:17.462945Z"
+      "updatedAt": "2026-05-29T07:12:31.837018Z"
     },
     {
       "id": "2026-05-27-mq-production-config-mq",
       "title": "mq-production-config: MQ 生产连接配置",
       "description": "活动引擎基础完善任务。完善 Kafka/RabbitMQ/Pulsar 的生产连接配置、认证引用、发送确认、错误分类和运行时隔离，避免在 activity config 或 outbox payload 中保存 broker 凭据。验收：targetRef 只描述目标；凭据从运行时配置读取；发送成功/失败/DLQ 有测试和审计。",
-      "status": "ANALYSIS_READY",
+      "status": "COMMIT_READY",
       "risk": "高",
-      "score": 0,
+      "score": 94,
       "taskDir": "tasks/2026-05-27-mq-production-config-mq",
       "createdAt": "2026-05-27T14:58:51.096721Z",
-      "updatedAt": "2026-05-27T15:00:29.864884Z"
+      "updatedAt": "2026-05-29T08:14:28.280299Z"
     },
     {
       "id": "2026-05-27-worker-production-hardening-worker",

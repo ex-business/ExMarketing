@@ -39,6 +39,43 @@ go run ./cmd/engine-e2e-postgres
 
 MQ reward commands use `targetRef` values such as `kafka://reward.commands`, `rabbitmq://reward-exchange/reward.commands`, `rabbitmq:///reward.commands`, or `pulsar://tenant/rewards/commands`. Broker endpoints and credentials belong in runtime sender configuration, not in activity config, outbox payload, audit payload, or logs.
 
+MQ sender runtime config:
+
+```bash
+export EX_MARKETING_MQ_SENDERS_JSON='{
+  "providers": {
+    "kafka": {
+      "enabled": true,
+      "endpoints": ["kafka-1:9092", "kafka-2:9092"],
+      "authRef": "secret/exmarketing/kafka",
+      "tls": true,
+      "caFile": "/run/secrets/kafka-ca.pem",
+      "clientCertFile": "/run/secrets/kafka-client.pem",
+      "clientKeyFile": "/run/secrets/kafka-client.key",
+      "sendTimeoutMillis": 5000,
+      "destinationAllowlist": ["reward.commands"]
+    },
+    "rabbitmq": {
+      "enabled": false,
+      "endpoints": []
+    },
+    "pulsar": {
+      "enabled": false,
+      "endpoints": []
+    }
+  }
+}'
+```
+
+Rules:
+
+- Provider keys are `kafka`, `rabbitmq`, or `pulsar`.
+- Enabled providers require at least one endpoint.
+- Endpoints must not include userinfo or `password=`, `token=`, `secret=` query material; use `authRef` or mounted secret files instead.
+- `destinationAllowlist` is optional. When set, a MQ outbox destination must match exactly or the worker keeps the outbox retryable and eventually moves it to DLQ.
+- A configured provider is not enough to mark a message `SENT`; the registered provider transport must return only after Kafka ack, RabbitMQ publisher confirm, or Pulsar send ack.
+- Missing provider config, disabled provider, allowlist refusal, timeout, auth failure, or missing transport adapter keeps the original outbox payload and follows retry/DLQ handling with a redacted error summary.
+
 配置 Fact Query allowlist：
 
 ```bash

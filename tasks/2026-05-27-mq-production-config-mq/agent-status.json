@@ -1,30 +1,53 @@
 {
   "requirementId": "2026-05-27-mq-production-config-mq",
-  "updatedAt": "2026-05-27T15:00:29.867816Z",
+  "updatedAt": "2026-05-29T08:14:28.306803Z",
   "agents": {
     "analysis": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-27-mq-production-config-mq/analysis.md"
+      "status": "DONE",
+      "startedAt": "2026-05-29T08:04:08.320742Z",
+      "finishedAt": "2026-05-29T08:06:43.174513Z",
+      "output": "tasks/2026-05-27-mq-production-config-mq/analysis.md",
+      "log": "tasks/2026-05-27-mq-production-config-mq/runs/20260529T080408Z-analysis.log",
+      "nextStatus": "REVIEW_READY"
     },
     "commit": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-27-mq-production-config-mq/commit.md"
+      "status": "RUNNING",
+      "startedAt": "2026-05-29T08:14:28.306799Z",
+      "output": "tasks/2026-05-27-mq-production-config-mq/commit.md",
+      "log": "tasks/2026-05-27-mq-production-config-mq/runs/20260529T081428Z-commit.log",
+      "pid": 86008
     },
     "dev": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-27-mq-production-config-mq/implementation.md"
+      "status": "DONE",
+      "startedAt": "2026-05-29T08:07:44.53259Z",
+      "finishedAt": "2026-05-29T08:13:21.895861Z",
+      "output": "tasks/2026-05-27-mq-production-config-mq/implementation.md",
+      "log": "tasks/2026-05-27-mq-production-config-mq/runs/20260529T080744Z-dev.log",
+      "nextStatus": "REVIEW_PASS"
     },
     "review": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-27-mq-production-config-mq/review.md"
+      "status": "DONE",
+      "startedAt": "2026-05-29T08:06:43.519803Z",
+      "finishedAt": "2026-05-29T08:07:44.527971Z",
+      "output": "tasks/2026-05-27-mq-production-config-mq/review.md",
+      "log": "tasks/2026-05-27-mq-production-config-mq/runs/20260529T080643Z-review.log",
+      "nextStatus": "REVIEW_PASS"
     },
     "test": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-27-mq-production-config-mq/test.md"
+      "status": "DONE",
+      "startedAt": "2026-05-29T08:13:21.934717Z",
+      "finishedAt": "2026-05-29T08:14:28.279957Z",
+      "output": "tasks/2026-05-27-mq-production-config-mq/test.md",
+      "log": "tasks/2026-05-27-mq-production-config-mq/runs/20260529T081321Z-test.log",
+      "nextStatus": "COMMIT_READY"
     },
     "test-plan": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-27-mq-production-config-mq/test-plan.md"
+      "status": "DONE",
+      "startedAt": "2026-05-29T08:07:44.556608Z",
+      "finishedAt": "2026-05-29T08:09:23.84053Z",
+      "output": "tasks/2026-05-27-mq-production-config-mq/test-plan.md",
+      "log": "tasks/2026-05-27-mq-production-config-mq/runs/20260529T080744Z-test-plan.log",
+      "nextStatus": "REVIEW_PASS"
     }
   }
 }

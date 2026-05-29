@@ -40,7 +40,22 @@ func main() {
 	}
 	handler := httpapi.NewHandlerWithConfigs(service, openAPIEventConfig, webhookConfig)
 	if env("EX_MARKETING_OUTBOX_WORKER", "false") == "true" {
-		go worker.NewOutboxWorker(repository, logger).Run(ctx)
+		outboxWorker := worker.NewOutboxWorker(repository, logger)
+		mqConfig, mqConfigured, err := worker.LoadMQRuntimeConfigFromEnv()
+		if err != nil {
+			logger.Error("mq sender config invalid", "error", err)
+			os.Exit(1)
+		}
+		if mqConfigured {
+			mqSender, err := worker.NewRuntimeMQSender(mqConfig, nil)
+			if err != nil {
+				logger.Error("mq sender init failed", "error", err)
+				os.Exit(1)
+			}
+			outboxWorker.SetMQSender(mqSender)
+			logger.Info("mq sender runtime config loaded")
+		}
+		go outboxWorker.Run(ctx)
 		logger.Info("outbox worker enabled")
 	}
 

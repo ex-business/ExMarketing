@@ -42,6 +42,12 @@ export EX_MARKETING_OUTBOX_WORKER=true
 
 The worker sends `HTTP`, `WEBHOOK`, and configured `MQ` reward commands to `rewardConfig.targetRef`, retries retryable failures with exponential backoff, then marks exhausted or non-retryable messages as `DLQ`. MQ delivery uses an adapter boundary for Kafka/RabbitMQ/Pulsar; broker credentials stay in runtime configuration and never in activity config or outbox payload.
 
+MQ runtime sender configuration is loaded from `EX_MARKETING_MQ_SENDERS_JSON` when the worker starts. `targetRef` remains only a destination such as `kafka://reward.commands`; endpoints and auth references live in runtime config:
+
+```bash
+export EX_MARKETING_MQ_SENDERS_JSON='{"providers":{"kafka":{"enabled":true,"endpoints":["kafka-1:9092"],"authRef":"secret/exmarketing/kafka","sendTimeoutMillis":5000,"destinationAllowlist":["reward.commands"]}}}'
+```
+
 DLQ messages can be inspected and operated from the admin API:
 
 ```bash

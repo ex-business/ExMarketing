@@ -93,6 +93,8 @@ Quota reservation:
 
 Outbox sender:
   EX_MARKETING_OUTBOX_WORKER=true enables HTTP/WEBHOOK/MQ delivery.
+  EX_MARKETING_MQ_SENDERS_JSON provides runtime-only provider endpoints,
+  authRef, TLS file references, send timeout, and destination allowlists.
   MQ delivery is behind a sender adapter boundary for Kafka ack, RabbitMQ
   publisher confirm, and Pulsar send ack. SENT means the command reached the
   broker, not that the reward succeeded. Failed messages retry with backoff and

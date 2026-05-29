@@ -56,6 +56,10 @@ type MQMessage struct {
 	Payload     []byte
 }
 
+func (w *OutboxWorker) SetMQSender(sender MQSender) {
+	w.mqSender = sender
+}
+
 func (w *OutboxWorker) Run(ctx context.Context) {
 	ticker := time.NewTicker(w.interval)
 	defer ticker.Stop()

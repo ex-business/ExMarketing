@@ -466,11 +466,18 @@ func (s *Service) validateActivityPluginConfig(cmd marketing.CreateActivityComma
 	if !ok {
 		return errors.Join(marketing.ErrInvalidActivity, errors.New(activityplugin.ReasonPluginNotRegistered+": pluginCode is not registered"))
 	}
+	registration, _ := s.pluginRegistry.GetRegistration(pluginCode)
+	if registration.Metadata.Disabled {
+		return errors.Join(marketing.ErrInvalidActivity, errors.New(activityplugin.ReasonPluginDisabled+": pluginCode is disabled"))
+	}
 	if !s.pluginRegistry.IsCompatible(pluginCode, cmd.Type) {
 		return errors.Join(marketing.ErrInvalidActivity, errors.New(activityplugin.ReasonPluginIncompatible+": pluginCode is not compatible with activityType"))
 	}
+	if missing := activityplugin.MissingCapabilities(registration.Metadata.Capabilities, []string{activityplugin.CapabilityConfigValidate, activityplugin.CapabilityContextBuild}); len(missing) > 0 {
+		return errors.Join(marketing.ErrInvalidActivity, errors.New(activityplugin.ReasonPluginCapabilityMissing+": "+strings.Join(missing, ",")))
+	}
 	if err := plugin.ValidateConfig(cmd.ConfigPayload()); err != nil {
-		return errors.Join(marketing.ErrInvalidActivity, err)
+		return errors.Join(marketing.ErrInvalidActivity, errors.New(activityplugin.ReasonPluginConfigInvalid+": "+err.Error()))
 	}
 	return nil
 }
@@ -1950,11 +1957,45 @@ func (s *Service) preparePlugin(ctx context.Context, activity marketing.Activity
 	if pluginCode == "" {
 		return nil, state, false, marketing.ActivityRuleResult{}, nil
 	}
-	activityPlugin, ok := s.pluginRegistry.Get(pluginCode)
+	registration, ok := s.pluginRegistry.GetRegistration(pluginCode)
 	if !ok {
 		result := pluginErrorRuleResult(activity, activityplugin.ReasonPluginNotRegistered, "pluginCode is not registered")
 		return &marketing.ActivityPluginSnapshot{
 			PluginCode: pluginCode,
+			Status:     string(marketing.RuleDecisionRejected),
+			ReasonCode: result.ReasonCode,
+			Reason:     result.Reason,
+			PrecheckResult: marketing.PluginPrecheckResult{
+				Allowed:    false,
+				ReasonCode: result.ReasonCode,
+				Reason:     result.Reason,
+			},
+		}, state, true, result, nil
+	}
+	activityPlugin := registration.Plugin
+	pluginVersion := registration.Metadata.Version
+	if registration.Metadata.Disabled {
+		result := pluginErrorRuleResult(activity, activityplugin.ReasonPluginDisabled, "pluginCode is disabled")
+		_ = s.audit(ctx, activity.TenantID, "system", "PLUGIN_EXECUTION_FAILED", "ACTIVITY_PLUGIN", activity.ID, auditSnapshot(nil, map[string]any{
+			"tenantId":        activity.TenantID,
+			"activityId":      activity.ID,
+			"activityCode":    activity.Code,
+			"activityVersion": activity.Version,
+			"pluginCode":      pluginCode,
+			"pluginVersion":   pluginVersion,
+			"lifecycleStep":   "BeforeMatch",
+			"status":          "ERROR",
+			"errorCode":       result.ReasonCode,
+			"reason":          result.Reason,
+			"eventId":         event.EventID,
+		}, nil))
+		return &marketing.ActivityPluginSnapshot{
+			PluginCode:    pluginCode,
+			PluginVersion: pluginVersion,
+			LifecycleStep: "BeforeMatch",
+			Status:        string(marketing.RuleDecisionError),
+			ReasonCode:    result.ReasonCode,
+			Reason:        result.Reason,
 			PrecheckResult: marketing.PluginPrecheckResult{
 				Allowed:    false,
 				ReasonCode: result.ReasonCode,
@@ -1965,7 +2006,12 @@ func (s *Service) preparePlugin(ctx context.Context, activity marketing.Activity
 	if !s.pluginRegistry.IsCompatible(pluginCode, activity.Type) {
 		result := pluginErrorRuleResult(activity, activityplugin.ReasonPluginIncompatible, "pluginCode is not compatible with activityType")
 		return &marketing.ActivityPluginSnapshot{
-			PluginCode: pluginCode,
+			PluginCode:    pluginCode,
+			PluginVersion: pluginVersion,
+			LifecycleStep: "BeforeMatch",
+			Status:        string(marketing.RuleDecisionRejected),
+			ReasonCode:    result.ReasonCode,
+			Reason:        result.Reason,
 			PrecheckResult: marketing.PluginPrecheckResult{
 				Allowed:    false,
 				ReasonCode: result.ReasonCode,
@@ -1979,8 +2025,26 @@ func (s *Service) preparePlugin(ctx context.Context, activity marketing.Activity
 	})
 	if err != nil {
 		result := pluginErrorRuleResult(activity, activityplugin.ReasonPluginContextError, err.Error())
+		_ = s.audit(ctx, activity.TenantID, "system", "PLUGIN_EXECUTION_FAILED", "ACTIVITY_PLUGIN", activity.ID, auditSnapshot(nil, map[string]any{
+			"tenantId":        activity.TenantID,
+			"activityId":      activity.ID,
+			"activityCode":    activity.Code,
+			"activityVersion": activity.Version,
+			"pluginCode":      pluginCode,
+			"pluginVersion":   pluginVersion,
+			"lifecycleStep":   "BeforeMatch",
+			"status":          "ERROR",
+			"errorCode":       result.ReasonCode,
+			"reason":          result.Reason,
+			"eventId":         event.EventID,
+		}, nil))
 		return &marketing.ActivityPluginSnapshot{
-			PluginCode: pluginCode,
+			PluginCode:    pluginCode,
+			PluginVersion: pluginVersion,
+			LifecycleStep: "BeforeMatch",
+			Status:        string(marketing.RuleDecisionError),
+			ReasonCode:    result.ReasonCode,
+			Reason:        result.Reason,
 			PrecheckResult: marketing.PluginPrecheckResult{
 				Allowed:    false,
 				ReasonCode: result.ReasonCode,
@@ -2001,15 +2065,22 @@ func (s *Service) preparePlugin(ctx context.Context, activity marketing.Activity
 	}
 	snapshot := &marketing.ActivityPluginSnapshot{
 		PluginCode:     pluginCode,
+		PluginVersion:  pluginVersion,
+		LifecycleStep:  "BeforeMatch",
+		Status:         "PASS",
 		PluginContext:  pluginResult.Context,
 		PrecheckResult: precheck,
 		Explain:        pluginResult.Explain,
+		RollbackToken:  pluginResult.RollbackToken,
 	}
 	if !precheck.Allowed {
 		if precheck.ReasonCode == "OK" {
 			precheck.ReasonCode = activityplugin.ReasonPluginPrecheck
 			snapshot.PrecheckResult = precheck
 		}
+		snapshot.Status = string(marketing.RuleDecisionRejected)
+		snapshot.ReasonCode = precheck.ReasonCode
+		snapshot.Reason = precheck.Reason
 		return snapshot, state, true, pluginErrorRuleResult(activity, precheck.ReasonCode, precheck.Reason), nil
 	}
 	state["plugin"] = map[string]any{pluginCode: pluginResult.Context}
@@ -2020,10 +2091,15 @@ func (s *Service) appendPluginIntents(ctx context.Context, activity marketing.Ac
 	if snapshot == nil || snapshot.PluginCode == "" {
 		return nil
 	}
-	activityPlugin, ok := s.pluginRegistry.Get(snapshot.PluginCode)
+	registration, ok := s.pluginRegistry.GetRegistration(snapshot.PluginCode)
 	if !ok {
 		return errors.New(activityplugin.ReasonPluginNotRegistered + ": pluginCode is not registered")
 	}
+	if registration.Metadata.Disabled {
+		return errors.New(activityplugin.ReasonPluginDisabled + ": pluginCode is disabled")
+	}
+	activityPlugin := registration.Plugin
+	snapshot.LifecycleStep = "AfterRewardCalculated"
 	intents, err := activityPlugin.AfterQualified(ctx, activityplugin.AfterQualifiedRequest{
 		Activity:                    activity,
 		Event:                       event,
@@ -2032,8 +2108,26 @@ func (s *Service) appendPluginIntents(ctx context.Context, activity marketing.Ac
 		PluginContext:               snapshot.PluginContext,
 	})
 	if err != nil {
+		snapshot.Status = string(marketing.RuleDecisionError)
+		snapshot.ReasonCode = activityplugin.ReasonPluginExecutionFailed
+		snapshot.Reason = err.Error()
+		_ = s.audit(ctx, activity.TenantID, "system", "PLUGIN_EXECUTION_FAILED", "ACTIVITY_PLUGIN", activity.ID, auditSnapshot(nil, map[string]any{
+			"tenantId":        activity.TenantID,
+			"activityId":      activity.ID,
+			"activityCode":    activity.Code,
+			"activityVersion": activity.Version,
+			"pluginCode":      snapshot.PluginCode,
+			"pluginVersion":   snapshot.PluginVersion,
+			"lifecycleStep":   "AfterRewardCalculated",
+			"status":          "ERROR",
+			"errorCode":       activityplugin.ReasonPluginExecutionFailed,
+			"reason":          err.Error(),
+			"traceId":         participation.IdempotencyKey,
+			"eventId":         event.EventID,
+		}, nil))
 		return errors.New(activityplugin.ReasonPluginIntentError + ": " + err.Error())
 	}
+	snapshot.Status = "PASS"
 	snapshot.StateChangeIntents = make([]marketing.PluginStateChangeIntent, 0, len(intents))
 	for _, intent := range intents {
 		pluginCode := firstNonEmpty(intent.PluginCode, snapshot.PluginCode)

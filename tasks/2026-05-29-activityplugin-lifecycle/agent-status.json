@@ -1,0 +1,53 @@
+{
+  "requirementId": "2026-05-29-activityplugin-lifecycle",
+  "updatedAt": "2026-05-29T14:30:37.092588Z",
+  "agents": {
+    "analysis": {
+      "status": "DONE",
+      "startedAt": "2026-05-29T14:19:14.264565Z",
+      "finishedAt": "2026-05-29T14:22:13.471472Z",
+      "output": "tasks/2026-05-29-activityplugin-lifecycle/analysis.md",
+      "log": "tasks/2026-05-29-activityplugin-lifecycle/runs/20260529T141914Z-analysis.log",
+      "nextStatus": "REVIEW_READY"
+    },
+    "commit": {
+      "status": "RUNNING",
+      "startedAt": "2026-05-29T14:30:37.092585Z",
+      "output": "tasks/2026-05-29-activityplugin-lifecycle/commit.md",
+      "log": "tasks/2026-05-29-activityplugin-lifecycle/runs/20260529T143037Z-commit.log",
+      "pid": 43555
+    },
+    "dev": {
+      "status": "DONE",
+      "startedAt": "2026-05-29T14:22:53.045629Z",
+      "finishedAt": "2026-05-29T14:29:39.276803Z",
+      "output": "tasks/2026-05-29-activityplugin-lifecycle/implementation.md",
+      "log": "tasks/2026-05-29-activityplugin-lifecycle/runs/20260529T142253Z-dev.log",
+      "nextStatus": "REVIEW_PASS"
+    },
+    "review": {
+      "status": "DONE",
+      "startedAt": "2026-05-29T14:22:13.832627Z",
+      "finishedAt": "2026-05-29T14:22:53.041939Z",
+      "output": "tasks/2026-05-29-activityplugin-lifecycle/review.md",
+      "log": "tasks/2026-05-29-activityplugin-lifecycle/runs/20260529T142213Z-review.log",
+      "nextStatus": "REVIEW_PASS"
+    },
+    "test": {
+      "status": "DONE",
+      "startedAt": "2026-05-29T14:29:39.327689Z",
+      "finishedAt": "2026-05-29T14:30:37.065348Z",
+      "output": "tasks/2026-05-29-activityplugin-lifecycle/test.md",
+      "log": "tasks/2026-05-29-activityplugin-lifecycle/runs/20260529T142939Z-test.log",
+      "nextStatus": "COMMIT_READY"
+    },
+    "test-plan": {
+      "status": "DONE",
+      "startedAt": "2026-05-29T14:22:53.071091Z",
+      "finishedAt": "2026-05-29T14:24:21.491757Z",
+      "output": "tasks/2026-05-29-activityplugin-lifecycle/test-plan.md",
+      "log": "tasks/2026-05-29-activityplugin-lifecycle/runs/20260529T142253Z-test-plan.log",
+      "nextStatus": "REVIEW_PASS"
+    }
+  }
+}

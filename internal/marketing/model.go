@@ -239,10 +239,16 @@ type PluginStateChangeIntent struct {
 
 type ActivityPluginSnapshot struct {
 	PluginCode         string                    `json:"pluginCode,omitempty"`
+	PluginVersion      string                    `json:"pluginVersion,omitempty"`
+	LifecycleStep      string                    `json:"lifecycleStep,omitempty"`
+	Status             string                    `json:"status,omitempty"`
+	ReasonCode         string                    `json:"reasonCode,omitempty"`
+	Reason             string                    `json:"reason,omitempty"`
 	PluginContext      map[string]any            `json:"pluginContext,omitempty"`
 	PrecheckResult     PluginPrecheckResult      `json:"precheckResult,omitempty"`
 	Explain            map[string]any            `json:"explain,omitempty"`
 	StateChangeIntents []PluginStateChangeIntent `json:"stateChangeIntents,omitempty"`
+	RollbackToken      string                    `json:"rollbackToken,omitempty"`
 }
 
 func (r *Rule) UnmarshalJSON(data []byte) error {

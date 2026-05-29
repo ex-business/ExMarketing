@@ -66,7 +66,13 @@ type PrelaunchValidationRequest struct {
 
 type PluginRegistration struct {
 	PluginCode              string   `json:"pluginCode"`
+	Version                 string   `json:"version,omitempty"`
+	Capabilities            []string `json:"capabilities,omitempty"`
 	CompatibleActivityTypes []string `json:"compatibleActivityTypes,omitempty"`
+	ConfigSchema            []byte   `json:"configSchema,omitempty"`
+	StateSchema             []byte   `json:"stateSchema,omitempty"`
+	Disabled                bool     `json:"disabled,omitempty"`
+	DisableStrategies       []string `json:"disableStrategies,omitempty"`
 }
 
 type PrelaunchValidationResult struct {
@@ -133,14 +139,22 @@ func (b *prelaunchBuilder) checkPlugin() {
 		if registered.PluginCode != pluginCode {
 			continue
 		}
+		if registered.Disabled {
+			b.addError("PLUGIN_DISABLED", "Activity plugin validation", "pluginCode is disabled", []string{"pluginCode"}, pluginCode, "enable the plugin or choose a different plugin before go-live")
+			return
+		}
 		if len(registered.CompatibleActivityTypes) > 0 && !slices.Contains(registered.CompatibleActivityTypes, b.request.Activity.Type) {
-			b.addError("PLUGIN_INCOMPATIBLE_ACTIVITY_TYPE", "Activity plugin validation", "pluginCode is not compatible with activityType", []string{"pluginCode", "activityType"}, pluginCode, "choose a compatible plugin or activityType")
+			b.addError("PLUGIN_ACTIVITY_TYPE_UNSUPPORTED", "Activity plugin validation", "pluginCode is not compatible with activityType", []string{"pluginCode", "activityType"}, pluginCode, "choose a compatible plugin or activityType")
+			return
+		}
+		if len(registered.Capabilities) > 0 && !slices.Contains(registered.Capabilities, "CONTEXT_BUILD") {
+			b.addError("PLUGIN_CAPABILITY_MISSING", "Activity plugin validation", "plugin is missing required capability", []string{"pluginCode", "capabilities"}, registered.Capabilities, "register a plugin version with CONTEXT_BUILD capability")
 			return
 		}
 		b.addPass("PLUGIN_REGISTERED", "Activity plugin validation", []string{"pluginCode"})
 		return
 	}
-	b.addError("PLUGIN_NOT_REGISTERED", "Activity plugin validation", "pluginCode is not registered", []string{"pluginCode"}, pluginCode, "register the plugin before create, update, or go-live validation")
+	b.addError("PLUGIN_NOT_FOUND", "Activity plugin validation", "pluginCode is not registered", []string{"pluginCode"}, pluginCode, "register the plugin before create, update, or go-live validation")
 }
 
 type prelaunchBuilder struct {

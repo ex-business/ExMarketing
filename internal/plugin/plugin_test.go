@@ -10,7 +10,8 @@ import (
 )
 
 type registryTestPlugin struct {
-	code string
+	code     string
+	metadata Metadata
 }
 
 func (p registryTestPlugin) Code() string {
@@ -19,6 +20,10 @@ func (p registryTestPlugin) Code() string {
 
 func (p registryTestPlugin) CompatibleActivityTypes() []string {
 	return []string{"LOTTERY"}
+}
+
+func (p registryTestPlugin) Metadata() Metadata {
+	return p.metadata
 }
 
 func (p registryTestPlugin) ValidateConfig(json.RawMessage) error {
@@ -58,5 +63,67 @@ func TestRegistryRejectsDuplicatePluginCode(t *testing.T) {
 	plugin, ok := registry.Get("LOTTERY_TEST")
 	if !ok || plugin.Code() != "LOTTERY_TEST" {
 		t.Fatalf("registry lost original plugin: ok=%v plugin=%+v", ok, plugin)
+	}
+}
+
+func TestRegistryResolvesHighestCompatibleVersionAndCapabilities(t *testing.T) {
+	registry := NewRegistry()
+	for _, version := range []string{"1.0.0", "1.2.0", "2.0.0"} {
+		if err := registry.Register(registryTestPlugin{
+			code: "LOTTERY_TEST",
+			metadata: Metadata{
+				PluginCode:             "LOTTERY_TEST",
+				Version:                version,
+				Capabilities:           []string{CapabilityConfigValidate, CapabilityContextBuild, CapabilityBeforeReward},
+				SupportedActivityTypes: []string{"LOTTERY"},
+				ConfigSchema:           json.RawMessage(`{"type":"object"}`),
+				StateSchema:            json.RawMessage(`{"type":"object"}`),
+				DisableStrategies:      []string{DisabledStrategyBlock, DisabledStrategyReadOnly},
+			},
+		}); err != nil {
+			t.Fatalf("register %s: %v", version, err)
+		}
+	}
+
+	registration, err := registry.Resolve("LOTTERY_TEST", "^1.0.0", ResolveOptions{
+		ActivityType:         "LOTTERY",
+		RequiredCapabilities: []string{CapabilityBeforeReward},
+	})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if registration.Metadata.Version != "1.2.0" {
+		t.Fatalf("version=%s, want highest compatible 1.2.0", registration.Metadata.Version)
+	}
+	if string(registration.Metadata.ConfigSchema) == "" || string(registration.Metadata.StateSchema) == "" {
+		t.Fatalf("expected schemas in registration: %+v", registration.Metadata)
+	}
+}
+
+func TestRegistryRejectsMissingCapabilityAndDisabledPlugin(t *testing.T) {
+	registry := NewRegistry()
+	if err := registry.Register(registryTestPlugin{
+		code: "LOTTERY_TEST",
+		metadata: Metadata{
+			PluginCode:             "LOTTERY_TEST",
+			Version:                "1.0.0",
+			Capabilities:           []string{CapabilityConfigValidate},
+			SupportedActivityTypes: []string{"LOTTERY"},
+			Disabled:               true,
+			DisableStrategies:      []string{DisabledStrategyBlock},
+		},
+	}); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	if _, err := registry.Resolve("LOTTERY_TEST", "1.0.0", ResolveOptions{
+		ActivityType:         "LOTTERY",
+		RequiredCapabilities: []string{CapabilityContextBuild},
+		IncludeDisabled:      true,
+	}); err == nil || !strings.Contains(err.Error(), ReasonPluginVersionUnresolved) {
+		t.Fatalf("expected unresolved when required capability is missing, got %v", err)
+	}
+	if _, err := registry.Resolve("LOTTERY_TEST", "1.0.0", ResolveOptions{ActivityType: "LOTTERY"}); err == nil || !strings.Contains(err.Error(), ReasonPluginVersionUnresolved) {
+		t.Fatalf("expected disabled plugin to be excluded, got %v", err)
 	}
 }

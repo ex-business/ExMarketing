@@ -259,8 +259,8 @@ func TestValidatePrelaunchBlocksUnknownPluginCode(t *testing.T) {
 	if result.Conclusion != PrelaunchBlock || result.AllowGoLive {
 		t.Fatalf("conclusion=%s allow=%v, want BLOCK false", result.Conclusion, result.AllowGoLive)
 	}
-	if !hasPrelaunchCode(result.Items, "PLUGIN_NOT_REGISTERED") {
-		t.Fatalf("expected PLUGIN_NOT_REGISTERED item, got %+v", result.Items)
+	if !hasPrelaunchCode(result.Items, "PLUGIN_NOT_FOUND") {
+		t.Fatalf("expected PLUGIN_NOT_FOUND item, got %+v", result.Items)
 	}
 }
 
@@ -281,7 +281,7 @@ func TestValidatePrelaunchBlocksIncompatiblePluginCode(t *testing.T) {
 		TargetAction: "GO_LIVE",
 	}, now)
 
-	if result.Conclusion != PrelaunchBlock || !hasPrelaunchCode(result.Items, "PLUGIN_INCOMPATIBLE_ACTIVITY_TYPE") {
+	if result.Conclusion != PrelaunchBlock || !hasPrelaunchCode(result.Items, "PLUGIN_ACTIVITY_TYPE_UNSUPPORTED") {
 		t.Fatalf("expected incompatible plugin BLOCK, got %+v", result)
 	}
 }
@@ -303,7 +303,7 @@ func TestValidatePrelaunchAllowsRegisteredCompatiblePlugin(t *testing.T) {
 		TargetAction: "GO_LIVE",
 	}, now)
 
-	if hasPrelaunchCode(result.Items, "PLUGIN_NOT_REGISTERED") || hasPrelaunchCode(result.Items, "PLUGIN_INCOMPATIBLE_ACTIVITY_TYPE") {
+	if hasPrelaunchCode(result.Items, "PLUGIN_NOT_FOUND") || hasPrelaunchCode(result.Items, "PLUGIN_ACTIVITY_TYPE_UNSUPPORTED") {
 		t.Fatalf("expected plugin validation to pass, got %+v", result.Items)
 	}
 	if !hasPrelaunchCode(result.Items, "PLUGIN_REGISTERED") {

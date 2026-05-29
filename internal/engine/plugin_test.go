@@ -15,8 +15,11 @@ import (
 type testActivityPlugin struct {
 	code            string
 	activityTypes   []string
+	metadata        activityplugin.Metadata
 	context         map[string]any
 	precheckAllowed bool
+	buildErr        error
+	afterErr        error
 }
 
 func (p testActivityPlugin) Code() string {
@@ -31,7 +34,14 @@ func (p testActivityPlugin) ValidateConfig(json.RawMessage) error {
 	return nil
 }
 
+func (p testActivityPlugin) Metadata() activityplugin.Metadata {
+	return p.metadata
+}
+
 func (p testActivityPlugin) BuildContext(context.Context, activityplugin.BuildContextRequest) (activityplugin.ContextResult, error) {
+	if p.buildErr != nil {
+		return activityplugin.ContextResult{}, p.buildErr
+	}
 	return activityplugin.ContextResult{
 		Context: p.context,
 		Precheck: activityplugin.PrecheckResult{
@@ -44,11 +54,68 @@ func (p testActivityPlugin) BuildContext(context.Context, activityplugin.BuildCo
 }
 
 func (p testActivityPlugin) AfterQualified(context.Context, activityplugin.AfterQualifiedRequest) ([]activityplugin.StateChangeIntent, error) {
+	if p.afterErr != nil {
+		return nil, p.afterErr
+	}
 	return []activityplugin.StateChangeIntent{{
 		PluginCode: p.code,
 		IntentType: "consumeDrawChance",
 		Payload:    map[string]any{"amount": "1"},
 	}}, nil
+}
+
+func TestActivityPluginExecutionFailureRejectsWithoutGrantOrOutboxAndAudits(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	if err := service.RegisterActivityPlugin(testActivityPlugin{
+		code:          "LOTTERY_FAIL",
+		activityTypes: []string{"LOTTERY"},
+		metadata: activityplugin.Metadata{
+			PluginCode:             "LOTTERY_FAIL",
+			Version:                "1.3.0",
+			Capabilities:           []string{activityplugin.CapabilityConfigValidate, activityplugin.CapabilityContextBuild, activityplugin.CapabilityBeforeMatch},
+			SupportedActivityTypes: []string{"LOTTERY"},
+			ConfigSchema:           json.RawMessage(`{"type":"object"}`),
+			StateSchema:            json.RawMessage(`{"type":"object"}`),
+			DisableStrategies:      []string{activityplugin.DisabledStrategyBlock},
+		},
+		precheckAllowed: true,
+		buildErr:        errors.New("context backend timeout"),
+	}); err != nil {
+		t.Fatalf("register plugin: %v", err)
+	}
+	if _, err := createApprovedPluginActivity(ctx, service, pluginActivityCommand("LOTTERY_FAIL")); err != nil {
+		t.Fatalf("create activity: %v", err)
+	}
+
+	result, err := service.ProcessEvent(ctx, pluginEvent("evt_plugin_fail", "biz_plugin_fail"))
+	if err != nil {
+		t.Fatalf("process event: %v", err)
+	}
+	if len(result.GrantOrders) != 0 || len(result.OutboxMessages) != 0 {
+		t.Fatalf("expected no grant/outbox on plugin failure, got grants=%d outbox=%d", len(result.GrantOrders), len(result.OutboxMessages))
+	}
+	if len(result.Participations) != 1 || result.Participations[0].Status != marketing.ParticipationRejected {
+		t.Fatalf("expected rejected participation, got %+v", result.Participations)
+	}
+
+	var snapshot map[string]any
+	if err := json.Unmarshal(result.Participations[0].Snapshot, &snapshot); err != nil {
+		t.Fatalf("decode snapshot: %v", err)
+	}
+	pluginSnapshot := snapshot["plugin"].(map[string]any)
+	if pluginSnapshot["pluginVersion"] != "1.3.0" || pluginSnapshot["reasonCode"] != activityplugin.ReasonPluginExecutionFailed {
+		t.Fatalf("unexpected plugin snapshot: %+v", pluginSnapshot)
+	}
+
+	audits, err := repo.ListAudit(ctx, marketing.AuditQuery{Action: "PLUGIN_EXECUTION_FAILED", Resource: "ACTIVITY_PLUGIN"})
+	if err != nil {
+		t.Fatalf("list audit: %v", err)
+	}
+	if len(audits) == 0 {
+		t.Fatalf("expected plugin execution failure audit")
+	}
 }
 
 func TestActivityPluginContextFeedsRulesRewardsAndSnapshot(t *testing.T) {

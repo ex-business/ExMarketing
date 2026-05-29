@@ -648,6 +648,182 @@
       "taskDir": "tasks/2026-05-27-business-activity-templates",
       "createdAt": "2026-05-27T14:58:51.402523Z",
       "updatedAt": "2026-05-29T13:46:07.33511Z"
+    },
+    {
+      "id": "2026-05-29-activityplugin-lifecycle",
+      "title": "activityplugin-lifecycle: 插件生命周期与版本契约",
+      "description": "ActivityPlugin 深化任务。定义插件注册、版本、能力声明、初始化、校验、执行、回滚、禁用和兼容性契约。验收：插件不得绕过主链路；插件版本不兼容时拒绝上线；插件执行前后有审计和结构化错误。",
+      "status": "COMMIT_READY",
+      "risk": "高",
+      "score": 92,
+      "taskDir": "tasks/2026-05-29-activityplugin-lifecycle",
+      "createdAt": "2026-05-29T14:13:00.524185Z",
+      "updatedAt": "2026-05-29T14:30:37.065604Z"
+    },
+    {
+      "id": "2026-05-29-activityplugin-context-state",
+      "title": "activityplugin-context-state: 插件上下文与状态隔离",
+      "description": "ActivityPlugin 深化任务。设计插件可读上下文、可写状态、幂等键、租户隔离和状态存储边界。验收：插件不能直接改 quota/grant_order/outbox；状态读写有 tenant/activity/version 维度；重复事件不会重复消费插件状态。",
+      "status": "ANALYSIS_READY",
+      "risk": "高",
+      "score": 0,
+      "taskDir": "tasks/2026-05-29-activityplugin-context-state",
+      "createdAt": "2026-05-29T14:13:00.582284Z",
+      "updatedAt": "2026-05-29T14:13:06.830133Z"
+    },
+    {
+      "id": "2026-05-29-activityplugin-scheduler-events",
+      "title": "activityplugin-scheduler-events: 插件调度与事件回传",
+      "description": "ActivityPlugin 深化任务。支持玩法型活动的场次开始、结束、开奖、补偿扫描和插件事件回传。验收：调度失败可重试；插件事件仍进入标准 Event Inbox；场次状态可审计。",
+      "status": "ANALYSIS_READY",
+      "risk": "中",
+      "score": 0,
+      "taskDir": "tasks/2026-05-29-activityplugin-scheduler-events",
+      "createdAt": "2026-05-29T14:13:00.631158Z",
+      "updatedAt": "2026-05-29T14:13:06.831284Z"
+    },
+    {
+      "id": "2026-05-29-activityplugin-red-envelope-lottery",
+      "title": "activityplugin-red-envelope-lottery: 红包雨与抽奖插件样板",
+      "description": "ActivityPlugin 深化任务。实现 RED_ENVELOPE 与 LOTTERY 插件样板，验证插件只生产玩法上下文和抽奖结果，不直接发奖。验收：概率/库存走主引擎校验；结果可复现审计；异常不影响其他活动。",
+      "status": "ANALYSIS_READY",
+      "risk": "高",
+      "score": 0,
+      "taskDir": "tasks/2026-05-29-activityplugin-red-envelope-lottery",
+      "createdAt": "2026-05-29T14:13:00.680363Z",
+      "updatedAt": "2026-05-29T14:13:06.832296Z"
+    },
+    {
+      "id": "2026-05-29-admin-activity-config-pages",
+      "title": "admin-activity-config-pages: 活动配置完整页面",
+      "description": "完整管理后台业务配置页任务。补齐活动基础信息、展示入口、时间窗口、租户、互斥组、优先级、状态和版本管理页面。验收：页面可创建/编辑/查看活动；非法配置前端提示且后端仍校验；保存后可模拟运行。",
+      "status": "ANALYSIS_READY",
+      "risk": "中",
+      "score": 0,
+      "taskDir": "tasks/2026-05-29-admin-activity-config-pages",
+      "createdAt": "2026-05-29T14:13:00.729662Z",
+      "updatedAt": "2026-05-29T14:13:06.833501Z"
+    },
+    {
+      "id": "2026-05-29-admin-rule-reward-quota-editors",
+      "title": "admin-rule-reward-quota-editors: 规则奖励额度编辑器",
+      "description": "完整管理后台业务配置页任务。补齐规则编辑器、奖励编辑器、预算库存次数限制编辑器，支持 JSON Schema 驱动表单和高级 JSON 模式。验收：MATCH/QUALIFY/REWARD/RISK/LIMIT 可配置；FIXED/RATIO/LADDER/RANDOM/PROBABILITY/POOL_SPLIT 可配置；非法配置阻止提交。",
+      "status": "ANALYSIS_READY",
+      "risk": "高",
+      "score": 0,
+      "taskDir": "tasks/2026-05-29-admin-rule-reward-quota-editors",
+      "createdAt": "2026-05-29T14:13:00.782063Z",
+      "updatedAt": "2026-05-29T14:13:06.834519Z"
+    },
+    {
+      "id": "2026-05-29-admin-simulation-approval-pages",
+      "title": "admin-simulation-approval-pages: 模拟运行与审批页面",
+      "description": "完整管理后台业务配置页任务。补齐模拟运行输入、结果解释、上线前校验、普通审批、高危二级审批、驳回原因和版本锁定页面。验收：模拟运行不写真实业务表；审批记录可查；BLOCK 配置不能上线。",
+      "status": "ANALYSIS_READY",
+      "risk": "中",
+      "score": 0,
+      "taskDir": "tasks/2026-05-29-admin-simulation-approval-pages",
+      "createdAt": "2026-05-29T14:13:00.840058Z",
+      "updatedAt": "2026-05-29T14:13:06.835835Z"
+    },
+    {
+      "id": "2026-05-29-admin-ops-pages-dlq",
+      "title": "admin-ops-pages: 审计对账DLQ运维页面",
+      "description": "完整管理后台业务配置页任务。补齐操作审计、对账查询、发奖单查询、Outbox 队列、DLQ 查看/重放/关闭、人工发奖/导出发奖页面。验收：关键操作有确认和审计；列表支持过滤分页；危险操作不能跨 tenant。",
+      "status": "ANALYSIS_READY",
+      "risk": "中",
+      "score": 0,
+      "taskDir": "tasks/2026-05-29-admin-ops-pages-dlq",
+      "createdAt": "2026-05-29T14:13:00.890251Z",
+      "updatedAt": "2026-05-29T14:13:06.837047Z"
+    },
+    {
+      "id": "2026-05-29-alerts-prometheus-grafana-prometheus-grafana",
+      "title": "alerts-prometheus-grafana: Prometheus 与 Grafana 接入",
+      "description": "生产环境真实告警接入任务。提供 Prometheus scrape 配置、Grafana dashboard JSON 或说明，覆盖 event intake、quota、outbox、callback、DLQ、worker、DB latency 指标。验收：本地或测试环境可拉取指标；面板能展示核心链路健康状态。",
+      "status": "ANALYSIS_READY",
+      "risk": "中",
+      "score": 0,
+      "taskDir": "tasks/2026-05-29-alerts-prometheus-grafana-prometheus-grafana",
+      "createdAt": "2026-05-29T14:13:00.942316Z",
+      "updatedAt": "2026-05-29T14:13:06.838089Z"
+    },
+    {
+      "id": "2026-05-29-alerts-rules-routing",
+      "title": "alerts-rules-routing: 告警规则与通知路由",
+      "description": "生产环境真实告警接入任务。定义 Alertmanager 或等价告警规则、阈值、通知路由、静默策略和升级策略。验收：DLQ 堆积、callback 失败率、quota 异常、outbox backlog、worker 停止、DB 错误均能触发告警。",
+      "status": "ANALYSIS_READY",
+      "risk": "高",
+      "score": 0,
+      "taskDir": "tasks/2026-05-29-alerts-rules-routing",
+      "createdAt": "2026-05-29T14:13:00.998615Z",
+      "updatedAt": "2026-05-29T14:13:06.839267Z"
+    },
+    {
+      "id": "2026-05-29-alerts-runbook-slo-runbook-slo",
+      "title": "alerts-runbook-slo: 告警 Runbook 与 SLO",
+      "description": "生产环境真实告警接入任务。为每类告警编写排查步骤、影响判断、恢复命令、回滚策略和 SLO/SLA 口径。验收：每个 P1/P2 告警都有 runbook；演练记录可追踪；误报/漏报可复盘。",
+      "status": "ANALYSIS_READY",
+      "risk": "中",
+      "score": 0,
+      "taskDir": "tasks/2026-05-29-alerts-runbook-slo-runbook-slo",
+      "createdAt": "2026-05-29T14:13:01.046994Z",
+      "updatedAt": "2026-05-29T14:13:06.840093Z"
+    },
+    {
+      "id": "2026-05-29-alerts-production-drill",
+      "title": "alerts-production-drill: 生产告警演练与故障注入",
+      "description": "生产环境真实告警接入任务。设计并执行测试环境故障注入：worker 停止、DB 慢查询、outbox 堆积、DLQ 增长、callback 失败。验收：告警按预期触发和恢复；演练报告记录时间线、指标、通知和修复动作。",
+      "status": "ANALYSIS_READY",
+      "risk": "高",
+      "score": 0,
+      "taskDir": "tasks/2026-05-29-alerts-production-drill",
+      "createdAt": "2026-05-29T14:13:01.096123Z",
+      "updatedAt": "2026-05-29T14:13:06.84121Z"
+    },
+    {
+      "id": "2026-05-29-security-threat-model",
+      "title": "security-threat-model: 正式安全威胁建模",
+      "description": "正式安全审计任务。围绕 OpenAPI、Admin、Webhook、Callback、Fact Provider、MQ、Outbox、DLQ、导出文件建立威胁模型。验收：列出资产、入口、信任边界、威胁、现有控制、缺口和优先级。",
+      "status": "ANALYSIS_READY",
+      "risk": "高",
+      "score": 0,
+      "taskDir": "tasks/2026-05-29-security-threat-model",
+      "createdAt": "2026-05-29T14:13:01.148627Z",
+      "updatedAt": "2026-05-29T14:13:06.842266Z"
+    },
+    {
+      "id": "2026-05-29-security-auth-signature-hardening",
+      "title": "security-auth-signature-hardening: 鉴权签名与租户隔离审计",
+      "description": "正式安全审计任务。审计 OpenAPI token、Webhook 签名、Reward Callback 签名、Admin 权限、tenant 隔离和重放攻击防护。验收：未授权、越权、跨 tenant、签名失败、时间戳过期、重复 nonce 均有测试或明确补救任务。",
+      "status": "ANALYSIS_READY",
+      "risk": "高",
+      "score": 0,
+      "taskDir": "tasks/2026-05-29-security-auth-signature-hardening",
+      "createdAt": "2026-05-29T14:13:01.201018Z",
+      "updatedAt": "2026-05-29T14:13:06.843164Z"
+    },
+    {
+      "id": "2026-05-29-security-secrets-data-export",
+      "title": "security-secrets-data-export: 密钥敏感数据与导出安全审计",
+      "description": "正式安全审计任务。审计 broker 凭据、provider authRef、日志脱敏、审计 payload、导出文件、备份文件和错误响应。验收：secret 不落 activity config/outbox payload/log；导出和备份有访问控制、过期和审计。",
+      "status": "ANALYSIS_READY",
+      "risk": "高",
+      "score": 0,
+      "taskDir": "tasks/2026-05-29-security-secrets-data-export",
+      "createdAt": "2026-05-29T14:13:01.252509Z",
+      "updatedAt": "2026-05-29T14:13:06.844079Z"
+    },
+    {
+      "id": "2026-05-29-security-release-gate-report",
+      "title": "security-release-gate-report: 安全发布门禁与审计报告",
+      "description": "正式安全审计任务。建立发布前安全 checklist、依赖漏洞扫描、配置基线检查、审计报告模板和风险接受流程。验收：发布前能输出 PASS/BLOCK；高危问题必须阻断；风险接受需记录责任人、期限和补偿措施。",
+      "status": "ANALYSIS_READY",
+      "risk": "高",
+      "score": 0,
+      "taskDir": "tasks/2026-05-29-security-release-gate-report",
+      "createdAt": "2026-05-29T14:13:01.306202Z",
+      "updatedAt": "2026-05-29T14:13:06.845367Z"
     }
   ]
 }

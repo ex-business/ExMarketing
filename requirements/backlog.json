@@ -631,23 +631,23 @@
       "id": "2026-05-27-db-backup-restore",
       "title": "db-backup-restore: 备份恢复流程",
       "description": "活动引擎基础完善任务。补齐 PostgreSQL 备份、恢复演练、数据校验和恢复后核心链路 smoke。验收：提供备份命令、恢复命令、校验脚本；恢复后能跑 Event In 到 Outbox 的最小链路。",
-      "status": "COMMIT_READY",
+      "status": "COMMITTED",
       "risk": "高",
       "score": 92,
       "taskDir": "tasks/2026-05-27-db-backup-restore",
       "createdAt": "2026-05-27T14:58:51.351908Z",
-      "updatedAt": "2026-05-29T12:57:33.710968Z"
+      "updatedAt": "2026-05-29T12:58:49.610019Z"
     },
     {
       "id": "2026-05-27-business-activity-templates",
       "title": "business-activity-templates: 业务活动配置模板",
       "description": "活动引擎基础完善任务。在不新增 ActivityPlugin 和管理后台增强的前提下，沉淀普通配置化活动模板：签到有礼、每月充值、续存、新手任务、返水、邀请好友、VIP 周/月红利、生日红利、升级红利。验收：每个模板只使用标准事件 attributes、facts、规则、奖励、quota 和 outbox；提供模拟运行样例和边界说明。",
-      "status": "ANALYSIS_READY",
+      "status": "COMMIT_READY",
       "risk": "中",
-      "score": 0,
+      "score": 96,
       "taskDir": "tasks/2026-05-27-business-activity-templates",
       "createdAt": "2026-05-27T14:58:51.402523Z",
-      "updatedAt": "2026-05-27T15:00:29.872102Z"
+      "updatedAt": "2026-05-29T13:44:39.320577Z"
     }
   ]
 }

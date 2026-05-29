@@ -289,6 +289,8 @@ rewards           奖励配置
 
 创建阶段会进行基础 Schema 校验。`tenantId + activityCode` 在同一租户内唯一，重复创建返回 `409 Conflict`；不同租户可以复用同一 `activityCode`。`startTime` / `endTime` 必须是带时区偏移的 RFC3339 时间，且 `startTime < endTime`；`timezone` 必须是可识别的 IANA 时区名或 `UTC`。未审批活动不能创建或更新为 `SCHEDULED` / `ACTIVE`，上线前必须先提交审批并通过当前版本审批。当前普通活动允许已注册 evaluator 的 `CONDITION` 和安全 `FORMULA` 规则；`FORMULA` 仅支持受控字段路径、Decimal 算术和 boolean 字段/字面量，不支持函数、脚本、SQL、HTTP、文件、环境变量、随机数或当前时间。`LIMIT`、`SCRIPT` 只保留配置 Schema，未注册 evaluator 前即使结构合法也会返回 `400 Bad Request`。奖励类型允许 `BONUS` / `CASH` / `COUPON` / `POINT` / `GIFT` / `DRAW_CHANCE` / `MEMBERSHIP`。金额类 `BONUS` / `CASH` 允许 `FIXED` / `RATIO` / `LADDER` / `RANDOM` / `PROBABILITY` / `POOL_SPLIT`；非金额类当前最小可上线口径只允许 `FIXED`，其他组合返回 `400 Bad Request`。发奖模式允许 `AUTO` / `MANUAL` / `MANUAL_EXPORT`。`AUTO` 发奖通道允许 `HTTP` / `WEBHOOK` / `MQ`，且 `rewardConfig.targetRef` 必填；HTTP / WEBHOOK 必须是 `http` 或 `https` URL，MQ 必须是 `kafka://<topic>`、`rabbitmq://<exchange>/<routingKey>`、`rabbitmq:///<routingKey>` 或 `pulsar://<tenant>/<namespace>/<topic>`。MQ `targetRef` 不允许包含凭据、query 或 fragment。`MANUAL` / `MANUAL_EXPORT` 不生成自动 outbox，`targetRef` 可为空或仅作为人工处理说明；未知配置字段、非法版本或不可解析 Decimal 会返回 `400 Bad Request`。配置 `pluginCode` 时必须命中服务内注册的 ActivityPlugin，且与 `activityType` 兼容；未知插件会在创建或上线前校验阶段拒绝。
 
+常用配置化业务活动模板见 [business-activity-templates.md](business-activity-templates.md)。这些模板均按普通活动配置提交，不需要 `ActivityPlugin` 或业务专用接口。
+
 人工发奖接口：
 
 ```http

@@ -1,30 +1,53 @@
 {
   "requirementId": "2026-05-27-business-activity-templates",
-  "updatedAt": "2026-05-27T15:00:29.872718Z",
+  "updatedAt": "2026-05-29T13:44:39.348666Z",
   "agents": {
     "analysis": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-27-business-activity-templates/analysis.md"
+      "status": "DONE",
+      "startedAt": "2026-05-29T13:34:25.167992Z",
+      "finishedAt": "2026-05-29T13:36:08.760959Z",
+      "output": "tasks/2026-05-27-business-activity-templates/analysis.md",
+      "log": "tasks/2026-05-27-business-activity-templates/runs/20260529T133425Z-analysis.log",
+      "nextStatus": "REVIEW_READY"
     },
     "commit": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-27-business-activity-templates/commit.md"
+      "status": "RUNNING",
+      "startedAt": "2026-05-29T13:44:39.348663Z",
+      "output": "tasks/2026-05-27-business-activity-templates/commit.md",
+      "log": "tasks/2026-05-27-business-activity-templates/runs/20260529T134439Z-commit.log",
+      "pid": 84622
     },
     "dev": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-27-business-activity-templates/implementation.md"
+      "status": "DONE",
+      "startedAt": "2026-05-29T13:38:03.723718Z",
+      "finishedAt": "2026-05-29T13:43:41.056891Z",
+      "output": "tasks/2026-05-27-business-activity-templates/implementation.md",
+      "log": "tasks/2026-05-27-business-activity-templates/runs/20260529T133803Z-dev.log",
+      "nextStatus": "REVIEW_PASS"
     },
     "review": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-27-business-activity-templates/review.md"
+      "status": "DONE",
+      "startedAt": "2026-05-29T13:36:08.794143Z",
+      "finishedAt": "2026-05-29T13:38:03.720859Z",
+      "output": "tasks/2026-05-27-business-activity-templates/review.md",
+      "log": "tasks/2026-05-27-business-activity-templates/runs/20260529T133608Z-review.log",
+      "nextStatus": "REVIEW_PASS"
     },
     "test": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-27-business-activity-templates/test.md"
+      "status": "DONE",
+      "startedAt": "2026-05-29T13:43:41.111891Z",
+      "finishedAt": "2026-05-29T13:44:39.320377Z",
+      "output": "tasks/2026-05-27-business-activity-templates/test.md",
+      "log": "tasks/2026-05-27-business-activity-templates/runs/20260529T134341Z-test.log",
+      "nextStatus": "COMMIT_READY"
     },
     "test-plan": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-27-business-activity-templates/test-plan.md"
+      "status": "DONE",
+      "startedAt": "2026-05-29T13:38:03.746537Z",
+      "finishedAt": "2026-05-29T13:39:14.035653Z",
+      "output": "tasks/2026-05-27-business-activity-templates/test-plan.md",
+      "log": "tasks/2026-05-27-business-activity-templates/runs/20260529T133803Z-test-plan.log",
+      "nextStatus": "REVIEW_PASS"
     }
   }
 }

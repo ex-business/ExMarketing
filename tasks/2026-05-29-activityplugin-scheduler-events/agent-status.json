@@ -1,0 +1,53 @@
+{
+  "requirementId": "2026-05-29-activityplugin-scheduler-events",
+  "updatedAt": "2026-05-29T15:06:23.923388Z",
+  "agents": {
+    "analysis": {
+      "status": "DONE",
+      "startedAt": "2026-05-29T14:47:47.893243Z",
+      "finishedAt": "2026-05-29T14:50:22.015981Z",
+      "output": "tasks/2026-05-29-activityplugin-scheduler-events/analysis.md",
+      "log": "tasks/2026-05-29-activityplugin-scheduler-events/runs/20260529T144747Z-analysis.log",
+      "nextStatus": "REVIEW_READY"
+    },
+    "commit": {
+      "status": "RUNNING",
+      "startedAt": "2026-05-29T15:06:23.923385Z",
+      "output": "tasks/2026-05-29-activityplugin-scheduler-events/commit.md",
+      "log": "tasks/2026-05-29-activityplugin-scheduler-events/runs/20260529T150623Z-commit.log",
+      "pid": 89728
+    },
+    "dev": {
+      "status": "DONE",
+      "startedAt": "2026-05-29T14:59:44.612161Z",
+      "finishedAt": "2026-05-29T15:04:47.185864Z",
+      "output": "tasks/2026-05-29-activityplugin-scheduler-events/implementation.md",
+      "log": "tasks/2026-05-29-activityplugin-scheduler-events/runs/20260529T145944Z-dev.log",
+      "nextStatus": "REVIEW_PASS"
+    },
+    "review": {
+      "status": "DONE",
+      "startedAt": "2026-05-29T14:50:22.04682Z",
+      "finishedAt": "2026-05-29T14:51:26.146065Z",
+      "output": "tasks/2026-05-29-activityplugin-scheduler-events/review.md",
+      "log": "tasks/2026-05-29-activityplugin-scheduler-events/runs/20260529T145022Z-review.log",
+      "nextStatus": "REVIEW_PASS"
+    },
+    "test": {
+      "status": "DONE",
+      "startedAt": "2026-05-29T15:04:47.230447Z",
+      "finishedAt": "2026-05-29T15:06:23.895488Z",
+      "output": "tasks/2026-05-29-activityplugin-scheduler-events/test.md",
+      "log": "tasks/2026-05-29-activityplugin-scheduler-events/runs/20260529T150447Z-test.log",
+      "nextStatus": "COMMIT_READY"
+    },
+    "test-plan": {
+      "status": "DONE",
+      "startedAt": "2026-05-29T14:51:26.175349Z",
+      "finishedAt": "2026-05-29T14:53:05.465001Z",
+      "output": "tasks/2026-05-29-activityplugin-scheduler-events/test-plan.md",
+      "log": "tasks/2026-05-29-activityplugin-scheduler-events/runs/20260529T145126Z-test-plan.log",
+      "nextStatus": "REVIEW_PASS"
+    }
+  }
+}

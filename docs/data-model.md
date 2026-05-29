@@ -254,6 +254,22 @@ DUPLICATE
 FAILED
 ```
 
+ActivityPlugin 调度事件必须先转换为标准事件再进入 Inbox。调度来源固定为
+`source_system=activity_plugin`，幂等键仍为
+`tenantId:sourceSystem:eventType:bizType:bizId`。默认 `biz_type` 为
+`PLUGIN_SCHEDULE_JOB`，`biz_id` 为 `jobId` 或多事件场景下的稳定
+`jobId:<sequence>`，`occurred_at` 默认使用 `PluginScheduleJob.scheduled_at`
+而不是执行器当前时间。同一调度 job 重试、重放或重复执行时，进入 Inbox
+比较的完整 payload 必须稳定；同 key 不同 payload 是
+`IDEMPOTENCY_CONFLICT`，不得标记调度成功。
+
+`PluginScheduleJob` 的最小字段包括 `jobId`、`tenantId`、`activityId`、
+`activityVersion`、`activityConfigHash`、`pluginCode`、`jobType`、
+`scheduledAt`、`status`、`retryCount`、`nextRetryAt`、`errorClass`、
+`errorMessage`、`lastRunAt`、`closedBy`、`closedReason`、`createdAt` 和
+`updatedAt`。`activityVersion` 和 `activityConfigHash` 是注册时快照，用于避免
+活动配置更新后重试同一 job 时改变标准事件 payload。
+
 ## marketing_participation
 
 参与记录。规则拒绝时单独写 `REJECTED`。规则通过且存在发奖单时，`REWARDABLE` participation 必须与 quota 扣减、grant_order 和 outbox 在同一个 activity 级事务内写入；预算、库存或次数不足时事务回滚，不保留 `REWARDABLE` 脏记录。

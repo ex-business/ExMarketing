@@ -169,9 +169,31 @@ func (m Manager) Drift(ctx context.Context) error {
 
 func (m Manager) dir() string {
 	if strings.TrimSpace(m.MigrationDir) == "" {
-		return "db/migration"
+		return defaultMigrationDir()
 	}
 	return m.MigrationDir
+}
+
+func defaultMigrationDir() string {
+	const relative = "db/migration"
+	if _, err := os.Stat(relative); err == nil {
+		return relative
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		return relative
+	}
+	for {
+		candidate := filepath.Join(wd, relative)
+		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+			return candidate
+		}
+		parent := filepath.Dir(wd)
+		if parent == wd {
+			return relative
+		}
+		wd = parent
+	}
 }
 
 func (m Manager) requiredTables() []string {

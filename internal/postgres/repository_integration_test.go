@@ -13,6 +13,7 @@ import (
 
 	"github.com/ex-stack/ExMarketing/internal/engine"
 	"github.com/ex-stack/ExMarketing/internal/marketing"
+	activityplugin "github.com/ex-stack/ExMarketing/internal/plugin"
 )
 
 func TestPostgresAtomicGrantRollsBackOnStockExceeded(t *testing.T) {
@@ -139,6 +140,70 @@ func TestPostgresCreateInboxDetectsDuplicateAndConflict(t *testing.T) {
 	conflict.Event.EventID = prefix + "_evt_conflict"
 	if _, duplicate, err := repo.CreateInbox(ctx, conflict); !errors.Is(err, marketing.ErrIdempotencyConflict) || duplicate {
 		t.Fatalf("expected idempotency conflict, duplicate=%v err=%v", duplicate, err)
+	}
+}
+
+func TestPostgresPluginScheduleEventInboxSmoke(t *testing.T) {
+	databaseURL := os.Getenv("EX_MARKETING_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("EX_MARKETING_DATABASE_URL is not set")
+	}
+	ctx := context.Background()
+	repo, err := NewRepository(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("connect postgres: %v", err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+
+	prefix := "pg_schedule_inbox"
+	cleanupPostgresInboxTest(t, repo, prefix)
+	t.Cleanup(func() { cleanupPostgresInboxTest(t, repo, prefix) })
+
+	scheduledAt := time.Date(2026, 5, 29, 10, 0, 0, 0, time.UTC)
+	job := activityplugin.PluginScheduleJob{
+		JobID:              prefix + "_job",
+		TenantID:           "site_001",
+		ActivityID:         prefix + "_act",
+		ActivityType:       "LOTTERY",
+		ActivityVersion:    7,
+		ActivityConfigHash: "locked-config",
+		PluginCode:         "LOTTERY_PLUGIN",
+		JobType:            activityplugin.PluginScheduleJobDraw,
+		ScheduledAt:        scheduledAt,
+	}
+	event, err := activityplugin.StandardEventFromPluginJob(job, activityplugin.PluginGeneratedEvent{
+		Attributes: map[string]any{"roundId": prefix + "_round"},
+	}, 0)
+	if err != nil {
+		t.Fatalf("map scheduler event: %v", err)
+	}
+	if !event.OccurredAt.Equal(scheduledAt) {
+		t.Fatalf("occurredAt=%s, want scheduledAt %s", event.OccurredAt, scheduledAt)
+	}
+	inbox := marketing.EventInbox{
+		ID:             prefix + "_inbox_1",
+		Event:          event,
+		IdempotencyKey: event.IdempotencyKey(),
+		ProcessStatus:  marketing.InboxReceived,
+		CreatedAt:      scheduledAt,
+		UpdatedAt:      scheduledAt,
+	}
+	if _, duplicate, err := repo.CreateInbox(ctx, inbox); err != nil || duplicate {
+		t.Fatalf("create scheduler inbox duplicate=%v err=%v", duplicate, err)
+	}
+
+	same := inbox
+	same.ID = prefix + "_inbox_2"
+	existing, duplicate, err := repo.CreateInbox(ctx, same)
+	if err != nil || !duplicate || existing.ID != inbox.ID {
+		t.Fatalf("expected scheduler duplicate, existing=%+v duplicate=%v err=%v", existing, duplicate, err)
+	}
+
+	conflict := inbox
+	conflict.ID = prefix + "_inbox_3"
+	conflict.Event.EventID = prefix + "_evt_conflict"
+	if _, duplicate, err := repo.CreateInbox(ctx, conflict); !errors.Is(err, marketing.ErrIdempotencyConflict) || duplicate {
+		t.Fatalf("expected scheduler idempotency conflict, duplicate=%v err=%v", duplicate, err)
 	}
 }
 

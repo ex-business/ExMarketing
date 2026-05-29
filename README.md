@@ -71,6 +71,23 @@ go run ./cmd/db-migration-release --mode apply
 go run ./cmd/db-migration-release --mode drift
 ```
 
+Database backup / restore drill commands:
+
+```bash
+export EX_MARKETING_DATABASE_URL='postgres://exmarketing:exmarketing@localhost:54329/exmarketing?sslmode=disable'
+go run ./cmd/db-backup-restore --mode backup --output-dir backups/db-restore-drills
+
+export EX_MARKETING_RESTORE_DATABASE_URL='postgres://exmarketing:exmarketing@localhost:54329/exmarketing_restore?sslmode=disable'
+go run ./cmd/db-backup-restore --mode restore --backup-file backups/db-restore-drills/<backup>.dump
+go run ./cmd/db-backup-restore --mode validate
+go run ./cmd/db-backup-restore --mode smoke
+```
+
+`restore` defaults to an isolated target and refuses to overwrite a non-empty
+target database unless `--force` is passed after an explicit local drill review.
+`validate` checks migration checksum drift and core table row counts; `smoke`
+uses the restored DSN to run the PostgreSQL Event In -> Outbox E2E flow.
+
 The migration release flow records successful versions in `schema_migrations`,
 checks SHA-256 checksums, blocks failed or drifted versions, and uses a
 forward-only strategy for shared and production environments.

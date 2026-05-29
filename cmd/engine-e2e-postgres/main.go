@@ -35,6 +35,7 @@ type runner struct {
 	baseURL   string
 	runID     string
 	tenantID  string
+	eventTime time.Time
 	activity  activityResponse
 	lastHTTP  *httpTrace
 	snapshots []string
@@ -144,10 +145,11 @@ func run() error {
 	go worker.NewOutboxWorker(repo, slog.New(slog.NewTextHandler(io.Discard, nil))).Run(workerCtx)
 
 	r := &runner{
-		ctx:     ctx,
-		db:      db,
-		baseURL: apiServer.URL,
-		runID:   "e2e_pg_" + time.Now().UTC().Format("20060102_150405_000000000"),
+		ctx:       ctx,
+		db:        db,
+		baseURL:   apiServer.URL,
+		runID:     "e2e_pg_" + time.Now().UTC().Format("20060102_150405_000000000"),
+		eventTime: time.Now().UTC().Truncate(time.Second),
 	}
 	r.tenantID = tenantIDForRun(r.runID)
 
@@ -377,7 +379,7 @@ func (r *runner) event(subjectID string, suffix string) map[string]any {
 		"tenantId":     r.tenantID,
 		"subject":      map[string]any{"type": "USER", "id": subjectID},
 		"biz":          map[string]any{"bizType": "DEPOSIT", "bizId": r.runID + "_" + suffix},
-		"occurredAt":   time.Now().UTC().Format(time.RFC3339),
+		"occurredAt":   r.eventTime.Format(time.RFC3339),
 		"attributes": map[string]any{
 			"amount":         "100.00",
 			"currency":       "USD",
@@ -576,19 +578,46 @@ func (r *runner) fail(stage string, err error) error {
 func (r *runner) databaseSnapshot() map[string]json.RawMessage {
 	activityID := r.activity.ID
 	out := map[string]json.RawMessage{}
-	queries := map[string]string{
-		"activity":      `SELECT COALESCE(json_agg(row_to_json(t)), '[]'::json) FROM (SELECT id, tenant_id, activity_code, status, version, created_at, updated_at FROM marketing_activity WHERE id = $1 OR activity_code = $2 ORDER BY created_at) t`,
-		"quota":         `SELECT COALESCE(json_agg(row_to_json(t)), '[]'::json) FROM (SELECT quota_type, scope, scope_key, total_value::text, used_value::text, frozen_value::text, version FROM marketing_quota WHERE activity_id = $1 ORDER BY quota_type, scope_key) t`,
-		"inbox":         `SELECT COALESCE(json_agg(row_to_json(t)), '[]'::json) FROM (SELECT id, event_id, idempotency_key, process_status, error_message FROM marketing_event_inbox WHERE tenant_id = $3 AND event_id LIKE $2 || '%' ORDER BY created_at) t`,
-		"participation": `SELECT COALESCE(json_agg(row_to_json(t)), '[]'::json) FROM (SELECT id, event_inbox_id, subject_id, biz_id, status, reject_reason FROM marketing_participation WHERE activity_id = $1 ORDER BY created_at) t`,
-		"grant_order":   `SELECT COALESCE(json_agg(row_to_json(t)), '[]'::json) FROM (SELECT id, participation_id, subject_id, bill_no, grant_status, reward_amount::text, error_message FROM marketing_grant_order WHERE activity_id = $1 ORDER BY created_at) t`,
-		"outbox":        `SELECT COALESCE(json_agg(row_to_json(t)), '[]'::json) FROM (SELECT id, send_status, retry_count, error_message, payload_json FROM marketing_outbox WHERE tenant_id = $3 AND payload_json::text LIKE '%' || $2 || '%' ORDER BY created_at) t`,
-		"reservation":   `SELECT COALESCE(json_agg(row_to_json(t)), '[]'::json) FROM (SELECT grant_order_id, command_id, quota_type, scope, scope_key, reserved_amount::text, reservation_status FROM marketing_quota_reservation WHERE activity_id = $1 ORDER BY created_at) t`,
-		"audit":         `SELECT COALESCE(json_agg(row_to_json(t)), '[]'::json) FROM (SELECT action, resource, resource_id, payload FROM marketing_audit WHERE tenant_id = $3 AND (resource_id = $1 OR payload::text LIKE '%' || $2 || '%') ORDER BY created_at LIMIT 50) t`,
+	queries := map[string]struct {
+		sql  string
+		args []any
+	}{
+		"activity": {
+			sql:  `SELECT COALESCE(json_agg(row_to_json(t)), '[]'::json) FROM (SELECT id, tenant_id, activity_code, status, version, created_at, updated_at FROM marketing_activity WHERE id = $1 OR activity_code = $2 ORDER BY created_at) t`,
+			args: []any{activityID, r.runID},
+		},
+		"quota": {
+			sql:  `SELECT COALESCE(json_agg(row_to_json(t)), '[]'::json) FROM (SELECT quota_type, scope, scope_key, total_value::text, used_value::text, frozen_value::text, version FROM marketing_quota WHERE activity_id = $1 ORDER BY quota_type, scope_key) t`,
+			args: []any{activityID},
+		},
+		"inbox": {
+			sql:  `SELECT COALESCE(json_agg(row_to_json(t)), '[]'::json) FROM (SELECT id, event_id, idempotency_key, process_status, error_message FROM marketing_event_inbox WHERE tenant_id = $1 AND event_id LIKE $2 || '%' ORDER BY created_at) t`,
+			args: []any{r.tenantID, r.runID},
+		},
+		"participation": {
+			sql:  `SELECT COALESCE(json_agg(row_to_json(t)), '[]'::json) FROM (SELECT id, event_inbox_id, subject_id, biz_id, status, reject_reason FROM marketing_participation WHERE activity_id = $1 ORDER BY created_at) t`,
+			args: []any{activityID},
+		},
+		"grant_order": {
+			sql:  `SELECT COALESCE(json_agg(row_to_json(t)), '[]'::json) FROM (SELECT id, participation_id, subject_id, bill_no, grant_status, reward_amount::text, error_message FROM marketing_grant_order WHERE activity_id = $1 ORDER BY created_at) t`,
+			args: []any{activityID},
+		},
+		"outbox": {
+			sql:  `SELECT COALESCE(json_agg(row_to_json(t)), '[]'::json) FROM (SELECT id, send_status, retry_count, error_message, payload_json FROM marketing_outbox WHERE tenant_id = $1 AND payload_json::text LIKE '%' || $2 || '%' ORDER BY created_at) t`,
+			args: []any{r.tenantID, r.runID},
+		},
+		"reservation": {
+			sql:  `SELECT COALESCE(json_agg(row_to_json(t)), '[]'::json) FROM (SELECT grant_order_id, command_id, quota_type, scope, scope_key, reserved_amount::text, reservation_status FROM marketing_quota_reservation WHERE activity_id = $1 ORDER BY created_at) t`,
+			args: []any{activityID},
+		},
+		"audit": {
+			sql:  `SELECT COALESCE(json_agg(row_to_json(t)), '[]'::json) FROM (SELECT action, resource, resource_id, payload_json FROM marketing_audit WHERE tenant_id = $1 AND (resource_id = $2 OR payload_json::text LIKE '%' || $3 || '%') ORDER BY created_at LIMIT 50) t`,
+			args: []any{r.tenantID, activityID, r.runID},
+		},
 	}
 	for name, query := range queries {
 		var raw json.RawMessage
-		if err := r.db.QueryRowContext(r.ctx, query, activityID, r.runID, r.tenantID).Scan(&raw); err != nil {
+		if err := r.db.QueryRowContext(r.ctx, query.sql, query.args...).Scan(&raw); err != nil {
 			out[name] = json.RawMessage(fmt.Sprintf("%q", err.Error()))
 			continue
 		}

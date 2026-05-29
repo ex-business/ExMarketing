@@ -178,6 +178,10 @@ func (m Manager) requiredTables() []string {
 	if len(m.RequiredTables) > 0 {
 		return m.RequiredTables
 	}
+	return RequiredTables()
+}
+
+func RequiredTables() []string {
 	return []string{
 		"marketing_activity",
 		"marketing_rule",

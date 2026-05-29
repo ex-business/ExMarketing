@@ -82,6 +82,87 @@ go run ./cmd/engine-e2e-postgres
 
 该命令会在进程内启动 API handler、Outbox worker 和 reward callback stub，但所有活动、quota、event inbox、participation、grant_order、outbox、callback 和对账状态都写入 `EX_MARKETING_DATABASE_URL` 指向的 PostgreSQL。命令使用唯一 `runId` 隔离数据，可重复执行；未设置 PostgreSQL DSN 时会失败。
 
+## PostgreSQL 备份恢复演练
+
+本地/测试环境灾备演练使用 `cmd/db-backup-restore`。该工具只支持
+PostgreSQL，默认读取 `EX_MARKETING_DATABASE_URL` 作为源库，并读取
+`EX_MARKETING_RESTORE_DATABASE_URL` 作为恢复目标库。命令输出会脱敏 DSN；
+`pg_dump`/`pg_restore` 执行时不会把 URL 密码放进命令参数。如果宿主机
+PATH 缺少 PostgreSQL client，工具会 fallback 到本仓库 `docker compose`
+的 `postgres` 服务内执行，并把 `localhost:54329` 改写为容器内的
+`localhost:5432`。
+
+准备源库并应用 migration：
+
+```bash
+docker compose up -d postgres
+export EX_MARKETING_DATABASE_URL='postgres://exmarketing:exmarketing@localhost:54329/exmarketing?sslmode=disable'
+go run ./cmd/db-migration-release --mode apply
+go run ./cmd/engine-e2e-postgres
+```
+
+生成 schema + data 备份：
+
+```bash
+go run ./cmd/db-backup-restore --mode backup --output-dir backups/db-restore-drills
+```
+
+成功输出包含备份文件路径、大小、SHA-256、UTC 创建时间和脱敏源 DSN。备份文件
+使用 PostgreSQL custom format，文件名包含数据库名与 UTC 时间戳，避免覆盖旧备份。
+
+创建隔离恢复库：
+
+```bash
+docker compose exec -T postgres createdb -U exmarketing exmarketing_restore
+export EX_MARKETING_RESTORE_DATABASE_URL='postgres://exmarketing:exmarketing@localhost:54329/exmarketing_restore?sslmode=disable'
+```
+
+恢复备份：
+
+```bash
+go run ./cmd/db-backup-restore --mode restore --backup-file backups/db-restore-drills/<backup>.dump
+```
+
+`restore` 默认拒绝以下情况：
+
+- 未提供恢复目标 DSN。
+- 恢复目标与源库相同。
+- 备份文件为空或不可读。
+- 恢复目标库已经存在 public base table。
+
+如果确认目标库只是本地演练库并且可以覆盖，才允许加 `--force`：
+
+```bash
+go run ./cmd/db-backup-restore --mode restore --backup-file backups/db-restore-drills/<backup>.dump --force
+```
+
+校验恢复库 schema、migration checksum 和核心表 row count：
+
+```bash
+go run ./cmd/db-backup-restore --mode validate
+```
+
+`validate` 会执行与 migration release 一致的 drift 检查，并统计核心表：
+`marketing_activity`、`marketing_rule`、`marketing_reward`、`marketing_quota`、
+`marketing_event_inbox`、`marketing_participation`、`marketing_grant_order`、
+`marketing_outbox`、`marketing_audit` 和 `marketing_fact_provider`。
+
+在恢复库上跑 Event In 到 Outbox smoke：
+
+```bash
+go run ./cmd/db-backup-restore --mode smoke
+```
+
+该模式会把 `EX_MARKETING_DATABASE_URL` 临时指向恢复目标 DSN，并调用
+`go run ./cmd/engine-e2e-postgres`。通过证据包括唯一 `runId`、tenant、
+activity、event inbox、participation、grant_order、outbox 和 callback/reconciliation
+状态。若只需要截止到 Outbox 的最小证据，也可以直接运行恢复库上的
+`go run ./cmd/engine-e2e-postgres` 并保留输出。
+
+失败诊断按阶段输出：`BACKUP`、`RESTORE`、`SCHEMA_CHECK`、`DATA_CHECK` 或
+`EVENT_IN_SMOKE`。错误信息会包含脱敏 DSN、命令退出摘要和 stderr 摘要，不应包含
+数据库密码、token、secret、Authorization 或 Cookie。
+
 MQ reward commands use `targetRef` values such as `kafka://reward.commands`, `rabbitmq://reward-exchange/reward.commands`, `rabbitmq:///reward.commands`, or `pulsar://tenant/rewards/commands`. Broker endpoints and credentials belong in runtime sender configuration, not in activity config, outbox payload, audit payload, or logs.
 
 MQ sender runtime config:

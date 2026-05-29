@@ -1,35 +1,36 @@
 # Review
 
-## Agent 指令
-
-你是 Review Agent。请审核 analysis.md。
-
-不改代码，不提交。
-
 ## Findings
 
-~~~text
+```text
 P0:
+- None.
+
 P1:
+- None.
+
 P2:
-~~~
+- None.
+```
+
+## Review Notes
+
+- `analysis.md` covers the task's required backup command, restore command, validation script, and restored-database Event In -> Outbox smoke scope.
+- The PostgreSQL-only scope, isolated restore target, no silent overwrite rule, checksum/schema validation, core table coverage, DSN redaction, and repeatable `runId` smoke are consistent with the existing operations and architecture docs.
+- Acceptance criteria are concrete enough for Dev/Test to implement and verify without relying on UI inspection or generic `go test` as a substitute for restore rehearsal.
 
 ## Open Questions
 
-待填写。
+None blocking.
+
+## Score
+
+```text
+92
+```
 
 ## Decision
 
-~~~text
-PASS / BLOCK
-~~~
-
-规则：
-
-~~~text
-存在 P0/P1 -> BLOCK
-Score < 80 -> BLOCK
-无 P0/P1 且 Score >= 80 -> PASS
-~~~
-
-需求：2026-05-27-db-backup-restore
+```text
+PASS
+```

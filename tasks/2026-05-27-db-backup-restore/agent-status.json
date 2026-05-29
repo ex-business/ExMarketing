@@ -1,30 +1,53 @@
 {
   "requirementId": "2026-05-27-db-backup-restore",
-  "updatedAt": "2026-05-27T15:00:29.872031Z",
+  "updatedAt": "2026-05-29T12:57:33.734784Z",
   "agents": {
     "analysis": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-27-db-backup-restore/analysis.md"
+      "status": "DONE",
+      "startedAt": "2026-05-29T12:29:10.023954Z",
+      "finishedAt": "2026-05-29T12:31:35.478748Z",
+      "output": "tasks/2026-05-27-db-backup-restore/analysis.md",
+      "log": "tasks/2026-05-27-db-backup-restore/runs/20260529T122910Z-analysis.log",
+      "nextStatus": "REVIEW_READY"
     },
     "commit": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-27-db-backup-restore/commit.md"
+      "status": "RUNNING",
+      "startedAt": "2026-05-29T12:57:33.734778Z",
+      "output": "tasks/2026-05-27-db-backup-restore/commit.md",
+      "log": "tasks/2026-05-27-db-backup-restore/runs/20260529T125733Z-commit.log",
+      "pid": 19068
     },
     "dev": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-27-db-backup-restore/implementation.md"
+      "status": "DONE",
+      "startedAt": "2026-05-29T12:51:45.60385Z",
+      "finishedAt": "2026-05-29T12:54:25.991228Z",
+      "output": "tasks/2026-05-27-db-backup-restore/implementation.md",
+      "log": "tasks/2026-05-27-db-backup-restore/runs/20260529T125145Z-dev.log",
+      "nextStatus": "REVIEW_PASS"
     },
     "review": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-27-db-backup-restore/review.md"
+      "status": "DONE",
+      "startedAt": "2026-05-29T12:31:35.840903Z",
+      "finishedAt": "2026-05-29T12:32:23.745952Z",
+      "output": "tasks/2026-05-27-db-backup-restore/review.md",
+      "log": "tasks/2026-05-27-db-backup-restore/runs/20260529T123135Z-review.log",
+      "nextStatus": "REVIEW_PASS"
     },
     "test": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-27-db-backup-restore/test.md"
+      "status": "DONE",
+      "startedAt": "2026-05-29T12:54:26.034198Z",
+      "finishedAt": "2026-05-29T12:57:33.710765Z",
+      "output": "tasks/2026-05-27-db-backup-restore/test.md",
+      "log": "tasks/2026-05-27-db-backup-restore/runs/20260529T125426Z-test.log",
+      "nextStatus": "COMMIT_READY"
     },
     "test-plan": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-27-db-backup-restore/test-plan.md"
+      "status": "DONE",
+      "startedAt": "2026-05-29T12:32:23.774406Z",
+      "finishedAt": "2026-05-29T12:33:54.370155Z",
+      "output": "tasks/2026-05-27-db-backup-restore/test-plan.md",
+      "log": "tasks/2026-05-27-db-backup-restore/runs/20260529T123223Z-test-plan.log",
+      "nextStatus": "REVIEW_PASS"
     }
   }
 }

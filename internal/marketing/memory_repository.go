@@ -1239,6 +1239,60 @@ func (r *MemoryRepository) MarkOutboxDLQ(ctx context.Context, id string, retryCo
 	})
 }
 
+func (r *MemoryRepository) RecoverStaleOutbox(ctx context.Context, staleBefore time.Time, limit int) ([]OutboxMessage, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	var recovered []OutboxMessage
+	for i := range r.outboxMessages {
+		if len(recovered) >= limit {
+			break
+		}
+		item := &r.outboxMessages[i]
+		if item.SendStatus != OutboxSending || !item.UpdatedAt.Before(staleBefore) {
+			continue
+		}
+		before := *item
+		item.SendStatus = OutboxPending
+		item.NextRetryAt = nil
+		item.UpdatedAt = time.Now().UTC()
+		recovered = append(recovered, before)
+	}
+	return recovered, nil
+}
+
+func (r *MemoryRepository) CountOutboxDLQ(ctx context.Context) ([]OutboxDLQCount, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	counts := map[string]OutboxDLQCount{}
+	for _, message := range r.outboxMessages {
+		if message.SendStatus != OutboxDLQ {
+			continue
+		}
+		key := message.TenantID + "\x00" + string(message.TargetChannel)
+		count := counts[key]
+		count.TenantID = message.TenantID
+		count.TargetChannel = message.TargetChannel
+		count.Count++
+		counts[key] = count
+	}
+	out := make([]OutboxDLQCount, 0, len(counts))
+	for _, count := range counts {
+		out = append(out, count)
+	}
+	return out, nil
+}
+
 func (r *MemoryRepository) ReplayOutboxDLQ(ctx context.Context, tenantID string, id string, operator string, reason string, replayedAt time.Time) (OutboxMessage, error) {
 	if err := ctx.Err(); err != nil {
 		return OutboxMessage{}, err

@@ -1300,6 +1300,90 @@ func (r *Repository) MarkOutboxDLQ(ctx context.Context, id string, retryCount in
 	return err
 }
 
+func (r *Repository) RecoverStaleOutbox(ctx context.Context, staleBefore time.Time, limit int) ([]marketing.OutboxMessage, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer rollback(tx)
+
+	rows, err := tx.QueryContext(ctx, `
+		WITH stale AS (
+			SELECT id
+			FROM marketing_outbox
+			WHERE send_status = 'SENDING'
+			  AND updated_at < $1
+			ORDER BY updated_at ASC
+			LIMIT $2
+			FOR UPDATE SKIP LOCKED
+		),
+		before AS (
+			SELECT o.id, o.tenant_id, o.message_type, o.target_channel, o.target_ref, o.payload_json,
+			       o.send_status, o.retry_count, o.next_retry_at, COALESCE(o.error_message, '') AS error_message,
+			       o.created_at, o.updated_at
+			FROM marketing_outbox o
+			JOIN stale ON stale.id = o.id
+		),
+		updated AS (
+			UPDATE marketing_outbox o
+			SET send_status = 'PENDING', next_retry_at = NULL, updated_at = NOW()
+			FROM stale
+			WHERE o.id = stale.id
+			RETURNING o.id
+		)
+		SELECT id, tenant_id, message_type, target_channel, target_ref, payload_json,
+		       send_status, retry_count, next_retry_at, error_message, created_at, updated_at
+		FROM before
+	`, staleBefore, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var messages []marketing.OutboxMessage
+	for rows.Next() {
+		message, err := scanOutbox(rows)
+		if err != nil {
+			return nil, err
+		}
+		messages = append(messages, message)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return messages, nil
+}
+
+func (r *Repository) CountOutboxDLQ(ctx context.Context) ([]marketing.OutboxDLQCount, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT tenant_id, target_channel, COUNT(*)
+		FROM marketing_outbox
+		WHERE send_status = 'DLQ'
+		GROUP BY tenant_id, target_channel
+		ORDER BY tenant_id, target_channel
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var counts []marketing.OutboxDLQCount
+	for rows.Next() {
+		var count marketing.OutboxDLQCount
+		if err := rows.Scan(&count.TenantID, &count.TargetChannel, &count.Count); err != nil {
+			return nil, err
+		}
+		counts = append(counts, count)
+	}
+	return counts, rows.Err()
+}
+
 func (r *Repository) ReplayOutboxDLQ(ctx context.Context, tenantID string, id string, operator string, reason string, replayedAt time.Time) (marketing.OutboxMessage, error) {
 	return r.updateOutboxDLQ(ctx, tenantID, id, operator, reason, replayedAt, marketing.OutboxPending, "OUTBOX_DLQ_REPLAY")
 }

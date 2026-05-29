@@ -1,30 +1,53 @@
 {
   "requirementId": "2026-05-27-worker-production-hardening-worker",
-  "updatedAt": "2026-05-27T15:00:29.868557Z",
+  "updatedAt": "2026-05-29T09:04:07.385471Z",
   "agents": {
     "analysis": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-27-worker-production-hardening-worker/analysis.md"
+      "status": "DONE",
+      "startedAt": "2026-05-29T08:16:35.761923Z",
+      "finishedAt": "2026-05-29T08:19:26.1724Z",
+      "output": "tasks/2026-05-27-worker-production-hardening-worker/analysis.md",
+      "log": "tasks/2026-05-27-worker-production-hardening-worker/runs/20260529T081635Z-analysis.log",
+      "nextStatus": "REVIEW_READY"
     },
     "commit": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-27-worker-production-hardening-worker/commit.md"
+      "status": "RUNNING",
+      "startedAt": "2026-05-29T09:04:07.385468Z",
+      "output": "tasks/2026-05-27-worker-production-hardening-worker/commit.md",
+      "log": "tasks/2026-05-27-worker-production-hardening-worker/runs/20260529T090407Z-commit.log",
+      "pid": 24111
     },
     "dev": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-27-worker-production-hardening-worker/implementation.md"
+      "status": "DONE",
+      "startedAt": "2026-05-29T08:40:25.099732Z",
+      "finishedAt": "2026-05-29T09:01:43.371959Z",
+      "output": "tasks/2026-05-27-worker-production-hardening-worker/implementation.md",
+      "log": "tasks/2026-05-27-worker-production-hardening-worker/runs/20260529T084025Z-dev.log",
+      "nextStatus": "REVIEW_PASS"
     },
     "review": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-27-worker-production-hardening-worker/review.md"
+      "status": "DONE",
+      "startedAt": "2026-05-29T08:19:27.154993Z",
+      "finishedAt": "2026-05-29T08:20:12.567494Z",
+      "output": "tasks/2026-05-27-worker-production-hardening-worker/review.md",
+      "log": "tasks/2026-05-27-worker-production-hardening-worker/runs/20260529T081927Z-review.log",
+      "nextStatus": "REVIEW_PASS"
     },
     "test": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-27-worker-production-hardening-worker/test.md"
+      "status": "DONE",
+      "startedAt": "2026-05-29T09:01:43.419795Z",
+      "finishedAt": "2026-05-29T09:04:07.357862Z",
+      "output": "tasks/2026-05-27-worker-production-hardening-worker/test.md",
+      "log": "tasks/2026-05-27-worker-production-hardening-worker/runs/20260529T090143Z-test.log",
+      "nextStatus": "COMMIT_READY"
     },
     "test-plan": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-27-worker-production-hardening-worker/test-plan.md"
+      "status": "DONE",
+      "startedAt": "2026-05-29T08:20:12.59617Z",
+      "finishedAt": "2026-05-29T08:21:58.307421Z",
+      "output": "tasks/2026-05-27-worker-production-hardening-worker/test-plan.md",
+      "log": "tasks/2026-05-27-worker-production-hardening-worker/runs/20260529T082012Z-test-plan.log",
+      "nextStatus": "REVIEW_PASS"
     }
   }
 }

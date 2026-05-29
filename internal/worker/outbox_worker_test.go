@@ -1,13 +1,16 @@
 package worker
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -305,6 +308,215 @@ func TestOutboxWorkerMQInvalidTargetMovesToDLQ(t *testing.T) {
 	}
 }
 
+func TestOutboxWorkerSingleFailureDoesNotStopNextMessage(t *testing.T) {
+	first := outboxMessage("outbox_first_failure", marketing.GrantHTTP, "{}")
+	first.TargetRef = "http://127.0.0.1/fail"
+	second := outboxMessage("outbox_second_success", marketing.GrantHTTP, "{}")
+	second.TargetRef = "http://127.0.0.1/success"
+	repo := newWorkerTestRepo(first, second)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/fail" {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	repo.messages[0].TargetRef = server.URL + "/fail"
+	repo.messages[1].TargetRef = server.URL + "/success"
+
+	worker := newTestWorker(repo)
+	worker.tick(context.Background())
+
+	if got := repo.messageStatus("outbox_first_failure"); got != marketing.OutboxFailed {
+		t.Fatalf("expected first outbox FAILED, got %s", got)
+	}
+	if got := repo.messageStatus("outbox_second_success"); got != marketing.OutboxSent {
+		t.Fatalf("expected second outbox SENT after first failure, got %s", got)
+	}
+	stats := worker.Snapshot()
+	if stats.RetryableFailures != 1 || stats.DeliverySuccesses != 1 {
+		t.Fatalf("expected one retryable failure and one success, got %+v", stats)
+	}
+}
+
+func TestOutboxWorkerRunContinuesAfterEmptyBatch(t *testing.T) {
+	repo := newWorkerTestRepo()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	worker := newTestWorker(repo)
+	worker.interval = 5 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		worker.Run(ctx)
+	}()
+
+	waitFor(t, time.Second, func() bool {
+		return worker.Snapshot().ClaimEmptyBatches > 0
+	})
+	message := outboxMessage("outbox_after_empty", marketing.GrantHTTP, "{}")
+	message.TargetRef = server.URL
+	repo.appendMessage(message)
+
+	waitFor(t, time.Second, func() bool {
+		return repo.messageStatus("outbox_after_empty") == marketing.OutboxSent
+	})
+	cancel()
+	<-done
+}
+
+func TestOutboxWorkerShutdownDrainsInFlight(t *testing.T) {
+	repo := newWorkerTestRepo(outboxMessage("outbox_drain", marketing.GrantHTTP, "{}"))
+	requestStarted := make(chan struct{})
+	releaseRequest := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(requestStarted)
+		<-releaseRequest
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	repo.messages[0].TargetRef = server.URL
+
+	worker := newTestWorker(repo)
+	worker.interval = time.Hour
+	worker.drainTimeout = time.Second
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		worker.Run(ctx)
+	}()
+
+	<-requestStarted
+	cancel()
+	close(releaseRequest)
+	<-done
+
+	if got := repo.messageStatus("outbox_drain"); got != marketing.OutboxSent {
+		t.Fatalf("expected in-flight outbox to be drained and marked SENT, got %s", got)
+	}
+	if stats := worker.Snapshot(); stats.InFlight != 0 || stats.DeliverySuccesses != 1 || stats.Draining {
+		t.Fatalf("expected drained stats, got %+v", stats)
+	}
+}
+
+func TestOutboxWorkerShutdownStopsClaimingNewMessages(t *testing.T) {
+	repo := newWorkerTestRepo(outboxMessage("outbox_stop_inflight", marketing.GrantHTTP, "{}"))
+	requestStarted := make(chan struct{})
+	releaseRequest := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(requestStarted)
+		<-releaseRequest
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	repo.messages[0].TargetRef = server.URL
+
+	worker := newTestWorker(repo)
+	worker.interval = time.Hour
+	worker.drainTimeout = time.Second
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		worker.Run(ctx)
+	}()
+
+	<-requestStarted
+	cancel()
+	newMessage := outboxMessage("outbox_stop_new", marketing.GrantHTTP, "{}")
+	newMessage.TargetRef = server.URL
+	repo.appendMessage(newMessage)
+	close(releaseRequest)
+	<-done
+
+	if got := repo.messageStatus("outbox_stop_inflight"); got != marketing.OutboxSent {
+		t.Fatalf("expected in-flight outbox SENT, got %s", got)
+	}
+	if got := repo.messageStatus("outbox_stop_new"); got != marketing.OutboxPending {
+		t.Fatalf("expected post-stop outbox to remain PENDING, got %s", got)
+	}
+}
+
+func TestOutboxWorkerRecoversStaleClaimsAndSnapshotsDLQ(t *testing.T) {
+	stale := outboxMessage("outbox_stale", marketing.GrantHTTP, "{}")
+	stale.SendStatus = marketing.OutboxSending
+	stale.UpdatedAt = stale.UpdatedAt.Add(-10 * time.Minute)
+	dlq := outboxMessage("outbox_dlq_count", marketing.GrantHTTP, "{}")
+	dlq.SendStatus = marketing.OutboxDLQ
+	repo := newWorkerTestRepo(stale, dlq)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	repo.messages[0].TargetRef = server.URL
+
+	worker := newTestWorker(repo)
+	worker.staleClaimThreshold = 5 * time.Minute
+	worker.tick(context.Background())
+
+	if got := repo.messageStatus("outbox_stale"); got != marketing.OutboxSent {
+		t.Fatalf("expected stale SENDING outbox to recover and send, got %s", got)
+	}
+	stats := worker.Snapshot()
+	if stats.StaleRecoveries != 1 {
+		t.Fatalf("expected one stale recovery, got %+v", stats)
+	}
+	if got := stats.DLQCounts["tenant_001|HTTP"]; got != 1 {
+		t.Fatalf("expected tenant/channel DLQ count in snapshot, got %+v", stats.DLQCounts)
+	}
+	if stats.ClaimDelaySamples != 1 || stats.ClaimDelayMax <= 0 {
+		t.Fatalf("expected claim delay sample, got %+v", stats)
+	}
+}
+
+func TestOutboxWorkerStructuredLogsRedactSensitiveFields(t *testing.T) {
+	var logs bytes.Buffer
+	repo := newWorkerTestRepo(outboxMessage("outbox_sensitive_logs", marketing.GrantMQ, `{"commandId":"cmd_sensitive"}`))
+	repo.grantStatuses["cmd_sensitive"] = marketing.GrantPending
+	worker := NewOutboxWorker(repo, slog.New(slog.NewJSONHandler(&logs, nil)))
+	worker.mqSender = &recordingMQSender{err: errors.New("Authorization=Bearer abc Cookie=session token=secret signature=raw")}
+	worker.tick(context.Background())
+
+	var sawFailure bool
+	for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+		if line == "" {
+			continue
+		}
+		var record map[string]any
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatalf("decode log line %q: %v", line, err)
+		}
+		if record["event"] != "outbox_failed" {
+			continue
+		}
+		sawFailure = true
+		for _, field := range []string{"worker_id", "event", "tenant_id", "outbox_id", "target_channel", "target_ref", "message_type", "send_status_before", "send_status_after", "retry_count", "next_retry_at", "claim_delay_ms", "delivery_duration_ms", "error_class", "error_message"} {
+			if _, ok := record[field]; !ok {
+				t.Fatalf("expected structured log field %q in %+v", field, record)
+			}
+		}
+		errorMessage, _ := record["error_message"].(string)
+		lowerError := strings.ToLower(errorMessage)
+		if strings.Contains(lowerError, "authorization") || strings.Contains(lowerError, "cookie") || strings.Contains(lowerError, "token=secret") || strings.Contains(lowerError, "signature=raw") {
+			t.Fatalf("expected sensitive error details to be redacted, got %q", errorMessage)
+		}
+		targetRef, _ := record["target_ref"].(string)
+		if strings.Contains(targetRef, "?") || strings.Contains(strings.ToLower(targetRef), "secret") {
+			t.Fatalf("expected target_ref to be redacted, got %q", targetRef)
+		}
+	}
+	if !sawFailure {
+		t.Fatalf("expected outbox_failed log, got %s", logs.String())
+	}
+}
+
 func newTestWorker(repo *workerTestRepo) *OutboxWorker {
 	worker := NewOutboxWorker(repo, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	worker.jitter = func() float64 { return 1 }
@@ -331,6 +543,7 @@ func outboxMessage(id string, channel marketing.GrantChannel, payload string) ma
 }
 
 type workerTestRepo struct {
+	mu               sync.Mutex
 	messages         []marketing.OutboxMessage
 	grantStatuses    map[string]marketing.GrantStatus
 	grantRetryCounts map[string]int
@@ -346,6 +559,8 @@ func newWorkerTestRepo(messages ...marketing.OutboxMessage) *workerTestRepo {
 }
 
 func (r *workerTestRepo) ListPendingOutbox(ctx context.Context, limit int) ([]marketing.OutboxMessage, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	var out []marketing.OutboxMessage
 	now := time.Now().UTC()
 	for i := range r.messages {
@@ -390,6 +605,8 @@ func (r *workerTestRepo) MarkOutboxDLQ(ctx context.Context, id string, retryCoun
 }
 
 func (r *workerTestRepo) update(id string, update func(*marketing.OutboxMessage)) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	for i := range r.messages {
 		if r.messages[i].ID == id {
 			update(&r.messages[i])
@@ -397,6 +614,71 @@ func (r *workerTestRepo) update(id string, update func(*marketing.OutboxMessage)
 		}
 	}
 	return marketing.ErrNotFound
+}
+
+func (r *workerTestRepo) appendMessage(message marketing.OutboxMessage) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.messages = append(r.messages, message)
+}
+
+func (r *workerTestRepo) messageStatus(id string) marketing.OutboxStatus {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, message := range r.messages {
+		if message.ID == id {
+			return message.SendStatus
+		}
+	}
+	return ""
+}
+
+func (r *workerTestRepo) RecoverStaleOutbox(ctx context.Context, staleBefore time.Time, limit int) ([]marketing.OutboxMessage, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var recovered []marketing.OutboxMessage
+	for i := range r.messages {
+		if len(recovered) >= limit {
+			break
+		}
+		if r.messages[i].SendStatus != marketing.OutboxSending || !r.messages[i].UpdatedAt.Before(staleBefore) {
+			continue
+		}
+		before := r.messages[i]
+		r.messages[i].SendStatus = marketing.OutboxPending
+		r.messages[i].NextRetryAt = nil
+		r.messages[i].UpdatedAt = time.Now().UTC()
+		recovered = append(recovered, before)
+	}
+	return recovered, nil
+}
+
+func (r *workerTestRepo) CountOutboxDLQ(ctx context.Context) ([]marketing.OutboxDLQCount, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	counts := map[string]marketing.OutboxDLQCount{}
+	for _, message := range r.messages {
+		if message.SendStatus != marketing.OutboxDLQ {
+			continue
+		}
+		key := message.TenantID + "|" + string(message.TargetChannel)
+		count := counts[key]
+		count.TenantID = message.TenantID
+		count.TargetChannel = message.TargetChannel
+		count.Count++
+		counts[key] = count
+	}
+	out := make([]marketing.OutboxDLQCount, 0, len(counts))
+	for _, count := range counts {
+		out = append(out, count)
+	}
+	return out, nil
 }
 
 func (r *workerTestRepo) CreateActivity(context.Context, marketing.Activity) (marketing.Activity, error) {
@@ -510,4 +792,16 @@ type recordingMQSender struct {
 func (s *recordingMQSender) Send(_ context.Context, message MQMessage) error {
 	s.messages = append(s.messages, message)
 	return s.err
+}
+
+func waitFor(t *testing.T, timeout time.Duration, condition func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if condition() {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatal("condition was not met before timeout")
 }

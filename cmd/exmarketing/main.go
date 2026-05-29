@@ -39,6 +39,7 @@ func main() {
 		os.Exit(1)
 	}
 	handler := httpapi.NewHandlerWithConfigs(service, openAPIEventConfig, webhookConfig)
+	var workerDone <-chan struct{}
 	if env("EX_MARKETING_OUTBOX_WORKER", "false") == "true" {
 		outboxWorker := worker.NewOutboxWorker(repository, logger)
 		mqConfig, mqConfigured, err := worker.LoadMQRuntimeConfigFromEnv()
@@ -55,7 +56,12 @@ func main() {
 			outboxWorker.SetMQSender(mqSender)
 			logger.Info("mq sender runtime config loaded")
 		}
-		go outboxWorker.Run(ctx)
+		done := make(chan struct{})
+		workerDone = done
+		go func() {
+			defer close(done)
+			outboxWorker.Run(ctx)
+		}()
 		logger.Info("outbox worker enabled")
 	}
 
@@ -77,8 +83,10 @@ func main() {
 		errCh <- server.Serve(listener)
 	}()
 
+	shutdownRequested := false
 	select {
 	case <-ctx.Done():
+		shutdownRequested = true
 		logger.Info("shutdown requested")
 	case err := <-errCh:
 		if !errors.Is(err, http.ErrServerClosed) {
@@ -93,6 +101,9 @@ func main() {
 	if err := server.Shutdown(ctx); err != nil {
 		logger.Error("graceful shutdown failed", "error", err)
 		os.Exit(1)
+	}
+	if workerDone != nil && shutdownRequested {
+		<-workerDone
 	}
 }
 

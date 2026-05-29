@@ -33,6 +33,12 @@ type QuotaType string
 type QuotaScope string
 type QuotaReservationStatus string
 
+type OutboxDLQCount struct {
+	TenantID      string
+	TargetChannel GrantChannel
+	Count         int
+}
+
 const (
 	ActivityDraft     ActivityStatus = "DRAFT"
 	ActivityScheduled ActivityStatus = "SCHEDULED"

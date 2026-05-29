@@ -144,12 +144,12 @@ func run() error {
 	go worker.NewOutboxWorker(repo, slog.New(slog.NewTextHandler(io.Discard, nil))).Run(workerCtx)
 
 	r := &runner{
-		ctx:      ctx,
-		db:       db,
-		baseURL:  apiServer.URL,
-		runID:    "e2e_pg_" + time.Now().UTC().Format("20060102_150405_000000000"),
-		tenantID: defaultTenantID,
+		ctx:     ctx,
+		db:      db,
+		baseURL: apiServer.URL,
+		runID:   "e2e_pg_" + time.Now().UTC().Format("20060102_150405_000000000"),
 	}
+	r.tenantID = tenantIDForRun(r.runID)
 
 	if err := r.createActivity(stub.server.URL + "/reward"); err != nil {
 		return r.fail("CREATE_ACTIVITY", err)
@@ -220,6 +220,14 @@ func newRewardStub() *rewardStub {
 		_, _ = w.Write([]byte(`{"accepted":true}`))
 	}))
 	return stub
+}
+
+func tenantIDForRun(runID string) string {
+	tenantID := defaultTenantID + "_" + runID
+	if len(tenantID) <= 64 {
+		return tenantID
+	}
+	return tenantID[:64]
 }
 
 func (s *rewardStub) received(commandID string) bool {

@@ -276,6 +276,280 @@ func TestPostgresCloseOutboxDLQOnlyClosesOutbox(t *testing.T) {
 	assertPostgresParticipationStatus(t, repo, prefix+"_part", marketing.ParticipationRewardable)
 }
 
+func TestPostgresOutboxRetryEligibilityAndTerminalStatusNotClaimed(t *testing.T) {
+	ctx, repo := openPostgresIntegrationRepository(t)
+	prefix := "pg_outbox_retry_terminal"
+	cleanupPostgresAtomicTest(t, repo, prefix)
+	t.Cleanup(func() { cleanupPostgresAtomicTest(t, repo, prefix) })
+
+	now := time.Now().UTC().Add(-time.Hour)
+	futureRetryAt := time.Now().UTC().Add(time.Hour)
+	eligibleRetryAt := time.Now().UTC().Add(-time.Minute)
+	future := testPostgresOutbox(prefix+"_future_retry", now)
+	future.SendStatus = marketing.OutboxFailed
+	future.RetryCount = 1
+	future.NextRetryAt = &futureRetryAt
+	eligible := testPostgresOutbox(prefix+"_eligible_retry", now.Add(time.Millisecond))
+	eligible.SendStatus = marketing.OutboxFailed
+	eligible.RetryCount = 1
+	eligible.NextRetryAt = &eligibleRetryAt
+	terminalSent := testPostgresOutbox(prefix+"_sent", now.Add(2*time.Millisecond))
+	terminalSent.SendStatus = marketing.OutboxSent
+	terminalDLQ := testPostgresOutbox(prefix+"_dlq", now.Add(3*time.Millisecond))
+	terminalDLQ.SendStatus = marketing.OutboxDLQ
+	terminalClosed := testPostgresOutbox(prefix+"_dlq_closed", now.Add(4*time.Millisecond))
+	terminalClosed.SendStatus = marketing.OutboxDLQClosed
+
+	for _, message := range []marketing.OutboxMessage{future, eligible, terminalSent, terminalDLQ, terminalClosed} {
+		if _, err := repo.CreateOutbox(ctx, message); err != nil {
+			t.Fatalf("create outbox %s: %v", message.ID, err)
+		}
+	}
+	before := postgresOutboxUpdatedAt(t, repo, prefix+"_sent")
+
+	claimed, err := repo.ListPendingOutbox(ctx, 10)
+	if err != nil {
+		t.Fatalf("list pending outbox: %v", err)
+	}
+	if got := outboxIDsWithPrefix(claimed, prefix); len(got) != 1 || got[0] != prefix+"_eligible_retry" {
+		t.Fatalf("expected only eligible retry to be claimed, got %v", got)
+	}
+	if got := postgresOutboxStatus(t, repo, prefix+"_future_retry"); got != marketing.OutboxFailed {
+		t.Fatalf("expected future retry to remain FAILED, got %s", got)
+	}
+	expectedTerminal := map[string]marketing.OutboxStatus{
+		prefix + "_sent":       marketing.OutboxSent,
+		prefix + "_dlq":        marketing.OutboxDLQ,
+		prefix + "_dlq_closed": marketing.OutboxDLQClosed,
+	}
+	for id, want := range expectedTerminal {
+		if got := postgresOutboxStatus(t, repo, id); got != want {
+			t.Fatalf("expected terminal status %s for %s, got %s", want, id, got)
+		}
+	}
+	if after := postgresOutboxUpdatedAt(t, repo, prefix+"_sent"); !after.Equal(before) {
+		t.Fatalf("expected terminal outbox updated_at unchanged, before=%s after=%s", before, after)
+	}
+}
+
+func TestPostgresOutboxConcurrentClaimSingleMessage(t *testing.T) {
+	ctx, repo := openPostgresIntegrationRepository(t)
+	prefix := "pg_outbox_claim_single"
+	cleanupPostgresAtomicTest(t, repo, prefix)
+	t.Cleanup(func() { cleanupPostgresAtomicTest(t, repo, prefix) })
+
+	if _, err := repo.CreateOutbox(ctx, testPostgresOutbox(prefix+"_outbox", time.Now().UTC())); err != nil {
+		t.Fatalf("create outbox: %v", err)
+	}
+
+	const workers = 8
+	start := make(chan struct{})
+	claimedIDs := make(chan string, workers)
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			messages, err := repo.ListPendingOutbox(ctx, 1)
+			if err != nil {
+				errs <- err
+				return
+			}
+			for _, message := range messages {
+				claimedIDs <- message.ID
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(claimedIDs)
+	close(errs)
+	for err := range errs {
+		t.Fatalf("claim outbox: %v", err)
+	}
+	var ids []string
+	for id := range claimedIDs {
+		ids = append(ids, id)
+	}
+	if len(ids) != 1 || ids[0] != prefix+"_outbox" {
+		t.Fatalf("expected one worker to claim the outbox once, got %v", ids)
+	}
+	if got := postgresOutboxStatus(t, repo, prefix+"_outbox"); got != marketing.OutboxSending {
+		t.Fatalf("expected claimed outbox SENDING, got %s", got)
+	}
+}
+
+func TestPostgresOutboxConcurrentClaimMultipleMessages(t *testing.T) {
+	ctx, repo := openPostgresIntegrationRepository(t)
+	prefix := "pg_outbox_claim_many"
+	cleanupPostgresAtomicTest(t, repo, prefix)
+	t.Cleanup(func() { cleanupPostgresAtomicTest(t, repo, prefix) })
+
+	now := time.Now().UTC().Add(-time.Minute)
+	const total = 12
+	for i := 0; i < total; i++ {
+		message := testPostgresOutbox(fmt.Sprintf("%s_outbox_%02d", prefix, i), now.Add(time.Duration(i)*time.Millisecond))
+		if i%2 == 0 {
+			message.TenantID = "tenant_a"
+		} else {
+			message.TenantID = "tenant_b"
+			message.TargetChannel = marketing.GrantMQ
+			message.TargetRef = "kafka://reward.commands"
+		}
+		if _, err := repo.CreateOutbox(ctx, message); err != nil {
+			t.Fatalf("create outbox %s: %v", message.ID, err)
+		}
+	}
+
+	const workers = 4
+	start := make(chan struct{})
+	claimedIDs := make(chan string, total)
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			messages, err := repo.ListPendingOutbox(ctx, 3)
+			if err != nil {
+				errs <- err
+				return
+			}
+			for _, message := range messages {
+				claimedIDs <- message.ID
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(claimedIDs)
+	close(errs)
+	for err := range errs {
+		t.Fatalf("claim outbox: %v", err)
+	}
+
+	seen := map[string]int{}
+	for id := range claimedIDs {
+		seen[id]++
+	}
+	if len(seen) != total {
+		t.Fatalf("expected %d claimed outboxes, got %d: %v", total, len(seen), seen)
+	}
+	for id, count := range seen {
+		if count != 1 {
+			t.Fatalf("expected outbox %s claimed once, got %d", id, count)
+		}
+		if got := postgresOutboxStatus(t, repo, id); got != marketing.OutboxSending {
+			t.Fatalf("expected outbox %s SENDING, got %s", id, got)
+		}
+	}
+}
+
+func TestPostgresOutboxStaleRecoveryConcurrentClaim(t *testing.T) {
+	ctx, repo := openPostgresIntegrationRepository(t)
+	prefix := "pg_outbox_stale_concurrent"
+	cleanupPostgresAtomicTest(t, repo, prefix)
+	t.Cleanup(func() { cleanupPostgresAtomicTest(t, repo, prefix) })
+
+	stale := testPostgresOutbox(prefix+"_stale", time.Now().UTC().Add(-10*time.Minute))
+	stale.SendStatus = marketing.OutboxSending
+	stale.UpdatedAt = time.Now().UTC().Add(-10 * time.Minute)
+	if _, err := repo.CreateOutbox(ctx, stale); err != nil {
+		t.Fatalf("create stale outbox: %v", err)
+	}
+
+	const attempts = 2
+	start := make(chan struct{})
+	recoveredIDs := make(chan string, attempts)
+	errs := make(chan error, attempts)
+	var wg sync.WaitGroup
+	for i := 0; i < attempts; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			messages, err := repo.RecoverStaleOutbox(ctx, time.Now().UTC().Add(-5*time.Minute), 1)
+			if err != nil {
+				errs <- err
+				return
+			}
+			for _, message := range messages {
+				recoveredIDs <- message.ID
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(recoveredIDs)
+	close(errs)
+	for err := range errs {
+		t.Fatalf("recover stale outbox: %v", err)
+	}
+	var ids []string
+	for id := range recoveredIDs {
+		ids = append(ids, id)
+	}
+	if len(ids) != 1 || ids[0] != prefix+"_stale" {
+		t.Fatalf("expected one stale recovery, got %v", ids)
+	}
+	claimed, err := repo.ListPendingOutbox(ctx, 1)
+	if err != nil {
+		t.Fatalf("claim recovered stale outbox: %v", err)
+	}
+	if got := outboxIDsWithPrefix(claimed, prefix); len(got) != 1 || got[0] != prefix+"_stale" {
+		t.Fatalf("expected recovered outbox to be claimable once, got %v", got)
+	}
+}
+
+func TestPostgresOutboxDLQCountByTenantAndChannel(t *testing.T) {
+	ctx, repo := openPostgresIntegrationRepository(t)
+	prefix := "pg_outbox_dlq_count"
+	cleanupPostgresAtomicTest(t, repo, prefix)
+	t.Cleanup(func() { cleanupPostgresAtomicTest(t, repo, prefix) })
+
+	now := time.Now().UTC()
+	messages := []marketing.OutboxMessage{
+		testPostgresOutbox(prefix+"_a_http_1", now),
+		testPostgresOutbox(prefix+"_a_http_2", now.Add(time.Millisecond)),
+		testPostgresOutbox(prefix+"_a_mq", now.Add(2*time.Millisecond)),
+		testPostgresOutbox(prefix+"_b_http", now.Add(3*time.Millisecond)),
+		testPostgresOutbox(prefix+"_closed", now.Add(4*time.Millisecond)),
+	}
+	for i := range messages {
+		messages[i].SendStatus = marketing.OutboxDLQ
+	}
+	messages[0].TenantID = "tenant_a"
+	messages[1].TenantID = "tenant_a"
+	messages[2].TenantID = "tenant_a"
+	messages[2].TargetChannel = marketing.GrantMQ
+	messages[2].TargetRef = "kafka://reward.commands"
+	messages[3].TenantID = "tenant_b"
+	messages[4].TenantID = "tenant_a"
+	messages[4].SendStatus = marketing.OutboxDLQClosed
+	for _, message := range messages {
+		if _, err := repo.CreateOutbox(ctx, message); err != nil {
+			t.Fatalf("create outbox %s: %v", message.ID, err)
+		}
+	}
+
+	counts, err := repo.CountOutboxDLQ(ctx)
+	if err != nil {
+		t.Fatalf("count outbox dlq: %v", err)
+	}
+	got := map[string]int{}
+	for _, count := range counts {
+		if strings.HasPrefix(count.TenantID, "tenant_") {
+			got[count.TenantID+"|"+string(count.TargetChannel)] = count.Count
+		}
+	}
+	if got["tenant_a|HTTP"] != 2 || got["tenant_a|MQ"] != 1 || got["tenant_b|HTTP"] != 1 {
+		t.Fatalf("unexpected DLQ counts: %+v", got)
+	}
+}
+
 func TestPostgresAtomicGrantRollsBackWhenGrantOrderCreateFails(t *testing.T) {
 	databaseURL := os.Getenv("EX_MARKETING_DATABASE_URL")
 	if databaseURL == "" {
@@ -1031,6 +1305,42 @@ func assertPostgresParticipationStatus(t *testing.T, repo *Repository, participa
 	if got != want {
 		t.Fatalf("expected participation %s status %s, got %s", participationID, want, got)
 	}
+}
+
+func postgresOutboxStatus(t *testing.T, repo *Repository, id string) marketing.OutboxStatus {
+	t.Helper()
+	var got marketing.OutboxStatus
+	if err := repo.db.QueryRowContext(context.Background(), `
+		SELECT send_status
+		FROM marketing_outbox
+		WHERE id = $1
+	`, id).Scan(&got); err != nil {
+		t.Fatalf("query outbox status %s: %v", id, err)
+	}
+	return got
+}
+
+func postgresOutboxUpdatedAt(t *testing.T, repo *Repository, id string) time.Time {
+	t.Helper()
+	var got time.Time
+	if err := repo.db.QueryRowContext(context.Background(), `
+		SELECT updated_at
+		FROM marketing_outbox
+		WHERE id = $1
+	`, id).Scan(&got); err != nil {
+		t.Fatalf("query outbox updated_at %s: %v", id, err)
+	}
+	return got
+}
+
+func outboxIDsWithPrefix(messages []marketing.OutboxMessage, prefix string) []string {
+	var ids []string
+	for _, message := range messages {
+		if strings.HasPrefix(message.ID, prefix) {
+			ids = append(ids, message.ID)
+		}
+	}
+	return ids
 }
 
 func countPostgresAtomicResults(t *testing.T, results <-chan error) (int, int) {

@@ -1,6 +1,6 @@
 {
   "requirementId": "2026-05-27-manual-grant-export",
-  "updatedAt": "2026-05-27T16:02:33.942648Z",
+  "updatedAt": "2026-05-29T07:11:17.490929Z",
   "agents": {
     "analysis": {
       "status": "DONE",
@@ -11,17 +11,19 @@
       "nextStatus": "REVIEW_READY"
     },
     "commit": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-27-manual-grant-export/commit.md"
+      "status": "RUNNING",
+      "startedAt": "2026-05-29T07:11:17.490925Z",
+      "output": "tasks/2026-05-27-manual-grant-export/commit.md",
+      "log": "tasks/2026-05-27-manual-grant-export/runs/20260529T071117Z-commit.log",
+      "pid": 16501
     },
     "dev": {
-      "status": "FAILED",
-      "startedAt": "2026-05-27T15:47:33.95198Z",
-      "finishedAt": "2026-05-27T16:02:33.942636Z",
+      "status": "DONE",
+      "startedAt": "2026-05-29T07:04:20.42909Z",
+      "finishedAt": "2026-05-29T07:09:15.74486Z",
       "output": "tasks/2026-05-27-manual-grant-export/implementation.md",
-      "log": "tasks/2026-05-27-manual-grant-export/runs/20260527T154733Z-dev.log",
-      "exitCode": 124,
-      "error": "context deadline exceeded"
+      "log": "tasks/2026-05-27-manual-grant-export/runs/20260529T070420Z-dev.log",
+      "nextStatus": "REVIEW_PASS"
     },
     "review": {
       "status": "DONE",
@@ -32,8 +34,12 @@
       "nextStatus": "REVIEW_PASS"
     },
     "test": {
-      "status": "WAITING",
-      "output": "tasks/2026-05-27-manual-grant-export/test.md"
+      "status": "DONE",
+      "startedAt": "2026-05-29T07:09:15.78597Z",
+      "finishedAt": "2026-05-29T07:11:17.462734Z",
+      "output": "tasks/2026-05-27-manual-grant-export/test.md",
+      "log": "tasks/2026-05-27-manual-grant-export/runs/20260529T070915Z-test.log",
+      "nextStatus": "COMMIT_READY"
     },
     "test-plan": {
       "status": "DONE",

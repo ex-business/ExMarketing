@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ex-stack/ExMarketing/internal/engine"
 	"github.com/ex-stack/ExMarketing/internal/marketing"
 )
 
@@ -677,10 +678,231 @@ func TestPostgresConcurrentStockLastItem(t *testing.T) {
 	assertPostgresCount(t, repo, `SELECT COUNT(*) FROM marketing_quota WHERE activity_id = $1 AND used_value + frozen_value > total_value`, activityID, 0)
 }
 
+func TestPostgresManualExportReadySuccessPersistsTraceAuditAndQuota(t *testing.T) {
+	ctx, repo := openPostgresIntegrationRepository(t)
+	service := engine.NewService(repo)
+
+	prefix := "pg_manual_export_ready"
+	cleanupPostgresAtomicTest(t, repo, prefix)
+	t.Cleanup(func() { cleanupPostgresAtomicTest(t, repo, prefix) })
+
+	now := time.Now().UTC()
+	activityID := prefix + "_act"
+	createPostgresCallbackQuotas(t, repo, activityID, prefix, "user_1", "user_1:2026-05-29", now)
+	grant := testPostgresManualGrant(prefix+"_grant", activityID, prefix+"_part", prefix+"_grant_idem", "REWARD_A", "10", marketing.GrantManualExport, now)
+
+	_, err := repo.CreateParticipationGrantOutboxesWithQuota(ctx, marketing.AtomicGrantCommand{
+		Participation:      testPostgresParticipation(prefix+"_part", activityID, prefix+"_part_idem", now),
+		BudgetAmount:       "10",
+		ReserveUserLimit:   true,
+		UserScopeKey:       "user_1",
+		ReserveDailyLimit:  true,
+		DailyLimitScopeKey: "user_1:2026-05-29",
+		StockReservations: []marketing.QuotaReservation{
+			{Type: marketing.QuotaStock, Scope: marketing.QuotaScopeActivity, ScopeKey: "REWARD_A", Amount: "1"},
+		},
+		GrantOrders: []marketing.GrantOrder{grant},
+	})
+	if err != nil {
+		t.Fatalf("atomic manual export grant: %v", err)
+	}
+	assertPostgresCount(t, repo, `SELECT COUNT(*) FROM marketing_outbox WHERE id LIKE $1`, prefix+"_%", 0)
+
+	_, err = service.ApplyManualGrantDecision(ctx, marketing.ManualGrantDecisionCommand{
+		TenantID:        "site_001",
+		CommandID:       grant.BillNo,
+		Status:          marketing.GrantSuccess,
+		ExternalGrantID: prefix + "_external",
+		Operator:        "ops",
+		Reason:          "paid before export",
+		FinishedAt:      now.Add(time.Minute),
+	})
+	if !errors.Is(err, marketing.ErrManualGrantExportRequired) {
+		t.Fatalf("expected manual export required before READY file, got %v", err)
+	}
+
+	exportResult, err := service.CreateManualGrantExport(ctx, marketing.ManualGrantExportCreateCommand{
+		TenantID:   "site_001",
+		Operator:   "ops",
+		Reason:     "daily offline file",
+		ActivityID: activityID,
+	})
+	if err != nil {
+		t.Fatalf("create manual export: %v", err)
+	}
+	if exportResult.ExportFile.Status != marketing.ManualGrantExportReady || exportResult.ExportFile.RowCount != 1 || exportResult.ExportFile.FileChecksum == "" {
+		t.Fatalf("unexpected export file: %+v", exportResult.ExportFile)
+	}
+	if len(exportResult.Details) != 1 || exportResult.Details[0].GrantOrderID != grant.ID {
+		t.Fatalf("unexpected export details: %+v", exportResult.Details)
+	}
+	assertPostgresGrantStatus(t, repo, "site_001", grant.BillNo, marketing.GrantSending)
+	assertPostgresCount(t, repo, `
+		SELECT COUNT(*)
+		FROM marketing_manual_grant_export_detail d
+		JOIN marketing_manual_grant_export_file f ON f.id = d.export_id
+		WHERE d.grant_order_id = $1 AND d.detail_status = 'READY' AND f.status = 'READY'
+	`, grant.ID, 1)
+
+	result, err := service.ApplyManualGrantDecision(ctx, marketing.ManualGrantDecisionCommand{
+		TenantID:        "site_001",
+		CommandID:       grant.BillNo,
+		Status:          marketing.GrantSuccess,
+		ExternalGrantID: prefix + "_external",
+		Operator:        "ops",
+		Reason:          "offline paid",
+		FinishedAt:      now.Add(2 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("manual export success: %v", err)
+	}
+	if result.GrantStatus != marketing.GrantSuccess || result.ParticipationStatus != marketing.ParticipationGranted {
+		t.Fatalf("unexpected manual export success result: %+v", result)
+	}
+	assertPostgresQuotaValues(t, repo, activityID, marketing.QuotaBudget, marketing.QuotaScopeActivity, "TOTAL", "10.0000", "0.0000")
+	assertPostgresQuotaValues(t, repo, activityID, marketing.QuotaStock, marketing.QuotaScopeActivity, "REWARD_A", "1.0000", "0.0000")
+	assertPostgresQuotaValues(t, repo, activityID, marketing.QuotaUserLimit, marketing.QuotaScopeUser, "user_1", "1.0000", "0.0000")
+	assertPostgresQuotaValues(t, repo, activityID, marketing.QuotaDailyLimit, marketing.QuotaScopeUser, "user_1:2026-05-29", "1.0000", "0.0000")
+	assertPostgresCount(t, repo, `SELECT COUNT(*) FROM marketing_quota_reservation WHERE activity_id = $1 AND reservation_status = 'CONFIRMED'`, activityID, 4)
+	assertPostgresCount(t, repo, `SELECT COUNT(*) FROM marketing_audit WHERE resource_id = $1 AND action = 'MANUAL_GRANT_EXPORT_READY'`, exportResult.ExportFile.ID, 1)
+	assertPostgresCount(t, repo, `SELECT COUNT(*) FROM marketing_audit WHERE resource_id = $1 AND action = 'MANUAL_GRANT_CONFIRM_SUCCESS'`, grant.ID, 1)
+	assertPostgresCount(t, repo, `
+		SELECT COUNT(*)
+		FROM marketing_manual_grant_export_detail d
+		JOIN marketing_manual_grant_export_file f ON f.id = d.export_id
+		WHERE d.grant_order_id = $1 AND f.file_checksum IS NOT NULL AND f.status = 'READY'
+	`, grant.ID, 1)
+}
+
+func TestPostgresManualExportConcurrentUniqueInclusionAndFailedHistoryReexport(t *testing.T) {
+	ctx, repo := openPostgresIntegrationRepository(t)
+
+	prefix := "pg_manual_export_concurrent"
+	cleanupPostgresAtomicTest(t, repo, prefix)
+	t.Cleanup(func() { cleanupPostgresAtomicTest(t, repo, prefix) })
+
+	now := time.Now().UTC()
+	activityID := prefix + "_act"
+	mustCreatePostgresQuota(t, repo, marketing.Quota{ID: prefix + "_budget", ActivityID: activityID, Type: marketing.QuotaBudget, Scope: marketing.QuotaScopeActivity, ScopeKey: "TOTAL", TotalValue: "100", UsedValue: "0", FrozenValue: "0", Version: 1, CreatedAt: now, UpdatedAt: now})
+
+	var grants []marketing.GrantOrder
+	for i := 0; i < 3; i++ {
+		suffix := fmt.Sprintf("%02d", i)
+		grant := testPostgresManualGrant(prefix+"_grant_"+suffix, activityID, prefix+"_part_"+suffix, prefix+"_grant_idem_"+suffix, "REWARD_"+suffix, "5", marketing.GrantManualExport, now.Add(time.Duration(i)*time.Millisecond))
+		grants = append(grants, grant)
+		_, err := repo.CreateParticipationGrantOutboxesWithQuota(ctx, marketing.AtomicGrantCommand{
+			Participation: testPostgresParticipation(prefix+"_part_"+suffix, activityID, prefix+"_part_idem_"+suffix, now),
+			BudgetAmount:  "5",
+			GrantOrders:   []marketing.GrantOrder{grant},
+		})
+		if err != nil {
+			t.Fatalf("atomic grant %s: %v", suffix, err)
+		}
+	}
+
+	const attempts = 2
+	start := make(chan struct{})
+	results := make(chan error, attempts)
+	var wg sync.WaitGroup
+	for i := 0; i < attempts; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			_, err := repo.CreateManualGrantExport(ctx, marketing.ManualGrantExportCreateCommand{
+				TenantID:   "site_001",
+				Operator:   fmt.Sprintf("ops_%d", i),
+				Reason:     "concurrent export",
+				ActivityID: activityID,
+			})
+			results <- err
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+
+	var success, notFound int
+	for err := range results {
+		switch {
+		case err == nil:
+			success++
+		case errors.Is(err, marketing.ErrNotFound):
+			notFound++
+		default:
+			t.Fatalf("unexpected concurrent export error: %v", err)
+		}
+	}
+	if success != 1 || notFound != attempts-1 {
+		t.Fatalf("expected one export success and %d not found, got success=%d notFound=%d", attempts-1, success, notFound)
+	}
+	assertPostgresCount(t, repo, `
+		SELECT COUNT(*)
+		FROM marketing_manual_grant_export_detail d
+		JOIN marketing_manual_grant_export_file f ON f.id = d.export_id
+		WHERE d.grant_order_id LIKE $1 AND f.status <> 'FAILED'
+	`, prefix+"_grant_%", len(grants))
+	assertPostgresCount(t, repo, `
+		SELECT COUNT(*)
+		FROM (
+			SELECT d.grant_order_id
+			FROM marketing_manual_grant_export_detail d
+			JOIN marketing_manual_grant_export_file f ON f.id = d.export_id
+			WHERE d.grant_order_id LIKE $1 AND f.status <> 'FAILED'
+			GROUP BY d.grant_order_id
+			HAVING COUNT(*) > 1
+		) duplicates
+	`, prefix+"_grant_%", 0)
+
+	retryGrant := testPostgresManualGrant(prefix+"_retry_grant", activityID, prefix+"_retry_part", prefix+"_retry_grant_idem", "REWARD_RETRY", "5", marketing.GrantManualExport, now.Add(time.Second))
+	_, err := repo.CreateParticipationGrantOutboxesWithQuota(ctx, marketing.AtomicGrantCommand{
+		Participation: testPostgresParticipation(prefix+"_retry_part", activityID, prefix+"_retry_part_idem", now),
+		BudgetAmount:  "5",
+		GrantOrders:   []marketing.GrantOrder{retryGrant},
+	})
+	if err != nil {
+		t.Fatalf("atomic retry grant: %v", err)
+	}
+	if err := insertPostgresFailedManualExportHistory(ctx, repo, prefix, retryGrant, now.Add(2*time.Second)); err != nil {
+		t.Fatalf("insert failed export history: %v", err)
+	}
+	assertPostgresGrantStatus(t, repo, "site_001", retryGrant.BillNo, marketing.GrantPending)
+	assertPostgresQuotaValues(t, repo, activityID, marketing.QuotaBudget, marketing.QuotaScopeActivity, "TOTAL", "0.0000", "20.0000")
+
+	reexport, err := repo.CreateManualGrantExport(ctx, marketing.ManualGrantExportCreateCommand{
+		TenantID:      "site_001",
+		Operator:      "ops_retry",
+		Reason:        "retry failed file",
+		GrantOrderIDs: []string{retryGrant.ID},
+	})
+	if err != nil {
+		t.Fatalf("re-export after failed history: %v", err)
+	}
+	if reexport.ExportFile.Status != marketing.ManualGrantExportReady || len(reexport.Details) != 1 || reexport.Details[0].GrantOrderID != retryGrant.ID {
+		t.Fatalf("unexpected reexport result: %+v", reexport)
+	}
+	assertPostgresGrantStatus(t, repo, "site_001", retryGrant.BillNo, marketing.GrantSending)
+	assertPostgresCount(t, repo, `
+		SELECT COUNT(*)
+		FROM marketing_manual_grant_export_detail d
+		JOIN marketing_manual_grant_export_file f ON f.id = d.export_id
+		WHERE d.grant_order_id = $1 AND f.status = 'FAILED'
+	`, retryGrant.ID, 1)
+	assertPostgresCount(t, repo, `
+		SELECT COUNT(*)
+		FROM marketing_manual_grant_export_detail d
+		JOIN marketing_manual_grant_export_file f ON f.id = d.export_id
+		WHERE d.grant_order_id = $1 AND f.status <> 'FAILED'
+	`, retryGrant.ID, 1)
+}
+
 func cleanupPostgresAtomicTest(t *testing.T, repo *Repository, prefix string) {
 	t.Helper()
 	ctx := context.Background()
 	for _, stmt := range []string{
+		`DELETE FROM marketing_audit WHERE resource_id LIKE $1 OR payload_json::text LIKE '%' || $1 || '%'`,
+		`DELETE FROM marketing_manual_grant_export_detail WHERE grant_order_id LIKE $1 OR export_id LIKE $1 OR id LIKE $1`,
+		`DELETE FROM marketing_manual_grant_export_file WHERE id LIKE $1`,
 		`DELETE FROM marketing_quota_reservation WHERE activity_id LIKE $1 OR grant_order_id LIKE $1 OR command_id LIKE $1`,
 		`DELETE FROM marketing_outbox WHERE id LIKE $1`,
 		`DELETE FROM marketing_grant_order WHERE id LIKE $1`,
@@ -915,6 +1137,40 @@ func testPostgresGrant(id string, activityID string, participationID string, ide
 		CreatedAt:       now,
 		UpdatedAt:       now,
 	}
+}
+
+func testPostgresManualGrant(id string, activityID string, participationID string, idempotencyKey string, rewardCode string, amount string, mode marketing.GrantMode, now time.Time) marketing.GrantOrder {
+	payload, _ := json.Marshal(map[string]any{
+		"rewardCode":    rewardCode,
+		"rewardType":    marketing.RewardBonus,
+		"calculateType": marketing.CalculateFixed,
+		"grantMode":     mode,
+		"grantChannel":  marketing.GrantManualFile,
+	})
+	order := testPostgresGrant(id, activityID, participationID, idempotencyKey, now)
+	order.RewardAmount = amount
+	order.RewardPayload = payload
+	order.GrantChannel = marketing.GrantManualFile
+	return order
+}
+
+func insertPostgresFailedManualExportHistory(ctx context.Context, repo *Repository, prefix string, grant marketing.GrantOrder, now time.Time) error {
+	exportID := prefix + "_failed_export"
+	if _, err := repo.db.ExecContext(ctx, `
+		INSERT INTO marketing_manual_grant_export_file (
+			id, tenant_id, file_name, file_format, status, operator, reason, filter_snapshot_json,
+			row_count, file_checksum, storage_ref, error_message, created_at, updated_at
+		) VALUES ($1, $2, $3, 'CSV', 'FAILED', 'ops', 'file write failed', $4, 1, NULL, NULL, 'disk full', $5, $5)
+	`, exportID, grant.TenantID, exportID+".csv", []byte(`{"reason":"test failed history"}`), now); err != nil {
+		return err
+	}
+	_, err := repo.db.ExecContext(ctx, `
+		INSERT INTO marketing_manual_grant_export_detail (
+			id, export_id, tenant_id, grant_order_id, bill_no, row_number,
+			export_grant_status, detail_status, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, 1, $6, 'READY', $7, $7)
+	`, prefix+"_failed_detail", exportID, grant.TenantID, grant.ID, grant.BillNo, grant.GrantStatus, now)
+	return err
 }
 
 func testPostgresOutbox(id string, now time.Time) marketing.OutboxMessage {

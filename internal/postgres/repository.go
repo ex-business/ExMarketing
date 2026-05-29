@@ -39,6 +39,10 @@ func NewRepository(ctx context.Context, databaseURL string) (*Repository, error)
 		_ = db.Close()
 		return nil, err
 	}
+	if err := ensureManualGrantExportTables(ctx, db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	return &Repository{db: db}, nil
 }
 
@@ -1685,6 +1689,48 @@ func ensureActivityUniqueConstraint(ctx context.Context, db *sql.DB) error {
 			END IF;
 		END
 		$$;
+	`)
+	return err
+}
+
+func ensureManualGrantExportTables(ctx context.Context, db *sql.DB) error {
+	_, err := db.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS marketing_manual_grant_export_file (
+			id VARCHAR(64) PRIMARY KEY,
+			tenant_id VARCHAR(64) NOT NULL,
+			file_name VARCHAR(255) NOT NULL,
+			file_format VARCHAR(32) NOT NULL,
+			status VARCHAR(32) NOT NULL,
+			operator VARCHAR(128) NOT NULL,
+			reason TEXT NOT NULL,
+			filter_snapshot_json JSONB,
+			row_count INTEGER NOT NULL DEFAULT 0,
+			file_checksum VARCHAR(128),
+			storage_ref TEXT,
+			error_message TEXT,
+			created_at TIMESTAMPTZ NOT NULL,
+			updated_at TIMESTAMPTZ NOT NULL
+		);
+
+		CREATE TABLE IF NOT EXISTS marketing_manual_grant_export_detail (
+			id VARCHAR(64) PRIMARY KEY,
+			export_id VARCHAR(64) NOT NULL REFERENCES marketing_manual_grant_export_file(id) ON DELETE CASCADE,
+			tenant_id VARCHAR(64) NOT NULL,
+			grant_order_id VARCHAR(64) NOT NULL REFERENCES marketing_grant_order(id) ON DELETE CASCADE,
+			bill_no VARCHAR(128) NOT NULL,
+			row_number INTEGER NOT NULL,
+			export_grant_status VARCHAR(32) NOT NULL,
+			detail_status VARCHAR(32) NOT NULL,
+			created_at TIMESTAMPTZ NOT NULL,
+			updated_at TIMESTAMPTZ NOT NULL
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_manual_grant_export_file_tenant_status
+			ON marketing_manual_grant_export_file (tenant_id, status, created_at);
+		CREATE INDEX IF NOT EXISTS idx_manual_grant_export_detail_grant_order
+			ON marketing_manual_grant_export_detail (grant_order_id);
+		CREATE INDEX IF NOT EXISTS idx_manual_grant_export_detail_export
+			ON marketing_manual_grant_export_detail (export_id, row_number);
 	`)
 	return err
 }

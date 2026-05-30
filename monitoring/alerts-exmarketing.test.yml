@@ -15,7 +15,7 @@ tests:
       - series: 'exmarketing_outbox_backlog{tenant_id="tenant_a",target_channel="wallet",send_status="PENDING"}'
         values: '150x20'
       - series: 'exmarketing_outbox_oldest_eligible_age_seconds{tenant_id="tenant_a",target_channel="wallet"}'
-        values: '90x20'
+        values: '180x20'
       - series: 'exmarketing_worker_claim_total{worker_id="worker_1",tenant_id="tenant_a",target_channel="wallet",result="success"}'
         values: '0x20'
       - series: 'exmarketing_db_operation_total{operation="grant_order_write",table="marketing_grant_order",result="failed",reason="db_error"}'
@@ -35,6 +35,24 @@ tests:
       - series: 'up{job="exmarketing",instance="localhost:8080"}'
         values: '0x20'
     alert_rule_test:
+      - eval_time: 12m
+        alertname: ExMarketingWorkerAllStopped
+        exp_alerts:
+          - exp_labels:
+              tenant_id: tenant_a
+              target_channel: wallet
+              service: exmarketing
+              severity: P0
+              owner: backend-oncall
+              tenant: tenant_a
+              channel: wallet
+              dashboard: '${GRAFANA_BASE_URL}/d/exmarketing/activity-engine?var-tenant=tenant_a&var-channel=wallet'
+              runbook: 'docs/runbooks/exmarketing-alerts.md#exmarketingworkerallstopped'
+            exp_annotations:
+              summary: 'Outbox worker has stopped claiming eligible work'
+              description: 'Eligible backlog is present for tenant=tenant_a channel=wallet, but successful claims have been zero for 5m.'
+              current_value: '150'
+              threshold: 'eligible backlog > 0, oldest eligible age > 120s, successful claim rate = 0'
       - eval_time: 12m
         alertname: ExMarketingDLQGrowing
         exp_alerts:
@@ -72,6 +90,24 @@ tests:
               current_value: '150'
               threshold: 'backlog > 100 and oldest eligible age > 60s for 5m'
       - eval_time: 12m
+        alertname: ExMarketingCallbackFailRateHigh
+        exp_alerts:
+          - exp_labels:
+              tenant_id: tenant_a
+              grant_channel: wallet
+              service: exmarketing
+              severity: P1
+              owner: backend-oncall
+              tenant: tenant_a
+              channel: wallet
+              dashboard: '${GRAFANA_BASE_URL}/d/exmarketing/activity-engine?var-tenant=tenant_a&var-channel=wallet&viewPanel=callback'
+              runbook: 'docs/runbooks/exmarketing-alerts.md#exmarketingcallbackfailratehigh'
+            exp_annotations:
+              summary: 'Reward callback failure rate is high'
+              description: 'Callback failures are above rate and count thresholds for tenant=tenant_a channel=wallet.'
+              current_value: '10'
+              threshold: 'failed callbacks >= 5 and failure rate > 5% over 5m'
+      - eval_time: 12m
         alertname: ExMarketingDBWriteFailure
         exp_alerts:
           - exp_labels:
@@ -108,3 +144,13 @@ tests:
               description: 'quota_type=BUDGET scope=ACTIVITY reported aggregate conflict or missing reservation.'
               current_value: '5'
               threshold: '>= 1 quota consistency failure over 5m'
+  - interval: 1m
+    input_series:
+      - series: 'exmarketing_quota_fail_total{tenant_id="tenant_a",quota_type="BUDGET",scope="ACTIVITY",action="reserve",reason="quota_insufficient"}'
+        values: '0+10x20'
+      - series: 'exmarketing_quota_attempt_total{tenant_id="tenant_a",quota_type="BUDGET",scope="ACTIVITY",action="reserve",result="failed",reason="quota_insufficient"}'
+        values: '0+10x20'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: ExMarketingQuotaOverDeductRisk
+        exp_alerts: []

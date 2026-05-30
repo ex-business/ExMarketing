@@ -55,6 +55,7 @@ Prometheus 告警规则位于 `monitoring/alerts-exmarketing.rules.yml`，并已
 | SLI/SLO/SLA | `docs/runbooks/exmarketing-alerts.md#sli-slo-and-sla` | 可用性、延迟、错误率、数据一致性和 DLQ 清理时效。 |
 | 业务确认边界 | `docs/runbooks/exmarketing-alerts.md#business-confirmation-policy` | 区分技术可直接处理和必须业务确认的动作。 |
 | 演练与复盘模板 | `docs/runbooks/exmarketing-alerts.md#drill-record-template`、`#incident-review-template` | 演练记录、事故复盘和预防项跟踪。 |
+| 生产告警演练手册 | `docs/runbooks/exmarketing-alert-drill.md` | 本地/测试环境故障注入、通知、恢复、清理和演练报告步骤。 |
 | 告警映射表 | `docs/runbooks/exmarketing-alerts.md#alert-to-runbook-mapping` | alertname、severity、owner、dashboard、anchor、验证指标。 |
 
 规则按 `P0/P1/P2/P3` 标注严重级别，并统一带上 `service`、`tenant`、

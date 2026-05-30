@@ -1,6 +1,6 @@
 {
   "requirementId": "2026-05-29-security-threat-model",
-  "updatedAt": "2026-05-30T12:42:36.182218Z",
+  "updatedAt": "2026-05-30T12:43:55.780164Z",
   "agents": {
     "analysis": {
       "status": "DONE",
@@ -11,11 +11,12 @@
       "nextStatus": "REVIEW_READY"
     },
     "commit": {
-      "status": "RUNNING",
+      "status": "DONE",
       "startedAt": "2026-05-30T12:42:36.182214Z",
+      "finishedAt": "2026-05-30T12:43:55.780161Z",
       "output": "tasks/2026-05-29-security-threat-model/commit.md",
       "log": "tasks/2026-05-29-security-threat-model/runs/20260530T124236Z-commit.log",
-      "pid": 2230
+      "nextStatus": "COMMITTED"
     },
     "dev": {
       "status": "DONE",

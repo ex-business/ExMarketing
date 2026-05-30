@@ -28,6 +28,7 @@ route:
         - severity=~"P0|P1"
         - alertname=~"ExMarketingQuotaOverDeductRisk|ExMarketingDLQGrowing|ExMarketingCallbackFailRateHigh"
       repeat_interval: 30m
+      continue: true
     - receiver: backend-oncall
       matchers:
         - service="exmarketing"

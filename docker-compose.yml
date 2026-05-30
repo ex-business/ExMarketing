@@ -16,5 +16,52 @@ services:
       timeout: 3s
       retries: 20
 
+  exmarketing-alert-drill:
+    image: golang:1.25-alpine
+    container_name: exmarketing-alert-drill
+    working_dir: /workspace
+    command: ["go", "run", "./cmd/exmarketing-alert-drill"]
+    environment:
+      EX_MARKETING_DRILL_ADDR: ":8080"
+    ports:
+      - "${EX_MARKETING_DRILL_HOST_PORT:-18080}:8080"
+    volumes:
+      - .:/workspace
+      - go-build-cache:/root/.cache/go-build
+      - go-mod-cache:/go/pkg/mod
+
+  prometheus:
+    image: prom/prometheus:v3.5.0
+    container_name: exmarketing-prometheus
+    depends_on:
+      - exmarketing-alert-drill
+      - alertmanager
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --web.enable-lifecycle
+      - --storage.tsdb.retention.time=2d
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus-exmarketing.local.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/alerts-exmarketing.rules.yml:/etc/prometheus/alerts-exmarketing.rules.yml:ro
+
+  alertmanager:
+    image: prom/alertmanager:v0.28.1
+    container_name: exmarketing-alertmanager
+    depends_on:
+      - exmarketing-alert-drill
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+      - --web.listen-address=:9093
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./monitoring/alertmanager-exmarketing.local.yml:/etc/alertmanager/alertmanager.yml:ro
+      - ./monitoring/alertmanager-exmarketing.tmpl:/etc/alertmanager/alertmanager-exmarketing.tmpl:ro
+
 volumes:
   exmarketing-postgres-data:
+  go-build-cache:
+  go-mod-cache:

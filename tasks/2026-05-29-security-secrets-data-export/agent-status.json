@@ -1,6 +1,6 @@
 {
   "requirementId": "2026-05-29-security-secrets-data-export",
-  "updatedAt": "2026-05-30T13:41:25.110324Z",
+  "updatedAt": "2026-05-30T13:42:58.23369Z",
   "agents": {
     "analysis": {
       "status": "DONE",
@@ -11,11 +11,12 @@
       "nextStatus": "REVIEW_READY"
     },
     "commit": {
-      "status": "RUNNING",
+      "status": "DONE",
       "startedAt": "2026-05-30T13:41:25.110321Z",
+      "finishedAt": "2026-05-30T13:42:58.233688Z",
       "output": "tasks/2026-05-29-security-secrets-data-export/commit.md",
       "log": "tasks/2026-05-29-security-secrets-data-export/runs/20260530T134125Z-commit.log",
-      "pid": 81651
+      "nextStatus": "COMMITTED"
     },
     "dev": {
       "status": "DONE",

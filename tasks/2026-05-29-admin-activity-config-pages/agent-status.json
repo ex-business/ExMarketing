@@ -1,6 +1,6 @@
 {
   "requirementId": "2026-05-29-admin-activity-config-pages",
-  "updatedAt": "2026-05-29T16:02:07.433911Z",
+  "updatedAt": "2026-05-29T16:03:38.361853Z",
   "agents": {
     "analysis": {
       "status": "DONE",
@@ -11,11 +11,12 @@
       "nextStatus": "REVIEW_READY"
     },
     "commit": {
-      "status": "RUNNING",
+      "status": "DONE",
       "startedAt": "2026-05-29T16:02:07.433908Z",
+      "finishedAt": "2026-05-29T16:03:38.36185Z",
       "output": "tasks/2026-05-29-admin-activity-config-pages/commit.md",
       "log": "tasks/2026-05-29-admin-activity-config-pages/runs/20260529T160207Z-commit.log",
-      "pid": 20831
+      "nextStatus": "COMMITTED"
     },
     "dev": {
       "status": "DONE",

@@ -1,0 +1,24 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 5s
+  external_labels:
+    env: local
+
+rule_files:
+  - alerts-exmarketing.rules.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+            - alertmanager:9093
+
+scrape_configs:
+  - job_name: exmarketing
+    metrics_path: /metrics
+    scheme: http
+    static_configs:
+      - targets:
+          - exmarketing-alert-drill:8080
+        labels:
+          service: exmarketing

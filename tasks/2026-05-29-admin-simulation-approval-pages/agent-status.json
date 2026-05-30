@@ -1,6 +1,6 @@
 {
   "requirementId": "2026-05-29-admin-simulation-approval-pages",
-  "updatedAt": "2026-05-30T07:53:02.58588Z",
+  "updatedAt": "2026-05-30T07:54:36.577417Z",
   "agents": {
     "analysis": {
       "status": "DONE",
@@ -11,11 +11,12 @@
       "nextStatus": "REVIEW_READY"
     },
     "commit": {
-      "status": "RUNNING",
+      "status": "DONE",
       "startedAt": "2026-05-30T07:53:02.585877Z",
+      "finishedAt": "2026-05-30T07:54:36.577413Z",
       "output": "tasks/2026-05-29-admin-simulation-approval-pages/commit.md",
       "log": "tasks/2026-05-29-admin-simulation-approval-pages/runs/20260530T075302Z-commit.log",
-      "pid": 78730
+      "nextStatus": "COMMITTED"
     },
     "dev": {
       "status": "DONE",

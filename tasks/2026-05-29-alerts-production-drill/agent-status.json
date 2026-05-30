@@ -1,0 +1,53 @@
+{
+  "requirementId": "2026-05-29-alerts-production-drill",
+  "updatedAt": "2026-05-30T14:04:32Z",
+  "agents": {
+    "analysis": {
+      "status": "DONE",
+      "startedAt": "2026-05-30T10:12:56.734659Z",
+      "finishedAt": "2026-05-30T10:15:48.375083Z",
+      "output": "tasks/2026-05-29-alerts-production-drill/analysis.md",
+      "log": "tasks/2026-05-29-alerts-production-drill/runs/20260530T101256Z-analysis.log",
+      "nextStatus": "REVIEW_READY"
+    },
+    "commit": {
+      "status": "DONE",
+      "startedAt": "2026-05-30T14:04:32Z",
+      "finishedAt": "2026-05-30T14:04:32Z",
+      "output": "tasks/2026-05-29-alerts-production-drill/commit.md",
+      "nextStatus": "COMMITTED"
+    },
+    "dev": {
+      "status": "DONE",
+      "startedAt": "2026-05-30T10:58:36.713124Z",
+      "finishedAt": "2026-05-30T11:03:22.530909Z",
+      "output": "tasks/2026-05-29-alerts-production-drill/implementation.md",
+      "log": "tasks/2026-05-29-alerts-production-drill/runs/20260530T105836Z-dev.log",
+      "nextStatus": "REVIEW_PASS"
+    },
+    "review": {
+      "status": "DONE",
+      "startedAt": "2026-05-30T10:15:48.737044Z",
+      "finishedAt": "2026-05-30T10:16:36.523996Z",
+      "output": "tasks/2026-05-29-alerts-production-drill/review.md",
+      "log": "tasks/2026-05-29-alerts-production-drill/runs/20260530T101548Z-review.log",
+      "nextStatus": "REVIEW_PASS"
+    },
+    "test": {
+      "status": "DONE",
+      "startedAt": "2026-05-30T12:07:45.234198Z",
+      "finishedAt": "2026-05-30T14:04:32Z",
+      "output": "tasks/2026-05-29-alerts-production-drill/test.md",
+      "log": "tasks/2026-05-29-alerts-production-drill/runs/20260530T120745Z-test.log",
+      "nextStatus": "TEST_PASS"
+    },
+    "test-plan": {
+      "status": "DONE",
+      "startedAt": "2026-05-30T10:16:36.558481Z",
+      "finishedAt": "2026-05-30T10:18:40.733254Z",
+      "output": "tasks/2026-05-29-alerts-production-drill/test-plan.md",
+      "log": "tasks/2026-05-29-alerts-production-drill/runs/20260530T101636Z-test-plan.log",
+      "nextStatus": "REVIEW_PASS"
+    }
+  }
+}

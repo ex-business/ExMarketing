@@ -12,9 +12,9 @@
 输出细化后的需求说明、背景目标、参与方、输入输出、业务规则、边界条件、异常场景、非目标范围、风险、验收标准和待确认问题。
 如果是 Review 打回后的返工，analysis.md 必须单独包含“Review 反馈处理”小节，说明每条打回意见如何处理或为何仍需 BLOCK。
 如果是 Analysis 自己上一轮 BLOCK 后的返工，analysis.md 必须单独包含“Analysis 自检修正”小节，说明每条 BLOCK 原因、扣分项、待确认问题如何修正。
-返工时必须基于拒绝原因补充需求细节、边界条件、输入输出、验收标准和非目标范围；能从 task.md、backlog、PRD/设计文档或业务规则文档推导出明确最小口径的，直接写入 analysis.md 并说明推导依据。
-如果仍无法从现有材料推导，必须继续 Decision BLOCK，并列出缺的需求信息；不要等待系统自动补充决策。
-如果关键信息不清楚，必须 Decision BLOCK，并列出需要补充的问题；不要用代码实现假设替代需求澄清。
+返工时必须基于拒绝原因补充需求细节、边界条件、输入输出、验收标准和非目标范围。
+不能等待 Owner 决策，不能只列出“需补充决策”后停止；如果现有材料没有唯一答案，必须给出默认最小可验收口径，写清推导依据和默认约束，并用该口径关闭旧 BLOCK。
+只有现有材料完全无法确定业务目标、验收对象和参与方时，才允许 Decision BLOCK；其他缺口必须由 Analysis Agent 补齐默认最小可验收口径继续推进。
 按评分规则打分，Score >= 80 且需求细节清楚、可审核、可验收才 Decision PASS。
 ~~~
 
@@ -54,6 +54,7 @@ Decision 必须是 PASS / BLOCK。
 ~~~text
 你是 Test Agent。请根据 tasks/2026-05-24-mq-event-consumer/task.md、analysis.md、review.md、test-plan.md、implementation.md 执行测试。
 只允许写 tasks/2026-05-24-mq-event-consumer/test.md；禁止修改业务代码、测试代码、文档代码、配置文件或任何其他文件。
+如果需要启动本地服务，必须后台启动并记录 PID，等待健康检查通过后再执行 curl/smoke，结束时用 trap/kill 清理；禁止以前台 go run ./cmd/exmarketing 挂住 Agent。
 如果测试失败，必须在 test.md 写清失败命令、失败日志摘要、失败原因和复现方式，让流程打回 Dev Agent，不能自己修。
 执行必要测试并写 tasks/2026-05-24-mq-event-consumer/test.md。
 ~~~

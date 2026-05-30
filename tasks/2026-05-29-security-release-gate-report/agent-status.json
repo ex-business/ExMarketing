@@ -1,0 +1,53 @@
+{
+  "requirementId": "2026-05-29-security-release-gate-report",
+  "updatedAt": "2026-05-30T13:57:12.315413Z",
+  "agents": {
+    "analysis": {
+      "status": "DONE",
+      "startedAt": "2026-05-30T13:45:08.70757Z",
+      "finishedAt": "2026-05-30T13:48:11.777316Z",
+      "output": "tasks/2026-05-29-security-release-gate-report/analysis.md",
+      "log": "tasks/2026-05-29-security-release-gate-report/runs/20260530T134508Z-analysis.log",
+      "nextStatus": "REVIEW_READY"
+    },
+    "commit": {
+      "status": "RUNNING",
+      "startedAt": "2026-05-30T13:57:12.315405Z",
+      "output": "tasks/2026-05-29-security-release-gate-report/commit.md",
+      "log": "tasks/2026-05-29-security-release-gate-report/runs/20260530T135712Z-commit.log",
+      "pid": 4118
+    },
+    "dev": {
+      "status": "DONE",
+      "startedAt": "2026-05-30T13:48:47.97851Z",
+      "finishedAt": "2026-05-30T13:55:42.411121Z",
+      "output": "tasks/2026-05-29-security-release-gate-report/implementation.md",
+      "log": "tasks/2026-05-29-security-release-gate-report/runs/20260530T134847Z-dev.log",
+      "nextStatus": "REVIEW_PASS"
+    },
+    "review": {
+      "status": "DONE",
+      "startedAt": "2026-05-30T13:48:12.136046Z",
+      "finishedAt": "2026-05-30T13:48:47.976096Z",
+      "output": "tasks/2026-05-29-security-release-gate-report/review.md",
+      "log": "tasks/2026-05-29-security-release-gate-report/runs/20260530T134812Z-review.log",
+      "nextStatus": "REVIEW_PASS"
+    },
+    "test": {
+      "status": "DONE",
+      "startedAt": "2026-05-30T13:55:42.477327Z",
+      "finishedAt": "2026-05-30T13:57:12.284431Z",
+      "output": "tasks/2026-05-29-security-release-gate-report/test.md",
+      "log": "tasks/2026-05-29-security-release-gate-report/runs/20260530T135542Z-test.log",
+      "nextStatus": "COMMIT_READY"
+    },
+    "test-plan": {
+      "status": "DONE",
+      "startedAt": "2026-05-30T13:48:48.002341Z",
+      "finishedAt": "2026-05-30T13:50:08.807239Z",
+      "output": "tasks/2026-05-29-security-release-gate-report/test-plan.md",
+      "log": "tasks/2026-05-29-security-release-gate-report/runs/20260530T134848Z-test-plan.log",
+      "nextStatus": "REVIEW_PASS"
+    }
+  }
+}

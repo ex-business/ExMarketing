@@ -1,0 +1,16 @@
+{{ define "exmarketing.default.message" -}}
+service={{ .CommonLabels.service }}
+env={{ .CommonLabels.env }}
+tenant={{ .CommonLabels.tenant }}
+channel={{ .CommonLabels.channel }}
+severity={{ .CommonLabels.severity }}
+alertname={{ .CommonLabels.alertname }}
+owner={{ .CommonLabels.owner }}
+summary={{ .CommonAnnotations.summary }}
+description={{ .CommonAnnotations.description }}
+dashboard={{ .CommonLabels.dashboard }}
+runbook={{ .CommonLabels.runbook }}
+first_seen={{ (index .Alerts 0).StartsAt }}
+current_value={{ .CommonAnnotations.current_value }}
+threshold={{ .CommonAnnotations.threshold }}
+{{- end }}

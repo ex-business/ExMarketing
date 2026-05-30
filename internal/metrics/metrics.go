@@ -148,6 +148,8 @@ func (r *Registry) RenderPrometheus() []byte {
 	writeMetricFamily(&out, "exmarketing_reward_command_delivery_latency_seconds", "histogram", "Single external reward command delivery latency in seconds.")
 	writeMetricFamily(&out, "exmarketing_db_operation_total", "counter", "Database operation results.")
 	writeMetricFamily(&out, "exmarketing_db_operation_latency_seconds", "histogram", "Database operation latency in seconds.")
+	writeMetricFamily(&out, "exmarketing_fact_query_total", "counter", "Fact query results.")
+	writeMetricFamily(&out, "exmarketing_fact_query_latency_seconds", "histogram", "Fact query latency in seconds.")
 
 	for _, k := range sortedKeys(r.counters) {
 		fmt.Fprintf(&out, "%s %s\n", k, formatFloat(r.counters[k]))

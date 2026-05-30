@@ -107,6 +107,29 @@ func TestOutboxWorkerAdvancesGrantOrderState(t *testing.T) {
 	}
 }
 
+func TestOutboxWorkerReleasesClaimWhenGrantCannotAdvance(t *testing.T) {
+	message := outboxMessage("outbox_grant_conflict", marketing.GrantHTTP, `{"commandId":"cmd_grant_conflict"}`)
+	repo := newWorkerTestRepo(message)
+	repo.grantStatuses["cmd_grant_conflict"] = marketing.GrantSending
+
+	worker := newTestWorker(repo)
+	worker.tick(context.Background())
+
+	got := repo.messages[0]
+	if got.SendStatus != marketing.OutboxFailed {
+		t.Fatalf("expected outbox claim to be released as FAILED, got %+v", got)
+	}
+	if got.RetryCount != 1 {
+		t.Fatalf("expected retry_count=1, got %d", got.RetryCount)
+	}
+	if got.NextRetryAt == nil {
+		t.Fatal("expected immediate retry timestamp")
+	}
+	if len(repo.audits) != 1 || repo.audits[0].Action != "OUTBOX_CLAIM_RELEASED" {
+		t.Fatalf("expected OUTBOX_CLAIM_RELEASED audit, got %+v", repo.audits)
+	}
+}
+
 func TestOutboxWorkerTimeoutIsRetryableFailure(t *testing.T) {
 	repo := newWorkerTestRepo(outboxMessage("outbox_timeout", marketing.GrantHTTP, "{}"))
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

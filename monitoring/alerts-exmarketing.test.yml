@@ -1,0 +1,110 @@
+rule_files:
+  - alerts-exmarketing.rules.yml
+
+evaluation_interval: 1m
+
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'exmarketing_outbox_dlq_total{tenant_id="tenant_a",target_channel="wallet",reason="send_failed"}'
+        values: '0+1x20'
+      - series: 'exmarketing_reward_callback_total{tenant_id="tenant_a",grant_channel="wallet",result="failed",callback_status="FAILED",reason="provider_error"}'
+        values: '0+2x20'
+      - series: 'exmarketing_reward_callback_total{tenant_id="tenant_a",grant_channel="wallet",result="success",callback_status="SUCCESS",reason="ok"}'
+        values: '0+10x20'
+      - series: 'exmarketing_outbox_backlog{tenant_id="tenant_a",target_channel="wallet",send_status="PENDING"}'
+        values: '150x20'
+      - series: 'exmarketing_outbox_oldest_eligible_age_seconds{tenant_id="tenant_a",target_channel="wallet"}'
+        values: '90x20'
+      - series: 'exmarketing_worker_claim_total{worker_id="worker_1",tenant_id="tenant_a",target_channel="wallet",result="success"}'
+        values: '0x20'
+      - series: 'exmarketing_db_operation_total{operation="grant_order_write",table="marketing_grant_order",result="failed",reason="db_error"}'
+        values: '0+1x20'
+      - series: 'exmarketing_quota_fail_total{tenant_id="tenant_a",quota_type="BUDGET",scope="ACTIVITY",action="confirm",reason="quota_aggregate_conflict"}'
+        values: '0+1x20'
+      - series: 'exmarketing_event_intake_total{tenant_id="tenant_a",source_system="crm",event_type="DEPOSIT",result="failed",reason="internal_error"}'
+        values: '0+5x20'
+      - series: 'exmarketing_event_intake_total{tenant_id="tenant_a",source_system="crm",event_type="DEPOSIT",result="success",reason="ok"}'
+        values: '0+50x20'
+      - series: 'exmarketing_reward_command_total{tenant_id="tenant_a",target_channel="wallet",result="retry",reason="timeout"}'
+        values: '0+5x20'
+      - series: 'exmarketing_fact_query_total{tenant_id="tenant_a",fact_code="VIP",result="timeout",reason="provider_timeout"}'
+        values: '0+3x20'
+      - series: 'exmarketing_fact_query_total{tenant_id="tenant_a",fact_code="VIP",result="success",reason="ok"}'
+        values: '0+20x20'
+      - series: 'up{job="exmarketing",instance="localhost:8080"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: ExMarketingDLQGrowing
+        exp_alerts:
+          - exp_labels:
+              tenant_id: tenant_a
+              target_channel: wallet
+              service: exmarketing
+              severity: P1
+              owner: backend-oncall
+              tenant: tenant_a
+              channel: wallet
+              dashboard: '${GRAFANA_BASE_URL}/d/exmarketing/activity-engine?var-tenant=tenant_a&var-channel=wallet&viewPanel=dlq'
+              runbook: 'docs/runbooks/exmarketing-alerts.md#exmarketingdlqgrowing'
+            exp_annotations:
+              summary: 'Outbox DLQ is growing'
+              description: 'New DLQ messages are increasing for tenant=tenant_a channel=wallet.'
+              current_value: '10'
+              threshold: '>= 5 new DLQ messages over 10m'
+      - eval_time: 12m
+        alertname: ExMarketingOutboxBacklogHigh
+        exp_alerts:
+          - exp_labels:
+              tenant_id: tenant_a
+              target_channel: wallet
+              service: exmarketing
+              severity: P1
+              owner: backend-oncall
+              tenant: tenant_a
+              channel: wallet
+              dashboard: '${GRAFANA_BASE_URL}/d/exmarketing/activity-engine?var-tenant=tenant_a&var-channel=wallet&viewPanel=outbox'
+              runbook: 'docs/runbooks/exmarketing-alerts.md#exmarketingoutboxbackloghigh'
+            exp_annotations:
+              summary: 'Outbox eligible backlog is high'
+              description: 'tenant=tenant_a channel=wallet has high eligible backlog and old pending messages.'
+              current_value: '150'
+              threshold: 'backlog > 100 and oldest eligible age > 60s for 5m'
+      - eval_time: 12m
+        alertname: ExMarketingDBWriteFailure
+        exp_alerts:
+          - exp_labels:
+              operation: grant_order_write
+              table: marketing_grant_order
+              service: exmarketing
+              severity: P0
+              owner: dba-infra
+              tenant: global
+              channel: database
+              dashboard: '${GRAFANA_BASE_URL}/d/exmarketing/activity-engine?viewPanel=db'
+              runbook: 'docs/runbooks/exmarketing-alerts.md#exmarketingdbwritefailure'
+            exp_annotations:
+              summary: 'Core database write path is failing'
+              description: 'operation=grant_order_write table=marketing_grant_order has failed writes in the last 5m.'
+              current_value: '5'
+              threshold: '>= 1 failed core write over 5m'
+      - eval_time: 12m
+        alertname: ExMarketingQuotaOverDeductRisk
+        exp_alerts:
+          - exp_labels:
+              tenant_id: tenant_a
+              quota_type: BUDGET
+              scope: ACTIVITY
+              service: exmarketing
+              severity: P0
+              owner: backend-oncall
+              tenant: tenant_a
+              channel: quota
+              dashboard: '${GRAFANA_BASE_URL}/d/exmarketing/activity-engine?var-tenant=tenant_a&viewPanel=quota'
+              runbook: 'docs/runbooks/exmarketing-alerts.md#exmarketingquotaoverdeductrisk'
+            exp_annotations:
+              summary: 'Quota consistency risk detected'
+              description: 'quota_type=BUDGET scope=ACTIVITY reported aggregate conflict or missing reservation.'
+              current_value: '5'
+              threshold: '>= 1 quota consistency failure over 5m'

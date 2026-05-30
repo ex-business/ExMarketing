@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ex-stack/ExMarketing/internal/marketing"
+	"github.com/ex-stack/ExMarketing/internal/metrics"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -261,6 +262,40 @@ func TestQueryRequestValidationAndEndpointCodes(t *testing.T) {
 	t.Setenv("EX_MARKETING_FACT_ALLOWLIST", "allowed.example.com")
 	if response := client.Query(context.Background(), provider, factRequest()); response.Success || response.ErrorCode != CodeProviderHostBlocked {
 		t.Fatalf("host blocked response=%+v", response)
+	}
+}
+
+func TestQueryRecordsPrometheusMetrics(t *testing.T) {
+	previousMetrics := metrics.Default
+	t.Cleanup(func() { metrics.Default = previousMetrics })
+	metrics.Default = metrics.NewRegistry()
+	t.Setenv("EX_MARKETING_FACT_ALLOWLIST", "example.com")
+	client := NewClientWithHTTPClient(&http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Body:       io.NopCloser(strings.NewReader(`{"data":{"vipLevel":"VIP3"}}`)),
+			Header:     http.Header{},
+		}, nil
+	})})
+	provider := factProvider()
+
+	first := client.Query(context.Background(), provider, factRequest())
+	second := client.Query(context.Background(), provider, factRequest())
+	if !first.Success || !second.Success || !second.Cached {
+		t.Fatalf("responses=%+v %+v", first, second)
+	}
+
+	rendered := string(metrics.Default.RenderPrometheus())
+	for _, want := range []string{
+		`exmarketing_fact_query_total{fact_code="USER_PROFILE",reason="ok",result="success",tenant_id="site_001"} 1`,
+		`exmarketing_fact_query_total{fact_code="USER_PROFILE",reason="cache_hit",result="cache_hit",tenant_id="site_001"} 1`,
+		`exmarketing_fact_query_latency_seconds_count{fact_code="USER_PROFILE",result="success",tenant_id="site_001"} 1`,
+		`exmarketing_fact_query_latency_seconds_count{fact_code="USER_PROFILE",result="cache_hit",tenant_id="site_001"} 1`,
+	} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("metrics missing %q\n%s", want, rendered)
+		}
 	}
 }
 

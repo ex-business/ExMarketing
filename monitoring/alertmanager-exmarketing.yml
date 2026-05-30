@@ -1,0 +1,108 @@
+global:
+  resolve_timeout: 5m
+
+route:
+  receiver: platform-observability
+  group_by: [service, env, severity, tenant, channel]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  routes:
+    - receiver: backend-oncall-p0
+      matchers:
+        - service="exmarketing"
+        - severity="P0"
+        - owner="backend-oncall"
+      repeat_interval: 10m
+      continue: true
+    - receiver: dba-infra-p0
+      matchers:
+        - service="exmarketing"
+        - severity="P0"
+        - owner="dba-infra"
+      repeat_interval: 10m
+      continue: true
+    - receiver: business-ops
+      matchers:
+        - service="exmarketing"
+        - severity=~"P0|P1"
+        - alertname=~"ExMarketingQuotaOverDeductRisk|ExMarketingDLQGrowing|ExMarketingCallbackFailRateHigh"
+      repeat_interval: 30m
+    - receiver: backend-oncall
+      matchers:
+        - service="exmarketing"
+        - severity="P1"
+      repeat_interval: 30m
+    - receiver: backend-workqueue
+      matchers:
+        - service="exmarketing"
+        - severity="P2"
+      repeat_interval: 2h
+    - receiver: platform-observability
+      matchers:
+        - service="exmarketing"
+        - severity="P3"
+      repeat_interval: 8h
+
+inhibit_rules:
+  - source_matchers:
+      - service="exmarketing"
+      - alertname="ExMarketingDBWriteFailure"
+      - severity="P0"
+    target_matchers:
+      - service="exmarketing"
+      - alertname=~"ExMarketingOutboxBacklogHigh|ExMarketingCallbackFailRateHigh|ExMarketingWorkerAllStopped|ExMarketingEventIntakeErrorRateHigh|ExMarketingFactQueryFailRateHigh|ExMarketingRewardRetrySpike|ExMarketingClaimLatencyHigh"
+    equal: [env, tenant]
+  - source_matchers:
+      - service="exmarketing"
+      - alertname="ExMarketingDBWriteFailure"
+      - severity="P0"
+      - tenant="global"
+    target_matchers:
+      - service="exmarketing"
+      - alertname=~"ExMarketingOutboxBacklogHigh|ExMarketingCallbackFailRateHigh|ExMarketingWorkerAllStopped|ExMarketingEventIntakeErrorRateHigh|ExMarketingFactQueryFailRateHigh|ExMarketingRewardRetrySpike|ExMarketingClaimLatencyHigh"
+    equal: [env]
+  - source_matchers:
+      - service="exmarketing"
+      - severity=~"P0|P1"
+    target_matchers:
+      - service="exmarketing"
+      - severity=~"P2|P3"
+    equal: [env, tenant, channel]
+
+receivers:
+  - name: backend-oncall-p0
+    webhook_configs:
+      - url: http://alert-router.local/backend-oncall/p0
+        send_resolved: true
+  - name: dba-infra-p0
+    webhook_configs:
+      - url: http://alert-router.local/dba-infra/p0
+        send_resolved: true
+  - name: backend-oncall
+    webhook_configs:
+      - url: http://alert-router.local/backend-oncall
+        send_resolved: true
+  - name: backend-workqueue
+    webhook_configs:
+      - url: http://alert-router.local/backend-workqueue
+        send_resolved: true
+  - name: business-ops
+    webhook_configs:
+      - url: http://alert-router.local/business-ops
+        send_resolved: true
+  - name: platform-observability
+    webhook_configs:
+      - url: http://alert-router.local/platform-observability
+        send_resolved: true
+
+templates:
+  - alertmanager-exmarketing.tmpl
+
+time_intervals:
+  - name: exmarketing-maintenance-window
+    time_intervals:
+      - weekdays: [sunday]
+        times:
+          - start_time: "02:00"
+            end_time: "04:00"

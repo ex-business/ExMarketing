@@ -219,9 +219,14 @@ func (w *OutboxWorker) processMessage(ctx context.Context, message marketing.Out
 	commandID := rewardCommandID(message)
 	if commandID != "" {
 		if err := w.repository.UpdateGrantOrderByCommandID(ctx, message.TenantID, commandID, marketing.GrantSending, ""); err != nil {
+			errorMessage := sanitizeError(err.Error())
+			retryCount := message.RetryCount + 1
+			_ = w.repository.MarkOutboxFailed(ctx, message.ID, retryCount, w.now(), errorMessage)
+			_ = w.recordOutboxAudit(ctx, message, "OUTBOX_CLAIM_RELEASED", retryCount, errorMessage)
 			w.addClaimConflict()
 			w.recordClaimMetric("conflict", message.TenantID, string(message.TargetChannel))
-			w.logger.Warn("advance grant order to sending failed", "worker_id", w.workerID, "event", "grant_sending_failed", "tenant_id", message.TenantID, "outbox_id", message.ID, "command_id", commandID, "error", err)
+			w.recordError(err)
+			w.logger.Warn("advance grant order to sending failed", "worker_id", w.workerID, "event", "grant_sending_failed", "tenant_id", message.TenantID, "outbox_id", message.ID, "command_id", commandID, "send_status_after", marketing.OutboxFailed, "retry_count", retryCount, "error", errorMessage)
 			return
 		}
 	}

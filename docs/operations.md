@@ -36,6 +36,30 @@ Prometheus scrape 样例位于 `monitoring/prometheus-exmarketing.yml`，本地�
 prometheus --config.file=monitoring/prometheus-exmarketing.yml
 ```
 
+Prometheus 告警规则位于 `monitoring/alerts-exmarketing.rules.yml`，并已由
+`monitoring/prometheus-exmarketing.yml` 的 `rule_files` 引入。Alertmanager
+通知路由、抑制规则、升级接收组和消息模板位于：
+
+- `monitoring/alertmanager-exmarketing.yml`
+- `monitoring/alertmanager-exmarketing.tmpl`
+- `docs/runbooks/exmarketing-alerts.md`
+
+规则按 `P0/P1/P2/P3` 标注严重级别，并统一带上 `service`、`tenant`、
+`channel`、`severity`、`summary`、`dashboard` 和 `runbook`。DLQ、outbox
+backlog、worker claim 相关规则按 `tenant_id,target_channel` 聚合，不做全局
+sum；callback 按 `tenant_id,grant_channel` 聚合；Fact Query 按
+`tenant_id,fact_code` 聚合。DB 写失败会按 `service,env,tenant` 优先精确抑制
+下游 outbox/callback/worker/event/Fact Query 泛洪告警，只有
+`tenant="global"` 的 DB 根因才退化为 `service,env` 抑制。
+
+告警静态校验和样例单测：
+
+```bash
+promtool check config monitoring/prometheus-exmarketing.yml
+promtool test rules monitoring/alerts-exmarketing.test.yml
+alertmanager --config.file=monitoring/alertmanager-exmarketing.yml --config.check
+```
+
 Grafana dashboard 位于 `monitoring/grafana-exmarketing-dashboard.json`。导入时将 `${DS_PROMETHEUS}` 绑定到实际 Prometheus 数据源即可；dashboard 不写死本机或生产地址。
 
 核心指标：
@@ -65,6 +89,14 @@ Grafana dashboard 位于 `monitoring/grafana-exmarketing-dashboard.json`。导�
 | `exmarketing_reward_command_delivery_latency_seconds` | Histogram | `tenant_id`, `target_channel`, `result` | 单次外部投递调用耗时。 |
 | `exmarketing_db_operation_total` | Counter | `operation`, `table`, `result`, `reason` | DB 操作成功和失败计数；当前覆盖 metrics 刷新依赖的 outbox/DLQ 查询。 |
 | `exmarketing_db_operation_latency_seconds` | Histogram | `operation`, `table`, `result` | DB 操作耗时。 |
+| `exmarketing_fact_query_total` | Counter | `tenant_id`, `fact_code`, `result`, `reason` | Fact Query 成功、缓存命中、拒绝、超时、provider 失败和 mapping 失败计数。 |
+| `exmarketing_fact_query_latency_seconds` | Histogram | `tenant_id`, `fact_code`, `result` | Fact Query 从接收请求到缓存命中、成功返回或失败的耗时。 |
+
+`ExMarketingDBWriteFailure` 只允许基于核心写路径启用，默认匹配以下
+`exmarketing_db_operation_total.operation`：`event_inbox_write`、
+`participation_write`、`grant_order_write`、`quota_reserve_write`、
+`quota_finalize_write`、`outbox_write`、`outbox_dlq_write`、`callback_write`。
+查询类 DB 失败只能进入 DB operation/metrics 健康排查，不能冒充核心写失败 P0。
 
 建议告警阈值：
 

@@ -1,0 +1,53 @@
+{
+  "requirementId": "2026-05-29-alerts-rules-routing",
+  "updatedAt": "2026-05-30T09:36:51.718976Z",
+  "agents": {
+    "analysis": {
+      "status": "DONE",
+      "startedAt": "2026-05-30T09:09:57.958035Z",
+      "finishedAt": "2026-05-30T09:14:04.27891Z",
+      "output": "tasks/2026-05-29-alerts-rules-routing/analysis.md",
+      "log": "tasks/2026-05-29-alerts-rules-routing/runs/20260530T090957Z-analysis.log",
+      "nextStatus": "REVIEW_READY"
+    },
+    "commit": {
+      "status": "RUNNING",
+      "startedAt": "2026-05-30T09:36:51.718972Z",
+      "output": "tasks/2026-05-29-alerts-rules-routing/commit.md",
+      "log": "tasks/2026-05-29-alerts-rules-routing/runs/20260530T093651Z-commit.log",
+      "pid": 99315
+    },
+    "dev": {
+      "status": "DONE",
+      "startedAt": "2026-05-30T09:29:15.829831Z",
+      "finishedAt": "2026-05-30T09:34:15.085752Z",
+      "output": "tasks/2026-05-29-alerts-rules-routing/implementation.md",
+      "log": "tasks/2026-05-29-alerts-rules-routing/runs/20260530T092915Z-dev.log",
+      "nextStatus": "REVIEW_PASS"
+    },
+    "review": {
+      "status": "DONE",
+      "startedAt": "2026-05-30T09:14:04.30667Z",
+      "finishedAt": "2026-05-30T09:15:13.540052Z",
+      "output": "tasks/2026-05-29-alerts-rules-routing/review.md",
+      "log": "tasks/2026-05-29-alerts-rules-routing/runs/20260530T091404Z-review.log",
+      "nextStatus": "REVIEW_PASS"
+    },
+    "test": {
+      "status": "DONE",
+      "startedAt": "2026-05-30T09:34:15.131185Z",
+      "finishedAt": "2026-05-30T09:36:51.689691Z",
+      "output": "tasks/2026-05-29-alerts-rules-routing/test.md",
+      "log": "tasks/2026-05-29-alerts-rules-routing/runs/20260530T093415Z-test.log",
+      "nextStatus": "COMMIT_READY"
+    },
+    "test-plan": {
+      "status": "DONE",
+      "startedAt": "2026-05-30T09:15:13.571268Z",
+      "finishedAt": "2026-05-30T09:16:44.26616Z",
+      "output": "tasks/2026-05-29-alerts-rules-routing/test-plan.md",
+      "log": "tasks/2026-05-29-alerts-rules-routing/runs/20260530T091513Z-test-plan.log",
+      "nextStatus": "REVIEW_PASS"
+    }
+  }
+}

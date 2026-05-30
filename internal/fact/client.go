@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/ex-stack/ExMarketing/internal/marketing"
+	"github.com/ex-stack/ExMarketing/internal/metrics"
 )
 
 const (
@@ -133,34 +134,111 @@ func NewClientWithHTTPClient(httpClient *http.Client) *Client {
 }
 
 func (c *Client) Query(ctx context.Context, provider marketing.FactProvider, request marketing.FactQueryRequest) marketing.FactQueryResponse {
+	startedAt := time.Now()
+	var response marketing.FactQueryResponse
+	defer func() {
+		recordFactQueryMetrics(request, response, startedAt)
+	}()
 	if err := ValidateRequest(request); err != nil {
-		return failure(request, CodeInvalidFactQuery, err.Error(), "", "")
+		response = failure(request, CodeInvalidFactQuery, err.Error(), "", "")
+		return response
 	}
 	if !provider.Enabled {
-		return failure(request, CodeProviderDisabled, "fact provider is disabled", "", "")
+		response = failure(request, CodeProviderDisabled, "fact provider is disabled", "", "")
+		return response
 	}
 	if err := provider.Validate(); err != nil {
-		return providerValidationFailure(request, err)
+		response = providerValidationFailure(request, err)
+		return response
 	}
 	if request.TenantID != provider.TenantID || request.FactCode != provider.FactCode {
-		return failure(request, CodeProviderNotConfigured, "fact provider is not configured for tenant and factCode", "", "")
+		response = failure(request, CodeProviderNotConfigured, "fact provider is not configured for tenant and factCode", "", "")
+		return response
 	}
 	if provider.CacheTTLSeconds > 0 {
 		key, err := cacheKey(provider, request)
 		if err != nil {
-			return failure(request, CodeCacheUnavailable, err.Error(), "", "")
+			response = failure(request, CodeCacheUnavailable, err.Error(), "", "")
+			return response
 		}
 		if cached, ok := c.cached(key); ok {
 			cached.Cached = true
-			return cached
+			response = cached
+			return response
 		}
-		response := c.queryProvider(ctx, provider, request)
+		response = c.queryProvider(ctx, provider, request)
 		if response.Success {
 			c.store(key, response, time.Duration(provider.CacheTTLSeconds)*time.Second)
 		}
 		return response
 	}
-	return c.queryProvider(ctx, provider, request)
+	response = c.queryProvider(ctx, provider, request)
+	return response
+}
+
+func recordFactQueryMetrics(request marketing.FactQueryRequest, response marketing.FactQueryResponse, startedAt time.Time) {
+	result := factQueryResult(response)
+	reason := factQueryReason(response)
+	metrics.Default.IncCounter("exmarketing_fact_query_total",
+		metrics.L("tenant_id", request.TenantID),
+		metrics.L("fact_code", request.FactCode),
+		metrics.L("result", result),
+		metrics.L("reason", reason),
+	)
+	metrics.Default.Observe("exmarketing_fact_query_latency_seconds", time.Since(startedAt).Seconds(),
+		metrics.L("tenant_id", request.TenantID),
+		metrics.L("fact_code", request.FactCode),
+		metrics.L("result", result),
+	)
+}
+
+func factQueryResult(response marketing.FactQueryResponse) string {
+	if response.Success && response.Cached {
+		return "cache_hit"
+	}
+	if response.Success {
+		return "success"
+	}
+	switch response.ErrorCode {
+	case CodeProviderTimeout:
+		return "timeout"
+	case CodeMappingFailed:
+		return "mapping_failed"
+	case CodeInvalidFactQuery, CodeProviderNotConfigured, CodeProviderDisabled, CodeProviderHostBlocked, CodeProviderPrivateIP:
+		return "rejected"
+	default:
+		return "failed"
+	}
+}
+
+func factQueryReason(response marketing.FactQueryResponse) string {
+	if response.Success && response.Cached {
+		return "cache_hit"
+	}
+	if response.Success {
+		return "ok"
+	}
+	if response.Reason != "" {
+		return strings.ToLower(response.Reason)
+	}
+	switch response.ErrorCode {
+	case CodeProviderTimeout:
+		return "provider_timeout"
+	case CodeProviderHTTPFailed:
+		return "provider_http_error"
+	case CodeProviderNotConfigured:
+		return "provider_not_configured"
+	case CodeProviderDisabled:
+		return "provider_disabled"
+	case CodeProviderHostBlocked, CodeProviderPrivateIP:
+		return "provider_blocked"
+	case CodeInvalidFactQuery:
+		return "invalid_request"
+	case CodeCacheUnavailable:
+		return "cache_unavailable"
+	default:
+		return "unknown"
+	}
 }
 
 func (c *Client) queryProvider(ctx context.Context, provider marketing.FactProvider, request marketing.FactQueryRequest) marketing.FactQueryResponse {

@@ -1,0 +1,249 @@
+groups:
+  - name: exmarketing-p0-p1
+    interval: 30s
+    rules:
+      - alert: ExMarketingWorkerAllStopped
+        expr: |
+          (
+            sum by (tenant_id, target_channel) (exmarketing_outbox_backlog{send_status=~"PENDING|FAILED"}) > 0
+            and on (tenant_id, target_channel)
+            max by (tenant_id, target_channel) (exmarketing_outbox_oldest_eligible_age_seconds > 120)
+          )
+          unless on (tenant_id, target_channel)
+          (sum by (tenant_id, target_channel) (rate(exmarketing_worker_claim_total{result="success"}[5m])) > 0)
+        for: 5m
+        labels:
+          service: exmarketing
+          severity: P0
+          owner: backend-oncall
+          tenant: '{{ $labels.tenant_id }}'
+          channel: '{{ $labels.target_channel }}'
+          dashboard: '${GRAFANA_BASE_URL}/d/exmarketing/activity-engine?var-tenant={{ $labels.tenant_id }}&var-channel={{ $labels.target_channel }}'
+          runbook: 'docs/runbooks/exmarketing-alerts.md#exmarketingworkerallstopped'
+        annotations:
+          summary: 'Outbox worker has stopped claiming eligible work'
+          description: 'Eligible backlog is present for tenant={{ $labels.tenant_id }} channel={{ $labels.target_channel }}, but successful claims have been zero for 5m.'
+          current_value: '{{ $value }}'
+          threshold: 'eligible backlog > 0, oldest eligible age > 120s, successful claim rate = 0'
+
+      - alert: ExMarketingDBWriteFailure
+        expr: |
+          sum by (operation, table) (
+            increase(exmarketing_db_operation_total{result="failed",operation=~"event_inbox_write|participation_write|grant_order_write|quota_reserve_write|quota_finalize_write|outbox_write|outbox_dlq_write|callback_write"}[5m])
+          ) >= 1
+        for: 2m
+        labels:
+          service: exmarketing
+          severity: P0
+          owner: dba-infra
+          tenant: global
+          channel: database
+          dashboard: '${GRAFANA_BASE_URL}/d/exmarketing/activity-engine?viewPanel=db'
+          runbook: 'docs/runbooks/exmarketing-alerts.md#exmarketingdbwritefailure'
+        annotations:
+          summary: 'Core database write path is failing'
+          description: 'operation={{ $labels.operation }} table={{ $labels.table }} has failed writes in the last 5m.'
+          current_value: '{{ $value }}'
+          threshold: '>= 1 failed core write over 5m'
+
+      - alert: ExMarketingQuotaOverDeductRisk
+        expr: |
+          sum by (tenant_id, quota_type, scope) (
+            increase(exmarketing_quota_fail_total{reason=~"quota_aggregate_conflict|quota_reservation_missing"}[5m])
+          ) >= 1
+        for: 2m
+        labels:
+          service: exmarketing
+          severity: P0
+          owner: backend-oncall
+          tenant: '{{ $labels.tenant_id }}'
+          channel: quota
+          dashboard: '${GRAFANA_BASE_URL}/d/exmarketing/activity-engine?var-tenant={{ $labels.tenant_id }}&viewPanel=quota'
+          runbook: 'docs/runbooks/exmarketing-alerts.md#exmarketingquotaoverdeductrisk'
+        annotations:
+          summary: 'Quota consistency risk detected'
+          description: 'quota_type={{ $labels.quota_type }} scope={{ $labels.scope }} reported aggregate conflict or missing reservation.'
+          current_value: '{{ $value }}'
+          threshold: '>= 1 quota consistency failure over 5m'
+
+      - alert: ExMarketingDLQGrowing
+        expr: |
+          sum by (tenant_id, target_channel) (
+            increase(exmarketing_outbox_dlq_total[10m])
+          ) >= 5
+        for: 5m
+        labels:
+          service: exmarketing
+          severity: P1
+          owner: backend-oncall
+          tenant: '{{ $labels.tenant_id }}'
+          channel: '{{ $labels.target_channel }}'
+          dashboard: '${GRAFANA_BASE_URL}/d/exmarketing/activity-engine?var-tenant={{ $labels.tenant_id }}&var-channel={{ $labels.target_channel }}&viewPanel=dlq'
+          runbook: 'docs/runbooks/exmarketing-alerts.md#exmarketingdlqgrowing'
+        annotations:
+          summary: 'Outbox DLQ is growing'
+          description: 'New DLQ messages are increasing for tenant={{ $labels.tenant_id }} channel={{ $labels.target_channel }}.'
+          current_value: '{{ $value }}'
+          threshold: '>= 5 new DLQ messages over 10m'
+
+      - alert: ExMarketingOutboxBacklogHigh
+        expr: |
+          sum by (tenant_id, target_channel) (exmarketing_outbox_backlog{send_status=~"PENDING|FAILED"}) > 100
+          and on (tenant_id, target_channel)
+          max by (tenant_id, target_channel) (exmarketing_outbox_oldest_eligible_age_seconds > 60)
+        for: 5m
+        labels:
+          service: exmarketing
+          severity: P1
+          owner: backend-oncall
+          tenant: '{{ $labels.tenant_id }}'
+          channel: '{{ $labels.target_channel }}'
+          dashboard: '${GRAFANA_BASE_URL}/d/exmarketing/activity-engine?var-tenant={{ $labels.tenant_id }}&var-channel={{ $labels.target_channel }}&viewPanel=outbox'
+          runbook: 'docs/runbooks/exmarketing-alerts.md#exmarketingoutboxbackloghigh'
+        annotations:
+          summary: 'Outbox eligible backlog is high'
+          description: 'tenant={{ $labels.tenant_id }} channel={{ $labels.target_channel }} has high eligible backlog and old pending messages.'
+          current_value: '{{ $value }}'
+          threshold: 'backlog > 100 and oldest eligible age > 60s for 5m'
+
+      - alert: ExMarketingCallbackFailRateHigh
+        expr: |
+          (
+            sum by (tenant_id, grant_channel) (increase(exmarketing_reward_callback_total{result=~"rejected|failed|conflict"}[5m])) >= 5
+          )
+          and on (tenant_id, grant_channel)
+          (
+            sum by (tenant_id, grant_channel) (rate(exmarketing_reward_callback_total{result=~"rejected|failed|conflict"}[5m]))
+            /
+            clamp_min(sum by (tenant_id, grant_channel) (rate(exmarketing_reward_callback_total[5m])), 0.001)
+            > 0.05
+          )
+        for: 5m
+        labels:
+          service: exmarketing
+          severity: P1
+          owner: backend-oncall
+          tenant: '{{ $labels.tenant_id }}'
+          channel: '{{ $labels.grant_channel }}'
+          dashboard: '${GRAFANA_BASE_URL}/d/exmarketing/activity-engine?var-tenant={{ $labels.tenant_id }}&var-channel={{ $labels.grant_channel }}&viewPanel=callback'
+          runbook: 'docs/runbooks/exmarketing-alerts.md#exmarketingcallbackfailratehigh'
+        annotations:
+          summary: 'Reward callback failure rate is high'
+          description: 'Callback failures are above rate and count thresholds for tenant={{ $labels.tenant_id }} channel={{ $labels.grant_channel }}.'
+          current_value: '{{ $value }}'
+          threshold: 'failed callbacks >= 5 and failure rate > 5% over 5m'
+
+  - name: exmarketing-p2-p3
+    interval: 30s
+    rules:
+      - alert: ExMarketingEventIntakeErrorRateHigh
+        expr: |
+          (
+            sum by (tenant_id, source_system, event_type) (increase(exmarketing_event_intake_total{result=~"failed|rejected"}[5m])) >= 20
+          )
+          and on (tenant_id, source_system, event_type)
+          (
+            sum by (tenant_id, source_system, event_type) (rate(exmarketing_event_intake_total{result=~"failed|rejected"}[5m]))
+            /
+            clamp_min(sum by (tenant_id, source_system, event_type) (rate(exmarketing_event_intake_total[5m])), 0.001)
+            > 0.05
+          )
+        for: 5m
+        labels:
+          service: exmarketing
+          severity: P2
+          owner: backend-oncall
+          tenant: '{{ $labels.tenant_id }}'
+          channel: '{{ $labels.source_system }}'
+          dashboard: '${GRAFANA_BASE_URL}/d/exmarketing/activity-engine?var-tenant={{ $labels.tenant_id }}&viewPanel=intake'
+          runbook: 'docs/runbooks/exmarketing-alerts.md#exmarketingeventintakeerrorratehigh'
+        annotations:
+          summary: 'Event intake error rate is elevated'
+          description: 'source={{ $labels.source_system }} event_type={{ $labels.event_type }} is above error thresholds.'
+          current_value: '{{ $value }}'
+          threshold: 'failed/rejected events >= 20 and error rate > 5% over 5m'
+
+      - alert: ExMarketingClaimLatencyHigh
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (tenant_id, target_channel, le) (rate(exmarketing_worker_claim_latency_seconds_bucket[5m]))
+          ) > 60
+        for: 5m
+        labels:
+          service: exmarketing
+          severity: P2
+          owner: backend-oncall
+          tenant: '{{ $labels.tenant_id }}'
+          channel: '{{ $labels.target_channel }}'
+          dashboard: '${GRAFANA_BASE_URL}/d/exmarketing/activity-engine?var-tenant={{ $labels.tenant_id }}&var-channel={{ $labels.target_channel }}&viewPanel=worker'
+          runbook: 'docs/runbooks/exmarketing-alerts.md#exmarketingclaimlatencyhigh'
+        annotations:
+          summary: 'Worker claim latency p95 is high'
+          description: 'Outbox eligible-to-claim latency p95 is above 60s.'
+          current_value: '{{ $value }}'
+          threshold: 'p95 > 60s for 5m'
+
+      - alert: ExMarketingRewardRetrySpike
+        expr: |
+          sum by (tenant_id, target_channel) (
+            increase(exmarketing_reward_command_total{result="retry"}[5m])
+          ) >= 20
+        for: 5m
+        labels:
+          service: exmarketing
+          severity: P2
+          owner: backend-oncall
+          tenant: '{{ $labels.tenant_id }}'
+          channel: '{{ $labels.target_channel }}'
+          dashboard: '${GRAFANA_BASE_URL}/d/exmarketing/activity-engine?var-tenant={{ $labels.tenant_id }}&var-channel={{ $labels.target_channel }}&viewPanel=reward-command'
+          runbook: 'docs/runbooks/exmarketing-alerts.md#exmarketingrewardretryspike'
+        annotations:
+          summary: 'Reward command retry volume is elevated'
+          description: 'Reward command retries spiked for tenant={{ $labels.tenant_id }} channel={{ $labels.target_channel }}.'
+          current_value: '{{ $value }}'
+          threshold: '>= 20 retries over 5m'
+
+      - alert: ExMarketingFactQueryFailRateHigh
+        expr: |
+          (
+            sum by (tenant_id, fact_code) (increase(exmarketing_fact_query_total{result=~"failed|rejected|timeout|mapping_failed|field_missing|provider_unavailable"}[5m])) >= 10
+          )
+          and on (tenant_id, fact_code)
+          (
+            sum by (tenant_id, fact_code) (rate(exmarketing_fact_query_total{result=~"failed|rejected|timeout|mapping_failed|field_missing|provider_unavailable"}[5m]))
+            /
+            clamp_min(sum by (tenant_id, fact_code) (rate(exmarketing_fact_query_total[5m])), 0.001)
+            > 0.10
+          )
+        for: 5m
+        labels:
+          service: exmarketing
+          severity: P2
+          owner: backend-oncall
+          tenant: '{{ $labels.tenant_id }}'
+          channel: fact-query
+          dashboard: '${GRAFANA_BASE_URL}/d/exmarketing/activity-engine?var-tenant={{ $labels.tenant_id }}&viewPanel=fact-query'
+          runbook: 'docs/runbooks/exmarketing-alerts.md#exmarketingfactqueryfailratehigh'
+        annotations:
+          summary: 'Fact Query failure rate is high'
+          description: 'fact_code={{ $labels.fact_code }} is above failure rate and count thresholds.'
+          current_value: '{{ $value }}'
+          threshold: 'failed Fact Query >= 10 and failure rate > 10% over 5m'
+
+      - alert: ExMarketingScrapeTargetDown
+        expr: up{job="exmarketing"} == 0
+        for: 2m
+        labels:
+          service: exmarketing
+          severity: P3
+          owner: platform-observability
+          tenant: global
+          channel: scrape
+          dashboard: '${GRAFANA_BASE_URL}/d/exmarketing/activity-engine?viewPanel=scrape'
+          runbook: 'docs/runbooks/exmarketing-alerts.md#exmarketingscrapetargetdown'
+        annotations:
+          summary: 'Prometheus cannot scrape ExMarketing'
+          description: 'Prometheus target {{ $labels.instance }} has been down for 2m.'
+          current_value: '{{ $value }}'
+          threshold: 'up == 0 for 2m'

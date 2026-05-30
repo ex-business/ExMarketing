@@ -829,6 +829,28 @@
     .activity-json-grid textarea {
       min-height: 180px;
     }
+    .editor-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+    .editor-grid .wide {
+      grid-column: 1 / -1;
+    }
+    .editor-grid textarea {
+      min-height: 96px;
+    }
+    .editor-preview {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+    .editor-preview pre {
+      min-height: 120px;
+      margin: 0;
+    }
     .form-error {
       color: var(--red);
       font-size: 12px;
@@ -1046,7 +1068,9 @@
       .field-grid,
       .activity-filter-grid,
       .activity-form-grid,
-      .activity-json-grid {
+      .activity-json-grid,
+      .editor-grid,
+      .editor-preview {
         grid-template-columns: 1fr;
       }
     }
@@ -1346,6 +1370,125 @@
               <div class="form-error" id="activityTriggerEventsError"></div>
             </div>
           </div>
+          <h3 class="panel-title" style="margin-top:14px">规则编辑器</h3>
+          <div class="editor-grid">
+            <div>
+              <label for="ruleEditorCode">ruleCode</label>
+              <input id="ruleEditorCode" placeholder="FIRST_DEPOSIT_AMOUNT">
+            </div>
+            <div>
+              <label for="ruleEditorPhase">phase</label>
+              <select id="ruleEditorPhase">
+                <option>MATCH</option>
+                <option>QUALIFY</option>
+                <option>REWARD</option>
+                <option>RISK</option>
+                <option>LIMIT</option>
+              </select>
+            </div>
+            <div>
+              <label for="ruleEditorType">type</label>
+              <select id="ruleEditorType">
+                <option>CONDITION</option>
+                <option>FORMULA</option>
+              </select>
+            </div>
+            <div>
+              <label for="ruleEditorSort">sort / enabled</label>
+              <input id="ruleEditorSort" type="number" value="1">
+            </div>
+            <div>
+              <label for="ruleEditorField">fieldPath</label>
+              <input id="ruleEditorField" placeholder="attributes.amount">
+            </div>
+            <div>
+              <label for="ruleEditorOp">op</label>
+              <select id="ruleEditorOp">
+                <option>=</option>
+                <option>==</option>
+                <option>!=</option>
+                <option>&lt;&gt;</option>
+                <option>&gt;</option>
+                <option>&gt;=</option>
+                <option>&lt;</option>
+                <option>&lt;=</option>
+                <option>IN</option>
+                <option>NOT_IN</option>
+              </select>
+            </div>
+            <div>
+              <label for="ruleEditorValue">value</label>
+              <input id="ruleEditorValue" placeholder="100.00 / true / A,B">
+            </div>
+            <div>
+              <label for="ruleEditorReason">reasonCode</label>
+              <input id="ruleEditorReason" placeholder="AMOUNT_NOT_MET">
+            </div>
+            <div class="wide">
+              <label for="ruleEditorConfig">高级 ruleConfig JSON</label>
+              <textarea id="ruleEditorConfig" placeholder='{"logic":"AND","conditions":[...]}'></textarea>
+              <div class="form-error" id="ruleEditorError"></div>
+            </div>
+          </div>
+          <div class="ops">
+            <button class="button secondary" type="button" onclick="appendRuleFromEditor()">添加规则</button>
+            <button class="button secondary" type="button" onclick="formatJsonEditor('activityRulesJson')">格式化 rules JSON</button>
+            <button class="button secondary" type="button" onclick="renderActivityConfigPreview()">刷新预览</button>
+          </div>
+          <h3 class="panel-title" style="margin-top:14px">奖励编辑器</h3>
+          <div class="editor-grid">
+            <div>
+              <label for="rewardEditorCode">rewardCode</label>
+              <input id="rewardEditorCode" placeholder="FIRST_DEPOSIT_RATIO">
+            </div>
+            <div>
+              <label for="rewardEditorType">rewardType</label>
+              <select id="rewardEditorType" onchange="syncRewardCalculateOptions()">
+                <option>BONUS</option>
+                <option>CASH</option>
+                <option>POINT</option>
+                <option>COUPON</option>
+                <option>GIFT</option>
+                <option>DRAW_CHANCE</option>
+                <option>MEMBERSHIP</option>
+              </select>
+            </div>
+            <div>
+              <label for="rewardEditorCalculate">calculateType</label>
+              <select id="rewardEditorCalculate">
+                <option>FIXED</option>
+                <option>RATIO</option>
+                <option>LADDER</option>
+                <option>RANDOM</option>
+                <option>PROBABILITY</option>
+                <option>POOL_SPLIT</option>
+              </select>
+            </div>
+            <div>
+              <label for="rewardEditorGrant">grantMode / channel</label>
+              <select id="rewardEditorGrant">
+                <option value="AUTO|HTTP">AUTO / HTTP</option>
+                <option value="AUTO|WEBHOOK">AUTO / WEBHOOK</option>
+                <option value="AUTO|MQ">AUTO / MQ</option>
+                <option value="MANUAL|">MANUAL</option>
+                <option value="MANUAL_EXPORT|MANUAL_EXPORT">MANUAL_EXPORT</option>
+              </select>
+            </div>
+            <div>
+              <label for="rewardEditorFlow">flowMultiple</label>
+              <input id="rewardEditorFlow" placeholder="BONUS only">
+            </div>
+            <div class="wide">
+              <label for="rewardEditorConfig">rewardConfig JSON</label>
+              <textarea id="rewardEditorConfig" placeholder='{"amount":"10.00","currency":"CNY","targetRef":"https://wallet.example.com/reward"}'></textarea>
+              <div class="form-error" id="rewardEditorError"></div>
+            </div>
+          </div>
+          <div class="ops">
+            <button class="button secondary" type="button" onclick="appendRewardFromEditor()">添加奖励</button>
+            <button class="button secondary" type="button" onclick="formatJsonEditor('activityRewardsJson')">格式化 rewards JSON</button>
+            <button class="button secondary" type="button" onclick="renderActivityConfigPreview()">刷新预览</button>
+          </div>
           <div class="activity-json-grid">
             <div>
               <label for="activityConfigJson">config</label>
@@ -1361,6 +1504,16 @@
               <label for="activityRewardsJson">rewards</label>
               <textarea id="activityRewardsJson"></textarea>
               <div class="form-error" id="activityRewardsJsonError"></div>
+            </div>
+          </div>
+          <div class="editor-preview">
+            <div>
+              <label>最终 JSON 预览</label>
+              <pre class="output" id="activityConfigJsonPreview"></pre>
+            </div>
+            <div>
+              <label>人类可读摘要</label>
+              <pre class="output" id="activityConfigSummaryPreview"></pre>
             </div>
           </div>
           <div class="readonly-box">创建提交基础字段、config、rules、rewards；编辑只提交后端允许更新的字段，不提交 id、tenantId、activityCode、activityType、rules、rewards。后端校验失败会显示在下方结果中。</div>
@@ -1379,6 +1532,41 @@
           <div class="panel-head"><h3 class="panel-title">Quota 创建</h3></div>
           <div class="detail-body">
             <div class="readonly-box">当前明确 API 只有 <code>POST /admin/v1/quotas</code>。创建成功展示后端返回；未配置的 BUDGET / STOCK / USER_LIMIT 在模拟解释中按 unlimited 表达。</div>
+            <div class="editor-grid">
+              <div>
+                <label for="quotaEditorActivityId">activityId</label>
+                <input id="quotaEditorActivityId" placeholder="act_xxx">
+              </div>
+              <div>
+                <label for="quotaEditorType">quotaType</label>
+                <select id="quotaEditorType" onchange="syncQuotaDefaults()">
+                  <option>BUDGET</option>
+                  <option>STOCK</option>
+                  <option>USER_LIMIT</option>
+                  <option>DAILY_LIMIT</option>
+                </select>
+              </div>
+              <div>
+                <label for="quotaEditorScope">scope</label>
+                <select id="quotaEditorScope">
+                  <option>ACTIVITY</option>
+                  <option>USER</option>
+                  <option>IP</option>
+                  <option>DEVICE</option>
+                </select>
+              </div>
+              <div>
+                <label for="quotaEditorScopeKey">scopeKey</label>
+                <input id="quotaEditorScopeKey" placeholder="TOTAL / rewardCode / subject.id">
+              </div>
+              <div>
+                <label for="quotaEditorTotal">totalValue</label>
+                <input id="quotaEditorTotal" placeholder="10000.00">
+              </div>
+            </div>
+            <div class="ops">
+              <button class="button secondary" type="button" onclick="buildQuotaFromEditor()">生成 Quota JSON</button>
+            </div>
             <textarea id="quota"></textarea>
             <div class="ops">
               <button class="button" onclick="postJson('/admin/v1/quotas', 'quota', 'quotaResult')">创建 Quota</button>
@@ -2973,6 +3161,218 @@ function renderSmallTable(items, fields) {
   `;
 }
 
+const amountRewardTypes = new Set(['BONUS', 'CASH']);
+const nonAmountRewardTypes = new Set(['POINT', 'COUPON', 'GIFT', 'DRAW_CHANCE', 'MEMBERSHIP']);
+const allCalculateTypes = ['FIXED', 'RATIO', 'LADDER', 'RANDOM', 'PROBABILITY', 'POOL_SPLIT'];
+const supportedFieldPrefixes = ['attributes.', 'facts.', 'state.activity.', 'state.subject.', 'state.quota.', 'state.exclusive.', 'state.plugin.'];
+const supportedExactFields = new Set(['eventId', 'eventType', 'sourceSystem', 'tenantId', 'subject.type', 'subject.id', 'biz.bizType', 'biz.bizId', 'occurredAt']);
+
+function supportedEditorField(path) {
+  const value = String(path || '').trim();
+  return supportedExactFields.has(value) || supportedFieldPrefixes.some(prefix => value.startsWith(prefix));
+}
+
+function syncRewardCalculateOptions() {
+  const rewardType = valueOf('rewardEditorType');
+  const calculate = document.getElementById('rewardEditorCalculate');
+  if (!calculate) return;
+  for (const option of calculate.options) {
+    option.disabled = nonAmountRewardTypes.has(rewardType) && option.value !== 'FIXED';
+  }
+  if (nonAmountRewardTypes.has(rewardType)) calculate.value = 'FIXED';
+}
+
+function parseEditorJSON(id, fallback, errorId) {
+  const raw = valueOf(id);
+  if (!raw) return fallback;
+  try {
+    return JSON.parse(raw);
+  } catch (err) {
+    const target = document.getElementById(errorId);
+    if (target) target.textContent = `${id}: JSON 解析失败: ${err.message}`;
+    return undefined;
+  }
+}
+
+function parseEditorScalar(raw, op) {
+  const text = String(raw || '').trim();
+  if (op === 'IN' || op === 'NOT_IN') return text.split(',').map(item => item.trim()).filter(Boolean);
+  if (text === 'true') return true;
+  if (text === 'false') return false;
+  if (text === 'null') return null;
+  if (/^-?\d+(\.\d+)?$/.test(text)) return text;
+  return text;
+}
+
+function appendRuleFromEditor() {
+  setFieldError('ruleEditor', '');
+  const rules = parseEditorJSON('activityRulesJson', [], 'ruleEditorError');
+  if (!Array.isArray(rules)) {
+    document.getElementById('ruleEditorError').textContent = 'activityRulesJson 必须是数组。';
+    return;
+  }
+  const config = parseEditorJSON('ruleEditorConfig', null, 'ruleEditorError');
+  if (config === undefined) return;
+  const field = valueOf('ruleEditorField');
+  const op = valueOf('ruleEditorOp');
+  const ruleConfig = config || {
+    logic: 'AND',
+    conditions: [{field, op, value: parseEditorScalar(valueOf('ruleEditorValue'), op)}]
+  };
+  if (!config && !supportedEditorField(field)) {
+    document.getElementById('ruleEditorError').textContent = 'fieldPath 不在白名单内；业务字段必须放在 attributes/facts/state 路径下。';
+    return;
+  }
+  rules.push({
+    ruleCode: valueOf('ruleEditorCode') || `RULE_${rules.length + 1}`,
+    rulePhase: valueOf('ruleEditorPhase') || 'QUALIFY',
+    ruleType: valueOf('ruleEditorType') || 'CONDITION',
+    ruleConfig,
+    sort: Number(valueOf('ruleEditorSort') || rules.length),
+    enabled: true,
+    reasonCode: valueOf('ruleEditorReason') || undefined,
+    version: 1
+  });
+  setJsonSample('activityRulesJson', rules);
+  document.getElementById('ruleEditorError').textContent = '';
+  renderActivityConfigPreview();
+}
+
+function appendRewardFromEditor() {
+  setFieldError('rewardEditor', '');
+  const rewards = parseEditorJSON('activityRewardsJson', [], 'rewardEditorError');
+  if (!Array.isArray(rewards)) {
+    document.getElementById('rewardEditorError').textContent = 'activityRewardsJson 必须是数组。';
+    return;
+  }
+  const rewardType = valueOf('rewardEditorType');
+  const calculateType = valueOf('rewardEditorCalculate');
+  if (nonAmountRewardTypes.has(rewardType) && calculateType !== 'FIXED') {
+    document.getElementById('rewardEditorError').textContent = `rewards[${rewards.length}].calculateType: ${rewardType} 当前只支持 FIXED。`;
+    return;
+  }
+  const rewardConfig = parseEditorJSON('rewardEditorConfig', {}, 'rewardEditorError');
+  if (rewardConfig === undefined) return;
+  if (amountRewardTypes.has(rewardType) && !rewardConfig.currency) {
+    document.getElementById('rewardEditorError').textContent = `rewards[${rewards.length}].rewardConfig.currency: 金额类奖励必须配置 currency。`;
+    return;
+  }
+  if ((rewardType === 'POINT' || rewardType === 'DRAW_CHANCE') && rewardConfig.currency) {
+    document.getElementById('rewardEditorError').textContent = `rewards[${rewards.length}].rewardConfig.currency: ${rewardType} 不支持 currency。`;
+    return;
+  }
+  const grantParts = (valueOf('rewardEditorGrant') || 'AUTO|HTTP').split('|');
+  rewards.push({
+    rewardCode: valueOf('rewardEditorCode') || `REWARD_${rewards.length + 1}`,
+    rewardType,
+    calculateType,
+    rewardConfig,
+    flowMultiple: valueOf('rewardEditorFlow') || undefined,
+    grantMode: grantParts[0],
+    grantChannel: grantParts[1] || undefined,
+    enabled: true,
+    version: 1
+  });
+  setJsonSample('activityRewardsJson', rewards);
+  document.getElementById('rewardEditorError').textContent = '';
+  renderActivityConfigPreview();
+}
+
+function validateEditorRewards(rewards) {
+  for (let i = 0; i < rewards.length; i++) {
+    const reward = rewards[i] || {};
+    if (nonAmountRewardTypes.has(reward.rewardType) && reward.calculateType !== 'FIXED') {
+      return `rewards[${i}].calculateType: ${reward.rewardType} 当前只支持 FIXED。`;
+    }
+    if (amountRewardTypes.has(reward.rewardType) && !reward.rewardConfig?.currency) {
+      return `rewards[${i}].rewardConfig.currency: 金额类奖励必须配置 currency。`;
+    }
+  }
+  return '';
+}
+
+function renderActivityConfigPreview() {
+  const config = parseJSONField('activityConfigJson', {});
+  const rules = parseJSONField('activityRulesJson', []);
+  const rewards = parseJSONField('activityRewardsJson', []);
+  if (config === undefined || rules === undefined || rewards === undefined) return;
+  const quota = parseJSONField('quota', null);
+  const error = Array.isArray(rewards) ? validateEditorRewards(rewards) : 'rewards 必须是数组。';
+  setFieldError('activityRewardsJson', error);
+  const finalJSON = {rules: rules || [], rewards: rewards || [], quotas: quota ? [quota] : 'unlimited'};
+  const jsonTarget = document.getElementById('activityConfigJsonPreview');
+  const summaryTarget = document.getElementById('activityConfigSummaryPreview');
+  if (jsonTarget) jsonTarget.textContent = JSON.stringify(finalJSON, null, 2);
+  if (summaryTarget) summaryTarget.textContent = [
+    summarizeRules(rules || []),
+    summarizeRewards(rewards || []),
+    summarizeQuota(quota)
+  ].join('\n\n');
+}
+
+function summarizeRules(rules) {
+  if (!rules.length) return '规则: 未配置';
+  return rules.map(rule => {
+    const conditions = rule.ruleConfig?.conditions || [];
+    const logic = rule.ruleConfig?.logic || 'AND';
+    const text = conditions.map(item => `${item.field} ${item.op} ${formatValue(item.value)}`).join(` ${logic} `);
+    return `${rule.rulePhase || '-'}: ${rule.enabled === false ? 'SKIPPED ' : ''}${text || rule.ruleType || '-'}`;
+  }).join('\n');
+}
+
+function summarizeRewards(rewards) {
+  if (!rewards.length) return '奖励: 未配置';
+  return rewards.map(reward => {
+    const cfg = reward.rewardConfig || {};
+    const unit = cfg.currency || cfg.unit || cfg.pointType || '';
+    const target = cfg.targetRef ? ` -> ${cfg.targetRef}` : '';
+    return `${reward.rewardType || '-'} ${reward.calculateType || '-'}: ${reward.rewardCode || '-'} ${unit} ${reward.flowMultiple ? `flow ${reward.flowMultiple}x ` : ''}${reward.grantMode || '-'}/${reward.grantChannel || 'MANUAL'}${target}`;
+  }).join('\n');
+}
+
+function summarizeQuota(quota) {
+  if (!quota) return 'Quota: unlimited';
+  return `Quota: ${quota.quotaType || '-'} ${quota.scope || '-'} ${quota.scopeKey || '-'} total ${quota.totalValue || '-'}`;
+}
+
+function formatJsonEditor(id) {
+  const parsed = parseJSONField(id, undefined);
+  if (parsed === undefined) return;
+  setJsonSample(id, parsed);
+  renderActivityConfigPreview();
+}
+
+function syncQuotaDefaults() {
+  const type = valueOf('quotaEditorType');
+  if (type === 'BUDGET') {
+    setValue('quotaEditorScope', 'ACTIVITY');
+    setValue('quotaEditorScopeKey', 'TOTAL');
+  } else if (type === 'STOCK') {
+    setValue('quotaEditorScope', 'ACTIVITY');
+    setValue('quotaEditorScopeKey', valueOf('rewardEditorCode') || 'REWARD_CODE');
+  } else if (type === 'USER_LIMIT') {
+    setValue('quotaEditorScope', 'USER');
+    setValue('quotaEditorScopeKey', 'subject.id');
+  } else if (type === 'DAILY_LIMIT') {
+    setValue('quotaEditorScope', 'USER');
+    setValue('quotaEditorScopeKey', 'subject.id:activityLocalDate');
+  }
+}
+
+function buildQuotaFromEditor() {
+  const quota = {
+    operator: 'ops',
+    tenantId: valueOf('activityTenantId') || 'site_001',
+    activityId: valueOf('quotaEditorActivityId') || selectedActivityId || 'act_xxx',
+    quotaType: valueOf('quotaEditorType') || 'BUDGET',
+    scope: valueOf('quotaEditorScope') || 'ACTIVITY',
+    scopeKey: valueOf('quotaEditorScopeKey') || 'TOTAL',
+    totalValue: valueOf('quotaEditorTotal') || '0'
+  };
+  setJsonSample('quota', quota);
+  renderActivityConfigPreview();
+}
+
 function metric(label, value) {
   return `<div class="metric"><div class="metric-label">${escapeHtml(label)}</div><div class="metric-value">${escapeHtml(value)}</div></div>`;
 }
@@ -3141,6 +3541,13 @@ function validateActivityPayload(payload, requireCreateFields) {
     setFieldError('activityConfigJson', 'entry.tenantIds 只能为空或包含当前 tenantId。');
     ok = false;
   }
+  if (Array.isArray(payload.rewards)) {
+    const rewardError = validateEditorRewards(payload.rewards);
+    if (rewardError) {
+      setFieldError('activityRewardsJson', rewardError);
+      ok = false;
+    }
+  }
   if (!ok) setActivityFormMessage('保存前校验未通过，请检查字段错误。', 'error');
   return ok;
 }
@@ -3182,6 +3589,7 @@ function populateActivityForm(item, mode) {
   setJsonSample('activityRulesJson', item.rules || []);
   setJsonSample('activityRewardsJson', item.rewards || []);
   clearActivityFormErrors();
+  renderActivityConfigPreview();
 }
 
 function prepareCopySelectedActivity() {
@@ -3585,6 +3993,23 @@ function fillActivitySample() {
   setJsonSample('activityRulesJson', sample.rules);
   setJsonSample('activityRewardsJson', sample.rewards);
   clearActivityFormErrors();
+  setValue('ruleEditorCode', 'AMOUNT_QUALIFY');
+  setValue('ruleEditorPhase', 'QUALIFY');
+  setValue('ruleEditorType', 'CONDITION');
+  setValue('ruleEditorSort', '1');
+  setValue('ruleEditorField', 'attributes.amount');
+  setValue('ruleEditorOp', '>=');
+  setValue('ruleEditorValue', '100.00');
+  setValue('ruleEditorReason', 'AMOUNT_NOT_MET');
+  setJsonSample('ruleEditorConfig', {logic: 'AND', conditions: [{field: 'attributes.amount', op: '>=', value: '100.00'}]});
+  setValue('rewardEditorCode', 'RATIO_BONUS');
+  setValue('rewardEditorType', 'BONUS');
+  syncRewardCalculateOptions();
+  setValue('rewardEditorCalculate', 'RATIO');
+  setValue('rewardEditorGrant', 'AUTO|HTTP');
+  setValue('rewardEditorFlow', '3');
+  setJsonSample('rewardEditorConfig', sample.rewards[0].rewardConfig);
+  renderActivityConfigPreview();
 }
 
 function fillQuotaSample() {
@@ -3597,6 +4022,12 @@ function fillQuotaSample() {
     scopeKey: 'TOTAL',
     totalValue: '10000.00'
   });
+  setValue('quotaEditorActivityId', 'act_xxx');
+  setValue('quotaEditorType', 'BUDGET');
+  setValue('quotaEditorScope', 'ACTIVITY');
+  setValue('quotaEditorScopeKey', 'TOTAL');
+  setValue('quotaEditorTotal', '10000.00');
+  renderActivityConfigPreview();
 }
 
 function fillEventSample() {

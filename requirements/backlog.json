@@ -708,12 +708,12 @@
       "id": "2026-05-29-admin-rule-reward-quota-editors",
       "title": "admin-rule-reward-quota-editors: 规则奖励额度编辑器",
       "description": "完整管理后台业务配置页任务。补齐规则编辑器、奖励编辑器、预算库存次数限制编辑器，支持 JSON Schema 驱动表单和高级 JSON 模式。验收：MATCH/QUALIFY/REWARD/RISK/LIMIT 可配置；FIXED/RATIO/LADDER/RANDOM/PROBABILITY/POOL_SPLIT 可配置；非法配置阻止提交。",
-      "status": "ANALYSIS_READY",
+      "status": "COMMIT_READY",
       "risk": "高",
-      "score": 0,
+      "score": 95,
       "taskDir": "tasks/2026-05-29-admin-rule-reward-quota-editors",
       "createdAt": "2026-05-29T14:13:00.782063Z",
-      "updatedAt": "2026-05-29T14:13:06.834519Z"
+      "updatedAt": "2026-05-30T07:13:12.134461Z"
     },
     {
       "id": "2026-05-29-admin-simulation-approval-pages",

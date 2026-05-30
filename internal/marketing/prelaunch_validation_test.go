@@ -481,6 +481,57 @@ func TestCreateActivityCommandValidatesRewardSchemaBoundaries(t *testing.T) {
 		})
 	}
 
+	invalidNonAmountCombos := map[string]struct {
+		rewardType    RewardType
+		calculateType CalculateType
+		config        string
+	}{
+		"point ratio": {
+			rewardType:    RewardPoint,
+			calculateType: CalculateRatio,
+			config:        `{"points":"10","unit":"POINT","baseField":"attributes.amount","rate":"1","targetRef":"https://points.example.com/reward"}`,
+		},
+		"coupon ladder": {
+			rewardType:    RewardCoupon,
+			calculateType: CalculateLadder,
+			config:        `{"couponTemplateId":"WELCOME_10","quantity":"1","field":"attributes.amount","ladders":[{"min":"0","max":"100","amount":"1"}],"targetRef":"https://coupon.example.com/reward"}`,
+		},
+		"gift random": {
+			rewardType:    RewardGift,
+			calculateType: CalculateRandom,
+			config:        `{"giftSkuId":"SKU_1","quantity":"1","minAmount":"1","maxAmount":"2","step":"1","targetRef":"https://gift.example.com/reward"}`,
+		},
+		"draw chance probability": {
+			rewardType:    RewardDrawChance,
+			calculateType: CalculateProbability,
+			config:        `{"drawPoolCode":"POOL_1","chanceCount":"1","items":[{"itemCode":"A","weight":"100","amount":"0"}],"targetRef":"https://draw.example.com/reward"}`,
+		},
+		"membership pool split": {
+			rewardType:    RewardMembership,
+			calculateType: CalculatePoolSplit,
+			config:        `{"membershipPlanId":"VIP_30","durationDays":"30","poolAmount":"100","splitBy":"COUNT","countField":"attributes.amount","targetRef":"https://member.example.com/reward"}`,
+		},
+	}
+	for name, tc := range invalidNonAmountCombos {
+		t.Run(name, func(t *testing.T) {
+			cmd := validPrelaunchActivity()
+			cmd.Rewards[0] = Reward{
+				Code:          "NON_AMOUNT_INVALID",
+				Type:          tc.rewardType,
+				CalculateType: tc.calculateType,
+				Config:        []byte(tc.config),
+				GrantMode:     GrantAuto,
+				GrantChannel:  GrantHTTP,
+				Enabled:       true,
+				Version:       1,
+			}
+			err := cmd.Validate(now)
+			if err == nil || !strings.Contains(err.Error(), "calculateType is unsupported for rewardType") {
+				t.Fatalf("expected calculateType matrix rejection, got %v", err)
+			}
+		})
+	}
+
 	for name, mutate := range map[string]func(*CreateActivityCommand){
 		"cash flow multiple": func(cmd *CreateActivityCommand) {
 			cmd.Rewards[0].Type = RewardCash

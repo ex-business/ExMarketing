@@ -1,0 +1,53 @@
+{
+  "requirementId": "2026-05-29-security-threat-model",
+  "updatedAt": "2026-05-30T12:42:36.182218Z",
+  "agents": {
+    "analysis": {
+      "status": "DONE",
+      "startedAt": "2026-05-30T12:30:41.409911Z",
+      "finishedAt": "2026-05-30T12:33:08.236372Z",
+      "output": "tasks/2026-05-29-security-threat-model/analysis.md",
+      "log": "tasks/2026-05-29-security-threat-model/runs/20260530T123041Z-analysis.log",
+      "nextStatus": "REVIEW_READY"
+    },
+    "commit": {
+      "status": "RUNNING",
+      "startedAt": "2026-05-30T12:42:36.182214Z",
+      "output": "tasks/2026-05-29-security-threat-model/commit.md",
+      "log": "tasks/2026-05-29-security-threat-model/runs/20260530T124236Z-commit.log",
+      "pid": 2230
+    },
+    "dev": {
+      "status": "DONE",
+      "startedAt": "2026-05-30T12:34:07.71217Z",
+      "finishedAt": "2026-05-30T12:39:30.948915Z",
+      "output": "tasks/2026-05-29-security-threat-model/implementation.md",
+      "log": "tasks/2026-05-29-security-threat-model/runs/20260530T123407Z-dev.log",
+      "nextStatus": "REVIEW_PASS"
+    },
+    "review": {
+      "status": "DONE",
+      "startedAt": "2026-05-30T12:33:08.606488Z",
+      "finishedAt": "2026-05-30T12:34:07.707257Z",
+      "output": "tasks/2026-05-29-security-threat-model/review.md",
+      "log": "tasks/2026-05-29-security-threat-model/runs/20260530T123308Z-review.log",
+      "nextStatus": "REVIEW_PASS"
+    },
+    "test": {
+      "status": "DONE",
+      "startedAt": "2026-05-30T12:39:31.002621Z",
+      "finishedAt": "2026-05-30T12:42:36.156759Z",
+      "output": "tasks/2026-05-29-security-threat-model/test.md",
+      "log": "tasks/2026-05-29-security-threat-model/runs/20260530T123931Z-test.log",
+      "nextStatus": "COMMIT_READY"
+    },
+    "test-plan": {
+      "status": "DONE",
+      "startedAt": "2026-05-30T12:34:07.743704Z",
+      "finishedAt": "2026-05-30T12:35:34.284107Z",
+      "output": "tasks/2026-05-29-security-threat-model/test-plan.md",
+      "log": "tasks/2026-05-29-security-threat-model/runs/20260530T123407Z-test-plan.log",
+      "nextStatus": "REVIEW_PASS"
+    }
+  }
+}

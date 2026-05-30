@@ -544,6 +544,7 @@ func (r *MemoryRepository) CreateManualGrantExport(ctx context.Context, cmd Manu
 			FilterSnapshot: filterSnapshot,
 			RowCount:       len(candidates),
 			ErrorMessage:   err.Error(),
+			ExpiresAt:      now.Add(24 * time.Hour),
 			CreatedAt:      now,
 			UpdatedAt:      now,
 		}
@@ -563,6 +564,7 @@ func (r *MemoryRepository) CreateManualGrantExport(ctx context.Context, cmd Manu
 		RowCount:       len(candidates),
 		FileChecksum:   checksum,
 		StorageRef:     "memory://manual-grant-exports/" + exportID + ".csv",
+		ExpiresAt:      now.Add(24 * time.Hour),
 		CreatedAt:      now,
 		UpdatedAt:      now,
 	}

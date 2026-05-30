@@ -648,6 +648,7 @@ type ManualGrantExportFile struct {
 	FileChecksum   string                  `json:"fileChecksum,omitempty"`
 	StorageRef     string                  `json:"storageRef,omitempty"`
 	ErrorMessage   string                  `json:"errorMessage,omitempty"`
+	ExpiresAt      time.Time               `json:"expiresAt"`
 	CreatedAt      time.Time               `json:"createdAt"`
 	UpdatedAt      time.Time               `json:"updatedAt"`
 }

@@ -1044,10 +1044,12 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 }
 
 func writeError(w http.ResponseWriter, status int, message string) {
+	message = marketing.RedactSensitiveString(message)
 	writeJSON(w, status, map[string]string{"error": message})
 }
 
 func writeErrorCode(w http.ResponseWriter, status int, code string, message string) {
+	message = marketing.RedactSensitiveString(message)
 	writeJSON(w, status, map[string]string{"code": code, "errorCode": code, "error": message, "message": message})
 }
 
@@ -1130,6 +1132,7 @@ func rejectActivityIdentityFields(body []byte) error {
 }
 
 func writeEventError(w http.ResponseWriter, status int, code string, message string) {
+	message = marketing.RedactSensitiveString(message)
 	writeJSON(w, status, map[string]string{
 		"errorCode": code,
 		"message":   message,

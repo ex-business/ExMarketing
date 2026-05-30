@@ -770,6 +770,7 @@ func (r *Repository) CreateManualGrantExport(ctx context.Context, cmd marketing.
 		FileChecksum:   checksum,
 		StorageRef:     "postgres://manual-grant-exports/" + exportID + ".csv",
 		ErrorMessage:   errorMessage,
+		ExpiresAt:      now.Add(24 * time.Hour),
 		CreatedAt:      now,
 		UpdatedAt:      now,
 	}

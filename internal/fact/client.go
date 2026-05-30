@@ -311,9 +311,9 @@ func failure(request marketing.FactQueryRequest, code string, message string, re
 		Success:        false,
 		Cached:         false,
 		ErrorCode:      code,
-		Error:          message,
-		Reason:         reason,
-		ProviderStatus: providerStatus,
+		Error:          marketing.RedactSensitiveString(message),
+		Reason:         marketing.RedactSensitiveString(reason),
+		ProviderStatus: marketing.RedactSensitiveString(providerStatus),
 	}
 }
 

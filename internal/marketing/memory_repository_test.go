@@ -759,6 +759,9 @@ func TestMemoryManualExportRequiresReadyFileBeforeSuccess(t *testing.T) {
 	if exportResult.ExportFile.Status != ManualGrantExportReady || len(exportResult.Details) != 1 {
 		t.Fatalf("unexpected export result: %+v", exportResult)
 	}
+	if exportResult.ExportFile.FileChecksum == "" || exportResult.ExportFile.Operator != "ops" || exportResult.ExportFile.ExpiresAt.IsZero() || !exportResult.ExportFile.ExpiresAt.After(exportResult.ExportFile.CreatedAt) {
+		t.Fatalf("export security metadata missing: %+v", exportResult.ExportFile)
+	}
 	if repo.grantOrders[0].GrantStatus != GrantSending {
 		t.Fatalf("expected exported grant sending, got %s", repo.grantOrders[0].GrantStatus)
 	}

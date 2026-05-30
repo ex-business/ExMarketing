@@ -2,6 +2,7 @@ package fact
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -88,6 +89,23 @@ func TestQueryReturnsMappingFailureReason(t *testing.T) {
 	response := client.Query(context.Background(), provider, factRequest())
 	if response.Success || response.ErrorCode != CodeMappingFailed || response.Reason != ReasonMappingTypeMismatch {
 		t.Fatalf("response=%+v", response)
+	}
+}
+
+func TestQueryRedactsProviderFailureDetails(t *testing.T) {
+	t.Setenv("EX_MARKETING_FACT_ALLOWLIST", "example.com")
+	client := NewClientWithHTTPClient(&http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return nil, errors.New("Authorization: Bearer raw-provider-token password=provider-secret")
+	})})
+	response := client.Query(context.Background(), factProvider(), factRequest())
+	if response.Success || response.ErrorCode != CodeProviderHTTPFailed {
+		t.Fatalf("expected provider failure, got %+v", response)
+	}
+	joined := response.Error + " " + response.ProviderStatus + " " + response.Reason
+	for _, secret := range []string{"raw-provider-token", "provider-secret"} {
+		if strings.Contains(joined, secret) {
+			t.Fatalf("provider failure leaked %q in %+v", secret, response)
+		}
 	}
 }
 

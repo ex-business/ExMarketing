@@ -891,6 +891,7 @@ func (s *Service) CreateManualGrantExport(ctx context.Context, cmd marketing.Man
 		"details":     result.Details,
 		"detailCount": len(result.Details),
 		"createdAt":   result.ExportFile.CreatedAt,
+		"expiresAt":   result.ExportFile.ExpiresAt,
 	}))
 	return result, nil
 }
@@ -2377,6 +2378,7 @@ func dailyLimitScopeKey(activity marketing.Activity, event marketing.ActivityEve
 func (s *Service) audit(ctx context.Context, tenantID, actor, action, resource, resourceID string, payload any) error {
 	now := s.now()
 	payload = auditPayloadWithSource(ctx, payload)
+	payload = marketing.RedactSensitive(payload)
 	bytes, _ := json.Marshal(payload)
 	return s.repository.CreateAudit(ctx, marketing.AuditRecord{
 		ID:         marketingID("audit"),

@@ -1,0 +1,53 @@
+{
+  "requirementId": "2026-05-29-security-secrets-data-export",
+  "updatedAt": "2026-05-30T13:41:25.110324Z",
+  "agents": {
+    "analysis": {
+      "status": "DONE",
+      "startedAt": "2026-05-30T13:31:37.504569Z",
+      "finishedAt": "2026-05-30T13:34:07.843601Z",
+      "output": "tasks/2026-05-29-security-secrets-data-export/analysis.md",
+      "log": "tasks/2026-05-29-security-secrets-data-export/runs/20260530T133137Z-analysis.log",
+      "nextStatus": "REVIEW_READY"
+    },
+    "commit": {
+      "status": "RUNNING",
+      "startedAt": "2026-05-30T13:41:25.110321Z",
+      "output": "tasks/2026-05-29-security-secrets-data-export/commit.md",
+      "log": "tasks/2026-05-29-security-secrets-data-export/runs/20260530T134125Z-commit.log",
+      "pid": 81651
+    },
+    "dev": {
+      "status": "DONE",
+      "startedAt": "2026-05-30T13:34:45.790048Z",
+      "finishedAt": "2026-05-30T13:39:43.552944Z",
+      "output": "tasks/2026-05-29-security-secrets-data-export/implementation.md",
+      "log": "tasks/2026-05-29-security-secrets-data-export/runs/20260530T133445Z-dev.log",
+      "nextStatus": "REVIEW_PASS"
+    },
+    "review": {
+      "status": "DONE",
+      "startedAt": "2026-05-30T13:34:08.211855Z",
+      "finishedAt": "2026-05-30T13:34:45.785727Z",
+      "output": "tasks/2026-05-29-security-secrets-data-export/review.md",
+      "log": "tasks/2026-05-29-security-secrets-data-export/runs/20260530T133408Z-review.log",
+      "nextStatus": "REVIEW_PASS"
+    },
+    "test": {
+      "status": "DONE",
+      "startedAt": "2026-05-30T13:39:43.594355Z",
+      "finishedAt": "2026-05-30T13:41:25.085205Z",
+      "output": "tasks/2026-05-29-security-secrets-data-export/test.md",
+      "log": "tasks/2026-05-29-security-secrets-data-export/runs/20260530T133943Z-test.log",
+      "nextStatus": "COMMIT_READY"
+    },
+    "test-plan": {
+      "status": "DONE",
+      "startedAt": "2026-05-30T13:34:45.820082Z",
+      "finishedAt": "2026-05-30T13:36:24.190042Z",
+      "output": "tasks/2026-05-29-security-secrets-data-export/test-plan.md",
+      "log": "tasks/2026-05-29-security-secrets-data-export/runs/20260530T133445Z-test-plan.log",
+      "nextStatus": "REVIEW_PASS"
+    }
+  }
+}

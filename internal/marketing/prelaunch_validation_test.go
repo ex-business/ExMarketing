@@ -104,14 +104,14 @@ func TestCreateActivityCommandRejectsInvalidMQRewardTargets(t *testing.T) {
 	}
 }
 
-func TestValidatePrelaunchBlocksAutoFundRewardWithoutApprovalFlow(t *testing.T) {
+func TestValidatePrelaunchRequiresApprovalForAutoFundRewardWithoutApprovalFlow(t *testing.T) {
 	now := time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
 	cmd := validPrelaunchActivity()
 
 	result := ValidatePrelaunch(PrelaunchValidationRequest{Activity: cmd, Actor: "operator", TargetAction: "GO_LIVE"}, now)
 
-	if result.Conclusion != PrelaunchBlock || result.AllowGoLive {
-		t.Fatalf("conclusion=%s allow=%v, want BLOCK false", result.Conclusion, result.AllowGoLive)
+	if result.Conclusion != PrelaunchApprovalRequired || result.AllowGoLive {
+		t.Fatalf("conclusion=%s allow=%v, want APPROVAL_REQUIRED false", result.Conclusion, result.AllowGoLive)
 	}
 	if !result.RequireApproval || len(result.HighRiskItems) == 0 {
 		t.Fatalf("expected approval and high-risk items, got %+v", result)
@@ -121,7 +121,7 @@ func TestValidatePrelaunchBlocksAutoFundRewardWithoutApprovalFlow(t *testing.T) 
 	}
 }
 
-func TestValidatePrelaunchBlocksApprovedHighRiskVersionUntilApprovalFlowExists(t *testing.T) {
+func TestValidatePrelaunchAllowsApprovedHighRiskVersion(t *testing.T) {
 	now := time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
 	cmd := validPrelaunchActivity()
 	req := PrelaunchValidationRequest{
@@ -144,8 +144,8 @@ func TestValidatePrelaunchBlocksApprovedHighRiskVersionUntilApprovalFlowExists(t
 
 	result := ValidatePrelaunch(req, now)
 
-	if result.AllowGoLive || result.Conclusion != PrelaunchBlock {
-		t.Fatalf("expected high-risk request to stay blocked, got %+v", result)
+	if !result.AllowGoLive || result.Conclusion != PrelaunchWarn {
+		t.Fatalf("expected approved high-risk request with stock warning to allow go-live, got %+v", result)
 	}
 	if !hasPrelaunchCode(result.Items, "HIGH_RISK_AUTO_FUND_REWARD") {
 		t.Fatalf("expected high-risk auto fund item, got %+v", result.Items)
@@ -213,11 +213,11 @@ func TestValidatePrelaunchWarnOnlyStillAllowsGoLive(t *testing.T) {
 
 	result := ValidatePrelaunch(PrelaunchValidationRequest{Activity: cmd, TargetAction: "GO_LIVE"}, now)
 
-	if result.Conclusion != PrelaunchPass || !result.AllowGoLive {
-		t.Fatalf("conclusion=%s allow=%v, want PASS true; items=%+v", result.Conclusion, result.AllowGoLive, result.Items)
+	if result.Conclusion != PrelaunchWarn || !result.AllowGoLive {
+		t.Fatalf("conclusion=%s allow=%v, want WARN true; items=%+v", result.Conclusion, result.AllowGoLive, result.Items)
 	}
-	if result.AuditSummary.Conclusion != PrelaunchPass || !result.AuditSummary.AllowGoLive {
-		t.Fatalf("audit conclusion=%s allow=%v, want PASS true", result.AuditSummary.Conclusion, result.AuditSummary.AllowGoLive)
+	if result.AuditSummary.Conclusion != PrelaunchWarn || !result.AuditSummary.AllowGoLive {
+		t.Fatalf("audit conclusion=%s allow=%v, want WARN true", result.AuditSummary.Conclusion, result.AuditSummary.AllowGoLive)
 	}
 	if !hasPrelaunchCode(result.Items, "BUDGET_OPTIONAL") || !hasPrelaunchCode(result.Items, "STOCK_OPTIONAL") {
 		t.Fatalf("expected warning items to remain itemized, got %+v", result.Items)

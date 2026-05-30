@@ -319,21 +319,30 @@ func (b *prelaunchBuilder) checkApproval() {
 func (b *prelaunchBuilder) result() PrelaunchValidationResult {
 	hasError := false
 	hasHighRisk := false
+	hasWarning := false
 	for _, item := range b.items {
 		switch item.Severity {
 		case PrelaunchError:
 			hasError = true
 		case PrelaunchHighRisk:
 			hasHighRisk = true
+		case PrelaunchWarning:
+			hasWarning = true
 		}
 	}
 	conclusion := PrelaunchPass
 	allow := true
 	requireApproval := len(b.highRiskItems) > 0
+	approvalSatisfied := !requireApproval || approvalValidForVersion(b.request.Approval, b.activityVersion())
 	switch {
-	case hasError || hasHighRisk:
+	case hasError:
 		conclusion = PrelaunchBlock
 		allow = false
+	case hasHighRisk && !approvalSatisfied:
+		conclusion = PrelaunchApprovalRequired
+		allow = false
+	case hasWarning:
+		conclusion = PrelaunchWarn
 	default:
 		conclusion = PrelaunchPass
 	}
@@ -358,6 +367,16 @@ func (b *prelaunchBuilder) result() PrelaunchValidationResult {
 		Approval:        b.request.Approval,
 		AuditSummary:    audit,
 	}
+}
+
+func approvalValidForVersion(approval ApprovalSnapshot, version int) bool {
+	if approval.Status != ApprovalApproved || approval.ActivityVersion != version {
+		return false
+	}
+	if strings.TrimSpace(approval.Submitter) != "" && approval.Submitter == approval.Approver {
+		return false
+	}
+	return true
 }
 
 func (b *prelaunchBuilder) activityVersion() int {

@@ -1260,6 +1260,7 @@ type CreateActivityCommand struct {
 
 type UpdateActivityCommand struct {
 	Operator       string          `json:"operator,omitempty"`
+	Reason         string          `json:"reason,omitempty"`
 	Name           *string         `json:"activityName,omitempty"`
 	Status         *ActivityStatus `json:"status,omitempty"`
 	StartTime      *time.Time      `json:"startTime,omitempty"`

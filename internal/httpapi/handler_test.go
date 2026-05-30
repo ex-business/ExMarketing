@@ -2490,7 +2490,7 @@ func postApprovalAction(t *testing.T, handler *Handler, path string, body string
 	return rec
 }
 
-func TestValidatePrelaunchEndpointReturnsItemizedHighRiskBlock(t *testing.T) {
+func TestValidatePrelaunchEndpointReturnsItemizedHighRiskApprovalRequired(t *testing.T) {
 	handler := newTestHandler()
 	body := `{
 		"actor": "operator",
@@ -2505,8 +2505,8 @@ func TestValidatePrelaunchEndpointReturnsItemizedHighRiskBlock(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected status %d, got %d: %s", http.StatusOK, rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), `"conclusion":"BLOCK"`) {
-		t.Fatalf("expected high-risk block result, got: %s", rec.Body.String())
+	if !strings.Contains(rec.Body.String(), `"conclusion":"APPROVAL_REQUIRED"`) {
+		t.Fatalf("expected high-risk approval-required result, got: %s", rec.Body.String())
 	}
 	if !strings.Contains(rec.Body.String(), `"allowGoLive":false`) {
 		t.Fatalf("expected go-live blocked, got: %s", rec.Body.String())

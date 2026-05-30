@@ -252,7 +252,11 @@ func (s *Service) UpdateActivity(ctx context.Context, id string, cmd marketing.U
 		updated.Approval = marketing.ApprovalSnapshot{Status: marketing.ApprovalNone}
 	}
 	if (updated.Status == marketing.ActivityScheduled || updated.Status == marketing.ActivityActive) && !activityApprovalValid(updated) {
-		_ = s.audit(ctx, before.TenantID, actorOrSystem(cmd.Operator), "ACTIVITY_GO_LIVE_BLOCKED", "ACTIVITY", before.ID, approvalAuditPayload(before, before.Approval, before.Approval, "APPROVAL_REQUIRED", nil))
+		reason := strings.TrimSpace(cmd.Reason)
+		if reason == "" {
+			reason = "APPROVAL_REQUIRED"
+		}
+		_ = s.audit(ctx, before.TenantID, actorOrSystem(cmd.Operator), "ACTIVITY_GO_LIVE_BLOCKED", "ACTIVITY", before.ID, approvalAuditPayload(before, before.Approval, before.Approval, reason, nil))
 		return marketing.Activity{}, errors.Join(marketing.ErrInvalidOperation, errors.New("APPROVAL_REQUIRED: activity version is not approved"))
 	}
 	saved, err := s.repository.UpdateActivity(ctx, updated)
@@ -260,7 +264,24 @@ func (s *Service) UpdateActivity(ctx context.Context, id string, cmd marketing.U
 		return marketing.Activity{}, err
 	}
 	saved.Approval = updated.Approval
-	_ = s.audit(ctx, saved.TenantID, actorOrSystem(cmd.Operator), "UPDATE_ACTIVITY", "ACTIVITY", saved.ID, auditSnapshot(before, saved, nil))
+	action := "UPDATE_ACTIVITY"
+	if before.Status != updated.Status && updated.Status == marketing.ActivityActive {
+		action = "ACTIVITY_GO_LIVE"
+	} else if before.Status != updated.Status && updated.Status == marketing.ActivityPaused {
+		action = "ACTIVITY_ROLLBACK"
+	}
+	details := map[string]any{}
+	if reason := strings.TrimSpace(cmd.Reason); reason != "" {
+		details["reason"] = reason
+	}
+	if before.Status != updated.Status {
+		details["beforeStatus"] = before.Status
+		details["afterStatus"] = updated.Status
+	}
+	if len(details) == 0 {
+		details = nil
+	}
+	_ = s.audit(ctx, saved.TenantID, actorOrSystem(cmd.Operator), action, "ACTIVITY", saved.ID, auditSnapshot(before, saved, details))
 	return saved, nil
 }
 

@@ -960,6 +960,23 @@
       margin-bottom: 10px;
       white-space: pre-wrap;
     }
+    .result-section {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      padding: 12px;
+      margin-top: 12px;
+    }
+    .result-section h4 {
+      margin: 0 0 10px;
+      font-size: 13px;
+      font-weight: 850;
+      color: var(--ink);
+    }
+    .result-section pre {
+      min-height: 80px;
+      max-height: 260px;
+    }
     .disabled-actions {
       display: flex;
       flex-wrap: wrap;
@@ -1583,13 +1600,17 @@
     <div class="panel">
       <div class="panel-head"><h3 class="panel-title">模拟运行</h3></div>
       <div class="detail-body">
-        <div class="readonly-box">模拟运行只调用 <code>POST /admin/v1/simulate</code>，后端返回命中/未命中、规则解释、奖励预览、quota 影响和 outbox 预览；不会写入真实业务表。</div>
+        <div class="readonly-box">模拟运行只调用 <code>POST /admin/v1/simulate</code>，所有 participation、grant order、outbox 和 quota 都是 preview-only；不会锁定 quota、真实发奖或投递指令。</div>
+        <div class="ops">
+          <button class="button secondary" onclick="fillEventSample()">首存充值样例</button>
+          <button class="button secondary" onclick="fillLoginEventSample()">登录事件样例</button>
+        </div>
         <textarea id="event"></textarea>
         <div class="ops">
-          <button class="button" onclick="postJson('/admin/v1/simulate', 'event', 'simulationResult')">模拟</button>
-          <button class="button secondary" onclick="fillEventSample()">填入示例</button>
+          <button class="button" onclick="runSimulation()">模拟</button>
+          <button class="button secondary" onclick="fillEventSample()">重置样例</button>
         </div>
-        <pre class="output" id="simulationResult"></pre>
+        <div id="simulationResult"></div>
       </div>
     </div>
   </section>
@@ -3132,8 +3153,8 @@ function renderActivityDetail(item) {
       <button class="button secondary" onclick="approveSelectedActivity()">审批通过</button>
       <button class="button secondary" onclick="rejectSelectedActivity()">审批驳回</button>
       <button class="button secondary" onclick="updateSelectedActivityStatus('SCHEDULED')">设为 SCHEDULED</button>
-      <button class="button secondary" onclick="updateSelectedActivityStatus('ACTIVE')">设为 ACTIVE</button>
-      <button class="button secondary" onclick="updateSelectedActivityStatus('PAUSED')">暂停</button>
+      <button class="button secondary" onclick="goLiveSelectedActivity()">goLive</button>
+      <button class="button secondary" onclick="rollbackSelectedActivity()">rollback</button>
       <button class="button secondary" onclick="loadSelectedApprovalRecords()">审批记录</button>
       <button class="button secondary" onclick="loadSelectedActivityAudit()">活动审计</button>
       <button class="button secondary" onclick="prepareCopySelectedActivity()">复制到表单</button>
@@ -3688,9 +3709,17 @@ async function postSelectedActivityAction(path) {
   if (data.ok) await loadActivityDetail(selectedActivityId);
 }
 
+async function goLiveSelectedActivity() {
+  await updateSelectedActivityStatus('ACTIVE');
+}
+
+async function rollbackSelectedActivity() {
+  await updateSelectedActivityStatus('PAUSED');
+}
+
 async function updateSelectedActivityStatus(status) {
   if (!selectedActivityId) return;
-  const body = {operator: valueOf('activityOperator') || 'ops', status};
+  const body = {operator: valueOf('activityOperator') || 'ops', status, reason: valueOf('activityReason')};
   const data = await requestJson('/admin/v1/activities/' + encodeURIComponent(selectedActivityId), {
     method: 'PUT',
     body: JSON.stringify(body)
@@ -3733,13 +3762,13 @@ async function validateSelectedActivity() {
       targetAction: 'GO_LIVE'
     })
   });
-  writeResult('activityActionResult', data);
+  writeStructuredResult('activityActionResult', data, data.ok ? renderValidationResult(data.body) : '');
 }
 
 async function loadSelectedApprovalRecords() {
   if (!selectedActivityId) return;
   const data = await requestJson('/admin/v1/activities/' + encodeURIComponent(selectedActivityId) + '/approval-records');
-  writeResult('activityActionResult', data);
+  writeStructuredResult('activityActionResult', data, data.ok ? renderApprovalRecords(data.body.items || []) : '');
 }
 
 async function loadSelectedActivityAudit() {
@@ -3789,8 +3818,16 @@ async function postJson(url, inputId, outputId) {
   if (url === '/admin/v1/simulate' && data.ok) {
     recordSimulationSummary(inputId, data.body);
   }
-  target.textContent = 'HTTP ' + data.status + '\n' + JSON.stringify(data.body, null, 2);
-  target.style.color = data.ok ? '#e5e7eb' : '#fecaca';
+  if (target.tagName === 'PRE') {
+    target.textContent = 'HTTP ' + data.status + '\n' + JSON.stringify(data.body, null, 2);
+    target.style.color = data.ok ? '#e5e7eb' : '#fecaca';
+  } else {
+    writeStructuredResult(outputId, data, url === '/admin/v1/simulate' && data.ok ? renderSimulationResult(data.body) : '');
+  }
+}
+
+async function runSimulation() {
+  await postJson('/admin/v1/simulate', 'event', 'simulationResult');
 }
 
 function recordSimulationSummary(inputId, body) {
@@ -3867,6 +3904,139 @@ function writeResult(id, data) {
   const target = document.getElementById(id);
   target.textContent = 'HTTP ' + data.status + '\n' + JSON.stringify(data.body, null, 2);
   target.style.color = data.ok ? '#e5e7eb' : '#fecaca';
+}
+
+function writeStructuredResult(id, data, html) {
+  const target = document.getElementById(id);
+  if (!target) return;
+  const raw = `<pre class="output">HTTP ${data.status}\n${escapeHtml(JSON.stringify(data.body, null, 2))}</pre>`;
+  target.innerHTML = data.ok && html ? html + raw : `<div class="error-box">HTTP ${data.status}\n${escapeHtml(JSON.stringify(data.body, null, 2))}</div>`;
+}
+
+function renderValidationResult(result) {
+  const items = result.items || [];
+  const highRiskItems = result.highRiskItems || [];
+  const approval = result.approval || {};
+  return `
+    <div class="summary">
+      ${metric('结论', result.conclusion || '-')}
+      ${metric('允许上线', result.allowGoLive ? 'true' : 'false')}
+      ${metric('需要审批', result.requireApproval ? 'true' : 'false')}
+      ${metric('审批状态', approval.status || 'NONE')}
+      ${metric('审批版本', String(approval.activityVersion || '-'))}
+      ${metric('高危项', String(highRiskItems.length))}
+    </div>
+    <div class="result-section">
+      <h4>校验项</h4>
+      ${items.length ? renderSmallTable(items, ['code', 'name', 'severity', 'result', 'reason', 'fields', 'currentValue', 'expected', 'suggestion']) : '<div class="empty">无校验项。</div>'}
+    </div>
+    <div class="result-section">
+      <h4>高危原因</h4>
+      ${highRiskItems.length ? renderSmallTable(highRiskItems, ['code', 'reason', 'fields', 'approvalRequired']) : '<div class="empty">无高危项。</div>'}
+    </div>
+  `;
+}
+
+function renderApprovalRecords(records) {
+  return `
+    <div class="result-section">
+      <h4>审批历史</h4>
+      ${records.length ? renderSmallTable(records, ['action', 'operator', 'reason', 'beforeStatus', 'afterStatus', 'activityVersion', 'highRisk', 'createdAt']) : '<div class="empty">没有审批记录。</div>'}
+    </div>
+  `;
+}
+
+function renderSimulationResult(result) {
+  const summary = result.summary || {};
+  const matched = result.matchedActivities || [];
+  const unmatched = result.unmatchedActivities || [];
+  return `
+    <div class="summary">
+      ${metric('候选活动', String(summary.candidateCount ?? matched.length + unmatched.length))}
+      ${metric('命中', String(summary.matchedCount ?? matched.length))}
+      ${metric('未命中', String(summary.unmatchedCount ?? unmatched.length))}
+      ${metric('奖励预览', summary.hasRewardableActivity ? 'true' : 'false')}
+      ${metric('quota 风险', summary.hasQuotaRisk ? 'true' : 'false')}
+      ${metric('模拟时间', result.simulatedAt || '-')}
+    </div>
+    <div class="warning-box">结果为 preview-only。grant order、outbox command 和 quota impact 只表示如果真实执行可能发生的变化，不代表已发奖、已锁定或已投递。</div>
+    <div class="result-section">
+      <h4>命中活动</h4>
+      ${matched.length ? matched.map(renderSimulationActivity).join('') : '<div class="empty">没有命中活动。</div>'}
+    </div>
+    <div class="result-section">
+      <h4>未命中活动</h4>
+      ${unmatched.length ? renderSmallTable(unmatched, ['activityCode', 'activityName', 'activityType', 'version', 'decision', 'decisionReasonCode', 'decisionReason']) : '<div class="empty">没有未命中活动。</div>'}
+    </div>
+  `;
+}
+
+function renderSimulationActivity(item) {
+  const stages = groupRuleStages(item.ruleResult);
+  const quotaExceeded = (item.quotaImpactPreviews || []).some(preview => preview.wouldExceed);
+  return `
+    <div class="result-section">
+      <h4>${escapeHtml(item.activityCode || item.activityId || '-')} ${badge(item.decision || '-', decisionTone(item.decision))}</h4>
+      <div class="summary">
+        ${metric('活动', item.activityName || '-')}
+        ${metric('类型', item.activityType || '-')}
+        ${metric('版本', String(item.version || '-'))}
+        ${metric('原因码', item.decisionReasonCode || '-')}
+      </div>
+      ${item.decisionReason ? `<div class="readonly-box">${escapeHtml(item.decisionReason)}</div>` : ''}
+      ${renderStageSections(stages)}
+      <div class="result-section"><h4>奖励预览</h4>${(item.rewardPreviews || []).length ? renderSmallTable(item.rewardPreviews, ['rewardCode', 'rewardType', 'calculateType', 'amount', 'currency', 'grantMode', 'grantChannel', 'skipped']) : '<div class="empty">无奖励预览。</div>'}</div>
+      <div class="result-section"><h4>Quota 影响</h4>${(item.quotaImpactPreviews || []).length ? renderSmallTable(item.quotaImpactPreviews, ['quotaType', 'scope', 'scopeKey', 'delta', 'unlimited', 'wouldExceed', 'reason']) : '<div class="empty">无 quota 影响；缺失 quota 按 unlimited 展示。</div>'}</div>
+      <div class="result-section"><h4>Fact Query</h4>${(item.factQueryResults || []).length ? renderSmallTable(item.factQueryResults, ['factCode', 'requiredBy', 'queried', 'cached', 'status', 'reasonCode', 'reason']) : '<div class="empty">无 Fact Query。</div>'}</div>
+      <div class="result-section"><h4>Participation / Grant / Outbox Preview</h4>${quotaExceeded ? '<div class="warning-box">quota wouldExceed=true，页面不展示可执行 grant/outbox 预览。</div>' : renderPreviewBlocks(item)}</div>
+      <div class="result-section"><h4>插件解释</h4>${item.plugin ? `<pre>${escapeHtml(JSON.stringify(item.plugin, null, 2))}</pre>` : '<div class="empty">无插件解释。</div>'}</div>
+    </div>
+  `;
+}
+
+function groupRuleStages(ruleResult) {
+  const stages = {MATCH: [], QUALIFY: [], REWARD: [], RISK: [], LIMIT: []};
+  const results = [];
+  for (const stageResult of ruleResult?.stageResults || []) {
+    const stage = stageResult.stage || 'QUALIFY';
+    if (!stages[stage]) stages[stage] = [];
+    stages[stage].push(...(stageResult.ruleResults || []));
+  }
+  if (ruleResult?.rules) results.push(...ruleResult.rules);
+  if (ruleResult?.ruleResults) results.push(...ruleResult.ruleResults);
+  for (const rule of results) {
+    const phase = rule.rulePhase || rule.phase || 'QUALIFY';
+    if (!stages[phase]) stages[phase] = [];
+    stages[phase].push(rule);
+  }
+  return stages;
+}
+
+function renderStageSections(stages) {
+  return Object.entries(stages).map(([stage, rules]) => `
+    <div class="result-section">
+      <h4>${escapeHtml(stage)}</h4>
+      ${rules.length ? renderSmallTable(rules, ['ruleCode', 'code', 'ruleType', 'status', 'decision', 'reasonCode', 'reason', 'field', 'expected', 'actual']) : '<div class="empty">无规则结果。</div>'}
+    </div>
+  `).join('');
+}
+
+function renderPreviewBlocks(item) {
+  return `
+    <div class="readonly-box">participationPreview</div>
+    <pre>${escapeHtml(JSON.stringify(item.participationPreview || null, null, 2))}</pre>
+    <div class="readonly-box">grantOrderPreviews</div>
+    <pre>${escapeHtml(JSON.stringify(item.grantOrderPreviews || [], null, 2))}</pre>
+    <div class="readonly-box">outboxCommandPreviews</div>
+    <pre>${escapeHtml(JSON.stringify(item.outboxCommandPreviews || [], null, 2))}</pre>
+  `;
+}
+
+function decisionTone(decision) {
+  if (decision === 'PASSED') return 'green';
+  if (decision === 'REJECTED' || decision === 'ERROR') return 'red';
+  if (decision === 'SKIPPED') return 'amber';
+  return '';
 }
 
 function addQuery(params, key, value) {
@@ -4042,7 +4212,25 @@ function fillEventSample() {
     attributes: {
       amount: '299.00',
       currency: 'CNY',
-      isFirstDeposit: true
+      isFirstDeposit: true,
+      channel: 'APP'
+    }
+  });
+}
+
+function fillLoginEventSample() {
+  setJsonSample('event', {
+    eventId: 'evt_login_sim_001',
+    eventType: 'LOGIN',
+    sourceSystem: 'account',
+    tenantId: 'site_001',
+    subject: {type: 'USER', id: '10001'},
+    biz: {bizType: 'LOGIN', bizId: 'login_sim_001'},
+    occurredAt: new Date().toISOString(),
+    attributes: {
+      channel: 'WEB',
+      ip: '127.0.0.1',
+      deviceId: 'device_sim_001'
     }
   });
 }

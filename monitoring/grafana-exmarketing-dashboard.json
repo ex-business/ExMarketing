@@ -1,0 +1,234 @@
+{
+  "uid": "exmarketing-health",
+  "title": "ExMarketing Activity Engine Health",
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "tags": ["exmarketing", "activity-engine"],
+  "templating": {
+    "list": [
+      {
+        "name": "DS_PROMETHEUS",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {
+          "text": "Prometheus",
+          "value": "Prometheus"
+        }
+      },
+      {
+        "name": "tenant_id",
+        "type": "query",
+        "datasource": "${DS_PROMETHEUS}",
+        "query": "label_values(exmarketing_event_intake_total, tenant_id)",
+        "includeAll": true,
+        "multi": true,
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Scrape Up",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": {"x": 0, "y": 0, "w": 4, "h": 4},
+      "targets": [{"expr": "min(up{job=\"exmarketing\"})", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "none", "thresholds": {"mode": "absolute", "steps": [{"color": "red", "value": null}, {"color": "green", "value": 1}]}}, "overrides": []}
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Event Failure Red",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": {"x": 4, "y": 0, "w": 4, "h": 4},
+      "targets": [{"expr": "sum(increase(exmarketing_event_intake_total{tenant_id=~\"$tenant_id\",result=~\"failed|rejected\"}[5m])) >= 20 and (sum(rate(exmarketing_event_intake_total{tenant_id=~\"$tenant_id\",result=~\"failed|rejected\"}[5m])) / clamp_min(sum(rate(exmarketing_event_intake_total{tenant_id=~\"$tenant_id\"}[5m])), 0.001)) > 0.05", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "bool", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}}, "overrides": []}
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Quota Reserve Failure Red",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": {"x": 8, "y": 0, "w": 4, "h": 4},
+      "targets": [{"expr": "sum(increase(exmarketing_quota_fail_total{tenant_id=~\"$tenant_id\",action=\"reserve\"}[5m])) >= 10 and (sum(rate(exmarketing_quota_fail_total{tenant_id=~\"$tenant_id\",action=\"reserve\"}[5m])) / clamp_min(sum(rate(exmarketing_quota_attempt_total{tenant_id=~\"$tenant_id\",action=\"reserve\"}[5m])), 0.001)) > 0.20", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "bool", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}}, "overrides": []}
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "DLQ Count",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": {"x": 12, "y": 0, "w": 4, "h": 4},
+      "targets": [{"expr": "sum(exmarketing_outbox_dlq_count{tenant_id=~\"$tenant_id\"})", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "none", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}}, "overrides": []}
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Oldest Eligible Outbox",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": {"x": 16, "y": 0, "w": 4, "h": 4},
+      "targets": [{"expr": "max(exmarketing_outbox_oldest_eligible_age_seconds{tenant_id=~\"$tenant_id\"})", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "s", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 60}, {"color": "red", "value": 120}]}}, "overrides": []}
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "DB Errors 5m",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": {"x": 20, "y": 0, "w": 4, "h": 4},
+      "targets": [{"expr": "sum(increase(exmarketing_db_operation_total{result=\"failed\"}[5m]))", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "none", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}}, "overrides": []}
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Event Intake Rate",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": {"x": 0, "y": 4, "w": 12, "h": 8},
+      "targets": [{"expr": "sum by (result, reason) (rate(exmarketing_event_intake_total{tenant_id=~\"$tenant_id\"}[5m]))", "legendFormat": "{{result}} {{reason}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []}
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Event Intake P95 Latency",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": {"x": 12, "y": 4, "w": 12, "h": 8},
+      "targets": [{"expr": "histogram_quantile(0.95, sum by (le, result) (rate(exmarketing_event_intake_latency_seconds_bucket{tenant_id=~\"$tenant_id\"}[5m])))", "legendFormat": "{{result}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []}
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Rule Execution Rate",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": {"x": 0, "y": 12, "w": 12, "h": 8},
+      "targets": [{"expr": "sum by (phase, result, reason) (rate(exmarketing_rule_execution_total{tenant_id=~\"$tenant_id\"}[5m]))", "legendFormat": "{{phase}} {{result}} {{reason}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []}
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Rule Stage P95 Latency",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": {"x": 12, "y": 12, "w": 12, "h": 8},
+      "targets": [{"expr": "histogram_quantile(0.95, sum by (le, phase) (rate(exmarketing_rule_stage_latency_seconds_bucket{tenant_id=~\"$tenant_id\"}[5m])))", "legendFormat": "{{phase}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []}
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Reward Execution Rate",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": {"x": 0, "y": 20, "w": 12, "h": 8},
+      "targets": [{"expr": "sum by (reward_type, calculate_type, grant_channel, result, reason) (rate(exmarketing_reward_execution_total{tenant_id=~\"$tenant_id\"}[5m]))", "legendFormat": "{{reward_type}} {{calculate_type}} {{grant_channel}} {{result}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []}
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Reward Stage P95 Latency",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": {"x": 12, "y": 20, "w": 12, "h": 8},
+      "targets": [{"expr": "histogram_quantile(0.95, sum by (le, reward_type, calculate_type) (rate(exmarketing_reward_stage_latency_seconds_bucket{tenant_id=~\"$tenant_id\"}[5m])))", "legendFormat": "{{reward_type}} {{calculate_type}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []}
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Quota Reserve Failure Rate",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": {"x": 0, "y": 28, "w": 12, "h": 8},
+      "targets": [{"expr": "sum by (quota_type, scope, reason) (rate(exmarketing_quota_fail_total{tenant_id=~\"$tenant_id\",action=\"reserve\"}[5m])) / clamp_min(sum by (quota_type, scope, reason) (rate(exmarketing_quota_attempt_total{tenant_id=~\"$tenant_id\",action=\"reserve\"}[5m])), 0.001)", "legendFormat": "{{quota_type}} {{scope}} {{reason}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "percentunit", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 0.2}]}}, "overrides": []}
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "Outbox Backlog by Status",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": {"x": 12, "y": 28, "w": 12, "h": 8},
+      "targets": [{"expr": "sum by (target_channel, send_status) (exmarketing_outbox_backlog{tenant_id=~\"$tenant_id\"})", "legendFormat": "{{target_channel}} {{send_status}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "none"}, "overrides": []}
+    },
+    {
+      "id": 15,
+      "type": "timeseries",
+      "title": "Callback Failure Rate",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": {"x": 0, "y": 36, "w": 12, "h": 8},
+      "targets": [{"expr": "sum(increase(exmarketing_reward_callback_total{tenant_id=~\"$tenant_id\",result=~\"rejected|failed|conflict\"}[5m])) >= 5 and (sum(rate(exmarketing_reward_callback_total{tenant_id=~\"$tenant_id\",result=~\"rejected|failed|conflict\"}[5m])) / clamp_min(sum(rate(exmarketing_reward_callback_total{tenant_id=~\"$tenant_id\"}[5m])), 0.001)) > 0.05", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "none", "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}}, "overrides": []}
+    },
+    {
+      "id": 16,
+      "type": "timeseries",
+      "title": "Callback P95 Latency",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": {"x": 12, "y": 36, "w": 12, "h": 8},
+      "targets": [{"expr": "histogram_quantile(0.95, sum by (le, result) (rate(exmarketing_reward_callback_latency_seconds_bucket{tenant_id=~\"$tenant_id\"}[5m])))", "legendFormat": "{{result}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []}
+    },
+    {
+      "id": 17,
+      "type": "timeseries",
+      "title": "Worker Claim Rate",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": {"x": 0, "y": 44, "w": 12, "h": 8},
+      "targets": [{"expr": "sum by (target_channel, result) (rate(exmarketing_worker_claim_total{tenant_id=~\"$tenant_id\"}[5m]))", "legendFormat": "{{target_channel}} {{result}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []}
+    },
+    {
+      "id": 18,
+      "type": "timeseries",
+      "title": "Worker Claim P95 and Inflight",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": {"x": 12, "y": 44, "w": 12, "h": 8},
+      "targets": [
+        {"expr": "histogram_quantile(0.95, sum by (le, target_channel) (rate(exmarketing_worker_claim_latency_seconds_bucket{tenant_id=~\"$tenant_id\"}[5m])))", "legendFormat": "p95 {{target_channel}}", "refId": "A"},
+        {"expr": "sum by (target_channel) (exmarketing_worker_inflight)", "legendFormat": "inflight {{target_channel}}", "refId": "B"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []}
+    },
+    {
+      "id": 19,
+      "type": "timeseries",
+      "title": "Reward Command Send Rate and Latency",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": {"x": 0, "y": 52, "w": 12, "h": 8},
+      "targets": [
+        {"expr": "sum by (target_channel, result, reason) (rate(exmarketing_reward_command_total{tenant_id=~\"$tenant_id\"}[5m]))", "legendFormat": "{{target_channel}} {{result}} {{reason}}", "refId": "A"},
+        {"expr": "histogram_quantile(0.95, sum by (le, target_channel, result) (rate(exmarketing_reward_command_latency_seconds_bucket{tenant_id=~\"$tenant_id\"}[5m])))", "legendFormat": "p95 {{target_channel}} {{result}}", "refId": "B"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []}
+    },
+    {
+      "id": 20,
+      "type": "timeseries",
+      "title": "DB Operation Rate and P95",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": {"x": 12, "y": 52, "w": 12, "h": 8},
+      "targets": [
+        {"expr": "sum by (operation, table, result, reason) (rate(exmarketing_db_operation_total[5m]))", "legendFormat": "{{operation}} {{table}} {{result}}", "refId": "A"},
+        {"expr": "histogram_quantile(0.95, sum by (le, operation, table) (rate(exmarketing_db_operation_latency_seconds_bucket[5m])))", "legendFormat": "p95 {{operation}} {{table}}", "refId": "B"}
+      ],
+      "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []}
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "Quota Amounts",
+      "datasource": "${DS_PROMETHEUS}",
+      "gridPos": {"x": 0, "y": 60, "w": 24, "h": 8},
+      "targets": [{"expr": "sum by (quota_type, scope, action, result) (rate(exmarketing_quota_amount_total{tenant_id=~\"$tenant_id\"}[5m]))", "legendFormat": "{{quota_type}} {{scope}} {{action}} {{result}}", "refId": "A"}],
+      "fieldConfig": {"defaults": {"unit": "none"}, "overrides": []}
+    }
+  ]
+}

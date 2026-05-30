@@ -102,6 +102,22 @@ func TestMetricsEndpointRendersEventAndOutboxMetrics(t *testing.T) {
 		t.Fatalf("expected bad event status %d, got %d: %s", http.StatusBadRequest, badEvent.Code, badEvent.Body.String())
 	}
 
+	activityRec := postActivity(t, handler, validActivityBody())
+	if activityRec.Code != http.StatusCreated {
+		t.Fatalf("expected create activity status %d, got %d: %s", http.StatusCreated, activityRec.Code, activityRec.Body.String())
+	}
+	var activity marketing.Activity
+	if err := json.NewDecoder(strings.NewReader(activityRec.Body.String())).Decode(&activity); err != nil {
+		t.Fatalf("decode activity: %v", err)
+	}
+	approveAndActivateCreatedActivity(t, handler, activityRec)
+	createQuota(t, handler, activity.ID, marketing.QuotaBudget, marketing.QuotaScopeActivity, "TOTAL", "1000.00")
+	createQuota(t, handler, activity.ID, marketing.QuotaStock, marketing.QuotaScopeActivity, "FIRST_DEPOSIT_RATIO", "100")
+	eventRec := postDepositEvent(t, handler, "evt_metrics_ok", "biz_metrics_ok")
+	if eventRec.Code != http.StatusAccepted {
+		t.Fatalf("expected event status %d, got %d: %s", http.StatusAccepted, eventRec.Code, eventRec.Body.String())
+	}
+
 	rec := httptest.NewRecorder()
 	handler.Routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	if rec.Code != http.StatusOK {
@@ -112,11 +128,22 @@ func TestMetricsEndpointRendersEventAndOutboxMetrics(t *testing.T) {
 		`# TYPE exmarketing_event_intake_total counter`,
 		`exmarketing_event_intake_total`,
 		`reason="invalid_payload"`,
+		`exmarketing_rule_execution_total`,
+		`exmarketing_rule_stage_latency_seconds_bucket`,
+		`exmarketing_reward_execution_total`,
+		`exmarketing_reward_stage_latency_seconds_bucket`,
+		`exmarketing_quota_attempt_total`,
+		`exmarketing_quota_amount_total`,
 		`exmarketing_outbox_backlog{send_status="PENDING",target_channel="HTTP",tenant_id="site_metrics"} 1`,
 		`exmarketing_outbox_oldest_eligible_age_seconds`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("expected metrics body to contain %q, got:\n%s", want, body)
+		}
+	}
+	for _, forbidden := range []string{`activity_id=`, `activityId=`, `eventId=`, `subjectId=`, `bizId=`, `commandId=`, `idempotencyKey=`} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("metrics body contains forbidden label %q:\n%s", forbidden, body)
 		}
 	}
 }

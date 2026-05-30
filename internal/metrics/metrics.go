@@ -32,7 +32,11 @@ type Label struct {
 }
 
 func L(name, value string) Label {
-	return Label{Name: safeLabelName(name), Value: safeLabelValue(value)}
+	name = safeLabelName(name)
+	if forbiddenLabelName(name) {
+		return Label{}
+	}
+	return Label{Name: name, Value: safeLabelValue(value)}
 }
 
 func NewRegistry() *Registry {
@@ -123,8 +127,13 @@ func (r *Registry) RenderPrometheus() []byte {
 	var out bytes.Buffer
 	writeMetricFamily(&out, "exmarketing_event_intake_total", "counter", "Event API intake results.")
 	writeMetricFamily(&out, "exmarketing_event_intake_latency_seconds", "histogram", "Event API processing latency in seconds.")
+	writeMetricFamily(&out, "exmarketing_rule_execution_total", "counter", "Activity rule execution results.")
+	writeMetricFamily(&out, "exmarketing_rule_stage_latency_seconds", "histogram", "Activity rule stage execution latency in seconds.")
+	writeMetricFamily(&out, "exmarketing_reward_execution_total", "counter", "Activity reward calculation results.")
+	writeMetricFamily(&out, "exmarketing_reward_stage_latency_seconds", "histogram", "Activity reward calculation latency in seconds.")
 	writeMetricFamily(&out, "exmarketing_quota_attempt_total", "counter", "Quota reserve, confirm, and release attempts.")
 	writeMetricFamily(&out, "exmarketing_quota_fail_total", "counter", "Quota failed attempts.")
+	writeMetricFamily(&out, "exmarketing_quota_amount_total", "counter", "Quota amount reserved, confirmed, or released.")
 	writeMetricFamily(&out, "exmarketing_outbox_backlog", "gauge", "Current outbox backlog by status.")
 	writeMetricFamily(&out, "exmarketing_outbox_oldest_eligible_age_seconds", "gauge", "Oldest eligible outbox age in seconds.")
 	writeMetricFamily(&out, "exmarketing_outbox_dlq_count", "gauge", "Current open DLQ outbox count.")
@@ -137,6 +146,8 @@ func (r *Registry) RenderPrometheus() []byte {
 	writeMetricFamily(&out, "exmarketing_reward_command_total", "counter", "Reward command delivery results.")
 	writeMetricFamily(&out, "exmarketing_reward_command_latency_seconds", "histogram", "Outbox create-to-terminal delivery latency in seconds.")
 	writeMetricFamily(&out, "exmarketing_reward_command_delivery_latency_seconds", "histogram", "Single external reward command delivery latency in seconds.")
+	writeMetricFamily(&out, "exmarketing_db_operation_total", "counter", "Database operation results.")
+	writeMetricFamily(&out, "exmarketing_db_operation_latency_seconds", "histogram", "Database operation latency in seconds.")
 
 	for _, k := range sortedKeys(r.counters) {
 		fmt.Fprintf(&out, "%s %s\n", k, formatFloat(r.counters[k]))
@@ -179,7 +190,13 @@ func key(name string, labels []Label) string {
 	sort.Slice(normalized, func(i, j int) bool { return normalized[i].Name < normalized[j].Name })
 	parts := make([]string, 0, len(normalized))
 	for _, label := range normalized {
+		if label.Name == "" {
+			continue
+		}
 		parts = append(parts, label.Name+`="`+escapeLabelValue(label.Value)+`"`)
+	}
+	if len(parts) == 0 {
+		return name
 	}
 	return name + "{" + strings.Join(parts, ",") + "}"
 }
@@ -224,6 +241,20 @@ func safeLabelValue(value string) string {
 		return value[:120]
 	}
 	return value
+}
+
+func forbiddenLabelName(name string) bool {
+	switch strings.ToLower(name) {
+	case "token", "authorization", "cookie", "secret", "password",
+		"payload", "target_ref", "targetref",
+		"eventid", "event_id", "bizid", "biz_id", "subjectid", "subject_id",
+		"userid", "user_id", "activityid", "activity_id", "billno", "bill_no",
+		"commandid", "command_id", "idempotencykey", "idempotency_key",
+		"error", "error_message":
+		return true
+	default:
+		return false
+	}
 }
 
 func escapeLabelValue(value string) string {

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -837,6 +838,9 @@ func (s *Service) ApplyRewardCallback(ctx context.Context, callback marketing.Re
 			"finishedAt":     callback.FinishedAt,
 		}))
 	}
+	if !result.Duplicate {
+		s.recordQuotaReservationAmounts(result.Reservations)
+	}
 	return result, nil
 }
 
@@ -848,6 +852,9 @@ func (s *Service) ApplyManualGrantDecision(ctx context.Context, cmd marketing.Ma
 	result, err := s.repository.ApplyManualGrantDecision(ctx, cmd)
 	if err != nil {
 		return marketing.RewardCallbackResult{}, err
+	}
+	if !result.Duplicate {
+		s.recordQuotaReservationAmounts(result.Reservations)
 	}
 	_ = s.audit(ctx, cmd.TenantID, cmd.Operator, "MANUAL_GRANT_DECISION", "GRANT_ORDER", result.GrantOrderID, auditSnapshot(nil, result, map[string]any{
 		"grantOrderId":        result.GrantOrderID,
@@ -874,14 +881,14 @@ func (s *Service) CreateManualGrantExport(ctx context.Context, cmd marketing.Man
 		return marketing.ManualGrantExportCreateResult{}, err
 	}
 	_ = s.audit(ctx, cmd.TenantID, cmd.Operator, "MANUAL_GRANT_EXPORT_CREATE", "MANUAL_GRANT_EXPORT", result.ExportFile.ID, auditSnapshot(nil, result.ExportFile, map[string]any{
-		"exportId":     result.ExportFile.ID,
-		"fileFormat":   result.ExportFile.FileFormat,
-		"rowCount":     result.ExportFile.RowCount,
-		"checksum":     result.ExportFile.FileChecksum,
-		"status":       result.ExportFile.Status,
-		"operator":     cmd.Operator,
-		"reason":       cmd.Reason,
-		"details":      result.Details,
+		"exportId":    result.ExportFile.ID,
+		"fileFormat":  result.ExportFile.FileFormat,
+		"rowCount":    result.ExportFile.RowCount,
+		"checksum":    result.ExportFile.FileChecksum,
+		"status":      result.ExportFile.Status,
+		"operator":    cmd.Operator,
+		"reason":      cmd.Reason,
+		"details":     result.Details,
 		"detailCount": len(result.Details),
 		"createdAt":   result.ExportFile.CreatedAt,
 	}))
@@ -902,6 +909,9 @@ func (s *Service) ReleaseExpiredQuotaReservations(ctx context.Context, cmd marke
 	result, err := s.repository.ReleaseExpiredQuotaReservations(ctx, cmd)
 	if err != nil {
 		return marketing.QuotaTimeoutReleaseResult{}, err
+	}
+	if !cmd.DryRun {
+		s.recordQuotaTimeoutReleaseAmounts(result.Items)
 	}
 	action := "QUOTA_TIMEOUT_RELEASE"
 	if cmd.DryRun {
@@ -1329,12 +1339,14 @@ func (s *Service) evaluateActivity(ctx context.Context, inbox marketing.EventInb
 	}
 
 	facts, factFailure, _ := s.queryActivityFacts(ctx, inbox.Event, activity)
+	ruleStartedAt := s.now()
 	ruleResult := s.executeRulesWithState(inbox.Event, activity, state, facts)
 	if factFailure != nil {
 		ruleResult.Decision = marketing.RuleDecisionRejected
 		ruleResult.ReasonCode = factFailure.ErrorCode
 		ruleResult.Reason = factFailure.Error
 	}
+	s.recordRuleExecution(activity, inbox.Event, ruleResult, s.now().Sub(ruleStartedAt))
 	if ruleResult.Decision != marketing.RuleDecisionPassed {
 		participation.Status = marketing.ParticipationRejected
 		participation.RejectReason = ruleResult.ReasonCode + ": " + ruleResult.Reason
@@ -1355,6 +1367,7 @@ func (s *Service) evaluateActivity(ctx context.Context, inbox marketing.EventInb
 		if !configuredReward.Enabled {
 			continue
 		}
+		rewardStartedAt := s.now()
 		rewardResult, err := s.rewardCalculator.Calculate(reward.Context{
 			Event:          inbox.Event,
 			TenantID:       activity.TenantID,
@@ -1363,12 +1376,15 @@ func (s *Service) evaluateActivity(ctx context.Context, inbox marketing.EventInb
 			State:          state,
 		}, configuredReward)
 		if err != nil {
+			s.recordRewardExecution(activity, configuredReward, reward.Result{}, "failed", "calculation_error", s.now().Sub(rewardStartedAt))
 			return participation, orders, messages, ruleResult, true, err
 		}
 		if rewardResult.Skipped {
+			s.recordRewardExecution(activity, configuredReward, rewardResult, "skipped", rewardResult.ReasonCode, s.now().Sub(rewardStartedAt))
 			rewardSummaries = append(rewardSummaries, rewardSnapshot(configuredReward, rewardResult, true))
 			continue
 		}
+		s.recordRewardExecution(activity, configuredReward, rewardResult, "success", "ok", s.now().Sub(rewardStartedAt))
 
 		commandID := marketingID("cmd")
 		rewardPayload := grantRewardPayload(configuredReward, rewardResult)
@@ -1488,23 +1504,95 @@ func (s *Service) evaluateActivity(ctx context.Context, inbox marketing.EventInb
 	return atomicResult.Participation, atomicResult.GrantOrders, atomicResult.OutboxMessages, ruleResult, true, nil
 }
 
+func (s *Service) recordRuleExecution(activity marketing.Activity, event marketing.ActivityEvent, result marketing.ActivityRuleResult, elapsed time.Duration) {
+	if s.metrics == nil {
+		return
+	}
+	for _, stage := range result.StageResults {
+		status := string(stage.Status)
+		reason := firstNonEmpty(stage.ReasonCode, "ok")
+		if stage.ExecutedCount == 0 && stage.SkippedCount == 0 && stage.FailedCount == 0 {
+			s.metrics.IncCounter("exmarketing_rule_execution_total",
+				metrics.L("tenant_id", activity.TenantID),
+				metrics.L("event_type", event.EventType),
+				metrics.L("phase", string(stage.Stage)),
+				metrics.L("result", status),
+				metrics.L("reason", reason),
+			)
+		} else {
+			if stage.ExecutedCount > 0 {
+				s.metrics.AddCounter("exmarketing_rule_execution_total", float64(stage.ExecutedCount),
+					metrics.L("tenant_id", activity.TenantID),
+					metrics.L("event_type", event.EventType),
+					metrics.L("phase", string(stage.Stage)),
+					metrics.L("result", status),
+					metrics.L("reason", reason),
+				)
+			}
+			if stage.SkippedCount > 0 {
+				s.metrics.AddCounter("exmarketing_rule_execution_total", float64(stage.SkippedCount),
+					metrics.L("tenant_id", activity.TenantID),
+					metrics.L("event_type", event.EventType),
+					metrics.L("phase", string(stage.Stage)),
+					metrics.L("result", string(marketing.RuleDecisionSkipped)),
+					metrics.L("reason", "skipped"),
+				)
+			}
+		}
+		s.metrics.Observe("exmarketing_rule_stage_latency_seconds", elapsed.Seconds(),
+			metrics.L("tenant_id", activity.TenantID),
+			metrics.L("event_type", event.EventType),
+			metrics.L("phase", string(stage.Stage)),
+			metrics.L("result", status),
+		)
+	}
+}
+
+func (s *Service) recordRewardExecution(activity marketing.Activity, configuredReward marketing.Reward, rewardResult reward.Result, result string, reason string, elapsed time.Duration) {
+	if s.metrics == nil {
+		return
+	}
+	reason = firstNonEmpty(reason, "ok")
+	rewardType := configuredReward.Type
+	if rewardResult.Type != "" {
+		rewardType = rewardResult.Type
+	}
+	labels := []metrics.Label{
+		metrics.L("tenant_id", activity.TenantID),
+		metrics.L("reward_type", string(rewardType)),
+		metrics.L("calculate_type", string(configuredReward.CalculateType)),
+		metrics.L("grant_channel", string(configuredReward.GrantChannel)),
+		metrics.L("result", result),
+		metrics.L("reason", reason),
+	}
+	s.metrics.IncCounter("exmarketing_reward_execution_total", labels...)
+	s.metrics.Observe("exmarketing_reward_stage_latency_seconds", elapsed.Seconds(),
+		metrics.L("tenant_id", activity.TenantID),
+		metrics.L("reward_type", string(rewardType)),
+		metrics.L("calculate_type", string(configuredReward.CalculateType)),
+		metrics.L("grant_channel", string(configuredReward.GrantChannel)),
+		metrics.L("result", result),
+	)
+}
+
 type quotaAttempt struct {
 	quotaType marketing.QuotaType
 	scope     marketing.QuotaScope
 	scopeKey  string
+	amount    string
 }
 
 func quotaReserveAttempts(activity marketing.Activity, event marketing.ActivityEvent, budgetAmount string, stockReservations []marketing.QuotaReservation) []quotaAttempt {
 	attempts := []quotaAttempt{
-		{quotaType: marketing.QuotaBudget, scope: marketing.QuotaScopeActivity, scopeKey: "TOTAL"},
-		{quotaType: marketing.QuotaUserLimit, scope: marketing.QuotaScopeUser, scopeKey: event.Subject.ID},
-		{quotaType: marketing.QuotaDailyLimit, scope: marketing.QuotaScopeUser, scopeKey: dailyLimitScopeKey(activity, event)},
+		{quotaType: marketing.QuotaBudget, scope: marketing.QuotaScopeActivity, scopeKey: "TOTAL", amount: budgetAmount},
+		{quotaType: marketing.QuotaUserLimit, scope: marketing.QuotaScopeUser, scopeKey: event.Subject.ID, amount: "1"},
+		{quotaType: marketing.QuotaDailyLimit, scope: marketing.QuotaScopeUser, scopeKey: dailyLimitScopeKey(activity, event), amount: "1"},
 	}
 	if decimal.MustParse(budgetAmount).IsZero() {
 		attempts = attempts[1:]
 	}
 	for _, reservation := range stockReservations {
-		attempts = append(attempts, quotaAttempt{quotaType: reservation.Type, scope: reservation.Scope, scopeKey: reservation.ScopeKey})
+		attempts = append(attempts, quotaAttempt{quotaType: reservation.Type, scope: reservation.Scope, scopeKey: reservation.ScopeKey, amount: reservation.Amount})
 	}
 	return attempts
 }
@@ -1539,7 +1627,6 @@ func (s *Service) recordQuotaAttempts(activity marketing.Activity, attempts []qu
 		}
 		labels := []metrics.Label{
 			metrics.L("tenant_id", activity.TenantID),
-			metrics.L("activity_id", activity.ID),
 			metrics.L("quota_type", string(attempt.quotaType)),
 			metrics.L("scope", string(attempt.scope)),
 			metrics.L("action", "reserve"),
@@ -1547,10 +1634,12 @@ func (s *Service) recordQuotaAttempts(activity marketing.Activity, attempts []qu
 			metrics.L("reason", attemptReason),
 		}
 		s.metrics.IncCounter("exmarketing_quota_attempt_total", labels...)
+		if result == "success" {
+			s.recordQuotaAmount(activity.TenantID, attempt.quotaType, attempt.scope, "reserve", "success", attempt.amount)
+		}
 		if result == "failed" {
 			s.metrics.IncCounter("exmarketing_quota_fail_total",
 				metrics.L("tenant_id", activity.TenantID),
-				metrics.L("activity_id", activity.ID),
 				metrics.L("quota_type", string(attempt.quotaType)),
 				metrics.L("scope", string(attempt.scope)),
 				metrics.L("action", "reserve"),
@@ -1558,6 +1647,49 @@ func (s *Service) recordQuotaAttempts(activity marketing.Activity, attempts []qu
 			)
 		}
 	}
+}
+
+func (s *Service) recordQuotaReservationAmounts(reservations []marketing.QuotaReservation) {
+	for _, reservation := range reservations {
+		action := ""
+		result := "success"
+		switch reservation.Status {
+		case marketing.QuotaReservationConfirmed:
+			action = "confirm"
+		case marketing.QuotaReservationReleased:
+			action = "release"
+		default:
+			continue
+		}
+		s.recordQuotaAmount(reservation.TenantID, reservation.Type, reservation.Scope, action, result, reservation.Amount)
+	}
+}
+
+func (s *Service) recordQuotaTimeoutReleaseAmounts(items []marketing.QuotaTimeoutReleaseItem) {
+	for _, item := range items {
+		for _, reservation := range item.Reservations {
+			if reservation.Status == marketing.QuotaReservationReleased {
+				s.recordQuotaAmount(reservation.TenantID, reservation.Type, reservation.Scope, "release", "success", reservation.Amount)
+			}
+		}
+	}
+}
+
+func (s *Service) recordQuotaAmount(tenantID string, quotaType marketing.QuotaType, scope marketing.QuotaScope, action string, result string, amount string) {
+	if s.metrics == nil {
+		return
+	}
+	value, err := strconv.ParseFloat(strings.TrimSpace(amount), 64)
+	if err != nil || value <= 0 {
+		return
+	}
+	s.metrics.AddCounter("exmarketing_quota_amount_total", value,
+		metrics.L("tenant_id", tenantID),
+		metrics.L("quota_type", string(quotaType)),
+		metrics.L("scope", string(scope)),
+		metrics.L("action", action),
+		metrics.L("result", result),
+	)
 }
 
 func (s *Service) simulateActivity(ctx context.Context, event marketing.ActivityEvent, activity marketing.Activity) (marketing.Participation, []marketing.GrantOrder, []marketing.OutboxMessage, marketing.ActivityRuleResult, *marketing.ActivityPluginSnapshot, []marketing.FactQuerySimulation, []marketing.RewardPreview, []marketing.QuotaReservation, decimal.Decimal) {

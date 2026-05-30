@@ -15,6 +15,7 @@ import (
 
 	"github.com/ex-stack/ExMarketing/internal/dbmigration"
 	"github.com/ex-stack/ExMarketing/internal/marketing"
+	"github.com/ex-stack/ExMarketing/internal/metrics"
 	"github.com/jackc/pgx/v5/pgconn"
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
@@ -1382,6 +1383,11 @@ func (r *Repository) RecoverStaleOutbox(ctx context.Context, staleBefore time.Ti
 }
 
 func (r *Repository) CountOutboxDLQ(ctx context.Context) ([]marketing.OutboxDLQCount, error) {
+	startedAt := time.Now()
+	var opErr error
+	defer func() {
+		recordDBOperation("count_outbox_dlq", "marketing_outbox", startedAt, opErr)
+	}()
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT tenant_id, target_channel, COUNT(*)
 		FROM marketing_outbox
@@ -1390,6 +1396,7 @@ func (r *Repository) CountOutboxDLQ(ctx context.Context) ([]marketing.OutboxDLQC
 		ORDER BY tenant_id, target_channel
 	`)
 	if err != nil {
+		opErr = err
 		return nil, err
 	}
 	defer rows.Close()
@@ -1398,17 +1405,24 @@ func (r *Repository) CountOutboxDLQ(ctx context.Context) ([]marketing.OutboxDLQC
 	for rows.Next() {
 		var count marketing.OutboxDLQCount
 		if err := rows.Scan(&count.TenantID, &count.TargetChannel, &count.Count); err != nil {
+			opErr = err
 			return nil, err
 		}
 		counts = append(counts, count)
 	}
-	return counts, rows.Err()
+	opErr = rows.Err()
+	return counts, opErr
 }
 
 func (r *Repository) CountOutboxBacklog(ctx context.Context, now time.Time) ([]marketing.OutboxBacklogMetric, error) {
 	if now.IsZero() {
 		now = time.Now().UTC()
 	}
+	startedAt := time.Now()
+	var opErr error
+	defer func() {
+		recordDBOperation("count_outbox_backlog", "marketing_outbox", startedAt, opErr)
+	}()
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT tenant_id,
 		       target_channel,
@@ -1427,6 +1441,7 @@ func (r *Repository) CountOutboxBacklog(ctx context.Context, now time.Time) ([]m
 		ORDER BY tenant_id, target_channel, send_status
 	`, now)
 	if err != nil {
+		opErr = err
 		return nil, err
 	}
 	defer rows.Close()
@@ -1435,6 +1450,7 @@ func (r *Repository) CountOutboxBacklog(ctx context.Context, now time.Time) ([]m
 	for rows.Next() {
 		var metric marketing.OutboxBacklogMetric
 		if err := rows.Scan(&metric.TenantID, &metric.TargetChannel, &metric.SendStatus, &metric.Count, &metric.OldestEligibleAgeSeconds); err != nil {
+			opErr = err
 			return nil, err
 		}
 		if metric.OldestEligibleAgeSeconds < 0 {
@@ -1442,7 +1458,28 @@ func (r *Repository) CountOutboxBacklog(ctx context.Context, now time.Time) ([]m
 		}
 		metrics = append(metrics, metric)
 	}
-	return metrics, rows.Err()
+	opErr = rows.Err()
+	return metrics, opErr
+}
+
+func recordDBOperation(operation string, table string, startedAt time.Time, err error) {
+	result := "success"
+	reason := "ok"
+	if err != nil {
+		result = "failed"
+		reason = "db_error"
+	}
+	metrics.Default.IncCounter("exmarketing_db_operation_total",
+		metrics.L("operation", operation),
+		metrics.L("table", table),
+		metrics.L("result", result),
+		metrics.L("reason", reason),
+	)
+	metrics.Default.Observe("exmarketing_db_operation_latency_seconds", time.Since(startedAt).Seconds(),
+		metrics.L("operation", operation),
+		metrics.L("table", table),
+		metrics.L("result", result),
+	)
 }
 
 func (r *Repository) ReplayOutboxDLQ(ctx context.Context, tenantID string, id string, operator string, reason string, replayedAt time.Time) (marketing.OutboxMessage, error) {

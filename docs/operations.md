@@ -30,14 +30,27 @@ curl http://localhost:8080/metrics
 
 `/metrics` 输出 Prometheus text format，默认用于内网或本地运维采集，不建议直接公网暴露。Counter 是进程生命周期累计值，服务重启后从 0 重新开始；outbox backlog 和 DLQ Gauge 会在抓取时从当前仓储状态刷新。
 
+Prometheus scrape 样例位于 `monitoring/prometheus-exmarketing.yml`，本地默认抓取 `localhost:8080/metrics`：
+
+```bash
+prometheus --config.file=monitoring/prometheus-exmarketing.yml
+```
+
+Grafana dashboard 位于 `monitoring/grafana-exmarketing-dashboard.json`。导入时将 `${DS_PROMETHEUS}` 绑定到实际 Prometheus 数据源即可；dashboard 不写死本机或生产地址。
+
 核心指标：
 
 | 指标 | 类型 | 标签 | 说明 |
 | --- | --- | --- | --- |
 | `exmarketing_event_intake_total` | Counter | `tenant_id`, `source_system`, `event_type`, `result`, `reason` | Event API 成功、失败、重复、鉴权失败、quota 拒绝等结果。 |
 | `exmarketing_event_intake_latency_seconds` | Histogram | `tenant_id`, `source_system`, `event_type`, `result` | Event API 处理耗时。 |
-| `exmarketing_quota_attempt_total` | Counter | `tenant_id`, `activity_id`, `quota_type`, `scope`, `action`, `result`, `reason` | Quota 操作尝试。当前 fail rate 只用 `action="reserve"` 作为分母，避免 confirm/release 稀释 reserve 拒绝率。 |
-| `exmarketing_quota_fail_total` | Counter | `tenant_id`, `activity_id`, `quota_type`, `scope`, `action`, `reason` | Quota 失败计数。 |
+| `exmarketing_rule_execution_total` | Counter | `tenant_id`, `event_type`, `phase`, `result`, `reason` | Rule 各阶段执行、跳过、拒绝和错误计数。 |
+| `exmarketing_rule_stage_latency_seconds` | Histogram | `tenant_id`, `event_type`, `phase`, `result` | Rule 阶段耗时。 |
+| `exmarketing_reward_execution_total` | Counter | `tenant_id`, `reward_type`, `calculate_type`, `grant_channel`, `result`, `reason` | Reward 计算成功、跳过和失败计数。 |
+| `exmarketing_reward_stage_latency_seconds` | Histogram | `tenant_id`, `reward_type`, `calculate_type`, `grant_channel`, `result` | Reward 计算耗时。 |
+| `exmarketing_quota_attempt_total` | Counter | `tenant_id`, `quota_type`, `scope`, `action`, `result`, `reason` | Quota 操作尝试。当前 fail rate 只用 `action="reserve"` 作为分母，避免 confirm/release 稀释 reserve 拒绝率。 |
+| `exmarketing_quota_fail_total` | Counter | `tenant_id`, `quota_type`, `scope`, `action`, `reason` | Quota 失败计数。 |
+| `exmarketing_quota_amount_total` | Counter | `tenant_id`, `quota_type`, `scope`, `action`, `result` | Quota reserve 冻结量、confirm 确认量、release 释放量。 |
 | `exmarketing_outbox_backlog` | Gauge | `tenant_id`, `target_channel`, `send_status` | 当前 outbox 状态数量，覆盖 `PENDING`, `FAILED`, `SENDING`, `DLQ`, `DLQ_CLOSED`。 |
 | `exmarketing_outbox_oldest_eligible_age_seconds` | Gauge | `tenant_id`, `target_channel` | 最老可投递 outbox 等待秒数。未到期 retry 不抬高该值。 |
 | `exmarketing_outbox_dlq_count` | Gauge | `tenant_id`, `target_channel` | 当前未关闭 DLQ 数量。 |
@@ -50,6 +63,8 @@ curl http://localhost:8080/metrics
 | `exmarketing_reward_command_total` | Counter | `tenant_id`, `target_channel`, `result`, `reason` | Reward command 投递 sent/retry/dlq 结果。 |
 | `exmarketing_reward_command_latency_seconds` | Histogram | `tenant_id`, `target_channel`, `result` | outbox 创建到投递终态耗时，不代表最终发奖成功。 |
 | `exmarketing_reward_command_delivery_latency_seconds` | Histogram | `tenant_id`, `target_channel`, `result` | 单次外部投递调用耗时。 |
+| `exmarketing_db_operation_total` | Counter | `operation`, `table`, `result`, `reason` | DB 操作成功和失败计数；当前覆盖 metrics 刷新依赖的 outbox/DLQ 查询。 |
+| `exmarketing_db_operation_latency_seconds` | Histogram | `operation`, `table`, `result` | DB 操作耗时。 |
 
 建议告警阈值：
 
@@ -64,8 +79,49 @@ curl http://localhost:8080/metrics
 | Callback fail rate | 5 分钟 | `result=~"rejected|failed|conflict"` 失败率 > 5% 且失败数 >= 5。 |
 | Worker claim latency P95 | 5 分钟 | P95 > 60 秒。 |
 | Reward command latency P95 | 5 分钟 | P95 > 120 秒。 |
+| DB operation error | 5 分钟 | `exmarketing_db_operation_total{result="failed"}` 持续增长。 |
+| DB operation latency P95 | 5 分钟 | P95 明显超过当前仓储操作基线，测试环境建议先用 1 秒作为排查阈值。 |
 
-指标标签禁止包含 token、Authorization、Cookie、secret、完整 payload、完整 targetRef、eventId、bizId、subjectId、billNo、commandId 或原始错误文本；这些信息只允许进入审计、对账查询或已脱敏日志。
+失败率类面板必须同时满足失败率和最小失败数才判 Red，避免低流量单次失败造成误报：
+
+```promql
+sum(increase(exmarketing_event_intake_total{result=~"failed|rejected"}[5m])) >= 20
+and
+(
+  sum(rate(exmarketing_event_intake_total{result=~"failed|rejected"}[5m]))
+  / clamp_min(sum(rate(exmarketing_event_intake_total[5m])), 0.001)
+) > 0.05
+```
+
+```promql
+sum(increase(exmarketing_quota_fail_total{action="reserve"}[5m])) >= 10
+and
+(
+  sum(rate(exmarketing_quota_fail_total{action="reserve"}[5m]))
+  / clamp_min(sum(rate(exmarketing_quota_attempt_total{action="reserve"}[5m])), 0.001)
+) > 0.20
+```
+
+```promql
+sum(increase(exmarketing_reward_callback_total{result=~"rejected|failed|conflict"}[5m])) >= 5
+and
+(
+  sum(rate(exmarketing_reward_callback_total{result=~"rejected|failed|conflict"}[5m]))
+  / clamp_min(sum(rate(exmarketing_reward_callback_total[5m])), 0.001)
+) > 0.05
+```
+
+指标标签禁止包含 token、Authorization、Cookie、secret、password、完整 payload、完整 targetRef、eventId、bizId、subjectId、userId、activityId、activity_id、billNo、commandId、idempotencyKey 或原始错误文本；这些信息只允许进入审计、对账查询或已脱敏日志。`tenant_id`、`source_system`、`event_type`、`result`、`reason`、`quota_type`、`scope`、`action`、`target_channel`、`send_status`、`grant_channel`、`callback_status`、`worker_id`、`operation`、`table` 和 `phase` 是当前允许的低基数标签。若需要定位单个活动、事件、用户或订单，使用审计、对账查询、DB 查询或脱敏日志，不通过 Prometheus 标签承载。
+
+本地验证：
+
+```bash
+go run ./cmd/exmarketing
+curl -fsS http://localhost:8080/metrics | tee /tmp/exmarketing.metrics
+rg 'exmarketing_(event_intake|rule_execution|reward_execution|quota_attempt|quota_amount|outbox_backlog|reward_callback|worker_claim|db_operation)' /tmp/exmarketing.metrics
+rg 'activity_id=|activityId=|eventId=|subjectId=|userId=|bizId=|commandId=|idempotencyKey=' /tmp/exmarketing.metrics && exit 1 || true
+promtool check config monitoring/prometheus-exmarketing.yml
+```
 
 开启 Outbox worker：
 

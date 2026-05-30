@@ -335,6 +335,66 @@ func TestAuditQueryFiltersAndSnapshots(t *testing.T) {
 	}
 }
 
+func TestAuditQueryTimeTraceAndRequestFilters(t *testing.T) {
+	repo := marketing.NewMemoryRepository()
+	handler := newTestHandlerWithRepository(repo)
+	early := time.Date(2026, 5, 29, 9, 0, 0, 0, time.UTC)
+	matching := time.Date(2026, 5, 29, 10, 0, 0, 0, time.UTC)
+	late := time.Date(2026, 5, 29, 11, 0, 0, 0, time.UTC)
+	for _, record := range []marketing.AuditRecord{
+		{
+			ID:         "audit_early",
+			TenantID:   "site_001",
+			Actor:      "ops",
+			Action:     "CREATE_ACTIVITY",
+			Resource:   "ACTIVITY",
+			ResourceID: "act_early",
+			Payload:    []byte(`{"source":{"traceId":"trace-old","requestId":"req-old"},"activityId":"act_early"}`),
+			CreatedAt:  early,
+		},
+		{
+			ID:         "audit_match",
+			TenantID:   "site_001",
+			Actor:      "ops",
+			Action:     "MANUAL_GRANT_DECISION",
+			Resource:   "GRANT_ORDER",
+			ResourceID: "grant_match",
+			Payload:    []byte(`{"source":{"traceId":"trace-123","requestId":"req-456"},"commandId":"cmd_match"}`),
+			CreatedAt:  matching,
+		},
+		{
+			ID:         "audit_late",
+			TenantID:   "site_001",
+			Actor:      "ops",
+			Action:     "MANUAL_GRANT_DECISION",
+			Resource:   "GRANT_ORDER",
+			ResourceID: "grant_late",
+			Payload:    []byte(`{"source":{"traceId":"trace-123","requestId":"req-other"},"commandId":"cmd_late"}`),
+			CreatedAt:  late,
+		},
+	} {
+		if err := repo.CreateAudit(context.Background(), record); err != nil {
+			t.Fatalf("create audit: %v", err)
+		}
+	}
+
+	rec := httptest.NewRecorder()
+	path := "/admin/v1/audit?tenantId=site_001&startTime=2026-05-29T09:30:00Z&endTime=2026-05-29T10:30:00Z&traceId=trace-123&requestId=req-456"
+	handler.Routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected audit OK, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"id":"audit_match"`) || strings.Contains(rec.Body.String(), "audit_early") || strings.Contains(rec.Body.String(), "audit_late") {
+		t.Fatalf("expected service-side time trace/request filter, got: %s", rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	handler.Routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/admin/v1/audit?tenantId=site_001&startTime=not-a-time", nil))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected invalid time status %d, got %d: %s", http.StatusBadRequest, rec.Code, rec.Body.String())
+	}
+}
+
 func TestCreateActivityRejectsUnsupportedRewardDelivery(t *testing.T) {
 	handler := newTestHandler()
 	for name, body := range map[string]string{
@@ -1998,6 +2058,107 @@ func TestOutboxDLQOperationRequiresOperatorAndReason(t *testing.T) {
 	handler.Routes().ServeHTTP(rec, req)
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("expected missing reason conflict, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestManualGrantDecisionAndExportWriteStableAuditActions(t *testing.T) {
+	repo := marketing.NewMemoryRepository()
+	handler := newTestHandlerWithRepository(repo)
+	now := time.Date(2026, 5, 29, 10, 0, 0, 0, time.UTC)
+	if _, err := repo.CreateParticipation(context.Background(), marketing.Participation{
+		ID:             "part_manual_audit",
+		TenantID:       "site_001",
+		ActivityID:     "act_manual_audit",
+		Subject:        marketing.EventSubject{Type: "USER", ID: "10001"},
+		Status:         marketing.ParticipationRewardable,
+		IdempotencyKey: "part_manual_audit_idem",
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}); err != nil {
+		t.Fatalf("create participation: %v", err)
+	}
+	if _, err := repo.CreateGrantOrder(context.Background(), marketing.GrantOrder{
+		ID:              "grant_manual_audit",
+		TenantID:        "site_001",
+		ActivityID:      "act_manual_audit",
+		ParticipationID: "part_manual_audit",
+		Subject:         marketing.EventSubject{Type: "USER", ID: "10001"},
+		RewardType:      marketing.RewardBonus,
+		RewardAmount:    "10",
+		RewardPayload:   []byte(`{"grantMode":"MANUAL"}`),
+		BillNo:          "cmd_manual_audit",
+		GrantStatus:     marketing.GrantPending,
+		GrantChannel:    marketing.GrantManualFile,
+		IdempotencyKey:  "grant_manual_audit_idem",
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}); err != nil {
+		t.Fatalf("create manual grant: %v", err)
+	}
+	decision := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(decision, httptest.NewRequest(http.MethodPost, "/admin/v1/manual-grants/decision", strings.NewReader(`{
+		"tenantId": "site_001",
+		"commandId": "cmd_manual_audit",
+		"status": "SUCCESS",
+		"externalGrantId": "offline_1",
+		"operator": "ops",
+		"reason": "offline paid",
+		"finishedAt": "2026-05-29T10:01:00Z"
+	}`)))
+	if decision.Code != http.StatusOK {
+		t.Fatalf("expected manual decision OK, got %d: %s", decision.Code, decision.Body.String())
+	}
+
+	if _, err := repo.CreateParticipation(context.Background(), marketing.Participation{
+		ID:             "part_export_audit",
+		TenantID:       "site_001",
+		ActivityID:     "act_export_audit",
+		Subject:        marketing.EventSubject{Type: "USER", ID: "10002"},
+		Status:         marketing.ParticipationRewardable,
+		IdempotencyKey: "part_export_audit_idem",
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}); err != nil {
+		t.Fatalf("create export participation: %v", err)
+	}
+	if _, err := repo.CreateGrantOrder(context.Background(), marketing.GrantOrder{
+		ID:              "grant_export_audit",
+		TenantID:        "site_001",
+		ActivityID:      "act_export_audit",
+		ParticipationID: "part_export_audit",
+		Subject:         marketing.EventSubject{Type: "USER", ID: "10002"},
+		RewardType:      marketing.RewardBonus,
+		RewardAmount:    "5",
+		RewardPayload:   []byte(`{"grantMode":"MANUAL_EXPORT","rewardCode":"REWARD_EXPORT"}`),
+		BillNo:          "cmd_export_audit",
+		GrantStatus:     marketing.GrantPending,
+		GrantChannel:    marketing.GrantManualFile,
+		IdempotencyKey:  "grant_export_audit_idem",
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}); err != nil {
+		t.Fatalf("create export grant: %v", err)
+	}
+	export := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(export, httptest.NewRequest(http.MethodPost, "/admin/v1/manual-grant-exports", strings.NewReader(`{
+		"tenantId": "site_001",
+		"operator": "ops",
+		"reason": "daily export",
+		"activityId": "act_export_audit"
+	}`)))
+	if export.Code != http.StatusCreated {
+		t.Fatalf("expected manual export created, got %d: %s", export.Code, export.Body.String())
+	}
+
+	audit := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(audit, httptest.NewRequest(http.MethodGet, "/admin/v1/audit?tenantId=site_001&actor=ops", nil))
+	for _, want := range []string{`"action":"MANUAL_GRANT_DECISION"`, `"action":"MANUAL_GRANT_EXPORT_CREATE"`, `"decisionStatus":"SUCCESS"`, `"checksum":`} {
+		if !strings.Contains(audit.Body.String(), want) {
+			t.Fatalf("expected manual audit %s, got: %s", want, audit.Body.String())
+		}
+	}
+	if strings.Contains(audit.Body.String(), "MANUAL_GRANT_CONFIRM_SUCCESS") || strings.Contains(audit.Body.String(), "MANUAL_GRANT_EXPORT_READY") {
+		t.Fatalf("expected stable manual audit actions only, got: %s", audit.Body.String())
 	}
 }
 

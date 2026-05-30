@@ -819,6 +819,10 @@ type AuditQuery struct {
 	ActivityID string
 	EventID    string
 	CommandID  string
+	StartTime  time.Time
+	EndTime    time.Time
+	TraceID    string
+	RequestID  string
 	Limit      int
 }
 

@@ -730,12 +730,12 @@
       "id": "2026-05-29-admin-ops-pages-dlq",
       "title": "admin-ops-pages: 审计对账DLQ运维页面",
       "description": "完整管理后台业务配置页任务。补齐操作审计、对账查询、发奖单查询、Outbox 队列、DLQ 查看/重放/关闭、人工发奖/导出发奖页面。验收：关键操作有确认和审计；列表支持过滤分页；危险操作不能跨 tenant。",
-      "status": "ANALYSIS_READY",
+      "status": "COMMIT_READY",
       "risk": "中",
-      "score": 0,
+      "score": 91,
       "taskDir": "tasks/2026-05-29-admin-ops-pages-dlq",
       "createdAt": "2026-05-29T14:13:00.890251Z",
-      "updatedAt": "2026-05-29T14:13:06.837047Z"
+      "updatedAt": "2026-05-30T08:16:50.583723Z"
     },
     {
       "id": "2026-05-29-alerts-prometheus-grafana-prometheus-grafana",

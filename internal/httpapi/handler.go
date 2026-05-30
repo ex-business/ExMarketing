@@ -408,6 +408,16 @@ func (h *Handler) createQuota(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) listAudit(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	startTime, err := parseOptionalRFC3339Query(r, "startTime")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	endTime, err := parseOptionalRFC3339Query(r, "endTime")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	records, err := h.engine.ListAudit(r.Context(), marketing.AuditQuery{
 		TenantID:   r.URL.Query().Get("tenantId"),
 		Actor:      r.URL.Query().Get("actor"),
@@ -417,6 +427,10 @@ func (h *Handler) listAudit(w http.ResponseWriter, r *http.Request) {
 		ActivityID: r.URL.Query().Get("activityId"),
 		EventID:    r.URL.Query().Get("eventId"),
 		CommandID:  r.URL.Query().Get("commandId"),
+		StartTime:  startTime,
+		EndTime:    endTime,
+		TraceID:    r.URL.Query().Get("traceId"),
+		RequestID:  r.URL.Query().Get("requestId"),
 		Limit:      limit,
 	})
 	if err != nil {
@@ -428,6 +442,18 @@ func (h *Handler) listAudit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": records})
+}
+
+func parseOptionalRFC3339Query(r *http.Request, name string) (time.Time, error) {
+	raw := strings.TrimSpace(r.URL.Query().Get(name))
+	if raw == "" {
+		return time.Time{}, nil
+	}
+	parsed, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("%s must be RFC3339", name)
+	}
+	return parsed.UTC(), nil
 }
 
 func (h *Handler) releaseExpiredQuotaReservations(w http.ResponseWriter, r *http.Request) {

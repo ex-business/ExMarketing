@@ -541,6 +541,17 @@ func (s *Service) ListAudit(ctx context.Context, query marketing.AuditQuery) ([]
 	if strings.TrimSpace(query.TenantID) == "" {
 		return nil, errors.Join(marketing.ErrInvalidOperation, errors.New("tenantId is required"))
 	}
+	if !query.StartTime.IsZero() {
+		query.StartTime = query.StartTime.UTC()
+	}
+	if !query.EndTime.IsZero() {
+		query.EndTime = query.EndTime.UTC()
+	}
+	if !query.StartTime.IsZero() && !query.EndTime.IsZero() && !query.StartTime.Before(query.EndTime) {
+		return nil, errors.Join(marketing.ErrInvalidOperation, errors.New("startTime must be before endTime"))
+	}
+	query.TraceID = strings.TrimSpace(query.TraceID)
+	query.RequestID = strings.TrimSpace(query.RequestID)
 	if query.Limit > 500 {
 		query.Limit = 500
 	}
@@ -838,17 +849,13 @@ func (s *Service) ApplyManualGrantDecision(ctx context.Context, cmd marketing.Ma
 	if err != nil {
 		return marketing.RewardCallbackResult{}, err
 	}
-	action := "MANUAL_GRANT_CONFIRM_FAILED"
-	if cmd.Status == marketing.GrantSuccess {
-		action = "MANUAL_GRANT_CONFIRM_SUCCESS"
-	}
-	if cmd.Status == marketing.GrantClosed {
-		action = "MANUAL_GRANT_CLOSE"
-	}
-	_ = s.audit(ctx, cmd.TenantID, cmd.Operator, action, "GRANT_ORDER", result.GrantOrderID, auditSnapshot(nil, result, map[string]any{
+	_ = s.audit(ctx, cmd.TenantID, cmd.Operator, "MANUAL_GRANT_DECISION", "GRANT_ORDER", result.GrantOrderID, auditSnapshot(nil, result, map[string]any{
 		"grantOrderId":        result.GrantOrderID,
 		"billNo":              result.BillNo,
+		"commandId":           result.CommandID,
 		"idempotencyKey":      result.IdempotencyKey,
+		"decisionStatus":      cmd.Status,
+		"newGrantStatus":      result.GrantStatus,
 		"operator":            cmd.Operator,
 		"reason":              cmd.Reason,
 		"quotaReservations":   result.Reservations,
@@ -866,12 +873,17 @@ func (s *Service) CreateManualGrantExport(ctx context.Context, cmd marketing.Man
 	if err != nil {
 		return marketing.ManualGrantExportCreateResult{}, err
 	}
-	_ = s.audit(ctx, cmd.TenantID, cmd.Operator, "MANUAL_GRANT_EXPORT_READY", "MANUAL_GRANT_EXPORT", result.ExportFile.ID, auditSnapshot(nil, result.ExportFile, map[string]any{
-		"exportId": result.ExportFile.ID,
-		"operator": cmd.Operator,
-		"reason":   cmd.Reason,
-		"rowCount": result.ExportFile.RowCount,
-		"details":  result.Details,
+	_ = s.audit(ctx, cmd.TenantID, cmd.Operator, "MANUAL_GRANT_EXPORT_CREATE", "MANUAL_GRANT_EXPORT", result.ExportFile.ID, auditSnapshot(nil, result.ExportFile, map[string]any{
+		"exportId":     result.ExportFile.ID,
+		"fileFormat":   result.ExportFile.FileFormat,
+		"rowCount":     result.ExportFile.RowCount,
+		"checksum":     result.ExportFile.FileChecksum,
+		"status":       result.ExportFile.Status,
+		"operator":     cmd.Operator,
+		"reason":       cmd.Reason,
+		"details":      result.Details,
+		"detailCount": len(result.Details),
+		"createdAt":   result.ExportFile.CreatedAt,
 	}))
 	return result, nil
 }

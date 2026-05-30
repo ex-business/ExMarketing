@@ -1103,8 +1103,8 @@ func TestPostgresManualExportReadySuccessPersistsTraceAuditAndQuota(t *testing.T
 	assertPostgresQuotaValues(t, repo, activityID, marketing.QuotaUserLimit, marketing.QuotaScopeUser, "user_1", "1.0000", "0.0000")
 	assertPostgresQuotaValues(t, repo, activityID, marketing.QuotaDailyLimit, marketing.QuotaScopeUser, "user_1:2026-05-29", "1.0000", "0.0000")
 	assertPostgresCount(t, repo, `SELECT COUNT(*) FROM marketing_quota_reservation WHERE activity_id = $1 AND reservation_status = 'CONFIRMED'`, activityID, 4)
-	assertPostgresCount(t, repo, `SELECT COUNT(*) FROM marketing_audit WHERE resource_id = $1 AND action = 'MANUAL_GRANT_EXPORT_READY'`, exportResult.ExportFile.ID, 1)
-	assertPostgresCount(t, repo, `SELECT COUNT(*) FROM marketing_audit WHERE resource_id = $1 AND action = 'MANUAL_GRANT_CONFIRM_SUCCESS'`, grant.ID, 1)
+	assertPostgresCount(t, repo, `SELECT COUNT(*) FROM marketing_audit WHERE resource_id = $1 AND action = 'MANUAL_GRANT_EXPORT_CREATE'`, exportResult.ExportFile.ID, 1)
+	assertPostgresCount(t, repo, `SELECT COUNT(*) FROM marketing_audit WHERE resource_id = $1 AND action = 'MANUAL_GRANT_DECISION'`, grant.ID, 1)
 	assertPostgresCount(t, repo, `
 		SELECT COUNT(*)
 		FROM marketing_manual_grant_export_detail d

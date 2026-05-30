@@ -302,6 +302,14 @@ POST /admin/v1/manual-grant-exports
 
 `/manual-grant-exports` 只选择 `grantMode=MANUAL_EXPORT` 且 `PENDING` / `RETRY` 的 grant order，同步生成 CSV、checksum 和导出明细，导出文件 `READY` 后再把明细内单据推进到 `SENDING`。未失败 / 未作废导出明细会阻止同一 grant order 被重复纳入。
 
+人工发奖和导出会写入以下审计 action：
+
+- `MANUAL_GRANT_DECISION`：resource=`GRANT_ORDER`，resourceId 为 grant order ID，payload 包含 `grantOrderId`、`billNo` / `commandId`、`idempotencyKey`、`decisionStatus`、`newGrantStatus`、`operator`、`reason` 和 quota reservation 摘要。
+- `MANUAL_GRANT_EXPORT_CREATE`：resource=`MANUAL_GRANT_EXPORT`，resourceId 为 exportId，payload 包含 `exportId`、`fileFormat`、`rowCount`、`checksum`、筛选快照、明细数量、`operator` 和 `reason`。
+- `MANUAL_GRANT_EXPORT_STATUS`：导出文件 READY / FAILED / CLOSED 等后续状态变化使用该 action；当前创建接口直接返回本次真实状态，不提供长期导出列表或下载接口。
+
+发奖单页和导出发奖页本期只承诺“按条件定位 / 本次创建结果展示”。未定义 grant order 全量分页列表、普通 Outbox 全量列表、导出文件长期列表和下载接口。
+
 ## 活动审批
 
 审批状态为 `NONE / PENDING_L1 / PENDING_L2 / APPROVED / REJECTED / WITHDRAWN`。普通活动一级审批通过后可上线；高危活动一级通过后进入 `PENDING_L2`，必须由不同的二级审批人通过后才可上线。提交人不能审批自己提交的活动，二级审批人不能与一级审批人相同。活动配置版本变化后，旧审批不再允许上线。
@@ -993,8 +1001,11 @@ OUTBOX_DELIVERY_FAILED
 OUTBOX_ENTER_DLQ
 OUTBOX_DLQ_REPLAY
 OUTBOX_DLQ_CLOSE
+MANUAL_GRANT_DECISION
+MANUAL_GRANT_EXPORT_CREATE
+MANUAL_GRANT_EXPORT_STATUS
 ```
 
-`tenantId` 必填。支持按 `tenantId`、`actor`、`action`、`resource`、`resourceId`、`activityId`、`eventId`、`commandId` 和 `limit` 过滤，默认 `limit=100`，最大 `500`。默认按 `createdAt` 倒序返回。
+`tenantId` 必填。支持按 `tenantId`、`actor`、`action`、`resource`、`resourceId`、`activityId`、`eventId`、`commandId`、`startTime`、`endTime`、`traceId`、`requestId` 和 `limit` 过滤，默认 `limit=100`，最大 `500`。默认按 `createdAt` 倒序返回。`startTime` / `endTime` 使用 RFC3339，服务端按 `createdAt >= startTime` 且 `createdAt < endTime` 过滤；`traceId` / `requestId` 精确匹配 `payload.source.traceId` / `payload.source.requestId`，历史缺少 source 摘要的记录不会被补造。
 
 创建、配置修改、审批和模拟类审计 payload 包含 `beforeSnapshot` / `afterSnapshot`；失败类审计在 payload 中记录错误上下文。所有审计 payload 包含 `source` 摘要。人工 HTTP 来源只记录 method、path、requestId/traceId、脱敏 IP 和 userAgent 摘要，不记录 Authorization、Cookie、token 或 secret。`QUOTA_EXCEEDED` payload 包含 `activityId`、`eventInboxId`、`subject`、`biz`、`quotaType`、`scope`、`scopeKey`、`amount`、`reason` 和 `error`，用于排查预算、库存或次数不足导致的发奖回滚。`GRANT_FAILED` payload 包含 `grantOrderId`、`commandId`、失败状态、消息摘要和完成时间。

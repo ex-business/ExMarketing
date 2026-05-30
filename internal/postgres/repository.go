@@ -1530,7 +1530,7 @@ func (r *Repository) updateOutboxDLQ(ctx context.Context, tenantID string, id st
 		"beforeStatus":  before.SendStatus,
 		"afterStatus":   nextStatus,
 		"targetChannel": before.TargetChannel,
-		"targetRef":     before.TargetRef,
+		"targetRef":     redactTargetRef(before.TargetRef),
 		"retryCount":    before.RetryCount,
 		"errorMessage":  before.ErrorMessage,
 		"commandId":     commandID,
@@ -1568,6 +1568,14 @@ func (r *Repository) ListAudit(ctx context.Context, query marketing.AuditQuery) 
 	if query.Limit > 500 {
 		query.Limit = 500
 	}
+	var startTime any
+	if !query.StartTime.IsZero() {
+		startTime = query.StartTime.UTC()
+	}
+	var endTime any
+	if !query.EndTime.IsZero() {
+		endTime = query.EndTime.UTC()
+	}
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, tenant_id, actor, action, resource, resource_id, payload_json, created_at
 		FROM marketing_audit
@@ -1579,10 +1587,14 @@ func (r *Repository) ListAudit(ctx context.Context, query marketing.AuditQuery) 
 		  AND ($6 = '' OR resource_id = $6 OR payload_json::text LIKE '%' || $6 || '%')
 		  AND ($7 = '' OR resource_id = $7 OR payload_json::text LIKE '%' || $7 || '%')
 		  AND ($8 = '' OR resource_id = $8 OR payload_json::text LIKE '%' || $8 || '%')
+		  AND ($9::timestamptz IS NULL OR created_at >= $9)
+		  AND ($10::timestamptz IS NULL OR created_at < $10)
+		  AND ($11 = '' OR payload_json -> 'source' ->> 'traceId' = $11)
+		  AND ($12 = '' OR payload_json -> 'source' ->> 'requestId' = $12)
 		ORDER BY created_at DESC
-		LIMIT $9
+		LIMIT $13
 	`, query.TenantID, query.Actor, query.Action, query.Resource, query.ResourceID,
-		query.ActivityID, query.EventID, query.CommandID, query.Limit)
+		query.ActivityID, query.EventID, query.CommandID, startTime, endTime, query.TraceID, query.RequestID, query.Limit)
 	if err != nil {
 		return nil, err
 	}
@@ -1606,6 +1618,25 @@ func auditSourceFromContext(ctx context.Context) map[string]any {
 		return map[string]any{"component": "internal"}
 	}
 	return source
+}
+
+func redactTargetRef(targetRef string) string {
+	targetRef = strings.TrimSpace(targetRef)
+	if targetRef == "" {
+		return ""
+	}
+	if idx := strings.Index(targetRef, "?"); idx >= 0 {
+		targetRef = targetRef[:idx]
+	}
+	if idx := strings.Index(targetRef, "#"); idx >= 0 {
+		targetRef = targetRef[:idx]
+	}
+	for _, marker := range []string{"token=", "secret=", "password=", "authorization="} {
+		if strings.Contains(strings.ToLower(targetRef), marker) {
+			return "[REDACTED]"
+		}
+	}
+	return targetRef
 }
 
 func (r *Repository) outboxesForReward(ctx context.Context, tenantID string, commandID string, participationID string) ([]marketing.OutboxMessage, error) {

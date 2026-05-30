@@ -1619,7 +1619,7 @@
     <div class="toolbar">
       <div>
         <h2 class="panel-title">审计运维</h2>
-        <div class="subtitle">审计记录、奖励对账、DLQ、Fact Query 和 Callback 调试。</div>
+        <div class="subtitle">审计记录、奖励对账定位、DLQ、人工发奖、导出发奖、Fact Query 和 Callback 调试。</div>
       </div>
       <button class="button secondary" onclick="loadAudit()">刷新审计</button>
     </div>
@@ -1627,6 +1627,7 @@
       <div class="panel">
         <div class="panel-head"><h3 class="panel-title">审计记录</h3></div>
         <div class="detail-body">
+          <div class="readonly-box">服务端按 tenant、对象、时间和 trace/request 过滤；历史审计可能缺少 source trace/request 摘要。</div>
           <div class="field-grid">
             <div>
               <label for="auditTenant">tenantId</label>
@@ -1647,14 +1648,56 @@
               <input id="auditActor" placeholder="ops">
             </div>
           </div>
+          <div class="field-grid">
+            <div>
+              <label for="auditResource">resource</label>
+              <input id="auditResource" placeholder="ACTIVITY / GRANT_ORDER / OUTBOX">
+            </div>
+            <div>
+              <label for="auditResourceId">resourceId</label>
+              <input id="auditResourceId" placeholder="业务对象 ID">
+            </div>
+          </div>
+          <div class="field-grid">
+            <div>
+              <label for="auditActivityId">activityId</label>
+              <input id="auditActivityId" placeholder="act_xxx">
+            </div>
+            <div>
+              <label for="auditEventId">eventId</label>
+              <input id="auditEventId" placeholder="evt_xxx">
+            </div>
+          </div>
+          <div class="field-grid">
+            <div>
+              <label for="auditCommandId">commandId</label>
+              <input id="auditCommandId" placeholder="cmd_xxx">
+            </div>
+            <div>
+              <label for="auditTraceId">traceId</label>
+              <input id="auditTraceId" placeholder="X-Trace-Id">
+            </div>
+          </div>
+          <div class="field-grid">
+            <div>
+              <label for="auditRequestId">requestId</label>
+              <input id="auditRequestId" placeholder="X-Request-Id">
+            </div>
+            <div>
+              <label for="auditStartTime">startTime</label>
+              <input id="auditStartTime" placeholder="2026-05-29T00:00:00Z">
+            </div>
+          </div>
+          <label for="auditEndTime">endTime</label>
+          <input id="auditEndTime" placeholder="2026-05-30T00:00:00Z">
           <div class="ops"><button class="button" onclick="loadAudit()">查询审计</button></div>
           <pre class="output" id="auditResult"></pre>
         </div>
       </div>
       <div class="panel">
-        <div class="panel-head"><h3 class="panel-title">奖励对账</h3></div>
+        <div class="panel-head"><h3 class="panel-title">奖励对账定位</h3></div>
         <div class="detail-body">
-          <div class="readonly-box">至少填写 tenantId，并提供 commandId、grantOrderId、activityId、subject、eventId 或 idempotencyKey 之一。</div>
+          <div class="readonly-box">按条件定位发奖单和链路；不是 grant order、普通 outbox 或导出文件的全量分页列表。至少填写 tenantId，并提供 commandId、grantOrderId、activityId、subject、eventId、participationId、outboxId 或 idempotencyKey 之一。</div>
           <div class="field-grid">
             <div>
               <label for="reconTenant">tenantId</label>
@@ -1679,6 +1722,7 @@
       <div class="panel">
         <div class="panel-head"><h3 class="panel-title">DLQ 运维</h3></div>
         <div class="detail-body">
+          <div class="readonly-box">DLQ 列表只展示当前 tenant 的 DLQ；includeClosed 后包含 DLQ_CLOSED。普通 Outbox 全量列表不在本页承诺范围。</div>
           <div class="field-grid">
             <div>
               <label for="dlqTenant">tenantId</label>
@@ -1713,6 +1757,30 @@
         </div>
       </div>
       <div class="admin-stack">
+        <div class="panel">
+          <div class="panel-head"><h3 class="panel-title">人工发奖确认</h3></div>
+          <div class="detail-body">
+            <div class="readonly-box">按 tenant + grantOrderId / commandId / billNo / idempotencyKey 定位人工发奖单；operator 和 reason 必填。</div>
+            <textarea id="manualDecision"></textarea>
+            <div class="ops">
+              <button class="button" onclick="submitManualDecision()">提交确认</button>
+              <button class="button secondary" onclick="fillManualDecisionSample()">填入示例</button>
+            </div>
+            <pre class="output" id="manualDecisionResult"></pre>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><h3 class="panel-title">导出发奖创建</h3></div>
+          <div class="detail-body">
+            <div class="readonly-box">创建 MANUAL_EXPORT 文件并展示本次返回的真实 exportId、rowCount、checksum 和明细摘要；长期列表和下载接口待后续接入。</div>
+            <textarea id="manualExport"></textarea>
+            <div class="ops">
+              <button class="button" onclick="createManualExport()">创建导出</button>
+              <button class="button secondary" onclick="fillManualExportSample()">填入示例</button>
+            </div>
+            <pre class="output" id="manualExportResult"></pre>
+          </div>
+        </div>
         <div class="panel">
           <div class="panel-head"><h3 class="panel-title">Fact Query</h3></div>
           <div class="detail-body">
@@ -3852,6 +3920,15 @@ async function loadAudit() {
   addQuery(params, 'tenantId', valueOf('auditTenant'));
   addQuery(params, 'actor', valueOf('auditActor'));
   addQuery(params, 'action', valueOf('auditAction'));
+  addQuery(params, 'resource', valueOf('auditResource'));
+  addQuery(params, 'resourceId', valueOf('auditResourceId'));
+  addQuery(params, 'activityId', valueOf('auditActivityId'));
+  addQuery(params, 'eventId', valueOf('auditEventId'));
+  addQuery(params, 'commandId', valueOf('auditCommandId'));
+  addQuery(params, 'traceId', valueOf('auditTraceId'));
+  addQuery(params, 'requestId', valueOf('auditRequestId'));
+  addQuery(params, 'startTime', valueOf('auditStartTime'));
+  addQuery(params, 'endTime', valueOf('auditEndTime'));
   addQuery(params, 'limit', valueOf('auditLimit'));
   const data = await requestJson('/admin/v1/audit?' + params.toString());
   writeResult('auditResult', data);
@@ -3888,6 +3965,11 @@ async function operateDLQ(action) {
     document.getElementById('dlqResult').textContent = 'outboxId 不能为空';
     return;
   }
+  if (!valueOf('dlqOperator') || !valueOf('dlqReason')) {
+    document.getElementById('dlqResult').textContent = 'operator 和 reason 不能为空';
+    return;
+  }
+  if (!confirm(`${action.toUpperCase()} DLQ ${id} ?`)) return;
   const body = {
     tenantId: valueOf('dlqTenant'),
     operator: valueOf('dlqOperator'),
@@ -3898,6 +3980,38 @@ async function operateDLQ(action) {
     body: JSON.stringify(body)
   });
   writeResult('dlqResult', data);
+}
+
+async function submitManualDecision() {
+  const body = parseDangerousJSON('manualDecision', 'manualDecisionResult');
+  if (!body) return;
+  if (!body.operator || !body.reason) {
+    document.getElementById('manualDecisionResult').textContent = 'operator 和 reason 不能为空';
+    return;
+  }
+  const locator = body.grantOrderId || body.commandId || body.billNo || body.idempotencyKey || '';
+  if (!confirm(`提交人工发奖 ${body.status || ''} ${locator} ?`)) return;
+  await postJson('/admin/v1/manual-grants/decision', 'manualDecision', 'manualDecisionResult');
+}
+
+async function createManualExport() {
+  const body = parseDangerousJSON('manualExport', 'manualExportResult');
+  if (!body) return;
+  if (!body.operator || !body.reason) {
+    document.getElementById('manualExportResult').textContent = 'operator 和 reason 不能为空';
+    return;
+  }
+  if (!confirm('创建 MANUAL_EXPORT 导出文件 ?')) return;
+  await postJson('/admin/v1/manual-grant-exports', 'manualExport', 'manualExportResult');
+}
+
+function parseDangerousJSON(inputId, outputId) {
+  try {
+    return JSON.parse(valueOf(inputId) || '{}');
+  } catch (err) {
+    document.getElementById(outputId).textContent = 'JSON 解析失败: ' + err.message;
+    return null;
+  }
 }
 
 function writeResult(id, data) {
@@ -4269,6 +4383,29 @@ function fillCallbackSample() {
     externalGrantId: 'wallet_bill_888',
     message: 'granted',
     finishedAt: '2026-05-24T12:00:03Z'
+  });
+}
+
+function fillManualDecisionSample() {
+  setJsonSample('manualDecision', {
+    tenantId: 'site_001',
+    commandId: 'cmd_xxx',
+    status: 'SUCCESS',
+    externalGrantId: 'offline_bill_888',
+    operator: 'ops',
+    reason: 'offline paid',
+    finishedAt: new Date().toISOString()
+  });
+}
+
+function fillManualExportSample() {
+  setJsonSample('manualExport', {
+    tenantId: 'site_001',
+    operator: 'ops',
+    reason: 'daily offline export',
+    activityId: 'act_xxx',
+    fileFormat: 'CSV',
+    limit: 100
   });
 }
 

@@ -1963,11 +1963,55 @@ func auditRecordMatches(record AuditRecord, query AuditQuery) bool {
 	if query.CommandID != "" && record.ResourceID != query.CommandID && !rawJSONContains(record.Payload, query.CommandID) {
 		return false
 	}
+	if !query.StartTime.IsZero() && record.CreatedAt.Before(query.StartTime) {
+		return false
+	}
+	if !query.EndTime.IsZero() && !record.CreatedAt.Before(query.EndTime) {
+		return false
+	}
+	if query.TraceID != "" && auditPayloadSourceValue(record.Payload, "traceId") != query.TraceID {
+		return false
+	}
+	if query.RequestID != "" && auditPayloadSourceValue(record.Payload, "requestId") != query.RequestID {
+		return false
+	}
 	return true
 }
 
 func rawJSONContains(payload json.RawMessage, value string) bool {
 	return value != "" && strings.Contains(string(payload), value)
+}
+
+func auditPayloadSourceValue(payload json.RawMessage, key string) string {
+	var body map[string]any
+	if err := json.Unmarshal(payload, &body); err != nil {
+		return ""
+	}
+	source, ok := body["source"].(map[string]any)
+	if !ok {
+		return ""
+	}
+	value, _ := source[key].(string)
+	return value
+}
+
+func redactTargetRef(targetRef string) string {
+	targetRef = strings.TrimSpace(targetRef)
+	if targetRef == "" {
+		return ""
+	}
+	if idx := strings.Index(targetRef, "?"); idx >= 0 {
+		targetRef = targetRef[:idx]
+	}
+	if idx := strings.Index(targetRef, "#"); idx >= 0 {
+		targetRef = targetRef[:idx]
+	}
+	for _, marker := range []string{"token=", "secret=", "password=", "authorization="} {
+		if strings.Contains(strings.ToLower(targetRef), marker) {
+			return "[REDACTED]"
+		}
+	}
+	return targetRef
 }
 
 func outboxOperationAudit(ctx context.Context, tenantID string, operator string, action string, before OutboxMessage, after OutboxStatus, reason string, at time.Time) AuditRecord {
@@ -1982,7 +2026,7 @@ func outboxOperationAudit(ctx context.Context, tenantID string, operator string,
 		"beforeStatus":  before.SendStatus,
 		"afterStatus":   after,
 		"targetChannel": before.TargetChannel,
-		"targetRef":     before.TargetRef,
+		"targetRef":     redactTargetRef(before.TargetRef),
 		"retryCount":    before.RetryCount,
 		"errorMessage":  before.ErrorMessage,
 		"commandId":     outboxRewardCommandID(before.Payload),

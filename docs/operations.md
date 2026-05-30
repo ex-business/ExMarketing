@@ -44,6 +44,19 @@ Prometheus 告警规则位于 `monitoring/alerts-exmarketing.rules.yml`，并已
 - `monitoring/alertmanager-exmarketing.tmpl`
 - `docs/runbooks/exmarketing-alerts.md`
 
+告警处置、SLO/SLA、演练记录、复盘模板和告警到 runbook 的映射表统一维护在
+`docs/runbooks/exmarketing-alerts.md`。值班处理时优先打开 Alertmanager
+告警中的 `runbook` label；若只从运维手册进入，使用以下入口：
+
+| 入口 | 文档位置 | 用途 |
+| --- | --- | --- |
+| 告警公共字段与升级 | `docs/runbooks/exmarketing-alerts.md#common-fields`、`#escalation` | ack、升级、silence 和敏感信息约束。 |
+| 告警 runbook | `docs/runbooks/exmarketing-alerts.md#alert-runbooks` | DLQ、outbox backlog、callback、quota、worker、DB、Fact Query 等逐项处置。 |
+| SLI/SLO/SLA | `docs/runbooks/exmarketing-alerts.md#sli-slo-and-sla` | 可用性、延迟、错误率、数据一致性和 DLQ 清理时效。 |
+| 业务确认边界 | `docs/runbooks/exmarketing-alerts.md#business-confirmation-policy` | 区分技术可直接处理和必须业务确认的动作。 |
+| 演练与复盘模板 | `docs/runbooks/exmarketing-alerts.md#drill-record-template`、`#incident-review-template` | 演练记录、事故复盘和预防项跟踪。 |
+| 告警映射表 | `docs/runbooks/exmarketing-alerts.md#alert-to-runbook-mapping` | alertname、severity、owner、dashboard、anchor、验证指标。 |
+
 规则按 `P0/P1/P2/P3` 标注严重级别，并统一带上 `service`、`tenant`、
 `channel`、`severity`、`summary`、`dashboard` 和 `runbook`。DLQ、outbox
 backlog、worker claim 相关规则按 `tenant_id,target_channel` 聚合，不做全局

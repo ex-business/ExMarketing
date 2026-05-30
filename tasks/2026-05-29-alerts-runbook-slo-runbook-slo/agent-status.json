@@ -1,0 +1,53 @@
+{
+  "requirementId": "2026-05-29-alerts-runbook-slo-runbook-slo",
+  "updatedAt": "2026-05-30T10:07:14.993315Z",
+  "agents": {
+    "analysis": {
+      "status": "DONE",
+      "startedAt": "2026-05-30T09:42:53.616193Z",
+      "finishedAt": "2026-05-30T09:45:50.53326Z",
+      "output": "tasks/2026-05-29-alerts-runbook-slo-runbook-slo/analysis.md",
+      "log": "tasks/2026-05-29-alerts-runbook-slo-runbook-slo/runs/20260530T094253Z-analysis.log",
+      "nextStatus": "REVIEW_READY"
+    },
+    "commit": {
+      "status": "RUNNING",
+      "startedAt": "2026-05-30T10:07:14.993312Z",
+      "output": "tasks/2026-05-29-alerts-runbook-slo-runbook-slo/commit.md",
+      "log": "tasks/2026-05-29-alerts-runbook-slo-runbook-slo/runs/20260530T100714Z-commit.log",
+      "pid": 37891
+    },
+    "dev": {
+      "status": "DONE",
+      "startedAt": "2026-05-30T09:55:44.119176Z",
+      "finishedAt": "2026-05-30T10:03:35.095416Z",
+      "output": "tasks/2026-05-29-alerts-runbook-slo-runbook-slo/implementation.md",
+      "log": "tasks/2026-05-29-alerts-runbook-slo-runbook-slo/runs/20260530T095544Z-dev.log",
+      "nextStatus": "REVIEW_PASS"
+    },
+    "review": {
+      "status": "DONE",
+      "startedAt": "2026-05-30T09:45:50.881364Z",
+      "finishedAt": "2026-05-30T09:46:37.760265Z",
+      "output": "tasks/2026-05-29-alerts-runbook-slo-runbook-slo/review.md",
+      "log": "tasks/2026-05-29-alerts-runbook-slo-runbook-slo/runs/20260530T094550Z-review.log",
+      "nextStatus": "REVIEW_PASS"
+    },
+    "test": {
+      "status": "DONE",
+      "startedAt": "2026-05-30T10:03:35.137293Z",
+      "finishedAt": "2026-05-30T10:07:14.967283Z",
+      "output": "tasks/2026-05-29-alerts-runbook-slo-runbook-slo/test.md",
+      "log": "tasks/2026-05-29-alerts-runbook-slo-runbook-slo/runs/20260530T100335Z-test.log",
+      "nextStatus": "COMMIT_READY"
+    },
+    "test-plan": {
+      "status": "DONE",
+      "startedAt": "2026-05-30T09:46:37.792351Z",
+      "finishedAt": "2026-05-30T09:48:58.611362Z",
+      "output": "tasks/2026-05-29-alerts-runbook-slo-runbook-slo/test-plan.md",
+      "log": "tasks/2026-05-29-alerts-runbook-slo-runbook-slo/runs/20260530T094637Z-test-plan.log",
+      "nextStatus": "REVIEW_PASS"
+    }
+  }
+}

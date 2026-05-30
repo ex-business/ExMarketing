@@ -1825,6 +1825,15 @@ func TestRewardCallbackSignedIdempotencyAndLocatorConflict(t *testing.T) {
 		t.Fatalf("expected invalid signature response, got %d: %s", invalid.Code, invalid.Body.String())
 	}
 
+	expired := postSignedRewardCallback(t, handler, body, func(req *http.Request) {
+		timestamp := strconv.FormatInt(time.Now().UTC().Add(-10*time.Minute).Unix(), 10)
+		req.Header.Set("X-ExMarketing-Timestamp", timestamp)
+		req.Header.Set("X-ExMarketing-Signature", webhookTestSignature("callback-secret", timestamp, body))
+	})
+	if expired.Code != http.StatusUnauthorized || !strings.Contains(expired.Body.String(), `"errorCode":"CALLBACK_TIMESTAMP_INVALID"`) {
+		t.Fatalf("expected expired signature response, got %d: %s", expired.Code, expired.Body.String())
+	}
+
 	ok := postSignedRewardCallback(t, handler, body, nil)
 	if ok.Code != http.StatusOK || !strings.Contains(ok.Body.String(), `"grantStatus":"SUCCESS"`) || !strings.Contains(ok.Body.String(), `"idempotencyKey":"`+firstOrder.IdempotencyKey+`"`) {
 		t.Fatalf("expected signed idempotency callback OK, got %d: %s", ok.Code, ok.Body.String())
@@ -2777,6 +2786,17 @@ func TestWebhookReceiverRejectsSecurityAndMappingFailures(t *testing.T) {
 			},
 			wantStatus: http.StatusUnauthorized,
 			wantCode:   "WEBHOOK_SIGNATURE_INVALID",
+		},
+		{
+			name:      "expired timestamp",
+			receivers: map[string]WebhookReceiver{"payment-webhook": validWebhookReceiver(true)},
+			mutate: func(req *http.Request) {
+				timestamp := strconv.FormatInt(time.Now().UTC().Add(-10*time.Minute).Unix(), 10)
+				req.Header.Set("X-ExMarketing-Timestamp", timestamp)
+				req.Header.Set("X-ExMarketing-Signature", webhookTestSignature("receiver-secret", timestamp, body))
+			},
+			wantStatus: http.StatusBadRequest,
+			wantCode:   "WEBHOOK_TIMESTAMP_INVALID",
 		},
 		{
 			name:       "mapping failed",

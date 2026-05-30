@@ -961,6 +961,8 @@ POST /openapi/v1/reward/callback
 ```bash
 curl -X POST http://localhost:8080/openapi/v1/reward/callback \
   -H 'content-type: application/json' \
+  -H "X-ExMarketing-Timestamp: $timestamp" \
+  -H "X-ExMarketing-Signature: $signature" \
   -d '{
     "commandId": "cmd_xxx",
     "tenantId": "site_001",
@@ -975,7 +977,8 @@ curl -X POST http://localhost:8080/openapi/v1/reward/callback \
 
 ```text
 更新 grant_order 时必须同时匹配 tenantId + commandId
-后续生产版本必须增加签名或 token 鉴权
+配置 callback secret 的 tenant 必须使用 X-ExMarketing-Timestamp + "." + raw_body 做 HMAC-SHA256 签名
+签名缺失、过期或不匹配会返回 CALLBACK_SIGNATURE_MISSING / CALLBACK_TIMESTAMP_INVALID / CALLBACK_SIGNATURE_INVALID，且不会更新业务状态
 ```
 
 ## 审计查询

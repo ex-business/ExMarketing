@@ -515,13 +515,14 @@ func TestPostgresOutboxConcurrentClaimMultipleMessages(t *testing.T) {
 
 func TestPostgresOutboxStaleRecoveryConcurrentClaim(t *testing.T) {
 	ctx, repo := openPostgresIntegrationRepository(t)
-	prefix := "pg_outbox_stale_concurrent"
+	prefix := fmt.Sprintf("pg_outbox_stale_concurrent_%d", time.Now().UnixNano())
 	cleanupPostgresAtomicTest(t, repo, prefix)
 	t.Cleanup(func() { cleanupPostgresAtomicTest(t, repo, prefix) })
 
-	stale := testPostgresOutbox(prefix+"_stale", time.Now().UTC().Add(-10*time.Minute))
+	staleAt := time.Unix(1, 0).UTC()
+	stale := testPostgresOutbox(prefix+"_stale", staleAt)
 	stale.SendStatus = marketing.OutboxSending
-	stale.UpdatedAt = time.Now().UTC().Add(-10 * time.Minute)
+	stale.UpdatedAt = staleAt
 	if _, err := repo.CreateOutbox(ctx, stale); err != nil {
 		t.Fatalf("create stale outbox: %v", err)
 	}
@@ -555,7 +556,9 @@ func TestPostgresOutboxStaleRecoveryConcurrentClaim(t *testing.T) {
 	}
 	var ids []string
 	for id := range recoveredIDs {
-		ids = append(ids, id)
+		if strings.HasPrefix(id, prefix) {
+			ids = append(ids, id)
+		}
 	}
 	if len(ids) != 1 || ids[0] != prefix+"_stale" {
 		t.Fatalf("expected one stale recovery, got %v", ids)

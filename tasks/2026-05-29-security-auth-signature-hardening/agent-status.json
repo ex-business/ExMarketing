@@ -1,0 +1,53 @@
+{
+  "requirementId": "2026-05-29-security-auth-signature-hardening",
+  "updatedAt": "2026-05-30T13:26:08.881548Z",
+  "agents": {
+    "analysis": {
+      "status": "DONE",
+      "startedAt": "2026-05-30T13:10:25.347327Z",
+      "finishedAt": "2026-05-30T13:13:18.979517Z",
+      "output": "tasks/2026-05-29-security-auth-signature-hardening/analysis.md",
+      "log": "tasks/2026-05-29-security-auth-signature-hardening/runs/20260530T131025Z-analysis.log",
+      "nextStatus": "REVIEW_READY"
+    },
+    "commit": {
+      "status": "RUNNING",
+      "startedAt": "2026-05-30T13:26:08.881544Z",
+      "output": "tasks/2026-05-29-security-auth-signature-hardening/commit.md",
+      "log": "tasks/2026-05-29-security-auth-signature-hardening/runs/20260530T132608Z-commit.log",
+      "pid": 60003
+    },
+    "dev": {
+      "status": "DONE",
+      "startedAt": "2026-05-30T13:20:28.206168Z",
+      "finishedAt": "2026-05-30T13:23:18.009802Z",
+      "output": "tasks/2026-05-29-security-auth-signature-hardening/implementation.md",
+      "log": "tasks/2026-05-29-security-auth-signature-hardening/runs/20260530T132028Z-dev.log",
+      "nextStatus": "REVIEW_PASS"
+    },
+    "review": {
+      "status": "DONE",
+      "startedAt": "2026-05-30T13:13:19.338672Z",
+      "finishedAt": "2026-05-30T13:14:21.441748Z",
+      "output": "tasks/2026-05-29-security-auth-signature-hardening/review.md",
+      "log": "tasks/2026-05-29-security-auth-signature-hardening/runs/20260530T131319Z-review.log",
+      "nextStatus": "REVIEW_PASS"
+    },
+    "test": {
+      "status": "DONE",
+      "startedAt": "2026-05-30T13:23:18.063468Z",
+      "finishedAt": "2026-05-30T13:26:08.847095Z",
+      "output": "tasks/2026-05-29-security-auth-signature-hardening/test.md",
+      "log": "tasks/2026-05-29-security-auth-signature-hardening/runs/20260530T132318Z-test.log",
+      "nextStatus": "COMMIT_READY"
+    },
+    "test-plan": {
+      "status": "DONE",
+      "startedAt": "2026-05-30T13:14:21.469309Z",
+      "finishedAt": "2026-05-30T13:16:01.43526Z",
+      "output": "tasks/2026-05-29-security-auth-signature-hardening/test-plan.md",
+      "log": "tasks/2026-05-29-security-auth-signature-hardening/runs/20260530T131421Z-test-plan.log",
+      "nextStatus": "REVIEW_PASS"
+    }
+  }
+}

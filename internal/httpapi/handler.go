@@ -203,6 +203,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /openapi/v1/webhooks/", h.missingWebhookReceiver)
 	mux.HandleFunc("POST /openapi/v1/facts/query", h.queryFacts)
 	mux.HandleFunc("POST /openapi/v1/reward/callback", h.rewardCallback)
+	mux.Handle("GET /admin-flow/", http.StripPrefix("/admin-flow/", http.FileServer(http.Dir("web/admin-flow"))))
 	mux.Handle("GET /admin/", http.StripPrefix("/admin/", http.FileServer(http.Dir("web/admin"))))
 	return withAuditSource(mux)
 }

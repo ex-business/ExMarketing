@@ -1,0 +1,38 @@
+{
+  "name": "exmarketing",
+  "version": "1.0.0",
+  "description": "`ExMarketing` is a standalone marketing system under `ex-stack`.",
+  "private": true,
+  "main": "index.js",
+  "directories": {
+    "doc": "docs"
+  },
+  "scripts": {
+    "build:admin-flow": "vite build frontend/admin-flow --base /admin-flow/ --outDir ../../web/admin-flow --emptyOutDir",
+    "dev:admin-flow": "vite --host 127.0.0.1 frontend/admin-flow",
+    "typecheck:admin-flow": "tsc -p frontend/admin-flow/tsconfig.json"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ex-business/ExMarketing.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/ex-business/ExMarketing/issues"
+  },
+  "homepage": "https://github.com/ex-business/ExMarketing#readme",
+  "dependencies": {
+    "@xyflow/react": "^12.3.6",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.15",
+    "@types/react-dom": "^19.2.3",
+    "typescript": "^6.0.3",
+    "vite": "^6.4.2"
+  }
+}

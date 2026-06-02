@@ -30,6 +30,13 @@ export type ActivityNodeData = {
   desc: string;
   inputs: string[];
   outputs: string[];
+  runStatus?: 'RUNNING' | 'SUCCESS' | 'FAILED' | 'SKIPPED';
+  lastRun?: {
+    status: 'RUNNING' | 'SUCCESS' | 'FAILED' | 'SKIPPED';
+    errorMessage?: string;
+    output?: unknown;
+    finishedAt?: string;
+  };
   onDelete?: (nodeId: string) => void;
   onAddFromOutput?: (request: OutputAddRequest) => void;
   onHoverChange?: (nodeId: string, hovering: boolean) => void;
@@ -76,4 +83,56 @@ export type NodePickerState = {
 export type AlignmentGuide = {
   vertical?: { screen: number; start: number; end: number; kind: 'left' | 'center' | 'right' };
   horizontal?: { screen: number; start: number; end: number; kind: 'top' | 'center' | 'bottom' };
+};
+
+export type WorkflowDefinition = {
+  nodes: Array<{
+    id: string;
+    type: string;
+    kind?: string;
+    code?: string;
+    title?: string;
+    position?: { x: number; y: number };
+    inputs?: string[];
+    outputs?: string[];
+    config?: unknown;
+  }>;
+  edges: Array<{
+    id: string;
+    source: string;
+    target: string;
+    sourceHandle?: string;
+    targetHandle?: string;
+    label?: string;
+  }>;
+  viewport?: { x: number; y: number; zoom: number };
+  meta?: Record<string, unknown>;
+};
+
+export type WorkflowExecutionStatus = 'RUNNING' | 'SUCCESS' | 'FAILED';
+
+export type WorkflowExecution = {
+  id: string;
+  tenantId: string;
+  activityId: string;
+  workflowVersionId: string;
+  workflowVersion: number;
+  eventInboxId?: string;
+  eventId?: string;
+  status: WorkflowExecutionStatus;
+  startedAt: string;
+  finishedAt?: string;
+  errorMessage?: string;
+};
+
+export type WorkflowNodeExecution = {
+  id: string;
+  executionId: string;
+  nodeId: string;
+  nodeType: string;
+  nodeTitle?: string;
+  status: 'RUNNING' | 'SUCCESS' | 'FAILED' | 'SKIPPED';
+  output?: unknown;
+  errorMessage?: string;
+  finishedAt?: string;
 };

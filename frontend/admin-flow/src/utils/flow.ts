@@ -1,5 +1,5 @@
 import { MarkerType } from '@xyflow/react';
-import type { ActivityEdge, ActivityNode, FlowNode, NodeKind } from '../types';
+import type { ActivityEdge, ActivityNode, FlowNode } from '../types';
 import { getDef } from '../data/nodeCatalog';
 
 export const ACTIVITY_NODE_WIDTH = 242;
@@ -34,23 +34,6 @@ export const layoutPositionByDefId: Record<string, { x: number; y: number }> = {
 
 export function cx(...names: Array<string | false | null | undefined>): string {
   return names.filter(Boolean).join(' ');
-}
-
-export function iconFor(kind: NodeKind): string {
-  return {
-    entry: '⌂',
-    store: '▣',
-    transform: '⇄',
-    logic: '⌁',
-    query: '⌕',
-    reward: '◇',
-    quota: '↯',
-    grant: '✓',
-    dispatch: '↗',
-    callback: '↩',
-    reliable: '∞',
-    audit: '◷',
-  }[kind];
 }
 
 export function flowNode(defId: string, x: number, y: number, extra: Partial<ActivityNode> = {}): ActivityNode {

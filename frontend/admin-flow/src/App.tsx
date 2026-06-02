@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   addEdge,
   Background,
@@ -19,7 +19,7 @@ import { NodePicker } from './components/NodePicker';
 import { PropertyPanel } from './components/PropertyPanel';
 import { StudioChrome } from './components/StudioChrome';
 import { baseEdges, baseNodes, simpleTemplate } from './data/initialFlow';
-import { nodeCatalog } from './data/nodeCatalog';
+import { getDef, nodeCatalog } from './data/nodeCatalog';
 import type {
   ActivityEdge,
   ActivityNode,
@@ -31,8 +31,89 @@ import type {
   NodePickerState,
   NoteNode,
   OutputAddRequest,
+  WorkflowDefinition,
+  WorkflowExecution,
+  WorkflowNodeExecution,
 } from './types';
 import { ACTIVITY_NODE_WIDTH, activityNodeHeight, cx, edge, flowNode, layoutFlowNodes } from './utils/flow';
+
+type ActivitySummary = {
+  id: string;
+  activityCode: string;
+  activityName: string;
+  tenantId: string;
+};
+
+function serializeWorkflowDefinition(nodes: FlowNode[], edges: ActivityEdge[], viewport?: { x: number; y: number; zoom: number }): WorkflowDefinition {
+  return {
+    nodes: nodes
+      .filter((node): node is ActivityNode => node.type === 'activity')
+      .map((node) => ({
+        id: node.id,
+        type: node.data.id,
+        kind: node.data.kind,
+        code: node.data.code,
+        title: node.data.title,
+        position: { x: node.position.x, y: node.position.y },
+        inputs: node.data.inputs,
+        outputs: node.data.outputs,
+      })),
+    edges: edges.map((item) => ({
+      id: item.id,
+      source: item.source,
+      target: item.target,
+      sourceHandle: item.sourceHandle ?? undefined,
+      targetHandle: item.targetHandle ?? undefined,
+      label: typeof item.label === 'string' ? item.label : undefined,
+    })),
+    viewport,
+    meta: {
+      app: 'ExMarketing',
+      schema: 'activity-workflow/v1',
+      exportedAt: new Date().toISOString(),
+    },
+  };
+}
+
+function hydrateWorkflowDefinition(definition: WorkflowDefinition): { nodes: FlowNode[]; edges: ActivityEdge[] } {
+  return {
+    nodes: definition.nodes.map((node) => {
+      const base = getDef(node.type);
+      return flowNode(node.type, node.position?.x ?? 80, node.position?.y ?? 120, {
+        id: node.id,
+        data: {
+          ...base,
+          id: node.type,
+          code: node.code ?? base.code,
+          title: node.title ?? base.title,
+          kind: (node.kind as ActivityNode['data']['kind']) ?? base.kind,
+          inputs: node.inputs ?? base.inputs,
+          outputs: node.outputs ?? base.outputs,
+        },
+      });
+    }),
+    edges: definition.edges.map((item) => edge(item.source, item.target, item.label ?? '', item.sourceHandle, item.targetHandle)),
+  };
+}
+
+async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(url, {
+    ...init,
+    headers: {
+      'content-type': 'application/json',
+      ...(init?.headers ?? {}),
+    },
+  });
+  const contentType = response.headers.get('content-type') ?? '';
+  if (!contentType.includes('application/json')) {
+    throw new Error('接口不可用');
+  }
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.error ?? body.message ?? `${response.status} ${response.statusText}`);
+  }
+  return response.json() as Promise<T>;
+}
 
 export function App() {
   const [nodes, setNodes, onNodesChange] = useNodesState<FlowNode>(baseNodes);
@@ -51,11 +132,60 @@ export function App() {
   const [showPalette, setShowPalette] = useState(false);
   const [interactionMode, setInteractionMode] = useState<'pointer' | 'hand'>('pointer');
   const [zoomPercent, setZoomPercent] = useState(100);
+  const [showMiniMap, setShowMiniMap] = useState(true);
   const [showChecklist, setShowChecklist] = useState(false);
   const [isPublished, setIsPublished] = useState(false);
+  const [activityId, setActivityId] = useState('');
+  const [activityLabel, setActivityLabel] = useState('未绑定活动');
+  const [workflowStatus, setWorkflowStatus] = useState('未连接后端');
 
   const nodeTypes = useMemo(() => ({ activity: ActivityNodeView, group: GroupNodeView, note: NoteNodeView }), []);
   const selectedCount = selectedNodeIds.length + selectedEdgeIds.length;
+
+  useEffect(() => {
+    let cancelled = false;
+    const params = new URLSearchParams(window.location.search);
+    const requestedActivityId = params.get('activityId') ?? '';
+    fetchJSON<{ items: ActivitySummary[] }>('/admin/v1/activities')
+      .then((body) => {
+        if (cancelled) return;
+        const activity = body.items.find((item) => item.id === requestedActivityId) ?? body.items[0];
+        if (!activity) {
+          setWorkflowStatus('没有可绑定活动');
+          return;
+        }
+        setActivityId(activity.id);
+        setActivityLabel(`${activity.activityName} / ${activity.activityCode}`);
+        setWorkflowStatus('已绑定活动');
+      })
+      .catch((error: Error) => {
+        if (cancelled) return;
+        setWorkflowStatus(`后端未连接：${error.message}`);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!activityId) return;
+    let cancelled = false;
+    fetchJSON<{ definition: WorkflowDefinition }>(`/admin/v1/activities/${activityId}/workflow/draft`)
+      .then((draft) => {
+        if (cancelled || !draft.definition) return;
+        const next = hydrateWorkflowDefinition(draft.definition);
+        setNodes(next.nodes);
+        setEdges(next.edges);
+        setWorkflowStatus('已加载草稿');
+      })
+      .catch((error: Error) => {
+        if (cancelled) return;
+        setWorkflowStatus(error.message.includes('not found') ? '当前活动暂无草稿' : `草稿加载失败：${error.message}`);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activityId, setEdges, setNodes]);
 
   const filteredCatalog = useMemo(() => {
     const keyword = nodeSearch.trim().toLowerCase();
@@ -357,6 +487,95 @@ export function App() {
     setZoomPercent(Math.round(zoom * 100));
   }, [reactFlowInstance]);
 
+  const zoomTo = useCallback((zoom: number) => {
+    reactFlowInstance?.setViewport({ x: 24, y: 36, zoom }, { duration: 180 });
+    setZoomPercent(Math.round(zoom * 100));
+  }, [reactFlowInstance]);
+
+  const saveDraft = useCallback(async (): Promise<boolean> => {
+    if (!activityId) {
+      setWorkflowStatus('需要先绑定活动');
+      return false;
+    }
+    const definition = serializeWorkflowDefinition(nodes, edges, reactFlowInstance?.getViewport());
+    try {
+      await fetchJSON(`/admin/v1/activities/${activityId}/workflow/draft`, {
+        method: 'PUT',
+        body: JSON.stringify({ operator: 'admin-flow', definition }),
+      });
+      setWorkflowStatus('草稿已保存');
+      setLastAdded('保存草稿');
+      return true;
+    } catch (error) {
+      setWorkflowStatus(`保存失败：${(error as Error).message}`);
+      return false;
+    }
+  }, [activityId, edges, nodes, reactFlowInstance]);
+
+  const publishWorkflow = useCallback(async () => {
+    if (!activityId) {
+      setWorkflowStatus('需要先绑定活动');
+      return;
+    }
+    try {
+      const draftSaved = await saveDraft();
+      if (!draftSaved) {
+        return;
+      }
+      await fetchJSON(`/admin/v1/activities/${activityId}/workflow/publish`, {
+        method: 'POST',
+        body: JSON.stringify({ operator: 'admin-flow' }),
+      });
+      setIsPublished(true);
+      setShowChecklist(true);
+      setWorkflowStatus('已发布 workflow version');
+      setLastAdded('发布版本');
+    } catch (error) {
+      setWorkflowStatus(`发布失败：${(error as Error).message}`);
+    }
+  }, [activityId, saveDraft]);
+
+  const refreshRunStatus = useCallback(async () => {
+    if (!activityId) {
+      setWorkflowStatus('需要先绑定活动');
+      return;
+    }
+    try {
+      const executions = await fetchJSON<{ items: WorkflowExecution[] }>(`/admin/v1/activities/${activityId}/workflow/executions?limit=1`);
+      const latest = executions.items[0];
+      if (!latest) {
+        setWorkflowStatus('暂无运行日志');
+        setNodes((items) => items.map((node) => (
+          node.type === 'activity' ? { ...node, data: { ...node.data, runStatus: undefined, lastRun: undefined } } as FlowNode : node
+        )));
+        return;
+      }
+      const nodesBody = await fetchJSON<{ items: WorkflowNodeExecution[] }>(`/admin/v1/workflow/executions/${latest.id}/nodes`);
+      const nodeRunById = new Map(nodesBody.items.map((item) => [item.nodeId, item]));
+      setNodes((items) => items.map((node) => {
+        if (node.type !== 'activity') return node;
+        const run = nodeRunById.get(node.id);
+        return {
+          ...node,
+          data: {
+            ...node.data,
+            runStatus: run?.status,
+            lastRun: run ? {
+              status: run.status,
+              errorMessage: run.errorMessage,
+              output: run.output,
+              finishedAt: run.finishedAt,
+            } : undefined,
+          },
+        } as FlowNode;
+      }));
+      setWorkflowStatus(`运行态：${latest.status} / v${latest.workflowVersion}`);
+      setLastAdded('刷新运行态');
+    } catch (error) {
+      setWorkflowStatus(`运行态失败：${(error as Error).message}`);
+    }
+  }, [activityId, setNodes]);
+
   return (
     <div className="flow-shell">
       <NodePalette open={showPalette} selectedTemplate={selectedTemplate} onAddNode={addCatalogNode} onDefault={resetDefault} onSimple={loadSimpleTemplate} />
@@ -369,6 +588,8 @@ export function App() {
           selectedCount={selectedCount}
           selectedNodeCount={selectedNodeIds.length}
           lastAdded={lastAdded}
+          activityLabel={activityLabel}
+          workflowStatus={workflowStatus}
           zoomPercent={zoomPercent}
           showChecklist={showChecklist}
           isPublished={isPublished}
@@ -385,21 +606,21 @@ export function App() {
             reactFlowInstance?.zoomOut({ duration: 160 });
             window.setTimeout(syncZoom, 180);
           }}
+          onZoomTo={zoomTo}
           onFitView={() => {
             reactFlowInstance?.fitView({ padding: 0.14, duration: 260 });
             window.setTimeout(syncZoom, 280);
           }}
+          showMiniMap={showMiniMap}
+          onToggleMiniMap={() => setShowMiniMap((value) => !value)}
           onGroup={groupSelectedNodes}
           onDelete={deleteSelected}
           onClear={clearCanvas}
+          onSaveDraft={saveDraft}
           onPreview={() => setLastAdded('Preview')}
-          onRunHistory={() => setLastAdded('运行历史')}
+          onRunHistory={refreshRunStatus}
           onToggleChecklist={() => setShowChecklist((value) => !value)}
-          onPublish={() => {
-            setIsPublished(true);
-            setShowChecklist(true);
-            setLastAdded('发布检查通过');
-          }}
+          onPublish={publishWorkflow}
         />
         <section className="canvas-card">
           <ReactFlowProvider>
@@ -449,12 +670,12 @@ export function App() {
               maxZoom={1.6}
               panOnScroll
               panOnDrag={interactionMode === 'hand'}
-              nodesDraggable={interactionMode === 'pointer'}
+              nodesDraggable
               selectionOnDrag={interactionMode === 'pointer'}
             >
               <Background color="#e7edf5" gap={16} size={1} />
               <Controls position="bottom-left" showInteractive={false} />
-              <MiniMap position="bottom-right" pannable zoomable nodeStrokeWidth={2} />
+              {showMiniMap ? <MiniMap position="bottom-right" pannable zoomable nodeStrokeWidth={2} /> : null}
             </ReactFlow>
             {alignmentGuide.vertical ? (
               <div className={cx('align-guide vertical', alignmentGuide.vertical.kind)} style={{ left: alignmentGuide.vertical.screen, top: alignmentGuide.vertical.start, height: alignmentGuide.vertical.end - alignmentGuide.vertical.start }} />

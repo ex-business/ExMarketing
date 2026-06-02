@@ -1,3 +1,5 @@
+import { useState } from 'react';
+
 type Props = {
   showPalette: boolean;
   interactionMode: 'pointer' | 'hand';
@@ -6,6 +8,8 @@ type Props = {
   selectedCount: number;
   selectedNodeCount: number;
   lastAdded: string;
+  activityLabel: string;
+  workflowStatus: string;
   zoomPercent: number;
   showChecklist: boolean;
   isPublished: boolean;
@@ -16,10 +20,14 @@ type Props = {
   onAutoLayout: () => void;
   onZoomIn: () => void;
   onZoomOut: () => void;
+  onZoomTo: (zoom: number) => void;
   onFitView: () => void;
+  showMiniMap: boolean;
+  onToggleMiniMap: () => void;
   onGroup: () => void;
   onDelete: () => void;
   onClear: () => void;
+  onSaveDraft: () => void;
   onPreview: () => void;
   onRunHistory: () => void;
   onToggleChecklist: () => void;
@@ -34,6 +42,8 @@ export function StudioChrome({
   selectedCount,
   selectedNodeCount,
   lastAdded,
+  activityLabel,
+  workflowStatus,
   zoomPercent,
   showChecklist,
   isPublished,
@@ -44,22 +54,33 @@ export function StudioChrome({
   onAutoLayout,
   onZoomIn,
   onZoomOut,
+  onZoomTo,
   onFitView,
+  showMiniMap,
+  onToggleMiniMap,
   onGroup,
   onDelete,
   onClear,
+  onSaveDraft,
   onPreview,
   onRunHistory,
   onToggleChecklist,
   onPublish,
 }: Props) {
+  const [showZoomMenu, setShowZoomMenu] = useState(false);
+  const zoomOptions = [200, 100, 75, 50, 25];
+  const chooseZoom = (value: number) => {
+    onZoomTo(value / 100);
+    setShowZoomMenu(false);
+  };
+
   return (
     <>
       <div className="workspace-topbar">
         <div className="workspace-brand">
           <strong>ExMarketing</strong>
           <span>/</span>
-          <button>ex-unknownname</button>
+          <button title={activityLabel}>ex-unknownname</button>
         </div>
         <nav className="app-tabs">
           <button className="active">编排</button>
@@ -72,11 +93,12 @@ export function StudioChrome({
           <span>D</span>
         </div>
       </div>
-      <div className="dify-top-status">自动保存 12:58:10 · {isPublished ? '已发布' : '未发布'}</div>
+      <div className="dify-top-status">{workflowStatus} · {isPublished ? '已发布' : '未发布'}</div>
       <div className="dify-float-toolbar">
         <button onClick={onDefault}>完整链路</button>
         <button onClick={onSimple}>简化链路</button>
         <button onClick={onAutoLayout}>自动排齐</button>
+        <button onClick={onSaveDraft}>保存草稿</button>
         <button onClick={onRunHistory}>运行历史</button>
         <button className="checklist-action" onClick={onToggleChecklist}>检查清单 <span>5</span></button>
         <button className="preview-action" onClick={onPreview}>▷ 预览</button>
@@ -99,8 +121,25 @@ export function StudioChrome({
       </div>
       <div className="zoom-toolbar">
         <button onClick={onZoomOut}>-</button>
-        <b>{zoomPercent}%</b>
+        <button className="zoom-percent-button" onClick={() => setShowZoomMenu((value) => !value)}>{zoomPercent}%</button>
         <button onClick={onZoomIn}>+</button>
+        {showZoomMenu ? (
+          <div className="zoom-menu">
+            {zoomOptions.map((value) => (
+              <button key={value} className={zoomPercent === value ? 'active' : ''} onClick={() => chooseZoom(value)}>
+                <span>{value}%</span>
+                {value === 100 ? <kbd>⇧ 1</kbd> : value === 50 ? <kbd>⇧ 5</kbd> : null}
+              </button>
+            ))}
+            <button onClick={() => { onFitView(); setShowZoomMenu(false); }}>
+              <span>Zoom to Fit</span>
+              <kbd>⌘ 1</kbd>
+            </button>
+            <button onClick={onToggleMiniMap}>
+              <span>{showMiniMap ? '✓' : ''} Minimap</span>
+            </button>
+          </div>
+        ) : null}
       </div>
       {showChecklist ? (
         <div className="checklist-popover">

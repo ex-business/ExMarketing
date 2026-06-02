@@ -674,6 +674,20 @@ func (s *Service) ProcessEventFrom(ctx context.Context, event marketing.Activity
 				_ = s.repository.UpdateInbox(ctx, inbox)
 				return result, err
 			}
+			if err := s.executeActivityWorkflow(ctx, workflowRuntime{
+				Inbox:         inbox,
+				Activity:      activity,
+				Participation: participation,
+				RuleResult:    entryRuleResult,
+				Qualified:     false,
+				Reason:        entryRuleResult.Reason,
+			}); err != nil {
+				inbox.ProcessStatus = marketing.InboxFailed
+				inbox.ErrorMessage = err.Error()
+				inbox.UpdatedAt = now
+				_ = s.repository.UpdateInbox(ctx, inbox)
+				return result, err
+			}
 			result.Participations = append(result.Participations, participation)
 			result.RuleResults = append(result.RuleResults, entryRuleResult)
 			continue
@@ -681,6 +695,20 @@ func (s *Service) ProcessEventFrom(ctx context.Context, event marketing.Activity
 		if activity.ExclusiveGroup != "" && matchedExclusive[activity.ExclusiveGroup] != "" && exclusiveSingleSelect[activity.ExclusiveGroup] {
 			participation, ruleResult, err := s.createExclusiveRejectedParticipation(ctx, inbox, activity, matchedExclusive[activity.ExclusiveGroup])
 			if err != nil {
+				inbox.ProcessStatus = marketing.InboxFailed
+				inbox.ErrorMessage = err.Error()
+				inbox.UpdatedAt = now
+				_ = s.repository.UpdateInbox(ctx, inbox)
+				return result, err
+			}
+			if err := s.executeActivityWorkflow(ctx, workflowRuntime{
+				Inbox:         inbox,
+				Activity:      activity,
+				Participation: participation,
+				RuleResult:    ruleResult,
+				Qualified:     false,
+				Reason:        ruleResult.Reason,
+			}); err != nil {
 				inbox.ProcessStatus = marketing.InboxFailed
 				inbox.ErrorMessage = err.Error()
 				inbox.UpdatedAt = now
@@ -705,6 +733,22 @@ func (s *Service) ProcessEventFrom(ctx context.Context, event marketing.Activity
 		result.GrantOrders = append(result.GrantOrders, rewardOrders...)
 		result.OutboxMessages = append(result.OutboxMessages, outboxMessages...)
 		result.RuleResults = append(result.RuleResults, ruleResult)
+		if err := s.executeActivityWorkflow(ctx, workflowRuntime{
+			Inbox:          inbox,
+			Activity:       activity,
+			Participation:  participation,
+			GrantOrders:    rewardOrders,
+			OutboxMessages: outboxMessages,
+			RuleResult:     ruleResult,
+			Qualified:      qualified,
+			Reason:         ruleResult.Reason,
+		}); err != nil {
+			inbox.ProcessStatus = marketing.InboxFailed
+			inbox.ErrorMessage = err.Error()
+			inbox.UpdatedAt = now
+			_ = s.repository.UpdateInbox(ctx, inbox)
+			return result, err
+		}
 		if qualified && activity.ExclusiveGroup != "" {
 			matchedExclusive[activity.ExclusiveGroup] = activity.Code
 		}

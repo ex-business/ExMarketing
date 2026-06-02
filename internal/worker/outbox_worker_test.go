@@ -719,6 +719,39 @@ func (r *workerTestRepo) UpdateActivity(context.Context, marketing.Activity) (ma
 func (r *workerTestRepo) FindMatchingActivities(context.Context, string, string) ([]marketing.Activity, error) {
 	panic("not implemented")
 }
+func (r *workerTestRepo) SaveWorkflowDraft(context.Context, marketing.WorkflowDraft) (marketing.WorkflowDraft, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) GetWorkflowDraft(context.Context, string) (marketing.WorkflowDraft, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) CreateWorkflowVersion(context.Context, marketing.WorkflowVersion) (marketing.WorkflowVersion, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) GetActiveWorkflowVersion(context.Context, string) (marketing.WorkflowVersion, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) ListWorkflowVersions(context.Context, string) ([]marketing.WorkflowVersion, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) CreateWorkflowExecution(context.Context, marketing.WorkflowExecution) (marketing.WorkflowExecution, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) UpdateWorkflowExecution(context.Context, marketing.WorkflowExecution) error {
+	panic("not implemented")
+}
+func (r *workerTestRepo) CreateWorkflowNodeExecution(context.Context, marketing.WorkflowNodeExecution) (marketing.WorkflowNodeExecution, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) UpdateWorkflowNodeExecution(context.Context, marketing.WorkflowNodeExecution) error {
+	panic("not implemented")
+}
+func (r *workerTestRepo) ListWorkflowExecutions(context.Context, marketing.WorkflowExecutionQuery) ([]marketing.WorkflowExecution, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) ListWorkflowNodeExecutions(context.Context, string) ([]marketing.WorkflowNodeExecution, error) {
+	panic("not implemented")
+}
 func (r *workerTestRepo) SaveFactProvider(context.Context, marketing.FactProvider) (marketing.FactProvider, error) {
 	panic("not implemented")
 }

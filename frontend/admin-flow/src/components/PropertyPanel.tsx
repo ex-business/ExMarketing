@@ -1,5 +1,8 @@
+import { useCallback, useState } from 'react';
+import type { PointerEvent as ReactPointerEvent } from 'react';
 import type { ActivityEdge, ActivityNode, FlowNode, GroupNode, NoteNode } from '../types';
-import { cx, iconFor } from '../utils/flow';
+import { cx } from '../utils/flow';
+import { NodeKindIcon } from './NodeKindIcon';
 
 function PropertyList({ title, items }: { title: string; items: string[] }) {
   return (
@@ -62,17 +65,34 @@ type Props = {
 };
 
 export function PropertyPanel({ nodes, edges, selectedNodeIds, selectedEdgeIds, onDeleteNodes, onDeleteEdges }: Props) {
+  const [panelWidth, setPanelWidth] = useState(390);
   const selectedNode = nodes.find((node): node is ActivityNode => node.id === selectedNodeIds[0] && node.type === 'activity');
   const selectedGroup = nodes.find((node): node is GroupNode => node.id === selectedNodeIds[0] && node.type === 'group');
   const selectedNote = nodes.find((node): node is NoteNode => node.id === selectedNodeIds[0] && node.type === 'note');
   const selectedEdge = edges.find((item) => item.id === selectedEdgeIds[0]);
   const hasSelection = Boolean(selectedNode || selectedGroup || selectedNote || selectedEdge);
+  const startResize = useCallback((event: ReactPointerEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    const updateWidth = (moveEvent: PointerEvent) => {
+      const nextWidth = Math.min(560, Math.max(320, window.innerWidth - moveEvent.clientX));
+      setPanelWidth(nextWidth);
+    };
+    const stopResize = () => {
+      document.body.classList.remove('property-panel-resizing');
+      window.removeEventListener('pointermove', updateWidth);
+      window.removeEventListener('pointerup', stopResize);
+    };
+    document.body.classList.add('property-panel-resizing');
+    window.addEventListener('pointermove', updateWidth);
+    window.addEventListener('pointerup', stopResize, { once: true });
+  }, []);
 
   return (
-    <aside className={cx('property-panel', hasSelection && 'open')}>
+    <aside className={cx('property-panel', hasSelection && 'open')} style={{ width: panelWidth }}>
+      <button className="property-resize-handle" aria-label="调整属性面板宽度" onPointerDown={startResize} />
       <div className="property-head">
         <div className="property-title-with-icon">
-          {selectedNode ? <span className={cx('node-icon', selectedNode.data.kind)}>{iconFor(selectedNode.data.kind)}</span> : null}
+          {selectedNode ? <NodeKindIcon node={selectedNode.data} className="node-icon" /> : null}
           <b>{selectedNode ? selectedNode.data.title : selectedGroup ? selectedGroup.data.title : selectedNote ? '备注' : selectedEdge ? '流程连线' : '属性'}</b>
         </div>
         <span>{selectedNode ? '节点' : selectedGroup ? '组合' : selectedNote ? '备注' : selectedEdge ? '连线' : '未选择'}</span>
@@ -87,7 +107,7 @@ export function PropertyPanel({ nodes, edges, selectedNodeIds, selectedEdgeIds, 
         <div className="property-body">
           <section className="property-card">
             <div className="property-title-row">
-              <span className={cx('palette-dot', selectedNode.data.kind)} />
+              <NodeKindIcon node={selectedNode.data} className="palette-dot" />
               <div>
                 <h2>{selectedNode.data.title}</h2>
                 <p>{selectedNode.data.code}</p>
@@ -108,7 +128,7 @@ export function PropertyPanel({ nodes, edges, selectedNodeIds, selectedEdgeIds, 
           <section className="property-section">
             <h3>下一步</h3>
             <div className="next-step-card">
-              <span className={cx('palette-dot', selectedNode.data.kind)} />
+              <NodeKindIcon node={selectedNode.data} className="palette-dot" />
               <div>
                 <b>{selectedNode.data.outputs[0] ?? '默认路径'}</b>
                 <p>连接下游活动节点，决定下一步执行链路。</p>
@@ -145,11 +165,19 @@ export function PropertyPanel({ nodes, edges, selectedNodeIds, selectedEdgeIds, 
           </section>
           <section className="property-section">
             <h3>上次运行</h3>
-            <div className="run-summary">
-              <b>SUCCESS</b>
-              <span>耗时 186ms</span>
-              <span>输出 {selectedNode.data.outputs[0] ?? 'result'}</span>
-            </div>
+            {selectedNode.data.lastRun ? (
+              <div className={cx('run-summary', `run-${selectedNode.data.lastRun.status.toLowerCase()}`)}>
+                <b>{selectedNode.data.lastRun.status}</b>
+                <span>{selectedNode.data.lastRun.finishedAt ? new Date(selectedNode.data.lastRun.finishedAt).toLocaleString() : '运行中'}</span>
+                <span>{selectedNode.data.lastRun.errorMessage || `输出 ${selectedNode.data.outputs[0] ?? 'result'}`}</span>
+              </div>
+            ) : (
+              <div className="run-summary empty">
+                <b>NONE</b>
+                <span>暂无运行记录</span>
+                <span>触发活动事件后刷新运行态</span>
+              </div>
+            )}
           </section>
         </div>
       ) : null}

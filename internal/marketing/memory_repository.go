@@ -19,6 +19,10 @@ import (
 type MemoryRepository struct {
 	mu                  sync.RWMutex
 	activities          []Activity
+	workflowDrafts      map[string]WorkflowDraft
+	workflowVersions    []WorkflowVersion
+	workflowExecutions  []WorkflowExecution
+	nodeExecutions      []WorkflowNodeExecution
 	factProviders       map[string]FactProvider
 	inboxByIdempotency  map[string]EventInbox
 	participations      []Participation
@@ -35,6 +39,7 @@ func NewMemoryRepository() *MemoryRepository {
 	return &MemoryRepository{
 		inboxByIdempotency: make(map[string]EventInbox),
 		factProviders:      make(map[string]FactProvider),
+		workflowDrafts:     make(map[string]WorkflowDraft),
 	}
 }
 
@@ -121,6 +126,191 @@ func (r *MemoryRepository) FindMatchingActivities(ctx context.Context, tenantID 
 func sameActivityCode(a Activity, b Activity) bool {
 	return strings.TrimSpace(a.TenantID) == strings.TrimSpace(b.TenantID) &&
 		strings.TrimSpace(a.Code) == strings.TrimSpace(b.Code)
+}
+
+func (r *MemoryRepository) SaveWorkflowDraft(ctx context.Context, draft WorkflowDraft) (WorkflowDraft, error) {
+	if err := ctx.Err(); err != nil {
+		return WorkflowDraft{}, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if existing, ok := r.workflowDrafts[draft.ActivityID]; ok {
+		draft.CreatedAt = existing.CreatedAt
+	}
+	r.workflowDrafts[draft.ActivityID] = draft
+	return draft, nil
+}
+
+func (r *MemoryRepository) GetWorkflowDraft(ctx context.Context, activityID string) (WorkflowDraft, error) {
+	if err := ctx.Err(); err != nil {
+		return WorkflowDraft{}, err
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	draft, ok := r.workflowDrafts[activityID]
+	if !ok {
+		return WorkflowDraft{}, ErrNotFound
+	}
+	return draft, nil
+}
+
+func (r *MemoryRepository) CreateWorkflowVersion(ctx context.Context, version WorkflowVersion) (WorkflowVersion, error) {
+	if err := ctx.Err(); err != nil {
+		return WorkflowVersion{}, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if version.Version <= 0 {
+		version.Version = 1
+		for _, existing := range r.workflowVersions {
+			if existing.ActivityID == version.ActivityID && existing.Version >= version.Version {
+				version.Version = existing.Version + 1
+			}
+		}
+	}
+	for i := range r.workflowVersions {
+		if r.workflowVersions[i].ActivityID == version.ActivityID && r.workflowVersions[i].Status == WorkflowVersionActive {
+			r.workflowVersions[i].Status = WorkflowVersionArchived
+		}
+	}
+	r.workflowVersions = append(r.workflowVersions, version)
+	return version, nil
+}
+
+func (r *MemoryRepository) GetActiveWorkflowVersion(ctx context.Context, activityID string) (WorkflowVersion, error) {
+	if err := ctx.Err(); err != nil {
+		return WorkflowVersion{}, err
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for i := len(r.workflowVersions) - 1; i >= 0; i-- {
+		version := r.workflowVersions[i]
+		if version.ActivityID == activityID && version.Status == WorkflowVersionActive {
+			return version, nil
+		}
+	}
+	return WorkflowVersion{}, ErrNotFound
+}
+
+func (r *MemoryRepository) ListWorkflowVersions(ctx context.Context, activityID string) ([]WorkflowVersion, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var out []WorkflowVersion
+	for _, version := range r.workflowVersions {
+		if version.ActivityID == activityID {
+			out = append(out, version)
+		}
+	}
+	slices.SortFunc(out, func(a, b WorkflowVersion) int {
+		return b.Version - a.Version
+	})
+	return out, nil
+}
+
+func (r *MemoryRepository) CreateWorkflowExecution(ctx context.Context, execution WorkflowExecution) (WorkflowExecution, error) {
+	if err := ctx.Err(); err != nil {
+		return WorkflowExecution{}, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.workflowExecutions = append(r.workflowExecutions, execution)
+	return execution, nil
+}
+
+func (r *MemoryRepository) UpdateWorkflowExecution(ctx context.Context, execution WorkflowExecution) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.workflowExecutions {
+		if r.workflowExecutions[i].ID == execution.ID {
+			r.workflowExecutions[i] = execution
+			return nil
+		}
+	}
+	return ErrNotFound
+}
+
+func (r *MemoryRepository) CreateWorkflowNodeExecution(ctx context.Context, execution WorkflowNodeExecution) (WorkflowNodeExecution, error) {
+	if err := ctx.Err(); err != nil {
+		return WorkflowNodeExecution{}, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.nodeExecutions = append(r.nodeExecutions, execution)
+	return execution, nil
+}
+
+func (r *MemoryRepository) UpdateWorkflowNodeExecution(ctx context.Context, execution WorkflowNodeExecution) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.nodeExecutions {
+		if r.nodeExecutions[i].ID == execution.ID {
+			r.nodeExecutions[i] = execution
+			return nil
+		}
+	}
+	return ErrNotFound
+}
+
+func (r *MemoryRepository) ListWorkflowExecutions(ctx context.Context, query WorkflowExecutionQuery) ([]WorkflowExecution, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	limit := query.Limit
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	var out []WorkflowExecution
+	for _, execution := range r.workflowExecutions {
+		if query.TenantID != "" && execution.TenantID != query.TenantID {
+			continue
+		}
+		if query.ActivityID != "" && execution.ActivityID != query.ActivityID {
+			continue
+		}
+		if query.EventID != "" && execution.EventID != query.EventID {
+			continue
+		}
+		if query.ExecutionID != "" && execution.ID != query.ExecutionID {
+			continue
+		}
+		out = append(out, execution)
+	}
+	slices.SortFunc(out, func(a, b WorkflowExecution) int {
+		return b.CreatedAt.Compare(a.CreatedAt)
+	})
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+func (r *MemoryRepository) ListWorkflowNodeExecutions(ctx context.Context, executionID string) ([]WorkflowNodeExecution, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var out []WorkflowNodeExecution
+	for _, execution := range r.nodeExecutions {
+		if execution.ExecutionID == executionID {
+			out = append(out, execution)
+		}
+	}
+	slices.SortFunc(out, func(a, b WorkflowNodeExecution) int {
+		return a.StartedAt.Compare(b.StartedAt)
+	})
+	return out, nil
 }
 
 func (r *MemoryRepository) SaveFactProvider(ctx context.Context, provider FactProvider) (FactProvider, error) {

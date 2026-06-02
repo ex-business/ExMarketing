@@ -1,7 +1,8 @@
 import { Handle, Position } from '@xyflow/react';
 import type { NodeProps } from '@xyflow/react';
 import type { ActivityNode, ActivityNodeData } from '../types';
-import { cx, iconFor } from '../utils/flow';
+import { cx } from '../utils/flow';
+import { NodeKindIcon } from './NodeKindIcon';
 
 type BranchRow = {
   caseLabel: string;
@@ -55,7 +56,7 @@ export function ActivityNodeView({ id, data, selected }: NodeProps<ActivityNode>
 
   return (
     <div
-      className={cx('activity-node', data.kind, isBranchNode && 'branch-node', selected && 'is-selected')}
+      className={cx('activity-node', data.kind, isBranchNode && 'branch-node', selected && 'is-selected', data.runStatus && `run-${data.runStatus.toLowerCase()}`)}
       onMouseEnter={() => data.onHoverChange?.(id, true)}
       onMouseLeave={() => data.onHoverChange?.(id, false)}
     >
@@ -87,11 +88,12 @@ export function ActivityNodeView({ id, data, selected }: NodeProps<ActivityNode>
         <button title="更多操作">•••</button>
       </div>
       <div className="activity-node-head">
-        <span className={cx('node-icon', data.kind)}>{iconFor(data.kind)}</span>
+        <NodeKindIcon node={data} className="node-icon" />
         <div className="node-title-block">
           <strong>{data.title}</strong>
           <span>{data.code}</span>
         </div>
+        {data.runStatus ? <span className="node-run-dot" title={`上次运行：${data.runStatus}`} /> : null}
         <button
           className="node-delete"
           title="删除节点"

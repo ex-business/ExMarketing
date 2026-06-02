@@ -11,6 +11,17 @@ type Repository interface {
 	ListActivities(ctx context.Context) ([]Activity, error)
 	UpdateActivity(ctx context.Context, activity Activity) (Activity, error)
 	FindMatchingActivities(ctx context.Context, tenantID string, eventType string) ([]Activity, error)
+	SaveWorkflowDraft(ctx context.Context, draft WorkflowDraft) (WorkflowDraft, error)
+	GetWorkflowDraft(ctx context.Context, activityID string) (WorkflowDraft, error)
+	CreateWorkflowVersion(ctx context.Context, version WorkflowVersion) (WorkflowVersion, error)
+	GetActiveWorkflowVersion(ctx context.Context, activityID string) (WorkflowVersion, error)
+	ListWorkflowVersions(ctx context.Context, activityID string) ([]WorkflowVersion, error)
+	CreateWorkflowExecution(ctx context.Context, execution WorkflowExecution) (WorkflowExecution, error)
+	UpdateWorkflowExecution(ctx context.Context, execution WorkflowExecution) error
+	CreateWorkflowNodeExecution(ctx context.Context, execution WorkflowNodeExecution) (WorkflowNodeExecution, error)
+	UpdateWorkflowNodeExecution(ctx context.Context, execution WorkflowNodeExecution) error
+	ListWorkflowExecutions(ctx context.Context, query WorkflowExecutionQuery) ([]WorkflowExecution, error)
+	ListWorkflowNodeExecutions(ctx context.Context, executionID string) ([]WorkflowNodeExecution, error)
 	SaveFactProvider(ctx context.Context, provider FactProvider) (FactProvider, error)
 	FindEnabledFactProvider(ctx context.Context, tenantID string, factCode string) (FactProvider, error)
 

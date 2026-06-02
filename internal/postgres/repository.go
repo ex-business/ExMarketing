@@ -251,6 +251,259 @@ func (r *Repository) FindMatchingActivities(ctx context.Context, tenantID string
 	return activities, nil
 }
 
+func (r *Repository) SaveWorkflowDraft(ctx context.Context, draft marketing.WorkflowDraft) (marketing.WorkflowDraft, error) {
+	_, err := r.db.ExecContext(ctx, `
+		INSERT INTO marketing_workflow_draft (
+			activity_id, tenant_id, definition_json, updated_by, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6)
+		ON CONFLICT (activity_id) DO UPDATE SET
+			tenant_id = EXCLUDED.tenant_id,
+			definition_json = EXCLUDED.definition_json,
+			updated_by = EXCLUDED.updated_by,
+			updated_at = EXCLUDED.updated_at
+	`, draft.ActivityID, draft.TenantID, draft.Definition, nullString(draft.UpdatedBy), draft.CreatedAt, draft.UpdatedAt)
+	if err != nil {
+		return marketing.WorkflowDraft{}, err
+	}
+	return r.GetWorkflowDraft(ctx, draft.ActivityID)
+}
+
+func (r *Repository) GetWorkflowDraft(ctx context.Context, activityID string) (marketing.WorkflowDraft, error) {
+	row := r.db.QueryRowContext(ctx, `
+		SELECT activity_id, tenant_id, definition_json, COALESCE(updated_by, ''), created_at, updated_at
+		FROM marketing_workflow_draft
+		WHERE activity_id = $1
+	`, activityID)
+	return scanWorkflowDraft(row)
+}
+
+func (r *Repository) CreateWorkflowVersion(ctx context.Context, version marketing.WorkflowVersion) (marketing.WorkflowVersion, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return marketing.WorkflowVersion{}, err
+	}
+	defer rollback(tx)
+
+	var lockedActivityID string
+	if err := tx.QueryRowContext(ctx, `
+		SELECT id
+		FROM marketing_activity
+		WHERE id = $1
+		FOR UPDATE
+	`, version.ActivityID).Scan(&lockedActivityID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return marketing.WorkflowVersion{}, marketing.ErrNotFound
+		}
+		return marketing.WorkflowVersion{}, err
+	}
+	if version.Version <= 0 {
+		err = tx.QueryRowContext(ctx, `
+			SELECT COALESCE(MAX(version), 0) + 1
+			FROM marketing_workflow_version
+			WHERE activity_id = $1
+		`, version.ActivityID).Scan(&version.Version)
+		if err != nil {
+			return marketing.WorkflowVersion{}, err
+		}
+	}
+	if version.Status == "" {
+		version.Status = marketing.WorkflowVersionActive
+	}
+	if version.Status == marketing.WorkflowVersionActive {
+		if _, err := tx.ExecContext(ctx, `
+			UPDATE marketing_workflow_version
+			SET status = $2
+			WHERE activity_id = $1 AND status = $3
+		`, version.ActivityID, marketing.WorkflowVersionArchived, marketing.WorkflowVersionActive); err != nil {
+			return marketing.WorkflowVersion{}, err
+		}
+	}
+	_, err = tx.ExecContext(ctx, `
+		INSERT INTO marketing_workflow_version (
+			id, tenant_id, activity_id, version, definition_json, status,
+			published_by, published_at, created_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+	`, version.ID, version.TenantID, version.ActivityID, version.Version, version.Definition, version.Status,
+		nullString(version.PublishedBy), version.PublishedAt, version.CreatedAt)
+	if err != nil {
+		return marketing.WorkflowVersion{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return marketing.WorkflowVersion{}, err
+	}
+	return version, nil
+}
+
+func (r *Repository) GetActiveWorkflowVersion(ctx context.Context, activityID string) (marketing.WorkflowVersion, error) {
+	row := r.db.QueryRowContext(ctx, `
+		SELECT id, tenant_id, activity_id, version, definition_json, status,
+		       COALESCE(published_by, ''), published_at, created_at
+		FROM marketing_workflow_version
+		WHERE activity_id = $1 AND status = $2
+	`, activityID, marketing.WorkflowVersionActive)
+	return scanWorkflowVersion(row)
+}
+
+func (r *Repository) ListWorkflowVersions(ctx context.Context, activityID string) ([]marketing.WorkflowVersion, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, tenant_id, activity_id, version, definition_json, status,
+		       COALESCE(published_by, ''), published_at, created_at
+		FROM marketing_workflow_version
+		WHERE activity_id = $1
+		ORDER BY version DESC
+	`, activityID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var versions []marketing.WorkflowVersion
+	for rows.Next() {
+		version, err := scanWorkflowVersion(rows)
+		if err != nil {
+			return nil, err
+		}
+		versions = append(versions, version)
+	}
+	return versions, rows.Err()
+}
+
+func (r *Repository) CreateWorkflowExecution(ctx context.Context, execution marketing.WorkflowExecution) (marketing.WorkflowExecution, error) {
+	_, err := r.db.ExecContext(ctx, `
+		INSERT INTO marketing_workflow_execution (
+			id, tenant_id, activity_id, workflow_version_id, workflow_version,
+			event_inbox_id, event_id, status, input_json, output_json, error_message,
+			started_at, finished_at, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+	`, execution.ID, execution.TenantID, execution.ActivityID, execution.WorkflowVersionID, execution.WorkflowVersion,
+		nullString(execution.EventInboxID), nullString(execution.EventID), execution.Status, nullJSON(execution.Input),
+		nullJSON(execution.Output), nullString(execution.ErrorMessage), execution.StartedAt, execution.FinishedAt,
+		execution.CreatedAt, execution.UpdatedAt)
+	if err != nil {
+		return marketing.WorkflowExecution{}, err
+	}
+	return execution, nil
+}
+
+func (r *Repository) UpdateWorkflowExecution(ctx context.Context, execution marketing.WorkflowExecution) error {
+	result, err := r.db.ExecContext(ctx, `
+		UPDATE marketing_workflow_execution
+		SET status = $2,
+		    output_json = $3,
+		    error_message = $4,
+		    finished_at = $5,
+		    updated_at = $6
+		WHERE id = $1
+	`, execution.ID, execution.Status, nullJSON(execution.Output), nullString(execution.ErrorMessage),
+		execution.FinishedAt, execution.UpdatedAt)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return marketing.ErrNotFound
+	}
+	return nil
+}
+
+func (r *Repository) CreateWorkflowNodeExecution(ctx context.Context, execution marketing.WorkflowNodeExecution) (marketing.WorkflowNodeExecution, error) {
+	_, err := r.db.ExecContext(ctx, `
+		INSERT INTO marketing_workflow_node_execution (
+			id, tenant_id, execution_id, node_id, node_type, node_title, status,
+			input_json, output_json, error_message, started_at, finished_at, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+	`, execution.ID, execution.TenantID, execution.ExecutionID, execution.NodeID, execution.NodeType,
+		nullString(execution.NodeTitle), execution.Status, nullJSON(execution.Input), nullJSON(execution.Output),
+		nullString(execution.ErrorMessage), execution.StartedAt, execution.FinishedAt, execution.CreatedAt, execution.UpdatedAt)
+	if err != nil {
+		return marketing.WorkflowNodeExecution{}, err
+	}
+	return execution, nil
+}
+
+func (r *Repository) UpdateWorkflowNodeExecution(ctx context.Context, execution marketing.WorkflowNodeExecution) error {
+	result, err := r.db.ExecContext(ctx, `
+		UPDATE marketing_workflow_node_execution
+		SET status = $2,
+		    output_json = $3,
+		    error_message = $4,
+		    finished_at = $5,
+		    updated_at = $6
+		WHERE id = $1
+	`, execution.ID, execution.Status, nullJSON(execution.Output), nullString(execution.ErrorMessage),
+		execution.FinishedAt, execution.UpdatedAt)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return marketing.ErrNotFound
+	}
+	return nil
+}
+
+func (r *Repository) ListWorkflowExecutions(ctx context.Context, query marketing.WorkflowExecutionQuery) ([]marketing.WorkflowExecution, error) {
+	limit := query.Limit
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, tenant_id, activity_id, workflow_version_id, workflow_version,
+		       COALESCE(event_inbox_id, ''), COALESCE(event_id, ''), status,
+		       input_json, output_json, COALESCE(error_message, ''),
+		       started_at, finished_at, created_at, updated_at
+		FROM marketing_workflow_execution
+		WHERE ($1 = '' OR tenant_id = $1)
+		  AND ($2 = '' OR activity_id = $2)
+		  AND ($3 = '' OR event_id = $3)
+		  AND ($4 = '' OR id = $4)
+		ORDER BY created_at DESC
+		LIMIT $5
+	`, query.TenantID, query.ActivityID, query.EventID, query.ExecutionID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var executions []marketing.WorkflowExecution
+	for rows.Next() {
+		execution, err := scanWorkflowExecution(rows)
+		if err != nil {
+			return nil, err
+		}
+		executions = append(executions, execution)
+	}
+	return executions, rows.Err()
+}
+
+func (r *Repository) ListWorkflowNodeExecutions(ctx context.Context, executionID string) ([]marketing.WorkflowNodeExecution, error) {
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, tenant_id, execution_id, node_id, node_type, COALESCE(node_title, ''), status,
+		       input_json, output_json, COALESCE(error_message, ''),
+		       started_at, finished_at, created_at, updated_at
+		FROM marketing_workflow_node_execution
+		WHERE execution_id = $1
+		ORDER BY started_at ASC, created_at ASC
+	`, executionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var executions []marketing.WorkflowNodeExecution
+	for rows.Next() {
+		execution, err := scanWorkflowNodeExecution(rows)
+		if err != nil {
+			return nil, err
+		}
+		executions = append(executions, execution)
+	}
+	return executions, rows.Err()
+}
+
 func (r *Repository) SaveFactProvider(ctx context.Context, provider marketing.FactProvider) (marketing.FactProvider, error) {
 	if err := provider.Validate(); err != nil {
 		return marketing.FactProvider{}, err
@@ -1881,6 +2134,77 @@ func scanOutbox(scanner outboxScanner) (marketing.OutboxMessage, error) {
 		message.NextRetryAt = &nextRetry.Time
 	}
 	return message, nil
+}
+
+func scanWorkflowDraft(scanner outboxScanner) (marketing.WorkflowDraft, error) {
+	var draft marketing.WorkflowDraft
+	err := scanner.Scan(&draft.ActivityID, &draft.TenantID, &draft.Definition, &draft.UpdatedBy, &draft.CreatedAt, &draft.UpdatedAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return marketing.WorkflowDraft{}, marketing.ErrNotFound
+		}
+		return marketing.WorkflowDraft{}, err
+	}
+	return draft, nil
+}
+
+func scanWorkflowVersion(scanner outboxScanner) (marketing.WorkflowVersion, error) {
+	var version marketing.WorkflowVersion
+	err := scanner.Scan(&version.ID, &version.TenantID, &version.ActivityID, &version.Version,
+		&version.Definition, &version.Status, &version.PublishedBy, &version.PublishedAt, &version.CreatedAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return marketing.WorkflowVersion{}, marketing.ErrNotFound
+		}
+		return marketing.WorkflowVersion{}, err
+	}
+	return version, nil
+}
+
+func scanWorkflowExecution(scanner outboxScanner) (marketing.WorkflowExecution, error) {
+	var execution marketing.WorkflowExecution
+	var input sql.NullString
+	var output sql.NullString
+	var finishedAt sql.NullTime
+	err := scanner.Scan(&execution.ID, &execution.TenantID, &execution.ActivityID, &execution.WorkflowVersionID,
+		&execution.WorkflowVersion, &execution.EventInboxID, &execution.EventID, &execution.Status,
+		&input, &output, &execution.ErrorMessage, &execution.StartedAt, &finishedAt, &execution.CreatedAt, &execution.UpdatedAt)
+	if err != nil {
+		return marketing.WorkflowExecution{}, err
+	}
+	if input.Valid {
+		execution.Input = json.RawMessage(input.String)
+	}
+	if output.Valid {
+		execution.Output = json.RawMessage(output.String)
+	}
+	if finishedAt.Valid {
+		execution.FinishedAt = &finishedAt.Time
+	}
+	return execution, nil
+}
+
+func scanWorkflowNodeExecution(scanner outboxScanner) (marketing.WorkflowNodeExecution, error) {
+	var execution marketing.WorkflowNodeExecution
+	var input sql.NullString
+	var output sql.NullString
+	var finishedAt sql.NullTime
+	err := scanner.Scan(&execution.ID, &execution.TenantID, &execution.ExecutionID, &execution.NodeID,
+		&execution.NodeType, &execution.NodeTitle, &execution.Status, &input, &output,
+		&execution.ErrorMessage, &execution.StartedAt, &finishedAt, &execution.CreatedAt, &execution.UpdatedAt)
+	if err != nil {
+		return marketing.WorkflowNodeExecution{}, err
+	}
+	if input.Valid {
+		execution.Input = json.RawMessage(input.String)
+	}
+	if output.Valid {
+		execution.Output = json.RawMessage(output.String)
+	}
+	if finishedAt.Valid {
+		execution.FinishedAt = &finishedAt.Time
+	}
+	return execution, nil
 }
 
 func rollback(tx *sql.Tx) {

@@ -165,6 +165,12 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /admin/v1/activities", h.createActivity)
 	mux.HandleFunc("GET /admin/v1/activities/{id}", h.getActivity)
 	mux.HandleFunc("PUT /admin/v1/activities/{id}", h.updateActivity)
+	mux.HandleFunc("GET /admin/v1/activities/{id}/workflow/draft", h.getActivityWorkflowDraft)
+	mux.HandleFunc("PUT /admin/v1/activities/{id}/workflow/draft", h.saveActivityWorkflowDraft)
+	mux.HandleFunc("POST /admin/v1/activities/{id}/workflow/publish", h.publishActivityWorkflow)
+	mux.HandleFunc("GET /admin/v1/activities/{id}/workflow/versions", h.listActivityWorkflowVersions)
+	mux.HandleFunc("GET /admin/v1/activities/{id}/workflow/executions", h.listActivityWorkflowExecutions)
+	mux.HandleFunc("GET /admin/v1/workflow/executions/{id}/nodes", h.listWorkflowNodeExecutions)
 	mux.HandleFunc("POST /admin/v1/activities/{id}/approval/submit", h.submitActivityApproval)
 	mux.HandleFunc("POST /admin/v1/activities/{id}/approval/approve", h.approveActivity)
 	mux.HandleFunc("POST /admin/v1/activities/{id}/approval/reject", h.rejectActivityApproval)
@@ -314,6 +320,101 @@ func (h *Handler) updateActivity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, activity)
+}
+
+func (h *Handler) getActivityWorkflowDraft(w http.ResponseWriter, r *http.Request) {
+	draft, err := h.engine.GetWorkflowDraft(r.Context(), r.PathValue("id"))
+	if err != nil {
+		if errors.Is(err, marketing.ErrNotFound) {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, draft)
+}
+
+func (h *Handler) saveActivityWorkflowDraft(w http.ResponseWriter, r *http.Request) {
+	var cmd marketing.SaveWorkflowDraftCommand
+	if err := decodeStrictJSON(r.Body, &cmd); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	draft, err := h.engine.SaveWorkflowDraft(r.Context(), r.PathValue("id"), cmd)
+	if err != nil {
+		if errors.Is(err, marketing.ErrNotFound) {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		if errors.Is(err, marketing.ErrInvalidWorkflow) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, draft)
+}
+
+func (h *Handler) publishActivityWorkflow(w http.ResponseWriter, r *http.Request) {
+	var cmd marketing.PublishWorkflowCommand
+	if err := decodeStrictJSON(r.Body, &cmd); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	version, err := h.engine.PublishWorkflowVersion(r.Context(), r.PathValue("id"), cmd)
+	if err != nil {
+		if errors.Is(err, marketing.ErrNotFound) {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		if errors.Is(err, marketing.ErrInvalidWorkflow) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, version)
+}
+
+func (h *Handler) listActivityWorkflowVersions(w http.ResponseWriter, r *http.Request) {
+	versions, err := h.engine.ListWorkflowVersions(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": versions})
+}
+
+func (h *Handler) listActivityWorkflowExecutions(w http.ResponseWriter, r *http.Request) {
+	limit, _ := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("limit")))
+	query := marketing.WorkflowExecutionQuery{
+		ActivityID: r.PathValue("id"),
+		TenantID:   strings.TrimSpace(r.URL.Query().Get("tenantId")),
+		EventID:    strings.TrimSpace(r.URL.Query().Get("eventId")),
+		Limit:      limit,
+	}
+	executions, err := h.engine.ListWorkflowExecutions(r.Context(), query)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": executions})
+}
+
+func (h *Handler) listWorkflowNodeExecutions(w http.ResponseWriter, r *http.Request) {
+	executions, err := h.engine.ListWorkflowNodeExecutions(r.Context(), r.PathValue("id"))
+	if err != nil {
+		if errors.Is(err, marketing.ErrNotFound) {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": executions})
 }
 
 func (h *Handler) submitActivityApproval(w http.ResponseWriter, r *http.Request) {

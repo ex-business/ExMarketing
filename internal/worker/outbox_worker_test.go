@@ -707,6 +707,54 @@ func (r *workerTestRepo) CountOutboxDLQ(ctx context.Context) ([]marketing.Outbox
 func (r *workerTestRepo) CreateActivity(context.Context, marketing.Activity) (marketing.Activity, error) {
 	panic("not implemented")
 }
+func (r *workerTestRepo) CreateWorkspace(context.Context, marketing.Workspace) (marketing.Workspace, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) GetWorkspace(context.Context, string) (marketing.Workspace, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) ListWorkspaces(context.Context, marketing.WorkspaceQuery) ([]marketing.Workspace, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) UpdateWorkspace(context.Context, marketing.Workspace) (marketing.Workspace, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) CreateWorkspaceMember(context.Context, marketing.WorkspaceMember) (marketing.WorkspaceMember, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) ListWorkspaceMembers(context.Context, string) ([]marketing.WorkspaceMember, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) UpdateWorkspaceMember(context.Context, marketing.WorkspaceMember) (marketing.WorkspaceMember, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) CreateWorkspaceFolder(context.Context, marketing.WorkspaceFolder) (marketing.WorkspaceFolder, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) GetWorkspaceFolder(context.Context, string) (marketing.WorkspaceFolder, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) ListWorkspaceFolders(context.Context, marketing.WorkspaceFolderQuery) ([]marketing.WorkspaceFolder, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) UpdateWorkspaceFolder(context.Context, marketing.WorkspaceFolder) (marketing.WorkspaceFolder, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) CreateWorkspaceShareLink(context.Context, marketing.WorkspaceShareLink) (marketing.WorkspaceShareLink, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) ListWorkspaceShareLinks(context.Context, marketing.WorkspaceShareLinkQuery) ([]marketing.WorkspaceShareLink, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) UpdateWorkspaceShareLink(context.Context, marketing.WorkspaceShareLink) (marketing.WorkspaceShareLink, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) CreateWorkspaceAuditLog(context.Context, marketing.WorkspaceAuditLog) error {
+	panic("not implemented")
+}
+func (r *workerTestRepo) ListWorkspaceAuditLogs(context.Context, marketing.WorkspaceAuditLogQuery) ([]marketing.WorkspaceAuditLog, error) {
+	panic("not implemented")
+}
 func (r *workerTestRepo) GetActivity(context.Context, string) (marketing.Activity, error) {
 	panic("not implemented")
 }

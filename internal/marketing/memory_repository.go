@@ -18,6 +18,11 @@ import (
 
 type MemoryRepository struct {
 	mu                  sync.RWMutex
+	workspaces          []Workspace
+	workspaceMembers    []WorkspaceMember
+	workspaceFolders    []WorkspaceFolder
+	workspaceShareLinks []WorkspaceShareLink
+	workspaceAuditLogs  []WorkspaceAuditLog
 	activities          []Activity
 	workflowDrafts      map[string]WorkflowDraft
 	workflowVersions    []WorkflowVersion

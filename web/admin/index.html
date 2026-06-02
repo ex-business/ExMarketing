@@ -3106,6 +3106,12 @@ function resetActivityFilters() {
   renderActivityList();
 }
 
+function openActivityFlow(id) {
+  const activityId = id || selectedActivityId;
+  if (!activityId) return;
+  window.location.href = '/admin-flow/?activityId=' + encodeURIComponent(activityId);
+}
+
 function renderActivityTable(items) {
   return `
     <table class="admin-table">
@@ -3121,6 +3127,7 @@ function renderActivityTable(items) {
           <th>时间</th>
           <th>版本</th>
           <th>更新</th>
+          <th>操作</th>
         </tr>
       </thead>
       <tbody>
@@ -3136,6 +3143,7 @@ function renderActivityTable(items) {
             <td>${escapeHtml(formatRange(item.startTime, item.endTime, item.timezone))}</td>
             <td>${escapeHtml(String(item.version ?? '-'))}</td>
             <td>${escapeHtml(formatTime(item.updatedAt))}</td>
+            <td><button class="button secondary" onclick="event.stopPropagation(); openActivityFlow('${escapeJs(item.id)}')">流程编排</button></td>
           </tr>
         `).join('')}
       </tbody>
@@ -3186,6 +3194,9 @@ function renderActivityDetail(item) {
       ${escapeHtml(formatRange(item.startTime, item.endTime, item.timezone))}<br>
       triggerEvents: ${escapeHtml((item.triggerEvents || []).join(', ') || '-')}<br>
       updatedAt: ${escapeHtml(formatTime(item.updatedAt))}
+    </div>
+    <div class="ops">
+      <button class="button" onclick="openActivityFlow('${escapeJs(item.id)}')">流程编排</button>
     </div>
     <h3 class="panel-title">配置快照</h3>
     <pre class="output">${escapeHtml(JSON.stringify(item.config || {}, null, 2))}</pre>

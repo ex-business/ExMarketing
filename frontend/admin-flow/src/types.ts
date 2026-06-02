@@ -125,6 +125,16 @@ export type WorkflowExecution = {
   errorMessage?: string;
 };
 
+export type WorkflowVersion = {
+  id: string;
+  tenantId: string;
+  activityId: string;
+  version: number;
+  status: 'ACTIVE' | 'ARCHIVED';
+  publishedBy?: string;
+  publishedAt: string;
+};
+
 export type WorkflowNodeExecution = {
   id: string;
   executionId: string;

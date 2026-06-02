@@ -6,6 +6,23 @@ import (
 )
 
 type Repository interface {
+	CreateWorkspace(ctx context.Context, workspace Workspace) (Workspace, error)
+	GetWorkspace(ctx context.Context, id string) (Workspace, error)
+	ListWorkspaces(ctx context.Context, query WorkspaceQuery) ([]Workspace, error)
+	UpdateWorkspace(ctx context.Context, workspace Workspace) (Workspace, error)
+	CreateWorkspaceMember(ctx context.Context, member WorkspaceMember) (WorkspaceMember, error)
+	ListWorkspaceMembers(ctx context.Context, workspaceID string) ([]WorkspaceMember, error)
+	UpdateWorkspaceMember(ctx context.Context, member WorkspaceMember) (WorkspaceMember, error)
+	CreateWorkspaceFolder(ctx context.Context, folder WorkspaceFolder) (WorkspaceFolder, error)
+	GetWorkspaceFolder(ctx context.Context, id string) (WorkspaceFolder, error)
+	ListWorkspaceFolders(ctx context.Context, query WorkspaceFolderQuery) ([]WorkspaceFolder, error)
+	UpdateWorkspaceFolder(ctx context.Context, folder WorkspaceFolder) (WorkspaceFolder, error)
+	CreateWorkspaceShareLink(ctx context.Context, link WorkspaceShareLink) (WorkspaceShareLink, error)
+	ListWorkspaceShareLinks(ctx context.Context, query WorkspaceShareLinkQuery) ([]WorkspaceShareLink, error)
+	UpdateWorkspaceShareLink(ctx context.Context, link WorkspaceShareLink) (WorkspaceShareLink, error)
+	CreateWorkspaceAuditLog(ctx context.Context, log WorkspaceAuditLog) error
+	ListWorkspaceAuditLogs(ctx context.Context, query WorkspaceAuditLogQuery) ([]WorkspaceAuditLog, error)
+
 	CreateActivity(ctx context.Context, activity Activity) (Activity, error)
 	GetActivity(ctx context.Context, id string) (Activity, error)
 	ListActivities(ctx context.Context) ([]Activity, error)

@@ -1,6 +1,16 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
+
+type ActivityOption = {
+  id: string;
+  tenantId?: string;
+  activityCode: string;
+  activityName: string;
+  status?: string;
+  version?: number;
+};
 
 type Props = {
+  homeMode: boolean;
   showPalette: boolean;
   interactionMode: 'pointer' | 'hand';
   nodeCount: number;
@@ -8,12 +18,16 @@ type Props = {
   selectedCount: number;
   selectedNodeCount: number;
   lastAdded: string;
+  activities: ActivityOption[];
+  activityId: string;
   activityLabel: string;
   workflowStatus: string;
+  workflowVersionLabel: string;
   zoomPercent: number;
   showChecklist: boolean;
   isPublished: boolean;
   onTogglePalette: () => void;
+  onActivityChange: (activityId: string) => void;
   onModeChange: (mode: 'pointer' | 'hand') => void;
   onDefault: () => void;
   onSimple: () => void;
@@ -35,6 +49,7 @@ type Props = {
 };
 
 export function StudioChrome({
+  homeMode,
   showPalette,
   interactionMode,
   nodeCount,
@@ -42,12 +57,16 @@ export function StudioChrome({
   selectedCount,
   selectedNodeCount,
   lastAdded,
+  activities,
+  activityId,
   activityLabel,
   workflowStatus,
+  workflowVersionLabel,
   zoomPercent,
   showChecklist,
   isPublished,
   onTogglePalette,
+  onActivityChange,
   onModeChange,
   onDefault,
   onSimple,
@@ -68,11 +87,26 @@ export function StudioChrome({
   onPublish,
 }: Props) {
   const [showZoomMenu, setShowZoomMenu] = useState(false);
+  const [showActivityPicker, setShowActivityPicker] = useState(false);
+  const [activitySearch, setActivitySearch] = useState('');
+  const [showTestActivities, setShowTestActivities] = useState(false);
   const zoomOptions = [200, 100, 75, 50, 25];
   const chooseZoom = (value: number) => {
     onZoomTo(value / 100);
     setShowZoomMenu(false);
   };
+  const activeActivity = activities.find((item) => item.id === activityId);
+  const activityOptions = useMemo(() => {
+    const keyword = activitySearch.trim().toLowerCase();
+    return activities
+      .filter((activity) => showTestActivities || !isTestActivity(activity))
+      .filter((activity) => {
+        if (!keyword) return true;
+        return `${activity.activityName} ${activity.activityCode} ${activity.tenantId}`.toLowerCase().includes(keyword);
+      })
+      .slice(0, 24);
+  }, [activities, activitySearch, showTestActivities]);
+  const hiddenTestCount = activities.filter(isTestActivity).length;
 
   return (
     <>
@@ -80,7 +114,54 @@ export function StudioChrome({
         <div className="workspace-brand">
           <strong>ExMarketing</strong>
           <span>/</span>
-          <button title={activityLabel}>ex-unknownname</button>
+          {homeMode ? (
+            <div className="workspace-section-title">Activity Studio</div>
+          ) : (
+            <>
+              <button
+                className="activity-current"
+                title={activityLabel}
+                onClick={() => setShowActivityPicker((value) => !value)}
+              >
+                <b>{activeActivity ? activeActivity.activityName || activeActivity.activityCode : '选择活动'}</b>
+                <small>{activeActivity ? activeActivity.activityCode : '未绑定'}</small>
+              </button>
+              {activeActivity ? <em className="activity-status">{activeActivity.status || 'UNKNOWN'} · v{activeActivity.version ?? '-'}</em> : null}
+            </>
+          )}
+          {!homeMode && showActivityPicker ? (
+            <div className="activity-picker-popover">
+              <div className="activity-picker-head">
+                <b>切换活动</b>
+                <a href="/admin/">创建活动</a>
+              </div>
+              <input value={activitySearch} placeholder="搜索活动名称、code 或 tenant" onChange={(event) => setActivitySearch(event.target.value)} />
+              <div className="activity-picker-list">
+                {activityOptions.length ? activityOptions.map((activity) => (
+                  <button
+                    key={activity.id}
+                    className={activity.id === activityId ? 'active' : ''}
+                    onClick={() => {
+                      onActivityChange(activity.id);
+                      setShowActivityPicker(false);
+                    }}
+                  >
+                    <span>
+                      <b>{activity.activityName || activity.activityCode}</b>
+                      <em>{activity.activityCode}</em>
+                    </span>
+                    <strong>{activity.status || 'UNKNOWN'} · v{activity.version ?? '-'}</strong>
+                  </button>
+                )) : <div className="activity-picker-empty">没有匹配活动。</div>}
+              </div>
+              {hiddenTestCount > 0 ? (
+                <label className="activity-picker-toggle">
+                  <input type="checkbox" checked={showTestActivities} onChange={(event) => setShowTestActivities(event.target.checked)} />
+                  <span>显示 {hiddenTestCount} 个测试活动</span>
+                </label>
+              ) : null}
+            </div>
+          ) : null}
         </div>
         <nav className="app-tabs">
           <button className="active">编排</button>
@@ -93,7 +174,9 @@ export function StudioChrome({
           <span>D</span>
         </div>
       </div>
-      <div className="dify-top-status">{workflowStatus} · {isPublished ? '已发布' : '未发布'}</div>
+      {homeMode ? null : (
+        <>
+      <div className="dify-top-status">{workflowStatus} · {workflowVersionLabel} · {isPublished ? '已发布' : '未发布'}</div>
       <div className="dify-float-toolbar">
         <button onClick={onDefault}>完整链路</button>
         <button onClick={onSimple}>简化链路</button>
@@ -170,6 +253,13 @@ export function StudioChrome({
           <button className="danger-action" disabled={selectedCount === 0} onClick={onDelete}>删除选中 {selectedCount > 0 ? selectedCount : ''}</button>
         </div>
       </header>
+        </>
+      )}
     </>
   );
+}
+
+function isTestActivity(activity: ActivityOption): boolean {
+  const text = `${activity.activityName} ${activity.activityCode} ${activity.id}`.toLowerCase();
+  return ['postgresql e2e', 'load fault', 'smoke', 'e2e_', 'load_fault', 'pg_smoke'].some((marker) => text.includes(marker));
 }

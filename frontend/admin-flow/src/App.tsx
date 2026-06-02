@@ -34,6 +34,7 @@ import type {
   WorkflowDefinition,
   WorkflowExecution,
   WorkflowNodeExecution,
+  WorkflowVersion,
 } from './types';
 import { ACTIVITY_NODE_WIDTH, activityNodeHeight, cx, edge, flowNode, layoutFlowNodes } from './utils/flow';
 
@@ -42,7 +43,113 @@ type ActivitySummary = {
   activityCode: string;
   activityName: string;
   tenantId: string;
+  status?: string;
+  version?: number;
 };
+
+type CreateStudioActivityInput = {
+  tenantId: string;
+  activityName: string;
+  activityCode: string;
+};
+
+function isTestActivity(activity: ActivitySummary): boolean {
+  const text = `${activity.activityName} ${activity.activityCode} ${activity.id}`.toLowerCase();
+  return [
+    'postgresql e2e',
+    'load fault',
+    'smoke',
+    'e2e_',
+    'load_fault',
+    'pg_smoke',
+  ].some((marker) => text.includes(marker));
+}
+
+function normalizeActivityCode(value: string): string {
+  const code = value
+    .trim()
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .replace(/[^A-Za-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .toUpperCase();
+  return code || `ACTIVITY_${Date.now().toString(36).toUpperCase()}`;
+}
+
+function buildStudioActivityPayload(input: CreateStudioActivityInput) {
+  const now = new Date();
+  const start = new Date(now.getTime() - 60_000).toISOString();
+  const end = new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000).toISOString();
+  const activityName = input.activityName.trim();
+  const activityCode = normalizeActivityCode(input.activityCode || activityName);
+  return {
+    operator: 'studio',
+    tenantId: input.tenantId.trim() || 'site_001',
+    activityCode,
+    activityName: activityName || activityCode,
+    activityType: 'STUDIO_WORKFLOW',
+    status: 'DRAFT',
+    triggerEvents: ['STUDIO_EVENT'],
+    startTime: start,
+    endTime: end,
+    timezone: 'UTC',
+    priority: 100,
+    exclusiveGroup: '',
+    stackable: true,
+    version: 1,
+    config: {
+      entry: {
+        channels: ['APP', 'WEB'],
+        entranceCodes: ['studio'],
+        landingUrl: 'https://example.com/studio',
+      },
+      display: {
+        title: activityName || activityCode,
+        visibleFrom: start,
+        visibleTo: end,
+        sort: 100,
+      },
+      audience: {
+        segmentCodes: ['all_users'],
+      },
+      metadata: {
+        owner: 'studio',
+      },
+    },
+    rules: [
+      {
+        ruleCode: 'STUDIO_DEFAULT_RULE',
+        rulePhase: 'QUALIFY',
+        ruleType: 'CONDITION',
+        ruleConfig: {
+          logic: 'AND',
+          conditions: [
+            { field: 'attributes.eventMatched', op: '=', value: true },
+          ],
+        },
+        sort: 1,
+        enabled: true,
+        version: 1,
+      },
+    ],
+    rewards: [
+      {
+        rewardCode: 'STUDIO_DEFAULT_REWARD',
+        rewardType: 'POINT',
+        calculateType: 'FIXED',
+        rewardConfig: {
+          points: 1,
+          unit: 'POINT',
+          pointType: 'DEFAULT',
+          targetRef: 'https://wallet.example.com/reward',
+        },
+        grantMode: 'AUTO',
+        grantChannel: 'HTTP',
+        enabled: true,
+        version: 1,
+      },
+    ],
+  };
+}
 
 function serializeWorkflowDefinition(nodes: FlowNode[], edges: ActivityEdge[], viewport?: { x: number; y: number; zoom: number }): WorkflowDefinition {
   return {
@@ -115,6 +222,168 @@ async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+function StudioActivityStart({
+  activities,
+  hiddenTestActivityCount,
+  workflowStatus,
+  onSelectActivity,
+  onCreateActivity,
+}: {
+  activities: ActivitySummary[];
+  hiddenTestActivityCount: number;
+  workflowStatus: string;
+  onSelectActivity: (activityId: string) => void;
+  onCreateActivity: (input: CreateStudioActivityInput) => Promise<void>;
+}) {
+  const [search, setSearch] = useState('');
+  const [createName, setCreateName] = useState('');
+  const [createCode, setCreateCode] = useState('');
+  const [createTenant, setCreateTenant] = useState('site_001');
+  const [createError, setCreateError] = useState('');
+  const [creating, setCreating] = useState(false);
+  const [showCreateDialog, setShowCreateDialog] = useState(false);
+  const filtered = useMemo(() => {
+    const keyword = search.trim().toLowerCase();
+    return activities
+      .filter((activity) => {
+        if (!keyword) return true;
+        return `${activity.activityName} ${activity.activityCode} ${activity.tenantId}`.toLowerCase().includes(keyword);
+      })
+      .slice(0, 8);
+  }, [activities, search]);
+  const suggestedCode = normalizeActivityCode(createCode || createName || search);
+  const openCreateDialog = (name?: string) => {
+    if (name) setCreateName(name);
+    setCreateError('');
+    setShowCreateDialog(true);
+  };
+  const submitCreate = async () => {
+    const nextName = createName.trim() || search.trim();
+    if (!nextName) {
+      setCreateError('先输入活动名称。');
+      return;
+    }
+    setCreating(true);
+    setCreateError('');
+    try {
+      await onCreateActivity({
+        tenantId: createTenant,
+        activityName: nextName,
+        activityCode: createCode || suggestedCode,
+      });
+      setShowCreateDialog(false);
+    } catch (error) {
+      setCreateError((error as Error).message);
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  return (
+    <div className="studio-start-overlay">
+      <section className="studio-start-shell">
+        <div className="studio-start-body">
+          <aside className="studio-activity-board">
+            <div className="studio-section-head">
+              <b>活动</b>
+              <small>{activities.length} total</small>
+            </div>
+            <div className="studio-start-search">
+              <input value={search} placeholder="搜索活动名称、code 或 tenant" onChange={(event) => setSearch(event.target.value)} />
+            </div>
+            <div className="studio-start-list">
+              {filtered.length ? filtered.map((activity) => (
+                <button key={activity.id} onClick={() => onSelectActivity(activity.id)}>
+                  <span>
+                    <b>{activity.activityName || activity.activityCode}</b>
+                    <em>{activity.activityCode}</em>
+                  </span>
+                  <strong>{activity.status || 'UNKNOWN'} · v{activity.version ?? '-'}</strong>
+                </button>
+              )) : <div className="studio-start-empty">没有匹配的正式活动。</div>}
+            </div>
+            {hiddenTestActivityCount > 0 ? (
+              <p className="studio-start-note">已隐藏 {hiddenTestActivityCount} 个测试活动</p>
+            ) : null}
+          </aside>
+
+          <section className="studio-recent-panel">
+            <div className="studio-section-head">
+              <div>
+                <b>最近活动</b>
+                <p>{workflowStatus}</p>
+              </div>
+              <a href="/admin/">活动后台</a>
+            </div>
+            {filtered.length ? (
+              <div className="studio-recent-list">
+                {filtered.slice(0, 4).map((activity) => (
+                  <button key={activity.id} onClick={() => onSelectActivity(activity.id)}>
+                    <span>
+                      <b>{activity.activityName || activity.activityCode}</b>
+                      <em>{activity.activityCode}</em>
+                    </span>
+                    <strong>{activity.status || 'UNKNOWN'}</strong>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="studio-empty-state">
+                <div className="studio-empty-icon">＋</div>
+                <b>还没有正式活动</b>
+                <span>从右侧创建活动，或进入后台导入已有活动。</span>
+                <div className="studio-empty-actions">
+                  <button onClick={() => openCreateDialog(search || '新活动')}>快速创建</button>
+                  <a href="/admin/">活动后台</a>
+                </div>
+              </div>
+            )}
+          </section>
+
+          <div className="studio-create-card">
+            <button className="studio-create-cover" onClick={() => openCreateDialog()}>
+              <span>+</span>
+              <div>
+                <b>新建活动</b>
+                <small>点击创建活动流程</small>
+              </div>
+            </button>
+          </div>
+        </div>
+      </section>
+      {showCreateDialog ? (
+        <div className="studio-create-dialog-backdrop" onClick={() => setShowCreateDialog(false)}>
+          <section className="studio-create-dialog" onClick={(event) => event.stopPropagation()}>
+            <div className="studio-create-dialog-head">
+              <div>
+                <b>新建活动</b>
+                <span>创建后直接进入编排画布。</span>
+              </div>
+              <button onClick={() => setShowCreateDialog(false)}>×</button>
+            </div>
+            <div className="studio-create-grid">
+              <label>
+                <span>名称</span>
+                <input value={createName} placeholder="618 拉新活动" onChange={(event) => setCreateName(event.target.value)} />
+              </label>
+              <label>
+                <span>Code</span>
+                <input value={createCode} placeholder={suggestedCode} onChange={(event) => setCreateCode(event.target.value)} />
+              </label>
+              <label>
+                <span>Tenant</span>
+                <input value={createTenant} placeholder="site_001" onChange={(event) => setCreateTenant(event.target.value)} />
+              </label>
+              <button onClick={submitCreate} disabled={creating}>{creating ? '创建中...' : '创建并编排'}</button>
+            </div>
+            {createError ? <p>{createError}</p> : null}
+          </section>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export function App() {
   const [nodes, setNodes, onNodesChange] = useNodesState<FlowNode>(baseNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState<ActivityEdge>(baseEdges);
@@ -135,12 +404,16 @@ export function App() {
   const [showMiniMap, setShowMiniMap] = useState(true);
   const [showChecklist, setShowChecklist] = useState(false);
   const [isPublished, setIsPublished] = useState(false);
+  const [activities, setActivities] = useState<ActivitySummary[]>([]);
   const [activityId, setActivityId] = useState('');
-  const [activityLabel, setActivityLabel] = useState('未绑定活动');
+  const [activityLabel, setActivityLabel] = useState('选择活动');
   const [workflowStatus, setWorkflowStatus] = useState('未连接后端');
+  const [workflowVersionLabel, setWorkflowVersionLabel] = useState('workflow 未发布');
 
   const nodeTypes = useMemo(() => ({ activity: ActivityNodeView, group: GroupNodeView, note: NoteNodeView }), []);
   const selectedCount = selectedNodeIds.length + selectedEdgeIds.length;
+  const visibleStudioActivities = useMemo(() => activities.filter((activity) => !isTestActivity(activity)), [activities]);
+  const hiddenTestActivityCount = activities.length - visibleStudioActivities.length;
 
   useEffect(() => {
     let cancelled = false;
@@ -149,9 +422,18 @@ export function App() {
     fetchJSON<{ items: ActivitySummary[] }>('/admin/v1/activities')
       .then((body) => {
         if (cancelled) return;
-        const activity = body.items.find((item) => item.id === requestedActivityId) ?? body.items[0];
-        if (!activity) {
+        setActivities(body.items);
+        if (!body.items.length) {
           setWorkflowStatus('没有可绑定活动');
+          return;
+        }
+        if (!requestedActivityId) {
+          setWorkflowStatus('请选择活动开始编排');
+          return;
+        }
+        const activity = body.items.find((item) => item.id === requestedActivityId);
+        if (!activity) {
+          setWorkflowStatus('URL 中的活动不存在，请重新选择');
           return;
         }
         setActivityId(activity.id);
@@ -170,6 +452,13 @@ export function App() {
   useEffect(() => {
     if (!activityId) return;
     let cancelled = false;
+    const activity = activities.find((item) => item.id === activityId);
+    if (activity) {
+      setActivityLabel(`${activity.activityName} / ${activity.activityCode}`);
+      const params = new URLSearchParams(window.location.search);
+      params.set('activityId', activity.id);
+      window.history.replaceState(null, '', `${window.location.pathname}?${params.toString()}`);
+    }
     fetchJSON<{ definition: WorkflowDefinition }>(`/admin/v1/activities/${activityId}/workflow/draft`)
       .then((draft) => {
         if (cancelled || !draft.definition) return;
@@ -180,12 +469,45 @@ export function App() {
       })
       .catch((error: Error) => {
         if (cancelled) return;
-        setWorkflowStatus(error.message.includes('not found') ? '当前活动暂无草稿' : `草稿加载失败：${error.message}`);
+        if (error.message.includes('not found')) {
+          setNodes(baseNodes);
+          setEdges(baseEdges);
+          setSelectedTemplate('default');
+          setWorkflowStatus('当前活动暂无草稿');
+          return;
+        }
+        setWorkflowStatus(`草稿加载失败：${error.message}`);
       });
     return () => {
       cancelled = true;
     };
-  }, [activityId, setEdges, setNodes]);
+  }, [activities, activityId, setEdges, setNodes]);
+
+  const refreshWorkflowVersions = useCallback(async (nextActivityId = activityId) => {
+    if (!nextActivityId) {
+      setWorkflowVersionLabel('workflow 未发布');
+      setIsPublished(false);
+      return;
+    }
+    try {
+      const versions = await fetchJSON<{ items: WorkflowVersion[] }>(`/admin/v1/activities/${nextActivityId}/workflow/versions`);
+      const active = versions.items.find((item) => item.status === 'ACTIVE');
+      if (!active) {
+        setWorkflowVersionLabel('workflow 未发布');
+        setIsPublished(false);
+        return;
+      }
+      setWorkflowVersionLabel(`workflow v${active.version} · ${new Date(active.publishedAt).toLocaleString()}`);
+      setIsPublished(true);
+    } catch (error) {
+      setWorkflowVersionLabel(`版本加载失败：${(error as Error).message}`);
+      setIsPublished(false);
+    }
+  }, [activityId]);
+
+  useEffect(() => {
+    void refreshWorkflowVersions(activityId);
+  }, [activityId, refreshWorkflowVersions]);
 
   const filteredCatalog = useMemo(() => {
     const keyword = nodeSearch.trim().toLowerCase();
@@ -526,6 +848,7 @@ export function App() {
         method: 'POST',
         body: JSON.stringify({ operator: 'admin-flow' }),
       });
+      await refreshWorkflowVersions(activityId);
       setIsPublished(true);
       setShowChecklist(true);
       setWorkflowStatus('已发布 workflow version');
@@ -533,7 +856,37 @@ export function App() {
     } catch (error) {
       setWorkflowStatus(`发布失败：${(error as Error).message}`);
     }
-  }, [activityId, saveDraft]);
+  }, [activityId, refreshWorkflowVersions, saveDraft]);
+
+  const changeActivity = useCallback((nextActivityId: string) => {
+    setActivityId(nextActivityId);
+    setSelectedNodeIds([]);
+    setSelectedEdgeIds([]);
+    setContextMenu(null);
+    setNodePicker(null);
+    setWorkflowStatus('切换活动中...');
+  }, []);
+
+  const createStudioActivity = useCallback(async (input: CreateStudioActivityInput) => {
+    const payload = buildStudioActivityPayload(input);
+    const created = await fetchJSON<ActivitySummary>('/admin/v1/activities', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+    setActivities((items) => [created, ...items.filter((item) => item.id !== created.id)]);
+    setActivityId(created.id);
+    setActivityLabel(`${created.activityName} / ${created.activityCode}`);
+    setSelectedNodeIds([]);
+    setSelectedEdgeIds([]);
+    setContextMenu(null);
+    setNodePicker(null);
+    setNodes(baseNodes);
+    setEdges(baseEdges);
+    setSelectedTemplate('default');
+    setWorkflowStatus('活动已创建，开始编排');
+    setWorkflowVersionLabel('workflow 未发布');
+    setIsPublished(false);
+  }, [setEdges, setNodes]);
 
   const refreshRunStatus = useCallback(async () => {
     if (!activityId) {
@@ -578,9 +931,10 @@ export function App() {
 
   return (
     <div className="flow-shell">
-      <NodePalette open={showPalette} selectedTemplate={selectedTemplate} onAddNode={addCatalogNode} onDefault={resetDefault} onSimple={loadSimpleTemplate} />
-      <main className="studio">
+      <NodePalette open={activityId ? showPalette : false} selectedTemplate={selectedTemplate} onAddNode={addCatalogNode} onDefault={resetDefault} onSimple={loadSimpleTemplate} />
+      <main className={cx('studio', !activityId && 'studio-home')}>
         <StudioChrome
+          homeMode={!activityId}
           showPalette={showPalette}
           interactionMode={interactionMode}
           nodeCount={nodes.length}
@@ -588,12 +942,16 @@ export function App() {
           selectedCount={selectedCount}
           selectedNodeCount={selectedNodeIds.length}
           lastAdded={lastAdded}
+          activities={activities}
+          activityId={activityId}
           activityLabel={activityLabel}
           workflowStatus={workflowStatus}
+          workflowVersionLabel={workflowVersionLabel}
           zoomPercent={zoomPercent}
           showChecklist={showChecklist}
           isPublished={isPublished}
           onTogglePalette={() => setShowPalette((value) => !value)}
+          onActivityChange={changeActivity}
           onModeChange={setInteractionMode}
           onDefault={resetDefault}
           onSimple={loadSimpleTemplate}
@@ -622,8 +980,10 @@ export function App() {
           onToggleChecklist={() => setShowChecklist((value) => !value)}
           onPublish={publishWorkflow}
         />
-        <section className="canvas-card">
+        <section className={cx('canvas-card', !activityId && 'studio-home-card')}>
           <ReactFlowProvider>
+            {activityId ? (
+              <>
             <ReactFlow
               nodes={visibleNodes}
               edges={visibleEdges}
@@ -701,10 +1061,20 @@ export function App() {
               />
             ) : null}
             {nodePicker ? <NodePicker picker={nodePicker} search={nodeSearch} filteredCatalog={filteredCatalog} onSearch={setNodeSearch} onAdd={addNodeAt} /> : null}
+              </>
+            ) : (
+              <StudioActivityStart
+                activities={visibleStudioActivities}
+                hiddenTestActivityCount={hiddenTestActivityCount}
+                workflowStatus={workflowStatus}
+                onSelectActivity={changeActivity}
+                onCreateActivity={createStudioActivity}
+              />
+            )}
           </ReactFlowProvider>
         </section>
       </main>
-      <PropertyPanel nodes={nodes} edges={edges} selectedNodeIds={selectedNodeIds} selectedEdgeIds={selectedEdgeIds} onDeleteNodes={deleteNodes} onDeleteEdges={deleteEdges} />
+      {activityId ? <PropertyPanel nodes={nodes} edges={edges} selectedNodeIds={selectedNodeIds} selectedEdgeIds={selectedEdgeIds} onDeleteNodes={deleteNodes} onDeleteEdges={deleteEdges} /> : null}
     </div>
   );
 }

@@ -1323,6 +1323,11 @@ var (
 	ErrQuotaReservationConflict  = errors.New("quota reservation conflict")
 	ErrQuotaAggregateConflict    = errors.New("quota aggregate conflict")
 	ErrActivityConflict          = errors.New("activity conflict")
+	ErrWorkspaceConflict         = errors.New("workspace conflict")
+	ErrInvalidWorkspace          = errors.New("invalid workspace")
+	ErrInvalidWorkspaceMember    = errors.New("invalid workspace member")
+	ErrInvalidWorkspaceFolder    = errors.New("invalid workspace folder")
+	ErrInvalidWorkspaceShare     = errors.New("invalid workspace share")
 	ErrManualGrantExportRequired = errors.New("manual export file is required before success confirmation")
 )
 

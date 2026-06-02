@@ -49,6 +49,10 @@ func NewRepository(ctx context.Context, databaseURL string) (*Repository, error)
 		_ = db.Close()
 		return nil, err
 	}
+	if err := ensureWorkspaceTables(ctx, db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	return &Repository{db: db}, nil
 }
 

@@ -239,7 +239,10 @@ export function App() {
     setSelectedNodeIds([]);
     setSelectedEdgeIds([]);
     closeFloatingUi();
-    window.requestAnimationFrame(() => reactFlowInstance?.fitView({ padding: 0.14, duration: 360 }));
+    window.requestAnimationFrame(() => {
+      reactFlowInstance?.setViewport({ x: 24, y: 36, zoom: 1 }, { duration: 360 });
+      setZoomPercent(100);
+    });
   }, [closeFloatingUi, reactFlowInstance, setNodes]);
 
   const groupSelectedNodes = useCallback(() => {

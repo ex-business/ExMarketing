@@ -59,7 +59,7 @@ export function StudioChrome({
         <div className="workspace-brand">
           <strong>ExMarketing</strong>
           <span>/</span>
-          <button>Dify's Workspace</button>
+          <button>ex-unknownname</button>
         </div>
         <nav className="app-tabs">
           <button className="active">编排</button>
@@ -74,7 +74,6 @@ export function StudioChrome({
       </div>
       <div className="dify-top-status">自动保存 12:58:10 · {isPublished ? '已发布' : '未发布'}</div>
       <div className="dify-float-toolbar">
-        <button onClick={onTogglePalette}>{showPalette ? '收起节点库' : '节点库'}</button>
         <button onClick={onDefault}>完整链路</button>
         <button onClick={onSimple}>简化链路</button>
         <button onClick={onAutoLayout}>自动排齐</button>
@@ -83,8 +82,15 @@ export function StudioChrome({
         <button className="preview-action" onClick={onPreview}>▷ 预览</button>
         <button className="publish-action" onClick={onPublish}>发布</button>
       </div>
+      <button
+        className={`node-library-fab ${showPalette ? 'open' : ''}`}
+        title={showPalette ? '收起节点库' : '展开节点库'}
+        onClick={onTogglePalette}
+      >
+        <span>{showPalette ? '×' : '+'}</span>
+        <b>{showPalette ? '收起' : '节点'}</b>
+      </button>
       <div className="dify-left-rail">
-        <button title="节点库" onClick={onTogglePalette}>+</button>
         <button className={interactionMode === 'pointer' ? 'active' : ''} title="指针模式" onClick={() => onModeChange('pointer')}>⌖</button>
         <button className={interactionMode === 'hand' ? 'active' : ''} title="手模式" onClick={() => onModeChange('hand')}>☝</button>
         <button title="整理节点" disabled={selectedNodeCount < 2} onClick={onGroup}>▦</button>

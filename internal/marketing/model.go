@@ -143,6 +143,8 @@ const (
 type Activity struct {
 	ID             string           `json:"id"`
 	TenantID       string           `json:"tenantId"`
+	WorkspaceID    string           `json:"workspaceId,omitempty"`
+	FolderID       string           `json:"folderId,omitempty"`
 	Code           string           `json:"activityCode"`
 	Name           string           `json:"activityName"`
 	Type           string           `json:"activityType"`
@@ -1243,6 +1245,8 @@ type RewardReconciliationQuery struct {
 type CreateActivityCommand struct {
 	Operator       string          `json:"operator,omitempty"`
 	TenantID       string          `json:"tenantId"`
+	WorkspaceID    string          `json:"workspaceId,omitempty"`
+	FolderID       string          `json:"folderId,omitempty"`
 	Code           string          `json:"activityCode"`
 	Name           string          `json:"activityName"`
 	Type           string          `json:"activityType"`
@@ -1266,6 +1270,8 @@ type CreateActivityCommand struct {
 type UpdateActivityCommand struct {
 	Operator       string          `json:"operator,omitempty"`
 	Reason         string          `json:"reason,omitempty"`
+	WorkspaceID    *string         `json:"workspaceId,omitempty"`
+	FolderID       *string         `json:"folderId,omitempty"`
 	Name           *string         `json:"activityName,omitempty"`
 	Status         *ActivityStatus `json:"status,omitempty"`
 	StartTime      *time.Time      `json:"startTime,omitempty"`
@@ -1443,6 +1449,9 @@ func (cmd CreateActivityCommand) Validate(now time.Time) error {
 	if strings.TrimSpace(cmd.TenantID) == "" {
 		return errors.Join(ErrInvalidActivity, errors.New("tenantId is required"))
 	}
+	if strings.TrimSpace(cmd.FolderID) != "" && strings.TrimSpace(cmd.WorkspaceID) == "" {
+		return errors.Join(ErrInvalidActivity, errors.New("workspaceId is required when folderId is set"))
+	}
 	if strings.TrimSpace(cmd.Code) == "" {
 		return errors.Join(ErrInvalidActivity, errors.New("activityCode is required"))
 	}
@@ -1522,6 +1531,15 @@ func (cmd CreateActivityCommand) ConfigPayload() json.RawMessage {
 
 func (cmd UpdateActivityCommand) ApplyTo(activity Activity, now time.Time) (Activity, error) {
 	versionChanging := cmd.ConfigVersionChanging()
+	if cmd.WorkspaceID != nil {
+		activity.WorkspaceID = strings.TrimSpace(*cmd.WorkspaceID)
+	}
+	if cmd.FolderID != nil {
+		activity.FolderID = strings.TrimSpace(*cmd.FolderID)
+	}
+	if activity.FolderID != "" && activity.WorkspaceID == "" {
+		return Activity{}, invalidActivityf("workspaceId is required when folderId is set")
+	}
 	if cmd.Name != nil {
 		name := strings.TrimSpace(*cmd.Name)
 		if name == "" {

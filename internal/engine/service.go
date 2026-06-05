@@ -21,24 +21,26 @@ import (
 )
 
 type Service struct {
-	repository       marketing.Repository
-	ruleRegistry     *rule.Registry
-	pluginRegistry   *activityplugin.Registry
-	rewardCalculator reward.Calculator
-	factClient       *fact.Client
-	metrics          *metrics.Registry
-	now              func() time.Time
+	repository        marketing.Repository
+	ruleRegistry      *rule.Registry
+	pluginRegistry    *activityplugin.Registry
+	rewardCalculator  reward.Calculator
+	factClient        *fact.Client
+	metrics           *metrics.Registry
+	workflowValidator marketing.WorkflowValidationService
+	now               func() time.Time
 }
 
 func NewService(repository marketing.Repository) *Service {
 	service := &Service{
-		repository:       repository,
-		ruleRegistry:     rule.NewRegistry(),
-		pluginRegistry:   activityplugin.NewRegistry(),
-		rewardCalculator: reward.ConfigCalculator{},
-		factClient:       fact.NewClient(),
-		metrics:          metrics.Default,
-		now:              func() time.Time { return time.Now().UTC() },
+		repository:        repository,
+		ruleRegistry:      rule.NewRegistry(),
+		pluginRegistry:    activityplugin.NewRegistry(),
+		rewardCalculator:  reward.ConfigCalculator{},
+		factClient:        fact.NewClient(),
+		metrics:           metrics.Default,
+		workflowValidator: marketing.NewWorkflowValidationService(),
+		now:               func() time.Time { return time.Now().UTC() },
 	}
 	_ = service.RegisterActivityPlugin(activityplugin.FirstDepositPlugin{})
 	_ = service.RegisterActivityPlugin(activityplugin.RedEnvelopePlugin{})
@@ -153,6 +155,8 @@ func (s *Service) CreateActivity(ctx context.Context, cmd marketing.CreateActivi
 	activity := marketing.Activity{
 		ID:             marketingID("act"),
 		TenantID:       cmd.TenantID,
+		WorkspaceID:    strings.TrimSpace(cmd.WorkspaceID),
+		FolderID:       strings.TrimSpace(cmd.FolderID),
 		Code:           cmd.Code,
 		Name:           cmd.Name,
 		Type:           cmd.Type,
@@ -174,6 +178,9 @@ func (s *Service) CreateActivity(ctx context.Context, cmd marketing.CreateActivi
 	}
 	if activity.Status == marketing.ActivityScheduled || activity.Status == marketing.ActivityActive {
 		return marketing.Activity{}, errors.Join(marketing.ErrInvalidOperation, errors.New("APPROVAL_REQUIRED: activity must be approved before SCHEDULED or ACTIVE"))
+	}
+	if err := s.ensureActivityWorkspacePlacement(ctx, activity.WorkspaceID, activity.FolderID); err != nil {
+		return marketing.Activity{}, err
 	}
 
 	created, err := s.repository.CreateActivity(ctx, activity)
@@ -223,6 +230,31 @@ func (s *Service) ListActivities(ctx context.Context) ([]marketing.Activity, err
 	return activities, nil
 }
 
+func (s *Service) ensureActivityWorkspacePlacement(ctx context.Context, workspaceID string, folderID string) error {
+	workspaceID = strings.TrimSpace(workspaceID)
+	folderID = strings.TrimSpace(folderID)
+	if workspaceID == "" && folderID == "" {
+		return nil
+	}
+	if workspaceID == "" {
+		return errors.Join(marketing.ErrInvalidActivity, errors.New("workspaceId is required when folderId is set"))
+	}
+	if _, err := s.repository.GetWorkspace(ctx, workspaceID); err != nil {
+		return err
+	}
+	if folderID == "" {
+		return nil
+	}
+	folder, err := s.repository.GetWorkspaceFolder(ctx, folderID)
+	if err != nil {
+		return err
+	}
+	if folder.WorkspaceID != workspaceID || folder.Status == marketing.WorkspaceFolderDeleted {
+		return marketing.ErrNotFound
+	}
+	return nil
+}
+
 func (s *Service) GetActivity(ctx context.Context, id string) (marketing.Activity, error) {
 	id = strings.TrimSpace(id)
 	if id == "" {
@@ -247,6 +279,9 @@ func (s *Service) UpdateActivity(ctx context.Context, id string, cmd marketing.U
 	before = s.hydrateApproval(ctx, before)
 	updated, err := cmd.ApplyTo(before, s.now())
 	if err != nil {
+		return marketing.Activity{}, err
+	}
+	if err := s.ensureActivityWorkspacePlacement(ctx, updated.WorkspaceID, updated.FolderID); err != nil {
 		return marketing.Activity{}, err
 	}
 	if cmd.ConfigVersionChanging() && updated.Approval.Status != "" {

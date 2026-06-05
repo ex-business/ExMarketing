@@ -33,13 +33,18 @@ import type {
   OutputAddRequest,
   WorkflowDefinition,
   WorkflowExecution,
+  WorkflowNodeConfigSchema,
   WorkflowNodeExecution,
+  WorkflowValidationIssue,
+  WorkflowValidationResult,
   WorkflowVersion,
 } from './types';
 import { ACTIVITY_NODE_WIDTH, activityNodeHeight, cx, edge, flowNode, layoutFlowNodes } from './utils/flow';
 
 type ActivitySummary = {
   id: string;
+  workspaceId?: string;
+  folderId?: string;
   activityCode: string;
   activityName: string;
   tenantId: string;
@@ -47,10 +52,53 @@ type ActivitySummary = {
   version?: number;
 };
 
+type WorkspaceSummary = {
+  id: string;
+  tenantId: string;
+  name: string;
+  slug: string;
+  color?: string;
+  visibility: 'PRIVATE' | 'TEAM' | 'PUBLIC';
+  status: string;
+};
+
+type WorkspaceFolderSummary = {
+  id: string;
+  workspaceId: string;
+  parentId?: string;
+  name: string;
+  color?: string;
+  visibility: string;
+  sortOrder: number;
+  status: string;
+};
+
+type WorkspaceShareLinkSummary = {
+  id: string;
+  workspaceId: string;
+  folderId?: string;
+  activityId?: string;
+  scope: 'WORKSPACE' | 'FOLDER' | 'ACTIVITY';
+  enabled: boolean;
+};
+
+type ActivityPlacement = {
+  workspaceId: string;
+  folderId: string;
+  shareLinkId?: string;
+};
+
+type CreateStudioWorkspaceInput = {
+  name: string;
+  tenantId: string;
+};
+
 type CreateStudioActivityInput = {
   tenantId: string;
   activityName: string;
   activityCode: string;
+  workspaceId: string;
+  folderId: string;
 };
 
 function isTestActivity(activity: ActivitySummary): boolean {
@@ -84,6 +132,8 @@ function buildStudioActivityPayload(input: CreateStudioActivityInput) {
   return {
     operator: 'studio',
     tenantId: input.tenantId.trim() || 'site_001',
+    workspaceId: input.workspaceId,
+    folderId: input.folderId,
     activityCode,
     activityName: activityName || activityCode,
     activityType: 'STUDIO_WORKFLOW',
@@ -113,6 +163,8 @@ function buildStudioActivityPayload(input: CreateStudioActivityInput) {
       },
       metadata: {
         owner: 'studio',
+        workspaceId: input.workspaceId,
+        folderId: input.folderId,
       },
     },
     rules: [
@@ -151,20 +203,31 @@ function buildStudioActivityPayload(input: CreateStudioActivityInput) {
   };
 }
 
-function serializeWorkflowDefinition(nodes: FlowNode[], edges: ActivityEdge[], viewport?: { x: number; y: number; zoom: number }): WorkflowDefinition {
+function serializeWorkflowDefinition(
+  nodes: FlowNode[],
+  edges: ActivityEdge[],
+  nodeConfigSchemas: WorkflowNodeConfigSchema[],
+  viewport?: { x: number; y: number; zoom: number },
+  context?: { workspaceId?: string; folderId?: string; activityId?: string },
+): WorkflowDefinition {
+  const schemaByNodeType = new Map(nodeConfigSchemas.map((schema) => [schema.nodeType, schema]));
   return {
     nodes: nodes
       .filter((node): node is ActivityNode => node.type === 'activity')
-      .map((node) => ({
-        id: node.id,
-        type: node.data.id,
-        kind: node.data.kind,
-        code: node.data.code,
-        title: node.data.title,
-        position: { x: node.position.x, y: node.position.y },
-        inputs: node.data.inputs,
-        outputs: node.data.outputs,
-      })),
+      .map((node) => {
+        const schema = schemaByNodeType.get(node.data.id);
+        return {
+          id: node.id,
+          type: node.data.id,
+          kind: node.data.kind,
+          code: node.data.code,
+          title: node.data.title,
+          position: { x: node.position.x, y: node.position.y },
+          inputs: node.data.inputs,
+          outputs: node.data.outputs,
+          config: materializeNodeConfig(node.data.config, schema),
+        };
+      }),
     edges: edges.map((item) => ({
       id: item.id,
       source: item.source,
@@ -178,8 +241,49 @@ function serializeWorkflowDefinition(nodes: FlowNode[], edges: ActivityEdge[], v
       app: 'ExMarketing',
       schema: 'activity-workflow/v1',
       exportedAt: new Date().toISOString(),
+      ...(context ?? {}),
     },
   };
+}
+
+function materializeNodeConfig(config: Record<string, unknown> | undefined, schema: WorkflowNodeConfigSchema | undefined): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  if (!schema) {
+    return { ...(config ?? {}) };
+  }
+  schema.fields.forEach((field) => {
+    if (config && Object.prototype.hasOwnProperty.call(config, field.key)) {
+      out[field.key] = config[field.key];
+      return;
+    }
+    if (Object.prototype.hasOwnProperty.call(field, 'default')) {
+      out[field.key] = field.default;
+      return;
+    }
+    switch (field.type) {
+      case 'BOOLEAN':
+        out[field.key] = false;
+        break;
+      case 'NUMBER':
+        out[field.key] = 0;
+        break;
+      case 'ARRAY':
+        out[field.key] = [];
+        break;
+      case 'OBJECT':
+        out[field.key] = {};
+        break;
+      default:
+        out[field.key] = '';
+        break;
+    }
+  });
+  Object.entries(config ?? {}).forEach(([key, value]) => {
+    if (!Object.prototype.hasOwnProperty.call(out, key)) {
+      out[key] = value;
+    }
+  });
+  return out;
 }
 
 function hydrateWorkflowDefinition(definition: WorkflowDefinition): { nodes: FlowNode[]; edges: ActivityEdge[] } {
@@ -196,11 +300,16 @@ function hydrateWorkflowDefinition(definition: WorkflowDefinition): { nodes: Flo
           kind: (node.kind as ActivityNode['data']['kind']) ?? base.kind,
           inputs: node.inputs ?? base.inputs,
           outputs: node.outputs ?? base.outputs,
+          config: isRecord(node.config) ? node.config : undefined,
         },
       });
     }),
     edges: definition.edges.map((item) => edge(item.source, item.target, item.label ?? '', item.sourceHandle, item.targetHandle)),
   };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
 async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
@@ -224,38 +333,175 @@ async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
 
 function StudioActivityStart({
   activities,
+  workspaces,
+  folders,
+  placements,
   hiddenTestActivityCount,
   workflowStatus,
+  initialWorkspaceId,
+  initialFolderId,
   onSelectActivity,
+  onCreateWorkspace,
   onCreateActivity,
+  onCreateFolder,
 }: {
   activities: ActivitySummary[];
+  workspaces: WorkspaceSummary[];
+  folders: WorkspaceFolderSummary[];
+  placements: Record<string, ActivityPlacement>;
   hiddenTestActivityCount: number;
   workflowStatus: string;
+  initialWorkspaceId: string;
+  initialFolderId: string;
   onSelectActivity: (activityId: string) => void;
+  onCreateWorkspace: (input: CreateStudioWorkspaceInput) => Promise<WorkspaceSummary>;
   onCreateActivity: (input: CreateStudioActivityInput) => Promise<void>;
+  onCreateFolder: (workspaceId: string, name: string) => Promise<WorkspaceFolderSummary>;
 }) {
   const [search, setSearch] = useState('');
+  const [workspaceName, setWorkspaceName] = useState('');
+  const [workspaceTenant, setWorkspaceTenant] = useState('site_001');
+  const [workspaceError, setWorkspaceError] = useState('');
+  const [creatingWorkspace, setCreatingWorkspace] = useState(false);
+  const [showWorkspaceDialog, setShowWorkspaceDialog] = useState(false);
+  const [folderName, setFolderName] = useState('');
+  const [folderError, setFolderError] = useState('');
+  const [creatingFolder, setCreatingFolder] = useState(false);
+  const [showFolderDialog, setShowFolderDialog] = useState(false);
   const [createName, setCreateName] = useState('');
   const [createCode, setCreateCode] = useState('');
   const [createTenant, setCreateTenant] = useState('site_001');
+  const [createWorkspaceId, setCreateWorkspaceId] = useState('');
+  const [createFolderId, setCreateFolderId] = useState('');
+  const [createFolderName, setCreateFolderName] = useState('');
   const [createError, setCreateError] = useState('');
   const [creating, setCreating] = useState(false);
   const [showCreateDialog, setShowCreateDialog] = useState(false);
-  const filtered = useMemo(() => {
+  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState('');
+  const [selectedFolderId, setSelectedFolderId] = useState('');
+  const foldersByWorkspace = useMemo(() => {
+    const next: Record<string, WorkspaceFolderSummary[]> = {};
+    folders
+      .filter((folder) => folder.status !== 'DELETED')
+      .forEach((folder) => {
+        next[folder.workspaceId] = [...(next[folder.workspaceId] ?? []), folder];
+      });
+    Object.values(next).forEach((items) => items.sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name)));
+    return next;
+  }, [folders]);
+  const activeWorkspaces = useMemo(() => workspaces.filter((workspace) => workspace.status !== 'DELETED'), [workspaces]);
+  useEffect(() => {
+    if (initialWorkspaceId) setSelectedWorkspaceId(initialWorkspaceId);
+    if (initialFolderId) setSelectedFolderId(initialFolderId);
+  }, [initialFolderId, initialWorkspaceId]);
+  const workflowCountByWorkspace = useMemo(() => {
+    const next: Record<string, number> = {};
+    activities.forEach((activity) => {
+      const placement = placements[activity.id];
+      if (!placement?.workspaceId) return;
+      next[placement.workspaceId] = (next[placement.workspaceId] ?? 0) + 1;
+    });
+    return next;
+  }, [activities, placements]);
+  const workflowCountByFolder = useMemo(() => {
+    const next: Record<string, number> = {};
+    activities.forEach((activity) => {
+      const placement = placements[activity.id];
+      if (!placement?.folderId) return;
+      next[placement.folderId] = (next[placement.folderId] ?? 0) + 1;
+    });
+    return next;
+  }, [activities, placements]);
+  const selectedWorkspace = activeWorkspaces.find((workspace) => workspace.id === selectedWorkspaceId) ?? activeWorkspaces[0];
+  const selectedWorkspaceFolders = selectedWorkspace ? foldersByWorkspace[selectedWorkspace.id] ?? [] : [];
+  const selectedFolder = selectedWorkspaceFolders.find((folder) => folder.id === selectedFolderId) ?? selectedWorkspaceFolders[0];
+  useEffect(() => {
+    if (!selectedWorkspace && selectedWorkspaceId) {
+      setSelectedWorkspaceId('');
+      setSelectedFolderId('');
+      return;
+    }
+    if (selectedWorkspace && selectedWorkspace.id !== selectedWorkspaceId) {
+      setSelectedWorkspaceId(selectedWorkspace.id);
+    }
+    if (selectedFolder && selectedFolder.id !== selectedFolderId) {
+      setSelectedFolderId(selectedFolder.id);
+    }
+    if (!selectedFolder && selectedFolderId) {
+      setSelectedFolderId('');
+    }
+  }, [selectedFolder, selectedFolderId, selectedWorkspace, selectedWorkspaceId]);
+  const selectedWorkflows = useMemo(() => {
     const keyword = search.trim().toLowerCase();
     return activities
       .filter((activity) => {
+        if (selectedWorkspace) {
+          const placement = placements[activity.id];
+          if (!placement || placement.workspaceId !== selectedWorkspace.id) return false;
+          if (selectedFolder && placement.folderId !== selectedFolder.id) return false;
+        }
         if (!keyword) return true;
-        return `${activity.activityName} ${activity.activityCode} ${activity.tenantId}`.toLowerCase().includes(keyword);
-      })
-      .slice(0, 8);
-  }, [activities, search]);
+        const folder = placements[activity.id]?.folderId ? folders.find((item) => item.id === placements[activity.id]?.folderId) : undefined;
+        return `${activity.activityName} ${activity.activityCode} ${activity.tenantId} ${selectedWorkspace?.name ?? ''} ${folder?.name ?? ''}`.toLowerCase().includes(keyword);
+      });
+  }, [activities, folders, placements, search, selectedFolder, selectedWorkspace]);
   const suggestedCode = normalizeActivityCode(createCode || createName || search);
-  const openCreateDialog = (name?: string) => {
+  const openCreateDialog = (name?: string, context?: { workspaceId?: string; folderId?: string }) => {
     if (name) setCreateName(name);
+    const fallbackWorkspace = context?.workspaceId || selectedWorkspace?.id || createWorkspaceId || workspaces[0]?.id || '';
+    const fallbackFolder = context?.folderId || selectedFolder?.id || createFolderId || foldersByWorkspace[fallbackWorkspace]?.[0]?.id || '';
+    setCreateWorkspaceId(fallbackWorkspace);
+    setCreateFolderId(fallbackFolder);
+    const fallbackWorkspaceItem = workspaces.find((workspace) => workspace.id === fallbackWorkspace);
+    if (fallbackWorkspaceItem?.tenantId) setCreateTenant(fallbackWorkspaceItem.tenantId);
     setCreateError('');
     setShowCreateDialog(true);
+  };
+  const workspaceFolders = foldersByWorkspace[createWorkspaceId] ?? [];
+  const submitWorkspace = async () => {
+    const nextName = workspaceName.trim();
+    if (!nextName) {
+      setWorkspaceError('先输入 workspace 名称。');
+      return;
+    }
+    setCreatingWorkspace(true);
+    setWorkspaceError('');
+    try {
+      const workspace = await onCreateWorkspace({ name: nextName, tenantId: workspaceTenant.trim() || 'site_001' });
+      setSelectedWorkspaceId(workspace.id);
+      setSelectedFolderId('');
+      setCreateWorkspaceId(workspace.id);
+      setCreateTenant(workspace.tenantId);
+      setWorkspaceName('');
+      setShowWorkspaceDialog(false);
+    } catch (error) {
+      setWorkspaceError((error as Error).message);
+    } finally {
+      setCreatingWorkspace(false);
+    }
+  };
+  const submitFolder = async () => {
+    if (!selectedWorkspace) {
+      setFolderError('先选择 workspace。');
+      return;
+    }
+    const nextName = folderName.trim();
+    if (!nextName) {
+      setFolderError('先输入 folder 名称。');
+      return;
+    }
+    setCreatingFolder(true);
+    setFolderError('');
+    try {
+      const folder = await onCreateFolder(selectedWorkspace.id, nextName);
+      setSelectedFolderId(folder.id);
+      setFolderName('');
+      setShowFolderDialog(false);
+    } catch (error) {
+      setFolderError((error as Error).message);
+    } finally {
+      setCreatingFolder(false);
+    }
   };
   const submitCreate = async () => {
     const nextName = createName.trim() || search.trim();
@@ -263,15 +509,38 @@ function StudioActivityStart({
       setCreateError('先输入活动名称。');
       return;
     }
+    if (!createWorkspaceId) {
+      setCreateError('先选择工作区。');
+      return;
+    }
+    const selectedWorkspace = workspaces.find((workspace) => workspace.id === createWorkspaceId);
+    let nextFolderId = createFolderId;
+    if (!nextFolderId && createFolderName.trim()) {
+      try {
+        const folder = await onCreateFolder(createWorkspaceId, createFolderName.trim());
+        nextFolderId = folder.id;
+        setCreateFolderId(folder.id);
+      } catch (error) {
+        setCreateError((error as Error).message);
+        return;
+      }
+    }
+    if (!nextFolderId) {
+      setCreateError('先选择文件夹，或输入新文件夹名称。');
+      return;
+    }
     setCreating(true);
     setCreateError('');
     try {
       await onCreateActivity({
-        tenantId: createTenant,
+        tenantId: selectedWorkspace?.tenantId || createTenant,
         activityName: nextName,
         activityCode: createCode || suggestedCode,
+        workspaceId: createWorkspaceId,
+        folderId: nextFolderId,
       });
       setShowCreateDialog(false);
+      setCreateFolderName('');
     } catch (error) {
       setCreateError((error as Error).message);
     } finally {
@@ -282,43 +551,100 @@ function StudioActivityStart({
   return (
     <div className="studio-start-overlay">
       <section className="studio-start-shell">
+        <header className="studio-home-top">
+          <div>
+            <b>ExMarketing</b>
+            <span>Activity Studio</span>
+          </div>
+          <a href="/admin/">活动后台</a>
+        </header>
         <div className="studio-start-body">
-          <aside className="studio-activity-board">
+          <aside className="studio-workspace-panel">
             <div className="studio-section-head">
-              <b>活动</b>
-              <small>{activities.length} total</small>
+              <b>Workspace</b>
+              <button onClick={() => {
+                setWorkspaceError('');
+                setShowWorkspaceDialog(true);
+              }}>+</button>
             </div>
             <div className="studio-start-search">
-              <input value={search} placeholder="搜索活动名称、code 或 tenant" onChange={(event) => setSearch(event.target.value)} />
+              <input value={search} placeholder="搜索 workflow" onChange={(event) => setSearch(event.target.value)} />
             </div>
-            <div className="studio-start-list">
-              {filtered.length ? filtered.map((activity) => (
-                <button key={activity.id} onClick={() => onSelectActivity(activity.id)}>
-                  <span>
-                    <b>{activity.activityName || activity.activityCode}</b>
-                    <em>{activity.activityCode}</em>
-                  </span>
-                  <strong>{activity.status || 'UNKNOWN'} · v{activity.version ?? '-'}</strong>
+            <div className="studio-workspace-list">
+              {activeWorkspaces.length ? activeWorkspaces.map((workspace) => (
+                <button
+                  key={workspace.id}
+                  className={cx(workspace.id === selectedWorkspace?.id && 'active')}
+                  onClick={() => {
+                    setSelectedWorkspaceId(workspace.id);
+                    setSelectedFolderId(foldersByWorkspace[workspace.id]?.[0]?.id ?? '');
+                  }}
+                >
+                  <span style={{ background: workspace.color || '#155eef' }}>{(workspace.name || workspace.slug || 'W').slice(0, 1).toUpperCase()}</span>
+                  <div>
+                    <b>{workspace.name}</b>
+                    <em>{workspace.slug} · {workspace.visibility}</em>
+                  </div>
+                  <strong>{workflowCountByWorkspace[workspace.id] ?? 0}</strong>
                 </button>
-              )) : <div className="studio-start-empty">没有匹配的正式活动。</div>}
+              )) : <div className="studio-start-empty">暂无 workspace</div>}
             </div>
             {hiddenTestActivityCount > 0 ? (
               <p className="studio-start-note">已隐藏 {hiddenTestActivityCount} 个测试活动</p>
             ) : null}
           </aside>
 
-          <section className="studio-recent-panel">
+          <aside className="studio-folder-panel">
             <div className="studio-section-head">
               <div>
-                <b>最近活动</b>
+                <b>Folder</b>
+                <p>{selectedWorkspace?.name ?? '选择 workspace'}</p>
+              </div>
+              <button
+                onClick={() => {
+                  setFolderError('');
+                  setShowFolderDialog(true);
+                }}
+                disabled={!selectedWorkspace}
+              >
+                +
+              </button>
+            </div>
+            <div className="studio-folder-list">
+              {selectedWorkspaceFolders.length ? selectedWorkspaceFolders.map((folder) => (
+                <button
+                  key={folder.id}
+                  className={cx(folder.id === selectedFolder?.id && 'active')}
+                  onClick={() => setSelectedFolderId(folder.id)}
+                >
+                  <span style={{ background: folder.color || '#eef4ff' }}>▰</span>
+                  <div>
+                    <b>{folder.name}</b>
+                    <em>{folder.visibility} · {folder.status}</em>
+                  </div>
+                  <strong>{workflowCountByFolder[folder.id] ?? 0}</strong>
+                </button>
+              )) : <div className="studio-start-empty">当前 workspace 没有 folder</div>}
+            </div>
+          </aside>
+
+          <section className="studio-workflow-panel">
+            <div className="studio-workflow-head">
+              <div>
+                <span>Workflow</span>
+                <b>{selectedFolder?.name ?? selectedWorkspace?.name ?? '选择一个 workspace'}</b>
                 <p>{workflowStatus}</p>
               </div>
-              <a href="/admin/">活动后台</a>
+              <button onClick={() => openCreateDialog('新 workflow', { workspaceId: selectedWorkspace?.id, folderId: selectedFolder?.id })} disabled={!selectedWorkspace}>
+                <span>+</span>
+                New Workflow
+              </button>
             </div>
-            {filtered.length ? (
-              <div className="studio-recent-list">
-                {filtered.slice(0, 4).map((activity) => (
+            {selectedWorkflows.length ? (
+              <div className="studio-workflow-grid">
+                {selectedWorkflows.map((activity) => (
                   <button key={activity.id} onClick={() => onSelectActivity(activity.id)}>
+                    <div className="studio-workflow-icon">{(activity.activityName || activity.activityCode || 'W').slice(0, 1).toUpperCase()}</div>
                     <span>
                       <b>{activity.activityName || activity.activityCode}</b>
                       <em>{activity.activityCode}</em>
@@ -330,29 +656,65 @@ function StudioActivityStart({
             ) : (
               <div className="studio-empty-state">
                 <div className="studio-empty-icon">＋</div>
-                <b>还没有正式活动</b>
-                <span>从右侧创建活动，或进入后台导入已有活动。</span>
+                <b>这个 folder 还没有 workflow</b>
+                <span>从当前 workspace / folder 创建后，会直接进入编排画布。</span>
                 <div className="studio-empty-actions">
-                  <button onClick={() => openCreateDialog(search || '新活动')}>快速创建</button>
+                  <button onClick={() => openCreateDialog(search || '新 workflow', { workspaceId: selectedWorkspace?.id, folderId: selectedFolder?.id })}>创建 Workflow</button>
                   <a href="/admin/">活动后台</a>
                 </div>
               </div>
             )}
           </section>
-
-          <div className="studio-create-card">
-            <button className="studio-create-cover" onClick={() => openCreateDialog()}>
-              <span>+</span>
-              <div>
-                <b>新建活动</b>
-                <small>点击创建活动流程</small>
-              </div>
-            </button>
-          </div>
         </div>
       </section>
+      {showWorkspaceDialog ? (
+        <div className="studio-create-dialog-backdrop">
+          <section className="studio-create-dialog" onClick={(event) => event.stopPropagation()}>
+            <div className="studio-create-dialog-head">
+              <div>
+                <b>新建 Workspace</b>
+                <span>用于组织 folder 和 workflow。</span>
+              </div>
+              <button onClick={() => setShowWorkspaceDialog(false)}>×</button>
+            </div>
+            <div className="studio-create-grid">
+              <label>
+                <span>名称</span>
+                <input value={workspaceName} placeholder="Marketing Studio" onChange={(event) => setWorkspaceName(event.target.value)} />
+              </label>
+              <label>
+                <span>Tenant</span>
+                <input value={workspaceTenant} placeholder="site_001" onChange={(event) => setWorkspaceTenant(event.target.value)} />
+              </label>
+              <button onClick={submitWorkspace} disabled={creatingWorkspace}>{creatingWorkspace ? '创建中...' : '创建 Workspace'}</button>
+            </div>
+            {workspaceError ? <p>{workspaceError}</p> : null}
+          </section>
+        </div>
+      ) : null}
+      {showFolderDialog ? (
+        <div className="studio-create-dialog-backdrop">
+          <section className="studio-create-dialog" onClick={(event) => event.stopPropagation()}>
+            <div className="studio-create-dialog-head">
+              <div>
+                <b>新建 Folder</b>
+                <span>{selectedWorkspace ? `创建到 ${selectedWorkspace.name}` : '先选择 workspace。'}</span>
+              </div>
+              <button onClick={() => setShowFolderDialog(false)}>×</button>
+            </div>
+            <div className="studio-create-grid">
+              <label>
+                <span>名称</span>
+                <input value={folderName} placeholder="增长活动" onChange={(event) => setFolderName(event.target.value)} />
+              </label>
+              <button onClick={submitFolder} disabled={creatingFolder || !selectedWorkspace}>{creatingFolder ? '创建中...' : '创建 Folder'}</button>
+            </div>
+            {folderError ? <p>{folderError}</p> : null}
+          </section>
+        </div>
+      ) : null}
       {showCreateDialog ? (
-        <div className="studio-create-dialog-backdrop" onClick={() => setShowCreateDialog(false)}>
+        <div className="studio-create-dialog-backdrop">
           <section className="studio-create-dialog" onClick={(event) => event.stopPropagation()}>
             <div className="studio-create-dialog-head">
               <div>
@@ -373,6 +735,34 @@ function StudioActivityStart({
               <label>
                 <span>Tenant</span>
                 <input value={createTenant} placeholder="site_001" onChange={(event) => setCreateTenant(event.target.value)} />
+              </label>
+              <label>
+                <span>Workspace</span>
+                <select value={createWorkspaceId} onChange={(event) => {
+                  const nextWorkspace = event.target.value;
+                  setCreateWorkspaceId(nextWorkspace);
+                  setCreateFolderId(foldersByWorkspace[nextWorkspace]?.[0]?.id ?? '');
+                  const workspace = workspaces.find((item) => item.id === nextWorkspace);
+                  if (workspace?.tenantId) setCreateTenant(workspace.tenantId);
+                }}>
+                  <option value="">选择工作区</option>
+                  {workspaces.map((workspace) => (
+                    <option key={workspace.id} value={workspace.id}>{workspace.name}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span>Folder</span>
+                <select value={createFolderId} onChange={(event) => setCreateFolderId(event.target.value)}>
+                  <option value="">选择文件夹</option>
+                  {workspaceFolders.map((folder) => (
+                    <option key={folder.id} value={folder.id}>{folder.name}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                <span>新文件夹</span>
+                <input value={createFolderName} placeholder="没有文件夹时填写" onChange={(event) => setCreateFolderName(event.target.value)} />
               </label>
               <button onClick={submitCreate} disabled={creating}>{creating ? '创建中...' : '创建并编排'}</button>
             </div>
@@ -403,35 +793,84 @@ export function App() {
   const [zoomPercent, setZoomPercent] = useState(100);
   const [showMiniMap, setShowMiniMap] = useState(true);
   const [showChecklist, setShowChecklist] = useState(false);
+  const [validatingWorkflow, setValidatingWorkflow] = useState(false);
+  const [workflowValidation, setWorkflowValidation] = useState<WorkflowValidationResult | null>(null);
+  const [nodeConfigSchemas, setNodeConfigSchemas] = useState<WorkflowNodeConfigSchema[]>([]);
   const [isPublished, setIsPublished] = useState(false);
   const [activities, setActivities] = useState<ActivitySummary[]>([]);
+  const [workspaces, setWorkspaces] = useState<WorkspaceSummary[]>([]);
+  const [workspaceFolders, setWorkspaceFolders] = useState<WorkspaceFolderSummary[]>([]);
+  const [activityPlacements, setActivityPlacements] = useState<Record<string, ActivityPlacement>>({});
   const [activityId, setActivityId] = useState('');
   const [activityLabel, setActivityLabel] = useState('选择活动');
   const [workflowStatus, setWorkflowStatus] = useState('未连接后端');
   const [workflowVersionLabel, setWorkflowVersionLabel] = useState('workflow 未发布');
+  const [homeWorkspaceId, setHomeWorkspaceId] = useState('');
+  const [homeFolderId, setHomeFolderId] = useState('');
 
   const nodeTypes = useMemo(() => ({ activity: ActivityNodeView, group: GroupNodeView, note: NoteNodeView }), []);
   const selectedCount = selectedNodeIds.length + selectedEdgeIds.length;
   const visibleStudioActivities = useMemo(() => activities.filter((activity) => !isTestActivity(activity)), [activities]);
   const hiddenTestActivityCount = activities.length - visibleStudioActivities.length;
+  const activePlacement = activityId ? activityPlacements[activityId] : undefined;
+  const activeWorkspace = activePlacement ? workspaces.find((workspace) => workspace.id === activePlacement.workspaceId) : undefined;
+  const activeFolder = activePlacement ? workspaceFolders.find((folder) => folder.id === activePlacement.folderId) : undefined;
 
   useEffect(() => {
     let cancelled = false;
     const params = new URLSearchParams(window.location.search);
     const requestedActivityId = params.get('activityId') ?? '';
-    fetchJSON<{ items: ActivitySummary[] }>('/admin/v1/activities')
-      .then((body) => {
+    Promise.all([
+      fetchJSON<{ items: ActivitySummary[] }>('/admin/v1/activities'),
+      fetchJSON<{ items: WorkspaceSummary[] }>('/admin/v1/workspaces?status=ACTIVE&limit=100'),
+    ])
+      .then(async ([activityBody, workspaceBody]) => {
         if (cancelled) return;
-        setActivities(body.items);
-        if (!body.items.length) {
-          setWorkflowStatus('没有可绑定活动');
+        const activityItems = activityBody.items ?? [];
+        const workspaceItems = workspaceBody.items ?? [];
+        const activeWorkspaces = workspaceItems.filter((workspace) => workspace.status !== 'DELETED');
+        const folderResults = await Promise.all(activeWorkspaces.map((workspace) => (
+          fetchJSON<{ items: WorkspaceFolderSummary[] }>(`/admin/v1/workspaces/${workspace.id}/folders?status=ACTIVE&limit=200`)
+            .then((body) => body.items ?? [])
+            .catch(() => [])
+        )));
+        const shareResults = await Promise.all(activeWorkspaces.map((workspace) => (
+          fetchJSON<{ items: WorkspaceShareLinkSummary[] }>(`/admin/v1/workspaces/${workspace.id}/share-links?scope=ACTIVITY&enabledOnly=true&limit=500`)
+            .then((body) => body.items ?? [])
+            .catch(() => [])
+        )));
+        if (cancelled) return;
+        const nextFolders = folderResults.flat();
+        const nextPlacements: Record<string, ActivityPlacement> = {};
+        activityItems.forEach((activity) => {
+          if (!activity.workspaceId || !activity.folderId) return;
+          nextPlacements[activity.id] = {
+            workspaceId: activity.workspaceId,
+            folderId: activity.folderId,
+          };
+        });
+        shareResults.flat().forEach((share) => {
+          if (!share.activityId || !share.folderId || !share.enabled) return;
+          if (nextPlacements[share.activityId]) return;
+          nextPlacements[share.activityId] = {
+            workspaceId: share.workspaceId,
+            folderId: share.folderId,
+            shareLinkId: share.id,
+          };
+        });
+        setActivities(activityItems);
+        setWorkspaces(activeWorkspaces);
+        setWorkspaceFolders(nextFolders);
+        setActivityPlacements(nextPlacements);
+        if (!activityItems.length) {
+          setWorkflowStatus('后端已连接 · 暂无 workflow');
           return;
         }
         if (!requestedActivityId) {
           setWorkflowStatus('请选择活动开始编排');
           return;
         }
-        const activity = body.items.find((item) => item.id === requestedActivityId);
+        const activity = activityItems.find((item) => item.id === requestedActivityId);
         if (!activity) {
           setWorkflowStatus('URL 中的活动不存在，请重新选择');
           return;
@@ -443,6 +882,22 @@ export function App() {
       .catch((error: Error) => {
         if (cancelled) return;
         setWorkflowStatus(`后端未连接：${error.message}`);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchJSON<{ items: WorkflowNodeConfigSchema[] }>('/admin/v1/workflow/node-config-schemas')
+      .then((body) => {
+        if (cancelled) return;
+        setNodeConfigSchemas(body.items ?? []);
+      })
+      .catch((error: Error) => {
+        if (cancelled) return;
+        setWorkflowStatus(`节点 schema 加载失败：${error.message}`);
       });
     return () => {
       cancelled = true;
@@ -528,6 +983,22 @@ export function App() {
     setContextMenu(null);
     setNodePicker(null);
   }, []);
+
+  const updateNodeConfig = useCallback((nodeId: string, key: string, value: unknown) => {
+    setNodes((items) => items.map((node) => {
+      if (node.type !== 'activity' || node.id !== nodeId) return node;
+      return {
+        ...node,
+        data: {
+          ...node.data,
+          config: {
+            ...(node.data.config ?? {}),
+            [key]: value,
+          },
+        },
+      } as FlowNode;
+    }));
+  }, [setNodes]);
 
   const addNodeAt = useCallback((def: ActivityNodeData, x: number, y: number) => {
     const id = `${def.id}-${Date.now().toString(36)}`;
@@ -772,10 +1243,30 @@ export function App() {
     setAlignmentGuide(nextGuide);
   }, [nodes, reactFlowInstance]);
 
+  const validationHighlights = useMemo(() => {
+    const blockNodeIds = new Set<string>();
+    const warningNodeIds = new Set<string>();
+    const blockEdgeIds = new Set<string>();
+    const warningEdgeIds = new Set<string>();
+    workflowValidation?.items.forEach((item) => {
+      const nodeSet = item.severity === 'BLOCK' ? blockNodeIds : warningNodeIds;
+      const edgeSet = item.severity === 'BLOCK' ? blockEdgeIds : warningEdgeIds;
+      if (item.nodeId) nodeSet.add(item.nodeId);
+      if (item.edgeId) edgeSet.add(item.edgeId);
+    });
+    return { blockNodeIds, warningNodeIds, blockEdgeIds, warningEdgeIds };
+  }, [workflowValidation]);
+
   const visibleNodes = useMemo(() => nodes.map((node) => {
+    const validationClass = validationHighlights.blockNodeIds.has(node.id)
+      ? 'validation-block'
+      : validationHighlights.warningNodeIds.has(node.id)
+        ? 'validation-warning'
+        : '';
     if (node.type === 'activity') {
       return {
         ...node,
+        className: cx(node.className, validationClass),
         data: {
           ...node.data,
           onDelete: (nodeId: string) => deleteNodes([nodeId]),
@@ -784,18 +1275,20 @@ export function App() {
         },
       } as ActivityNode;
     }
-    return { ...node, data: { ...node.data, onDelete: (nodeId: string) => deleteNodes([nodeId]) } } as FlowNode;
-  }), [deleteNodes, nodes, openOutputNodePicker]);
+    return { ...node, className: cx(node.className, validationClass), data: { ...node.data, onDelete: (nodeId: string) => deleteNodes([nodeId]) } } as FlowNode;
+  }), [deleteNodes, nodes, openOutputNodePicker, validationHighlights]);
 
   const visibleEdges = useMemo(() => edges.map((item) => ({
     ...item,
     className: cx(
       item.className,
+      validationHighlights.blockEdgeIds.has(item.id) && 'validation-block',
+      !validationHighlights.blockEdgeIds.has(item.id) && validationHighlights.warningEdgeIds.has(item.id) && 'validation-warning',
       item.id === hoveredEdgeId && 'edge-hover',
       hoveredNodeId !== '' && (item.source === hoveredNodeId || item.target === hoveredNodeId) && 'edge-node-hover',
       selectedNodeIds.some((nodeId) => item.source === nodeId || item.target === nodeId) && 'edge-related',
     ),
-  })), [edges, hoveredEdgeId, hoveredNodeId, selectedNodeIds]);
+  })), [edges, hoveredEdgeId, hoveredNodeId, selectedNodeIds, validationHighlights]);
 
   const onConnect = useCallback((params: Connection) => {
     setEdges((items) => addEdge({
@@ -814,12 +1307,57 @@ export function App() {
     setZoomPercent(Math.round(zoom * 100));
   }, [reactFlowInstance]);
 
+  const focusValidationIssue = useCallback((item: WorkflowValidationIssue) => {
+    if (item.nodeId) {
+      const node = nodes.find((candidate) => candidate.id === item.nodeId);
+      if (node) {
+        setSelectedNodeIds([node.id]);
+        setSelectedEdgeIds([]);
+        const nodeWidth = node.type === 'activity' ? ACTIVITY_NODE_WIDTH : (node.width ?? 180);
+        const nodeHeight = node.type === 'activity' ? activityNodeHeight(node) : (node.height ?? 120);
+        reactFlowInstance?.setCenter(node.position.x + nodeWidth / 2, node.position.y + nodeHeight / 2, {
+          zoom: Math.max(reactFlowInstance.getZoom(), 1),
+          duration: 360,
+        });
+        setWorkflowStatus(`已定位节点：${node.id}`);
+        return;
+      }
+    }
+    if (item.edgeId) {
+      const targetEdge = edges.find((candidate) => candidate.id === item.edgeId);
+      if (targetEdge) {
+        setSelectedNodeIds([]);
+        setSelectedEdgeIds([targetEdge.id]);
+        const relatedNodes = nodes.filter((node) => node.id === targetEdge.source || node.id === targetEdge.target);
+        if (relatedNodes.length > 0) {
+          reactFlowInstance?.fitView({ nodes: relatedNodes.map((node) => ({ id: node.id })), padding: 0.28, duration: 360 });
+        }
+        setWorkflowStatus(`已定位连线：${targetEdge.id}`);
+        return;
+      }
+    }
+    setWorkflowStatus(`未找到检查项定位目标：${item.code}`);
+  }, [edges, nodes, reactFlowInstance]);
+
   const saveDraft = useCallback(async (): Promise<boolean> => {
     if (!activityId) {
       setWorkflowStatus('需要先绑定活动');
       return false;
     }
-    const definition = serializeWorkflowDefinition(nodes, edges, reactFlowInstance?.getViewport());
+    const placement = activityPlacements[activityId];
+    if (!placement?.workspaceId || !placement.folderId) {
+      setWorkflowStatus('保存前需要先把活动绑定到 workspace / folder');
+      return false;
+    }
+    if (nodeConfigSchemas.length === 0) {
+      setWorkflowStatus('节点配置 schema 尚未加载，稍后再保存');
+      return false;
+    }
+    const definition = serializeWorkflowDefinition(nodes, edges, nodeConfigSchemas, reactFlowInstance?.getViewport(), {
+      workspaceId: placement.workspaceId,
+      folderId: placement.folderId,
+      activityId,
+    });
     try {
       await fetchJSON(`/admin/v1/activities/${activityId}/workflow/draft`, {
         method: 'PUT',
@@ -832,7 +1370,37 @@ export function App() {
       setWorkflowStatus(`保存失败：${(error as Error).message}`);
       return false;
     }
-  }, [activityId, edges, nodes, reactFlowInstance]);
+  }, [activityId, activityPlacements, edges, nodeConfigSchemas, nodes, reactFlowInstance]);
+
+  const validateCurrentDraft = useCallback(async (): Promise<WorkflowValidationResult | null> => {
+    if (!activityId) {
+      setWorkflowStatus('需要先绑定活动');
+      return null;
+    }
+    setShowChecklist(true);
+    setValidatingWorkflow(true);
+    try {
+      const draftSaved = await saveDraft();
+      if (!draftSaved) {
+        return null;
+      }
+      const result = await fetchJSON<WorkflowValidationResult>(`/admin/v1/activities/${activityId}/workflow/draft/validate`, {
+        method: 'POST',
+      });
+      setWorkflowValidation(result);
+      if (result.valid) {
+        setWorkflowStatus('发布检查通过');
+      } else {
+        setWorkflowStatus(`发布检查未通过：${result.summary.blockCount} 个阻塞项`);
+      }
+      return result;
+    } catch (error) {
+      setWorkflowStatus(`检查失败：${(error as Error).message}`);
+      return null;
+    } finally {
+      setValidatingWorkflow(false);
+    }
+  }, [activityId, saveDraft]);
 
   const publishWorkflow = useCallback(async () => {
     if (!activityId) {
@@ -840,8 +1408,8 @@ export function App() {
       return;
     }
     try {
-      const draftSaved = await saveDraft();
-      if (!draftSaved) {
+      const validation = await validateCurrentDraft();
+      if (!validation?.valid) {
         return;
       }
       await fetchJSON(`/admin/v1/activities/${activityId}/workflow/publish`, {
@@ -856,16 +1424,68 @@ export function App() {
     } catch (error) {
       setWorkflowStatus(`发布失败：${(error as Error).message}`);
     }
-  }, [activityId, refreshWorkflowVersions, saveDraft]);
+  }, [activityId, refreshWorkflowVersions, validateCurrentDraft]);
 
   const changeActivity = useCallback((nextActivityId: string) => {
     setActivityId(nextActivityId);
+    setHomeWorkspaceId('');
+    setHomeFolderId('');
     setSelectedNodeIds([]);
     setSelectedEdgeIds([]);
+    setWorkflowValidation(null);
     setContextMenu(null);
     setNodePicker(null);
     setWorkflowStatus('切换活动中...');
   }, []);
+
+  const navigateWorkspaceHome = useCallback((workspaceId: string, folderId = '') => {
+    setHomeWorkspaceId(workspaceId);
+    setHomeFolderId(folderId);
+    setActivityId('');
+    setSelectedNodeIds([]);
+    setSelectedEdgeIds([]);
+    setContextMenu(null);
+    setNodePicker(null);
+    window.history.replaceState(null, '', window.location.pathname);
+    setWorkflowStatus(folderId ? '已返回 folder 视图' : '已返回 workspace 视图');
+  }, []);
+
+  const createStudioWorkspace = useCallback(async (input: CreateStudioWorkspaceInput) => {
+    const slug = normalizeActivityCode(input.name).toLowerCase().replace(/_/g, '-');
+    const created = await fetchJSON<WorkspaceSummary>('/admin/v1/workspaces', {
+      method: 'POST',
+      body: JSON.stringify({
+        tenantId: input.tenantId,
+        name: input.name,
+        slug,
+        visibility: 'TEAM',
+        defaultRole: 'VIEWER',
+        ownerId: 'admin-flow',
+        createdBy: 'admin-flow',
+      }),
+    });
+    setWorkspaces((items) => [created, ...items.filter((item) => item.id !== created.id)]);
+    setWorkflowStatus(`已创建 workspace：${created.name}`);
+    return created;
+  }, []);
+
+  const createWorkspaceFolder = useCallback(async (workspaceId: string, name: string) => {
+    const workspace = workspaces.find((item) => item.id === workspaceId);
+    const created = await fetchJSON<WorkspaceFolderSummary>(`/admin/v1/workspaces/${workspaceId}/folders`, {
+      method: 'POST',
+      body: JSON.stringify({
+        name,
+        visibility: 'TEAM',
+        sortOrder: (workspaceFolders.filter((folder) => folder.workspaceId === workspaceId).length + 1) * 10,
+        createdBy: 'admin-flow',
+      }),
+    });
+    setWorkspaceFolders((items) => [created, ...items.filter((item) => item.id !== created.id)]);
+    if (workspace?.tenantId) {
+      setWorkflowStatus(`已创建文件夹：${workspace.name} / ${created.name}`);
+    }
+    return created;
+  }, [workspaceFolders, workspaces]);
 
   const createStudioActivity = useCallback(async (input: CreateStudioActivityInput) => {
     const payload = buildStudioActivityPayload(input);
@@ -874,6 +1494,13 @@ export function App() {
       body: JSON.stringify(payload),
     });
     setActivities((items) => [created, ...items.filter((item) => item.id !== created.id)]);
+    setActivityPlacements((items) => ({
+      ...items,
+      [created.id]: {
+        workspaceId: created.workspaceId || input.workspaceId,
+        folderId: created.folderId || input.folderId,
+      },
+    }));
     setActivityId(created.id);
     setActivityLabel(`${created.activityName} / ${created.activityCode}`);
     setSelectedNodeIds([]);
@@ -943,15 +1570,21 @@ export function App() {
           selectedNodeCount={selectedNodeIds.length}
           lastAdded={lastAdded}
           activities={activities}
+          workspaces={workspaces}
+          folders={workspaceFolders}
+          placements={activityPlacements}
           activityId={activityId}
           activityLabel={activityLabel}
           workflowStatus={workflowStatus}
           workflowVersionLabel={workflowVersionLabel}
           zoomPercent={zoomPercent}
           showChecklist={showChecklist}
+          validatingWorkflow={validatingWorkflow}
+          workflowValidation={workflowValidation}
           isPublished={isPublished}
           onTogglePalette={() => setShowPalette((value) => !value)}
           onActivityChange={changeActivity}
+          onWorkspaceNavigate={navigateWorkspaceHome}
           onModeChange={setInteractionMode}
           onDefault={resetDefault}
           onSimple={loadSimpleTemplate}
@@ -977,7 +1610,14 @@ export function App() {
           onSaveDraft={saveDraft}
           onPreview={() => setLastAdded('Preview')}
           onRunHistory={refreshRunStatus}
-          onToggleChecklist={() => setShowChecklist((value) => !value)}
+          onToggleChecklist={() => {
+            if (showChecklist) {
+              setShowChecklist(false);
+              return;
+            }
+            void validateCurrentDraft();
+          }}
+          onValidationIssueFocus={focusValidationIssue}
           onPublish={publishWorkflow}
         />
         <section className={cx('canvas-card', !activityId && 'studio-home-card')}>
@@ -1065,16 +1705,23 @@ export function App() {
             ) : (
               <StudioActivityStart
                 activities={visibleStudioActivities}
+                workspaces={workspaces}
+                folders={workspaceFolders}
+                placements={activityPlacements}
                 hiddenTestActivityCount={hiddenTestActivityCount}
                 workflowStatus={workflowStatus}
+                initialWorkspaceId={homeWorkspaceId}
+                initialFolderId={homeFolderId}
                 onSelectActivity={changeActivity}
+                onCreateWorkspace={createStudioWorkspace}
                 onCreateActivity={createStudioActivity}
+                onCreateFolder={createWorkspaceFolder}
               />
             )}
           </ReactFlowProvider>
         </section>
       </main>
-      {activityId ? <PropertyPanel nodes={nodes} edges={edges} selectedNodeIds={selectedNodeIds} selectedEdgeIds={selectedEdgeIds} onDeleteNodes={deleteNodes} onDeleteEdges={deleteEdges} /> : null}
+      {activityId ? <PropertyPanel nodes={nodes} edges={edges} selectedNodeIds={selectedNodeIds} selectedEdgeIds={selectedEdgeIds} nodeConfigSchemas={nodeConfigSchemas} onNodeConfigChange={updateNodeConfig} onDeleteNodes={deleteNodes} onDeleteEdges={deleteEdges} /> : null}
     </div>
   );
 }

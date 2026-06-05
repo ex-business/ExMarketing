@@ -485,10 +485,10 @@ func ensureWorkspaceTables(ctx context.Context, db *sql.DB) error {
 		CREATE UNIQUE INDEX IF NOT EXISTS marketing_workspace_member_email_key
 			ON marketing_workspace_member(workspace_id, lower(email)) WHERE email <> '';
 
-		CREATE TABLE IF NOT EXISTS marketing_workspace_folder (
-			id VARCHAR(64) PRIMARY KEY,
-			workspace_id VARCHAR(64) NOT NULL REFERENCES marketing_workspace(id) ON DELETE CASCADE,
-			parent_id VARCHAR(64) REFERENCES marketing_workspace_folder(id) ON DELETE SET NULL,
+			CREATE TABLE IF NOT EXISTS marketing_workspace_folder (
+				id VARCHAR(64) PRIMARY KEY,
+				workspace_id VARCHAR(64) NOT NULL REFERENCES marketing_workspace(id) ON DELETE CASCADE,
+				parent_id VARCHAR(64) REFERENCES marketing_workspace_folder(id) ON DELETE SET NULL,
 			name VARCHAR(255) NOT NULL,
 			description TEXT NOT NULL DEFAULT '',
 			icon VARCHAR(128) NOT NULL DEFAULT '',
@@ -502,9 +502,9 @@ func ensureWorkspaceTables(ctx context.Context, db *sql.DB) error {
 			updated_at TIMESTAMPTZ NOT NULL
 		);
 
-		CREATE TABLE IF NOT EXISTS marketing_workspace_share_link (
-			id VARCHAR(64) PRIMARY KEY,
-			workspace_id VARCHAR(64) NOT NULL REFERENCES marketing_workspace(id) ON DELETE CASCADE,
+			CREATE TABLE IF NOT EXISTS marketing_workspace_share_link (
+				id VARCHAR(64) PRIMARY KEY,
+				workspace_id VARCHAR(64) NOT NULL REFERENCES marketing_workspace(id) ON DELETE CASCADE,
 			folder_id VARCHAR(64) REFERENCES marketing_workspace_folder(id) ON DELETE CASCADE,
 			activity_id VARCHAR(64),
 			token VARCHAR(128) NOT NULL UNIQUE,
@@ -529,9 +529,43 @@ func ensureWorkspaceTables(ctx context.Context, db *sql.DB) error {
 			after_json JSONB,
 			ip VARCHAR(64) NOT NULL DEFAULT '',
 			user_agent TEXT NOT NULL DEFAULT '',
-			created_at TIMESTAMPTZ NOT NULL
-		);
-	`)
+				created_at TIMESTAMPTZ NOT NULL
+			);
+
+			DO $$
+			BEGIN
+				IF NOT EXISTS (
+					SELECT 1 FROM pg_constraint
+					WHERE conname = 'marketing_workspace_folder_workspace_id_id_key'
+					  AND conrelid = 'marketing_workspace_folder'::regclass
+				) THEN
+					ALTER TABLE marketing_workspace_folder
+						ADD CONSTRAINT marketing_workspace_folder_workspace_id_id_key
+						UNIQUE (workspace_id, id);
+				END IF;
+				IF NOT EXISTS (
+					SELECT 1 FROM pg_constraint
+					WHERE conname = 'marketing_workspace_folder_parent_workspace_fk'
+					  AND conrelid = 'marketing_workspace_folder'::regclass
+				) THEN
+					ALTER TABLE marketing_workspace_folder
+						ADD CONSTRAINT marketing_workspace_folder_parent_workspace_fk
+						FOREIGN KEY (workspace_id, parent_id)
+						REFERENCES marketing_workspace_folder(workspace_id, id);
+				END IF;
+				IF NOT EXISTS (
+					SELECT 1 FROM pg_constraint
+					WHERE conname = 'marketing_workspace_share_link_folder_workspace_fk'
+					  AND conrelid = 'marketing_workspace_share_link'::regclass
+				) THEN
+					ALTER TABLE marketing_workspace_share_link
+						ADD CONSTRAINT marketing_workspace_share_link_folder_workspace_fk
+						FOREIGN KEY (workspace_id, folder_id)
+						REFERENCES marketing_workspace_folder(workspace_id, id)
+						ON DELETE CASCADE;
+				END IF;
+			END $$;
+		`)
 	return err
 }
 
@@ -542,6 +576,9 @@ func mapPostgresWorkspaceError(err error) error {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 		return marketing.ErrWorkspaceConflict
+	}
+	if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+		return marketing.ErrNotFound
 	}
 	return err
 }

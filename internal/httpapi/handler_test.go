@@ -118,11 +118,32 @@ func TestWorkspaceAdminHTTPAPI(t *testing.T) {
 	updateWorkspace := httptest.NewRecorder()
 	handler.Routes().ServeHTTP(updateWorkspace, httptest.NewRequest(http.MethodPut, "/admin/v1/workspaces/"+workspace.ID, strings.NewReader(`{
 		"name": "Growth Ops",
+		"description": "clear me",
+		"icon": "spark",
+		"color": "#2563eb",
 		"visibility": "PRIVATE",
 		"updatedBy": "owner"
 	}`)))
 	if updateWorkspace.Code != http.StatusOK || !strings.Contains(updateWorkspace.Body.String(), `"visibility":"PRIVATE"`) {
 		t.Fatalf("update workspace failed: %d %s", updateWorkspace.Code, updateWorkspace.Body.String())
+	}
+	clearWorkspace := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(clearWorkspace, httptest.NewRequest(http.MethodPut, "/admin/v1/workspaces/"+workspace.ID, strings.NewReader(`{
+		"description": "",
+		"icon": "",
+		"color": "",
+		"ownerId": "",
+		"updatedBy": "owner"
+	}`)))
+	if clearWorkspace.Code != http.StatusOK {
+		t.Fatalf("clear workspace failed: %d %s", clearWorkspace.Code, clearWorkspace.Body.String())
+	}
+	var clearedWorkspace marketing.Workspace
+	if err := json.NewDecoder(clearWorkspace.Body).Decode(&clearedWorkspace); err != nil {
+		t.Fatalf("decode cleared workspace: %v", err)
+	}
+	if clearedWorkspace.Description != "" || clearedWorkspace.Icon != "" || clearedWorkspace.Color != "" || clearedWorkspace.OwnerID != "" {
+		t.Fatalf("expected cleared workspace metadata, got %+v", clearedWorkspace)
 	}
 
 	createMember := httptest.NewRecorder()
@@ -140,6 +161,12 @@ func TestWorkspaceAdminHTTPAPI(t *testing.T) {
 	var member marketing.WorkspaceMember
 	if err := json.NewDecoder(createMember.Body).Decode(&member); err != nil {
 		t.Fatalf("decode member: %v", err)
+	}
+
+	getMember := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(getMember, httptest.NewRequest(http.MethodGet, "/admin/v1/workspaces/"+workspace.ID+"/members/"+member.ID, nil))
+	if getMember.Code != http.StatusOK || !strings.Contains(getMember.Body.String(), `"userId":"editor"`) {
+		t.Fatalf("get member failed: %d %s", getMember.Code, getMember.Body.String())
 	}
 
 	deleteMember := httptest.NewRecorder()
@@ -161,6 +188,54 @@ func TestWorkspaceAdminHTTPAPI(t *testing.T) {
 	var folder marketing.WorkspaceFolder
 	if err := json.NewDecoder(createFolder.Body).Decode(&folder); err != nil {
 		t.Fatalf("decode folder: %v", err)
+	}
+
+	createWorkspaceActivity := httptest.NewRecorder()
+	activityBody := strings.Replace(validActivityBody(), `"tenantId": "site_001",`, `"tenantId": "site_001", "workspaceId": "`+workspace.ID+`", "folderId": "`+folder.ID+`",`, 1)
+	handler.Routes().ServeHTTP(createWorkspaceActivity, httptest.NewRequest(http.MethodPost, "/admin/v1/activities", strings.NewReader(activityBody)))
+	if createWorkspaceActivity.Code != http.StatusCreated {
+		t.Fatalf("create workspace activity failed: %d %s", createWorkspaceActivity.Code, createWorkspaceActivity.Body.String())
+	}
+	var workspaceActivity marketing.Activity
+	if err := json.NewDecoder(createWorkspaceActivity.Body).Decode(&workspaceActivity); err != nil {
+		t.Fatalf("decode workspace activity: %v", err)
+	}
+	if workspaceActivity.WorkspaceID != workspace.ID || workspaceActivity.FolderID != folder.ID {
+		t.Fatalf("expected activity workspace/folder binding, got %+v", workspaceActivity)
+	}
+
+	createChildFolder := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(createChildFolder, httptest.NewRequest(http.MethodPost, "/admin/v1/workspaces/"+workspace.ID+"/folders", strings.NewReader(`{
+		"parentId": "`+folder.ID+`",
+		"name": "Child",
+		"description": "clear me",
+		"visibility": "TEAM",
+		"sortOrder": 9,
+		"createdBy": "owner"
+	}`)))
+	if createChildFolder.Code != http.StatusCreated {
+		t.Fatalf("create child folder failed: %d %s", createChildFolder.Code, createChildFolder.Body.String())
+	}
+	var childFolder marketing.WorkspaceFolder
+	if err := json.NewDecoder(createChildFolder.Body).Decode(&childFolder); err != nil {
+		t.Fatalf("decode child folder: %v", err)
+	}
+	clearChildFolder := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(clearChildFolder, httptest.NewRequest(http.MethodPut, "/admin/v1/workspaces/"+workspace.ID+"/folders/"+childFolder.ID, strings.NewReader(`{
+		"parentId": "",
+		"description": "",
+		"sortOrder": 0,
+		"updatedBy": "owner"
+	}`)))
+	if clearChildFolder.Code != http.StatusOK {
+		t.Fatalf("clear child folder failed: %d %s", clearChildFolder.Code, clearChildFolder.Body.String())
+	}
+	var clearedFolder marketing.WorkspaceFolder
+	if err := json.NewDecoder(clearChildFolder.Body).Decode(&clearedFolder); err != nil {
+		t.Fatalf("decode cleared folder: %v", err)
+	}
+	if clearedFolder.ParentID != "" || clearedFolder.Description != "" || clearedFolder.SortOrder != 0 {
+		t.Fatalf("expected cleared folder parent/description/sort, got %+v", clearedFolder)
 	}
 
 	getFolder := httptest.NewRecorder()
@@ -188,6 +263,22 @@ func TestWorkspaceAdminHTTPAPI(t *testing.T) {
 	handler.Routes().ServeHTTP(listShares, httptest.NewRequest(http.MethodGet, "/admin/v1/workspaces/"+workspace.ID+"/share-links?enabledOnly=true", nil))
 	if listShares.Code != http.StatusOK || !strings.Contains(listShares.Body.String(), share.Token) {
 		t.Fatalf("list shares failed: %d %s", listShares.Code, listShares.Body.String())
+	}
+
+	getShare := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(getShare, httptest.NewRequest(http.MethodGet, "/admin/v1/workspaces/"+workspace.ID+"/share-links/"+share.ID, nil))
+	if getShare.Code != http.StatusOK || !strings.Contains(getShare.Body.String(), `"permission":"VIEW"`) {
+		t.Fatalf("get share failed: %d %s", getShare.Code, getShare.Body.String())
+	}
+
+	updateShare := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(updateShare, httptest.NewRequest(http.MethodPut, "/admin/v1/workspaces/"+workspace.ID+"/share-links/"+share.ID, strings.NewReader(`{
+		"permission": "EDIT",
+		"enabled": false,
+		"updatedBy": "owner"
+	}`)))
+	if updateShare.Code != http.StatusOK || !strings.Contains(updateShare.Body.String(), `"permission":"EDIT"`) || !strings.Contains(updateShare.Body.String(), `"enabled":false`) {
+		t.Fatalf("update share failed: %d %s", updateShare.Code, updateShare.Body.String())
 	}
 
 	deleteShare := httptest.NewRecorder()
@@ -299,6 +390,20 @@ func TestCreateActivityReturnsUnifiedConfigVersions(t *testing.T) {
 }
 
 func TestActivityWorkflowHTTPAPI(t *testing.T) {
+	t.Run("node config schemas are exposed", func(t *testing.T) {
+		handler := newTestHandler()
+		rec := httptest.NewRecorder()
+		handler.Routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/admin/v1/workflow/node-config-schemas", nil))
+		if rec.Code != http.StatusOK ||
+			!strings.Contains(rec.Body.String(), `"nodeType":"http-call"`) ||
+			!strings.Contains(rec.Body.String(), `"key":"url"`) ||
+			!strings.Contains(rec.Body.String(), `"required":true`) ||
+			!strings.Contains(rec.Body.String(), `"validationRules"`) ||
+			!strings.Contains(rec.Body.String(), `"type":"PATTERN"`) {
+			t.Fatalf("expected node config schemas, got %d: %s", rec.Code, rec.Body.String())
+		}
+	})
+
 	t.Run("publish requires draft", func(t *testing.T) {
 		handler := newTestHandler()
 		activityID := createActivity(t, handler)
@@ -312,20 +417,283 @@ func TestActivityWorkflowHTTPAPI(t *testing.T) {
 
 	handler := newTestHandler()
 	activityID := createActivity(t, handler)
+
+	validateMissingDraft := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(validateMissingDraft, httptest.NewRequest(http.MethodPost, "/admin/v1/activities/"+activityID+"/workflow/draft/validate", nil))
+	if validateMissingDraft.Code != http.StatusNotFound {
+		t.Fatalf("expected missing draft validation status %d, got %d: %s", http.StatusNotFound, validateMissingDraft.Code, validateMissingDraft.Body.String())
+	}
+
 	invalidDraft := httptest.NewRecorder()
 	invalidReq := httptest.NewRequest(http.MethodPut, "/admin/v1/activities/"+activityID+"/workflow/draft", strings.NewReader(`{
 		"operator": "ops",
-		"definition": {"nodes":[{"id":"match","type":"match"}],"edges":[]}
+		"definition": {"meta":{"activityId":"`+activityID+`","workspaceId":"workspace-1","folderId":"folder-1"},"nodes":[{"id":"match","type":"match"}],"edges":[]}
 	}`))
 	handler.Routes().ServeHTTP(invalidDraft, invalidReq)
-	if invalidDraft.Code != http.StatusBadRequest {
-		t.Fatalf("expected invalid draft status %d, got %d: %s", http.StatusBadRequest, invalidDraft.Code, invalidDraft.Body.String())
+	if invalidDraft.Code != http.StatusOK {
+		t.Fatalf("expected invalid but parseable draft to save, got %d: %s", invalidDraft.Code, invalidDraft.Body.String())
+	}
+
+	validateInvalidDraft := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(validateInvalidDraft, httptest.NewRequest(http.MethodPost, "/admin/v1/activities/"+activityID+"/workflow/draft/validate", nil))
+	if validateInvalidDraft.Code != http.StatusOK ||
+		!strings.Contains(validateInvalidDraft.Body.String(), `"valid":false`) ||
+		!strings.Contains(validateInvalidDraft.Body.String(), `"code":"WORKFLOW_ENTRY_MISSING"`) {
+		t.Fatalf("expected saved invalid draft validation issue, got %d: %s", validateInvalidDraft.Code, validateInvalidDraft.Body.String())
+	}
+
+	publishInvalidDraft := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(publishInvalidDraft, httptest.NewRequest(http.MethodPost, "/admin/v1/activities/"+activityID+"/workflow/publish", strings.NewReader(`{"operator":"ops"}`)))
+	if publishInvalidDraft.Code != http.StatusBadRequest || !strings.Contains(publishInvalidDraft.Body.String(), "WORKFLOW_ENTRY_MISSING") {
+		t.Fatalf("expected saved invalid draft publish to fail, got %d: %s", publishInvalidDraft.Code, publishInvalidDraft.Body.String())
+	}
+
+	validateMissingEntry := httptest.NewRecorder()
+	validateReq := httptest.NewRequest(http.MethodPost, "/admin/v1/activities/"+activityID+"/workflow/validate", strings.NewReader(`{
+		"definition": {"meta":{"activityId":"`+activityID+`","workspaceId":"workspace-1","folderId":"folder-1"},"nodes":[{"id":"match","type":"match"}],"edges":[]}
+	}`))
+	handler.Routes().ServeHTTP(validateMissingEntry, validateReq)
+	if validateMissingEntry.Code != http.StatusOK ||
+		!strings.Contains(validateMissingEntry.Body.String(), `"valid":false`) ||
+		!strings.Contains(validateMissingEntry.Body.String(), `"code":"WORKFLOW_ENTRY_MISSING"`) {
+		t.Fatalf("expected entry missing validation, got %d: %s", validateMissingEntry.Code, validateMissingEntry.Body.String())
+	}
+
+	validateDuplicateNodeID := httptest.NewRecorder()
+	validateDuplicateNodeIDReq := httptest.NewRequest(http.MethodPost, "/admin/v1/activities/"+activityID+"/workflow/validate", strings.NewReader(`{
+		"definition": {"meta":{"activityId":"`+activityID+`","workspaceId":"workspace-1","folderId":"folder-1"},"nodes":[{"id":"event-in","type":"event-in","kind":"entry"},{"id":"event-in","type":"match"}],"edges":[]}
+	}`))
+	handler.Routes().ServeHTTP(validateDuplicateNodeID, validateDuplicateNodeIDReq)
+	if validateDuplicateNodeID.Code != http.StatusOK ||
+		!strings.Contains(validateDuplicateNodeID.Body.String(), `"valid":false`) ||
+		!strings.Contains(validateDuplicateNodeID.Body.String(), `"code":"WORKFLOW_NODE_ID_DUPLICATED"`) {
+		t.Fatalf("expected duplicate node id validation, got %d: %s", validateDuplicateNodeID.Code, validateDuplicateNodeID.Body.String())
+	}
+
+	validateMetadata := httptest.NewRecorder()
+	validateMetadataReq := httptest.NewRequest(http.MethodPost, "/admin/v1/activities/"+activityID+"/workflow/validate", strings.NewReader(`{
+		"definition": {
+			"nodes": [
+				{"id":"event-in","type":"event-in","kind":"entry"},
+				{"id":"match","type":"match"}
+			],
+			"edges": [
+				{"id":"event-in-match","source":"event-in","target":"match"}
+			]
+		}
+	}`))
+	handler.Routes().ServeHTTP(validateMetadata, validateMetadataReq)
+	if validateMetadata.Code != http.StatusOK ||
+		!strings.Contains(validateMetadata.Body.String(), `"valid":false`) ||
+		!strings.Contains(validateMetadata.Body.String(), `"code":"WORKFLOW_METADATA_ACTIVITY_ID_REQUIRED"`) ||
+		!strings.Contains(validateMetadata.Body.String(), `"code":"WORKFLOW_METADATA_WORKSPACE_ID_REQUIRED"`) ||
+		!strings.Contains(validateMetadata.Body.String(), `"code":"WORKFLOW_METADATA_FOLDER_ID_REQUIRED"`) {
+		t.Fatalf("expected workflow metadata validation, got %d: %s", validateMetadata.Code, validateMetadata.Body.String())
+	}
+
+	validateEdgeEndpoints := httptest.NewRecorder()
+	validateEdgeEndpointsReq := httptest.NewRequest(http.MethodPost, "/admin/v1/activities/"+activityID+"/workflow/validate", strings.NewReader(`{
+		"definition": {
+			"meta": {"activityId":"`+activityID+`","workspaceId":"workspace-1","folderId":"folder-1"},
+			"nodes": [
+				{"id":"event-in","type":"event-in","kind":"entry"},
+				{"id":"match","type":"match"}
+			],
+			"edges": [
+				{"id":"missing-source","source":"missing","target":"match"},
+				{"id":"missing-target","source":"event-in","target":"missing"}
+			]
+		}
+	}`))
+	handler.Routes().ServeHTTP(validateEdgeEndpoints, validateEdgeEndpointsReq)
+	if validateEdgeEndpoints.Code != http.StatusOK ||
+		!strings.Contains(validateEdgeEndpoints.Body.String(), `"valid":false`) ||
+		!strings.Contains(validateEdgeEndpoints.Body.String(), `"code":"WORKFLOW_EDGE_SOURCE_MISSING"`) ||
+		!strings.Contains(validateEdgeEndpoints.Body.String(), `"code":"WORKFLOW_EDGE_TARGET_MISSING"`) {
+		t.Fatalf("expected missing edge endpoint validation, got %d: %s", validateEdgeEndpoints.Code, validateEdgeEndpoints.Body.String())
+	}
+
+	validateReachability := httptest.NewRecorder()
+	validateReachabilityReq := httptest.NewRequest(http.MethodPost, "/admin/v1/activities/"+activityID+"/workflow/validate", strings.NewReader(`{
+		"definition": {
+			"meta": {"activityId":"`+activityID+`","workspaceId":"workspace-1","folderId":"folder-1"},
+			"nodes": [
+				{"id":"event-in","type":"event-in","kind":"entry"},
+				{"id":"match","type":"match"},
+				{"id":"qualify","type":"qualify"},
+				{"id":"reward","type":"reward"}
+			],
+			"edges": [
+				{"id":"event-in-match","source":"event-in","target":"match"},
+				{"id":"qualify-reward","source":"qualify","target":"reward"}
+			]
+		}
+	}`))
+	handler.Routes().ServeHTTP(validateReachability, validateReachabilityReq)
+	if validateReachability.Code != http.StatusOK ||
+		!strings.Contains(validateReachability.Body.String(), `"valid":false`) ||
+		!strings.Contains(validateReachability.Body.String(), `"code":"WORKFLOW_NODE_UNREACHABLE"`) ||
+		!strings.Contains(validateReachability.Body.String(), `"nodeId":"qualify"`) {
+		t.Fatalf("expected unreachable node validation, got %d: %s", validateReachability.Code, validateReachability.Body.String())
+	}
+
+	validateIsland := httptest.NewRecorder()
+	validateIslandReq := httptest.NewRequest(http.MethodPost, "/admin/v1/activities/"+activityID+"/workflow/validate", strings.NewReader(`{
+		"definition": {
+			"meta": {"activityId":"`+activityID+`","workspaceId":"workspace-1","folderId":"folder-1"},
+			"nodes": [
+				{"id":"event-in","type":"event-in","kind":"entry"},
+				{"id":"match","type":"match"},
+				{"id":"reward","type":"reward"}
+			],
+			"edges": [
+				{"id":"event-in-match","source":"event-in","target":"match"}
+			]
+		}
+	}`))
+	handler.Routes().ServeHTTP(validateIsland, validateIslandReq)
+	if validateIsland.Code != http.StatusOK ||
+		!strings.Contains(validateIsland.Body.String(), `"valid":false`) ||
+		!strings.Contains(validateIsland.Body.String(), `"code":"WORKFLOW_NODE_ISLAND"`) ||
+		!strings.Contains(validateIsland.Body.String(), `"nodeId":"reward"`) {
+		t.Fatalf("expected island node validation, got %d: %s", validateIsland.Code, validateIsland.Body.String())
+	}
+
+	validateDuplicateOutput := httptest.NewRecorder()
+	validateDuplicateOutputReq := httptest.NewRequest(http.MethodPost, "/admin/v1/activities/"+activityID+"/workflow/validate", strings.NewReader(`{
+		"definition": {
+			"meta": {"activityId":"`+activityID+`","workspaceId":"workspace-1","folderId":"folder-1"},
+			"nodes": [
+				{"id":"event-in","type":"event-in","kind":"entry"},
+				{"id":"match","type":"match"},
+				{"id":"qualify","type":"qualify"}
+			],
+			"edges": [
+				{"id":"event-in-match","source":"event-in","sourceHandle":"raw_event","target":"match"},
+				{"id":"event-in-qualify","source":"event-in","sourceHandle":"raw_event","target":"qualify"}
+			]
+		}
+	}`))
+	handler.Routes().ServeHTTP(validateDuplicateOutput, validateDuplicateOutputReq)
+	if validateDuplicateOutput.Code != http.StatusOK ||
+		!strings.Contains(validateDuplicateOutput.Body.String(), `"valid":false`) ||
+		!strings.Contains(validateDuplicateOutput.Body.String(), `"code":"WORKFLOW_OUTPUT_DUPLICATED_EDGE"`) ||
+		!strings.Contains(validateDuplicateOutput.Body.String(), `"nodeId":"event-in"`) ||
+		!strings.Contains(validateDuplicateOutput.Body.String(), `"edgeId":"event-in-qualify"`) {
+		t.Fatalf("expected duplicate output edge validation, got %d: %s", validateDuplicateOutput.Code, validateDuplicateOutput.Body.String())
+	}
+
+	validateCycle := httptest.NewRecorder()
+	validateCycleReq := httptest.NewRequest(http.MethodPost, "/admin/v1/activities/"+activityID+"/workflow/validate", strings.NewReader(`{
+		"definition": {
+			"meta": {"activityId":"`+activityID+`","workspaceId":"workspace-1","folderId":"folder-1"},
+			"nodes": [
+				{"id":"event-in","type":"event-in","kind":"entry"},
+				{"id":"match","type":"match"},
+				{"id":"reward","type":"reward"}
+			],
+			"edges": [
+				{"id":"event-in-match","source":"event-in","target":"match"},
+				{"id":"match-reward","source":"match","target":"reward"},
+				{"id":"reward-match","source":"reward","target":"match"}
+			]
+		}
+	}`))
+	handler.Routes().ServeHTTP(validateCycle, validateCycleReq)
+	if validateCycle.Code != http.StatusOK ||
+		!strings.Contains(validateCycle.Body.String(), `"valid":false`) ||
+		!strings.Contains(validateCycle.Body.String(), `"code":"WORKFLOW_UNSUPPORTED_CYCLE"`) {
+		t.Fatalf("expected unsupported cycle validation, got %d: %s", validateCycle.Code, validateCycle.Body.String())
+	}
+
+	saveCycle := httptest.NewRecorder()
+	saveCycleReq := httptest.NewRequest(http.MethodPut, "/admin/v1/activities/"+activityID+"/workflow/draft", strings.NewReader(`{
+		"operator": "ops",
+		"definition": {
+			"meta": {"activityId":"`+activityID+`","workspaceId":"workspace-1","folderId":"folder-1"},
+			"nodes": [
+				{"id":"event-in","type":"event-in","kind":"entry"},
+				{"id":"match","type":"match"},
+				{"id":"reward","type":"reward"}
+			],
+			"edges": [
+				{"id":"event-in-match","source":"event-in","target":"match"},
+				{"id":"match-reward","source":"match","target":"reward"},
+				{"id":"reward-match","source":"reward","target":"match"}
+			]
+		}
+	}`))
+	handler.Routes().ServeHTTP(saveCycle, saveCycleReq)
+	if saveCycle.Code != http.StatusOK {
+		t.Fatalf("expected cyclic draft to save before publish validation, got %d: %s", saveCycle.Code, saveCycle.Body.String())
+	}
+
+	publishCycle := httptest.NewRecorder()
+	publishCycleReq := httptest.NewRequest(http.MethodPost, "/admin/v1/activities/"+activityID+"/workflow/publish", strings.NewReader(`{"operator":"ops"}`))
+	handler.Routes().ServeHTTP(publishCycle, publishCycleReq)
+	if publishCycle.Code != http.StatusBadRequest || !strings.Contains(publishCycle.Body.String(), "WORKFLOW_UNSUPPORTED_CYCLE") {
+		t.Fatalf("expected cyclic draft publish to fail, got %d: %s", publishCycle.Code, publishCycle.Body.String())
+	}
+
+	saveMissingNodeConfig := httptest.NewRecorder()
+	saveMissingNodeConfigReq := httptest.NewRequest(http.MethodPut, "/admin/v1/activities/"+activityID+"/workflow/draft", strings.NewReader(`{
+		"operator": "ops",
+		"definition": {
+			"meta": {"activityId":"`+activityID+`","workspaceId":"workspace-1","folderId":"folder-1"},
+			"nodes": [
+				{"id":"event-in","type":"event-in","kind":"entry"},
+				{"id":"http","type":"http-call","config":{"method":"POST"}}
+			],
+			"edges": [
+				{"id":"event-in-http","source":"event-in","target":"http"}
+			]
+		}
+	}`))
+	handler.Routes().ServeHTTP(saveMissingNodeConfig, saveMissingNodeConfigReq)
+	if saveMissingNodeConfig.Code != http.StatusOK {
+		t.Fatalf("expected missing node config draft to save before publish validation, got %d: %s", saveMissingNodeConfig.Code, saveMissingNodeConfig.Body.String())
+	}
+
+	publishMissingNodeConfig := httptest.NewRecorder()
+	publishMissingNodeConfigReq := httptest.NewRequest(http.MethodPost, "/admin/v1/activities/"+activityID+"/workflow/publish", strings.NewReader(`{"operator":"ops"}`))
+	handler.Routes().ServeHTTP(publishMissingNodeConfig, publishMissingNodeConfigReq)
+	if publishMissingNodeConfig.Code != http.StatusBadRequest || !strings.Contains(publishMissingNodeConfig.Body.String(), "WORKFLOW_NODE_CONFIG_REQUIRED") {
+		t.Fatalf("expected missing node config publish to fail, got %d: %s", publishMissingNodeConfig.Code, publishMissingNodeConfig.Body.String())
+	}
+
+	saveInvalidVariableRef := httptest.NewRecorder()
+	saveInvalidVariableRefReq := httptest.NewRequest(http.MethodPut, "/admin/v1/activities/"+activityID+"/workflow/draft", strings.NewReader(`{
+		"operator": "ops",
+		"definition": {
+			"meta": {"activityId":"`+activityID+`","workspaceId":"workspace-1","folderId":"folder-1"},
+			"nodes": [
+				{"id":"event-in","type":"event-in","kind":"entry"},
+				{"id":"inbox","type":"inbox"},
+				{"id":"match","type":"match","config":{"inputMapping":{"event_context":{"sourceNodeId":"inbox","outputKey":"renamed_event_context","path":"$.user.id"}}}}
+			],
+			"edges": [
+				{"id":"event-in-inbox","source":"event-in","target":"inbox"},
+				{"id":"inbox-match","source":"inbox","target":"match"}
+			]
+		}
+	}`))
+	handler.Routes().ServeHTTP(saveInvalidVariableRef, saveInvalidVariableRefReq)
+	if saveInvalidVariableRef.Code != http.StatusOK {
+		t.Fatalf("expected invalid variable ref draft to save before publish validation, got %d: %s", saveInvalidVariableRef.Code, saveInvalidVariableRef.Body.String())
+	}
+
+	publishInvalidVariableRef := httptest.NewRecorder()
+	publishInvalidVariableRefReq := httptest.NewRequest(http.MethodPost, "/admin/v1/activities/"+activityID+"/workflow/publish", strings.NewReader(`{"operator":"ops"}`))
+	handler.Routes().ServeHTTP(publishInvalidVariableRef, publishInvalidVariableRefReq)
+	if publishInvalidVariableRef.Code != http.StatusBadRequest || !strings.Contains(publishInvalidVariableRef.Body.String(), "WORKFLOW_NODE_INPUT_MAPPING_OUTPUT_MISSING") {
+		t.Fatalf("expected invalid variable ref publish to fail, got %d: %s", publishInvalidVariableRef.Code, publishInvalidVariableRef.Body.String())
 	}
 
 	saveRec := httptest.NewRecorder()
 	saveReq := httptest.NewRequest(http.MethodPut, "/admin/v1/activities/"+activityID+"/workflow/draft", strings.NewReader(`{
 		"operator": "ops",
 		"definition": {
+			"meta": {"activityId":"`+activityID+`","workspaceId":"workspace-1","folderId":"folder-1"},
 			"nodes": [
 				{"id":"event-in","type":"event-in","kind":"entry","title":"事件入口","outputs":["raw_event"],"position":{"x":80,"y":120}},
 				{"id":"match","type":"match","kind":"logic","title":"活动匹配","inputs":["raw_event"],"outputs":["matched"],"position":{"x":410,"y":120}},
@@ -346,6 +714,18 @@ func TestActivityWorkflowHTTPAPI(t *testing.T) {
 	handler.Routes().ServeHTTP(getDraft, httptest.NewRequest(http.MethodGet, "/admin/v1/activities/"+activityID+"/workflow/draft", nil))
 	if getDraft.Code != http.StatusOK || !strings.Contains(getDraft.Body.String(), `"event-in"`) {
 		t.Fatalf("expected draft detail, got %d: %s", getDraft.Code, getDraft.Body.String())
+	}
+
+	validateCurrentDraft := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(validateCurrentDraft, httptest.NewRequest(http.MethodPost, "/admin/v1/activities/"+activityID+"/workflow/draft/validate", nil))
+	if validateCurrentDraft.Code != http.StatusOK || !strings.Contains(validateCurrentDraft.Body.String(), `"valid":true`) {
+		t.Fatalf("expected valid current draft validation, got %d: %s", validateCurrentDraft.Code, validateCurrentDraft.Body.String())
+	}
+
+	validateDraft := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(validateDraft, httptest.NewRequest(http.MethodPost, "/admin/v1/activities/"+activityID+"/workflow/validate", strings.NewReader(`{}`)))
+	if validateDraft.Code != http.StatusOK || !strings.Contains(validateDraft.Body.String(), `"valid":true`) {
+		t.Fatalf("expected valid draft validation, got %d: %s", validateDraft.Code, validateDraft.Body.String())
 	}
 
 	publishRec := httptest.NewRecorder()

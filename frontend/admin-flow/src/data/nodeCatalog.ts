@@ -21,6 +21,7 @@ export const nodeCatalog: CatalogGroup[] = [
       nodeDef('qualify', 'QUALIFY', '资格校验', 'logic', '用户资格、活动门槛、参与范围、黑白名单和风险规则校验', ['event_context', 'matched_activity'], ['PASS', 'BLOCK', 'RISK']),
       nodeDef('switch', 'SWITCH', '条件分支', 'logic', '基于阶段结果选择后续路径，支持 PASS / BLOCK / SKIP', ['stage_result'], ['PASS', 'BLOCK', 'SKIP']),
       nodeDef('fact-query', 'Fact Query', '事实查询', 'query', '查询用户、订单、交易、历史参与和外部事实数据', ['subject', 'fact_keys'], ['facts']),
+      nodeDef('code', 'CODE', '代码节点', 'transform', '用受控代码片段处理上下文，输出中间变量给下游节点', ['context', 'input'], ['code_result']),
     ],
   },
   {

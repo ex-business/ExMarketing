@@ -98,6 +98,51 @@ func (s *Service) UpdateWorkspace(ctx context.Context, id string, update marketi
 	return saved, nil
 }
 
+func (s *Service) PatchWorkspace(ctx context.Context, id string, patch marketing.WorkspacePatch) (marketing.Workspace, error) {
+	before, err := s.repository.GetWorkspace(ctx, strings.TrimSpace(id))
+	if err != nil {
+		return marketing.Workspace{}, err
+	}
+	updated := before
+	if patch.Name != nil {
+		updated.Name = strings.TrimSpace(*patch.Name)
+	}
+	if patch.Slug != nil {
+		updated.Slug = workspaceSlug(*patch.Slug)
+	}
+	if patch.Description != nil {
+		updated.Description = *patch.Description
+	}
+	if patch.Icon != nil {
+		updated.Icon = *patch.Icon
+	}
+	if patch.Color != nil {
+		updated.Color = *patch.Color
+	}
+	if patch.Visibility != nil {
+		updated.Visibility = *patch.Visibility
+	}
+	if patch.DefaultRole != nil {
+		updated.DefaultRole = *patch.DefaultRole
+	}
+	if patch.OwnerID != nil {
+		updated.OwnerID = *patch.OwnerID
+	}
+	if patch.Status != nil {
+		updated.Status = *patch.Status
+	}
+	if patch.UpdatedBy != nil {
+		updated.UpdatedBy = *patch.UpdatedBy
+	}
+	updated.UpdatedAt = s.now()
+	saved, err := s.repository.UpdateWorkspace(ctx, updated)
+	if err != nil {
+		return marketing.Workspace{}, err
+	}
+	_ = s.repository.CreateWorkspaceAuditLog(ctx, workspaceAudit(saved.ID, saved.UpdatedBy, "UPDATE_WORKSPACE", "WORKSPACE", saved.ID, before, saved, s.now()))
+	return saved, nil
+}
+
 func (s *Service) DeleteWorkspace(ctx context.Context, id string, actorID string) (marketing.Workspace, error) {
 	return s.UpdateWorkspace(ctx, id, marketing.Workspace{Status: marketing.WorkspaceDeleted, UpdatedBy: actorID})
 }
@@ -133,20 +178,24 @@ func (s *Service) ListWorkspaceMembers(ctx context.Context, workspaceID string) 
 	return s.repository.ListWorkspaceMembers(ctx, strings.TrimSpace(workspaceID))
 }
 
-func (s *Service) UpdateWorkspaceMember(ctx context.Context, workspaceID string, memberID string, update marketing.WorkspaceMember) (marketing.WorkspaceMember, error) {
+func (s *Service) GetWorkspaceMember(ctx context.Context, workspaceID string, memberID string) (marketing.WorkspaceMember, error) {
 	members, err := s.repository.ListWorkspaceMembers(ctx, strings.TrimSpace(workspaceID))
 	if err != nil {
 		return marketing.WorkspaceMember{}, err
 	}
-	var before marketing.WorkspaceMember
+	memberID = strings.TrimSpace(memberID)
 	for _, member := range members {
 		if member.ID == memberID {
-			before = member
-			break
+			return member, nil
 		}
 	}
-	if before.ID == "" {
-		return marketing.WorkspaceMember{}, marketing.ErrNotFound
+	return marketing.WorkspaceMember{}, marketing.ErrNotFound
+}
+
+func (s *Service) UpdateWorkspaceMember(ctx context.Context, workspaceID string, memberID string, update marketing.WorkspaceMember) (marketing.WorkspaceMember, error) {
+	before, err := s.GetWorkspaceMember(ctx, workspaceID, memberID)
+	if err != nil {
+		return marketing.WorkspaceMember{}, err
 	}
 	updated := before
 	if update.UserID != "" {
@@ -277,6 +326,51 @@ func (s *Service) UpdateWorkspaceFolder(ctx context.Context, workspaceID string,
 	return saved, nil
 }
 
+func (s *Service) PatchWorkspaceFolder(ctx context.Context, workspaceID string, folderID string, patch marketing.WorkspaceFolderPatch) (marketing.WorkspaceFolder, error) {
+	before, err := s.GetWorkspaceFolder(ctx, workspaceID, folderID)
+	if err != nil {
+		return marketing.WorkspaceFolder{}, err
+	}
+	updated := before
+	if patch.ParentID != nil {
+		updated.ParentID = strings.TrimSpace(*patch.ParentID)
+	}
+	if patch.Name != nil {
+		updated.Name = strings.TrimSpace(*patch.Name)
+	}
+	if patch.Description != nil {
+		updated.Description = *patch.Description
+	}
+	if patch.Icon != nil {
+		updated.Icon = *patch.Icon
+	}
+	if patch.Color != nil {
+		updated.Color = *patch.Color
+	}
+	if patch.Visibility != nil {
+		updated.Visibility = *patch.Visibility
+	}
+	if patch.SortOrder != nil {
+		updated.SortOrder = *patch.SortOrder
+	}
+	if patch.Status != nil {
+		updated.Status = *patch.Status
+	}
+	if patch.UpdatedBy != nil {
+		updated.UpdatedBy = *patch.UpdatedBy
+	}
+	updated.UpdatedAt = s.now()
+	if err := s.ensureWorkspaceFolderParent(ctx, updated.WorkspaceID, updated.ParentID, updated.ID); err != nil {
+		return marketing.WorkspaceFolder{}, err
+	}
+	saved, err := s.repository.UpdateWorkspaceFolder(ctx, updated)
+	if err != nil {
+		return marketing.WorkspaceFolder{}, err
+	}
+	_ = s.repository.CreateWorkspaceAuditLog(ctx, workspaceAudit(workspaceID, updated.UpdatedBy, "UPDATE_FOLDER", "FOLDER", folderID, before, saved, s.now()))
+	return saved, nil
+}
+
 func (s *Service) DeleteWorkspaceFolder(ctx context.Context, workspaceID string, folderID string, actorID string) (marketing.WorkspaceFolder, error) {
 	return s.UpdateWorkspaceFolder(ctx, workspaceID, folderID, marketing.WorkspaceFolder{Status: marketing.WorkspaceFolderDeleted, UpdatedBy: actorID})
 }
@@ -319,25 +413,71 @@ func (s *Service) ListWorkspaceShareLinks(ctx context.Context, query marketing.W
 	return s.repository.ListWorkspaceShareLinks(ctx, query)
 }
 
-func (s *Service) DeleteWorkspaceShareLink(ctx context.Context, workspaceID string, linkID string, actorID string) (marketing.WorkspaceShareLink, error) {
+func (s *Service) GetWorkspaceShareLink(ctx context.Context, workspaceID string, linkID string) (marketing.WorkspaceShareLink, error) {
 	links, err := s.repository.ListWorkspaceShareLinks(ctx, marketing.WorkspaceShareLinkQuery{WorkspaceID: strings.TrimSpace(workspaceID)})
 	if err != nil {
 		return marketing.WorkspaceShareLink{}, err
 	}
+	linkID = strings.TrimSpace(linkID)
 	for _, link := range links {
 		if link.ID == linkID {
-			before := link
-			link.Enabled = false
-			link.UpdatedAt = s.now()
-			saved, err := s.repository.UpdateWorkspaceShareLink(ctx, link)
-			if err != nil {
-				return marketing.WorkspaceShareLink{}, err
-			}
-			_ = s.repository.CreateWorkspaceAuditLog(ctx, workspaceAudit(workspaceID, actorID, "DELETE_SHARE_LINK", "SHARE_LINK", linkID, before, saved, s.now()))
-			return saved, nil
+			return link, nil
 		}
 	}
 	return marketing.WorkspaceShareLink{}, marketing.ErrNotFound
+}
+
+func (s *Service) PatchWorkspaceShareLink(ctx context.Context, workspaceID string, linkID string, patch marketing.WorkspaceShareLinkPatch) (marketing.WorkspaceShareLink, error) {
+	before, err := s.GetWorkspaceShareLink(ctx, workspaceID, linkID)
+	if err != nil {
+		return marketing.WorkspaceShareLink{}, err
+	}
+	updated := before
+	if patch.FolderID != nil {
+		updated.FolderID = strings.TrimSpace(*patch.FolderID)
+	}
+	if patch.ActivityID != nil {
+		updated.ActivityID = strings.TrimSpace(*patch.ActivityID)
+	}
+	if patch.Token != nil {
+		updated.Token = strings.TrimSpace(*patch.Token)
+	}
+	if patch.Scope != nil {
+		updated.Scope = *patch.Scope
+	}
+	if patch.Permission != nil {
+		updated.Permission = *patch.Permission
+	}
+	if patch.ExpiresAt != nil {
+		updated.ExpiresAt = patch.ExpiresAt
+	}
+	if patch.PasswordHash != nil {
+		updated.PasswordHash = *patch.PasswordHash
+	}
+	if patch.Enabled != nil {
+		updated.Enabled = *patch.Enabled
+	}
+	actorID := ""
+	if patch.UpdatedBy != nil {
+		actorID = strings.TrimSpace(*patch.UpdatedBy)
+	}
+	updated.UpdatedAt = s.now()
+	if err := updated.Validate(); err != nil {
+		return marketing.WorkspaceShareLink{}, err
+	}
+	if err := s.ensureShareLinkScope(ctx, updated.WorkspaceID, updated); err != nil {
+		return marketing.WorkspaceShareLink{}, err
+	}
+	saved, err := s.repository.UpdateWorkspaceShareLink(ctx, updated)
+	if err != nil {
+		return marketing.WorkspaceShareLink{}, err
+	}
+	_ = s.repository.CreateWorkspaceAuditLog(ctx, workspaceAudit(workspaceID, actorID, "UPDATE_SHARE_LINK", "SHARE_LINK", linkID, before, saved, s.now()))
+	return saved, nil
+}
+
+func (s *Service) DeleteWorkspaceShareLink(ctx context.Context, workspaceID string, linkID string, actorID string) (marketing.WorkspaceShareLink, error) {
+	return s.PatchWorkspaceShareLink(ctx, workspaceID, linkID, marketing.WorkspaceShareLinkPatch{Enabled: boolPtr(false), UpdatedBy: &actorID})
 }
 
 func (s *Service) ListWorkspaceAuditLogs(ctx context.Context, query marketing.WorkspaceAuditLogQuery) ([]marketing.WorkspaceAuditLog, error) {
@@ -363,6 +503,17 @@ func (s *Service) ensureWorkspaceFolderParent(ctx context.Context, workspaceID s
 }
 
 func (s *Service) ensureShareLinkScope(ctx context.Context, workspaceID string, link marketing.WorkspaceShareLink) error {
+	workspaceID = strings.TrimSpace(workspaceID)
+	if link.Scope == marketing.WorkspaceShareActivity {
+		activity, err := s.repository.GetActivity(ctx, strings.TrimSpace(link.ActivityID))
+		if err != nil {
+			return err
+		}
+		if activity.WorkspaceID != workspaceID {
+			return marketing.ErrNotFound
+		}
+		return nil
+	}
 	if link.Scope != marketing.WorkspaceShareFolder {
 		return nil
 	}
@@ -370,7 +521,7 @@ func (s *Service) ensureShareLinkScope(ctx context.Context, workspaceID string, 
 	if err != nil {
 		return err
 	}
-	if folder.WorkspaceID != strings.TrimSpace(workspaceID) || folder.Status == marketing.WorkspaceFolderDeleted {
+	if folder.WorkspaceID != workspaceID || folder.Status == marketing.WorkspaceFolderDeleted {
 		return marketing.ErrNotFound
 	}
 	return nil
@@ -384,6 +535,10 @@ func workspaceSlug(value string) string {
 		return "workspace"
 	}
 	return value
+}
+
+func boolPtr(value bool) *bool {
+	return &value
 }
 
 func workspaceAudit(workspaceID string, actorID string, action string, targetType string, targetID string, before any, after any, createdAt time.Time) marketing.WorkspaceAuditLog {

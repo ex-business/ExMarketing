@@ -8,8 +8,8 @@
     "doc": "docs"
   },
   "scripts": {
-    "build:admin-flow": "vite build frontend/admin-flow --base /admin-flow/ --outDir ../../web/admin-flow --emptyOutDir",
-    "dev:admin-flow": "vite --host 127.0.0.1 frontend/admin-flow",
+    "build:admin-flow": "vite build --config frontend/admin-flow/vite.config.ts",
+    "dev:admin-flow": "vite --config frontend/admin-flow/vite.config.ts --host 127.0.0.1",
     "typecheck:admin-flow": "tsc -p frontend/admin-flow/tsconfig.json"
   },
   "repository": {

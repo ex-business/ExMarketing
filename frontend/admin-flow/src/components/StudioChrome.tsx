@@ -1,12 +1,39 @@
 import { useMemo, useState } from 'react';
+import type { WorkflowValidationIssue, WorkflowValidationResult } from '../types';
 
 type ActivityOption = {
   id: string;
+  workspaceId?: string;
+  folderId?: string;
   tenantId?: string;
   activityCode: string;
   activityName: string;
   status?: string;
   version?: number;
+};
+
+type WorkspaceOption = {
+  id: string;
+  name: string;
+  slug: string;
+  color?: string;
+  visibility: string;
+  status: string;
+};
+
+type FolderOption = {
+  id: string;
+  workspaceId: string;
+  name: string;
+  color?: string;
+  visibility: string;
+  sortOrder: number;
+  status: string;
+};
+
+type ActivityPlacement = {
+  workspaceId: string;
+  folderId: string;
 };
 
 type Props = {
@@ -19,15 +46,21 @@ type Props = {
   selectedNodeCount: number;
   lastAdded: string;
   activities: ActivityOption[];
+  workspaces: WorkspaceOption[];
+  folders: FolderOption[];
+  placements: Record<string, ActivityPlacement>;
   activityId: string;
   activityLabel: string;
   workflowStatus: string;
   workflowVersionLabel: string;
   zoomPercent: number;
   showChecklist: boolean;
+  validatingWorkflow: boolean;
+  workflowValidation: WorkflowValidationResult | null;
   isPublished: boolean;
   onTogglePalette: () => void;
   onActivityChange: (activityId: string) => void;
+  onWorkspaceNavigate: (workspaceId: string, folderId?: string) => void;
   onModeChange: (mode: 'pointer' | 'hand') => void;
   onDefault: () => void;
   onSimple: () => void;
@@ -45,6 +78,7 @@ type Props = {
   onPreview: () => void;
   onRunHistory: () => void;
   onToggleChecklist: () => void;
+  onValidationIssueFocus: (item: WorkflowValidationIssue) => void;
   onPublish: () => void;
 };
 
@@ -58,15 +92,21 @@ export function StudioChrome({
   selectedNodeCount,
   lastAdded,
   activities,
+  workspaces,
+  folders,
+  placements,
   activityId,
   activityLabel,
   workflowStatus,
   workflowVersionLabel,
   zoomPercent,
   showChecklist,
+  validatingWorkflow,
+  workflowValidation,
   isPublished,
   onTogglePalette,
   onActivityChange,
+  onWorkspaceNavigate,
   onModeChange,
   onDefault,
   onSimple,
@@ -84,28 +124,82 @@ export function StudioChrome({
   onPreview,
   onRunHistory,
   onToggleChecklist,
+  onValidationIssueFocus,
   onPublish,
 }: Props) {
   const [showZoomMenu, setShowZoomMenu] = useState(false);
   const [showActivityPicker, setShowActivityPicker] = useState(false);
   const [activitySearch, setActivitySearch] = useState('');
   const [showTestActivities, setShowTestActivities] = useState(false);
+  const [pickerWorkspaceId, setPickerWorkspaceId] = useState('');
+  const [pickerFolderId, setPickerFolderId] = useState('');
   const zoomOptions = [200, 100, 75, 50, 25];
   const chooseZoom = (value: number) => {
     onZoomTo(value / 100);
     setShowZoomMenu(false);
   };
   const activeActivity = activities.find((item) => item.id === activityId);
+  const activePlacement = activityId ? placements[activityId] : undefined;
+  const activeWorkspace = activePlacement ? workspaces.find((workspace) => workspace.id === activePlacement.workspaceId) : undefined;
+  const activeFolder = activePlacement ? folders.find((folder) => folder.id === activePlacement.folderId) : undefined;
+  const validationBlockCount = workflowValidation?.summary.blockCount ?? 0;
+  const validationWarningCount = workflowValidation?.summary.warningCount ?? 0;
+  const checklistBadge = validatingWorkflow
+    ? '...'
+    : workflowValidation
+      ? workflowValidation.valid ? 'PASS' : String(validationBlockCount)
+      : '-';
+  const checklistStatus = validatingWorkflow
+    ? '检查中'
+    : workflowValidation
+      ? workflowValidation.valid ? 'PASS' : `${validationBlockCount} 阻塞 / ${validationWarningCount} 警告`
+      : '未检查';
+  const activeWorkspaces = useMemo(() => workspaces.filter((workspace) => workspace.status !== 'DELETED'), [workspaces]);
+  const folderOptions = useMemo(() => (
+    folders
+      .filter((folder) => folder.status !== 'DELETED')
+      .sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name))
+  ), [folders]);
+  const workspaceWorkflowCount = useMemo(() => {
+    const next: Record<string, number> = {};
+    activities.forEach((activity) => {
+      if (!showTestActivities && isTestActivity(activity)) return;
+      const placement = placements[activity.id];
+      if (!placement?.workspaceId) return;
+      next[placement.workspaceId] = (next[placement.workspaceId] ?? 0) + 1;
+    });
+    return next;
+  }, [activities, placements, showTestActivities]);
+  const folderWorkflowCount = useMemo(() => {
+    const next: Record<string, number> = {};
+    activities.forEach((activity) => {
+      if (!showTestActivities && isTestActivity(activity)) return;
+      const placement = placements[activity.id];
+      if (!placement?.folderId) return;
+      next[placement.folderId] = (next[placement.folderId] ?? 0) + 1;
+    });
+    return next;
+  }, [activities, placements, showTestActivities]);
+  const selectedPickerWorkspaceId = pickerWorkspaceId || activePlacement?.workspaceId || activeWorkspaces[0]?.id || '';
+  const selectedPickerFolders = folderOptions.filter((folder) => folder.workspaceId === selectedPickerWorkspaceId);
+  const selectedPickerFolderId = pickerFolderId || activePlacement?.folderId || selectedPickerFolders[0]?.id || '';
+  const selectedPickerWorkspace = activeWorkspaces.find((workspace) => workspace.id === selectedPickerWorkspaceId);
+  const selectedPickerFolder = selectedPickerFolders.find((folder) => folder.id === selectedPickerFolderId);
   const activityOptions = useMemo(() => {
     const keyword = activitySearch.trim().toLowerCase();
     return activities
       .filter((activity) => showTestActivities || !isTestActivity(activity))
       .filter((activity) => {
+        const placement = placements[activity.id];
+        if (selectedPickerWorkspaceId && placement?.workspaceId !== selectedPickerWorkspaceId) return false;
+        if (selectedPickerFolderId && placement?.folderId !== selectedPickerFolderId) return false;
         if (!keyword) return true;
-        return `${activity.activityName} ${activity.activityCode} ${activity.tenantId}`.toLowerCase().includes(keyword);
+        const workspace = activeWorkspaces.find((item) => item.id === placement?.workspaceId);
+        const folder = folderOptions.find((item) => item.id === placement?.folderId);
+        return `${activity.activityName} ${activity.activityCode} ${activity.tenantId} ${workspace?.name ?? ''} ${folder?.name ?? ''}`.toLowerCase().includes(keyword);
       })
       .slice(0, 24);
-  }, [activities, activitySearch, showTestActivities]);
+  }, [activities, activitySearch, activeWorkspaces, folderOptions, placements, selectedPickerFolderId, selectedPickerWorkspaceId, showTestActivities]);
   const hiddenTestCount = activities.filter(isTestActivity).length;
 
   return (
@@ -132,27 +226,80 @@ export function StudioChrome({
           {!homeMode && showActivityPicker ? (
             <div className="activity-picker-popover">
               <div className="activity-picker-head">
-                <b>切换活动</b>
+                <b>切换 Workflow</b>
                 <a href="/admin/">创建活动</a>
               </div>
-              <input value={activitySearch} placeholder="搜索活动名称、code 或 tenant" onChange={(event) => setActivitySearch(event.target.value)} />
-              <div className="activity-picker-list">
-                {activityOptions.length ? activityOptions.map((activity) => (
-                  <button
-                    key={activity.id}
-                    className={activity.id === activityId ? 'active' : ''}
-                    onClick={() => {
-                      onActivityChange(activity.id);
-                      setShowActivityPicker(false);
-                    }}
-                  >
+              <input value={activitySearch} placeholder="搜索 workspace、folder 或 workflow" onChange={(event) => setActivitySearch(event.target.value)} />
+              <div className="activity-picker-workspace-view">
+                <aside className="activity-picker-tree">
+                  {activeWorkspaces.length ? activeWorkspaces.map((workspace) => {
+                    const workspaceFolders = folderOptions.filter((folder) => folder.workspaceId === workspace.id);
+                    return (
+                      <div key={workspace.id} className="activity-picker-tree-group">
+                        <button
+                          className={workspace.id === selectedPickerWorkspaceId ? 'active workspace' : 'workspace'}
+                          onClick={() => {
+                            setPickerWorkspaceId(workspace.id);
+                            setPickerFolderId(workspaceFolders[0]?.id ?? '');
+                          }}
+                        >
+                          <i>▦</i>
+                          <span>
+                            <b>{workspace.name}</b>
+                            <em>{workspace.slug}</em>
+                          </span>
+                          <strong>{workspaceWorkflowCount[workspace.id] ?? 0}</strong>
+                        </button>
+                        {workspace.id === selectedPickerWorkspaceId ? (
+                          <div className="activity-picker-folder-list">
+                            {workspaceFolders.length ? workspaceFolders.map((folder) => (
+                              <button
+                                key={folder.id}
+                                className={folder.id === selectedPickerFolderId ? 'active folder' : 'folder'}
+                                onClick={() => setPickerFolderId(folder.id)}
+                              >
+                                <i>▸</i>
+                                <span>
+                                  <b>{folder.name}</b>
+                                  <em>{folder.visibility}</em>
+                                </span>
+                                <strong>{folderWorkflowCount[folder.id] ?? 0}</strong>
+                              </button>
+                            )) : <div className="activity-picker-empty compact">暂无 folder</div>}
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  }) : <div className="activity-picker-empty">暂无 workspace</div>}
+                </aside>
+                <section className="activity-picker-workflow-pane">
+                  <header>
                     <span>
-                      <b>{activity.activityName || activity.activityCode}</b>
-                      <em>{activity.activityCode}</em>
+                      <b>{selectedPickerFolder?.name ?? selectedPickerWorkspace?.name ?? 'Workflow'}</b>
+                      <em>{selectedPickerWorkspace?.name ?? '选择 workspace'}</em>
                     </span>
-                    <strong>{activity.status || 'UNKNOWN'} · v{activity.version ?? '-'}</strong>
-                  </button>
-                )) : <div className="activity-picker-empty">没有匹配活动。</div>}
+                    <strong>{activityOptions.length}</strong>
+                  </header>
+                  <div className="activity-picker-workflow-list">
+                    {activityOptions.length ? activityOptions.map((activity) => (
+                    <button
+                      key={activity.id}
+                      className={activity.id === activityId ? 'active' : ''}
+                      onClick={() => {
+                        onActivityChange(activity.id);
+                        setShowActivityPicker(false);
+                      }}
+                    >
+                      <i>◇</i>
+                      <span>
+                        <b>{activity.activityName || activity.activityCode}</b>
+                        <em>{activity.activityCode}</em>
+                      </span>
+                      <strong>{activity.status || 'UNKNOWN'} · v{activity.version ?? '-'}</strong>
+                    </button>
+                    )) : <div className="activity-picker-empty">没有匹配 workflow。</div>}
+                  </div>
+                </section>
               </div>
               {hiddenTestCount > 0 ? (
                 <label className="activity-picker-toggle">
@@ -176,14 +323,32 @@ export function StudioChrome({
       </div>
       {homeMode ? null : (
         <>
-      <div className="dify-top-status">{workflowStatus} · {workflowVersionLabel} · {isPublished ? '已发布' : '未发布'}</div>
+      <div className="dify-top-status">
+        <span>{workflowStatus}</span>
+        {activeWorkspace ? (
+          <>
+            <i>/</i>
+            <button onClick={() => onWorkspaceNavigate(activeWorkspace.id)}>{activeWorkspace.name}</button>
+          </>
+        ) : null}
+        {activeWorkspace && activeFolder ? (
+          <>
+            <i>/</i>
+            <button onClick={() => onWorkspaceNavigate(activeWorkspace.id, activeFolder.id)}>{activeFolder.name}</button>
+          </>
+        ) : null}
+        <i>·</i>
+        <span>{workflowVersionLabel}</span>
+        <i>·</i>
+        <span>{isPublished ? '已发布' : '未发布'}</span>
+      </div>
       <div className="dify-float-toolbar">
         <button onClick={onDefault}>完整链路</button>
         <button onClick={onSimple}>简化链路</button>
         <button onClick={onAutoLayout}>自动排齐</button>
         <button onClick={onSaveDraft}>保存草稿</button>
         <button onClick={onRunHistory}>运行历史</button>
-        <button className="checklist-action" onClick={onToggleChecklist}>检查清单 <span>5</span></button>
+        <button className="checklist-action" onClick={onToggleChecklist}>检查清单 <span>{checklistBadge}</span></button>
         <button className="preview-action" onClick={onPreview}>▷ 预览</button>
         <button className="publish-action" onClick={onPublish}>发布</button>
       </div>
@@ -228,14 +393,26 @@ export function StudioChrome({
         <div className="checklist-popover">
           <div className="checklist-head">
             <b>发布检查清单</b>
-            <span>{isPublished ? 'PASS' : '5 项'}</span>
+            <span>{checklistStatus}</span>
           </div>
-          {['入口节点已配置', '关键规则存在分支', '奖励与 Quota 已串联', '失败重试已开启', '审计节点已连接'].map((item, index) => (
-            <label key={item} className="checklist-row">
-              <input type="checkbox" checked={index < 3 || isPublished} readOnly />
-              <span>{item}</span>
-            </label>
-          ))}
+          {validatingWorkflow ? (
+            <div className="checklist-empty">正在保存当前画布并执行校验...</div>
+          ) : workflowValidation ? (
+            workflowValidation.items.length > 0 ? workflowValidation.items.map((item) => (
+              <ValidationIssueRow
+                key={`${item.code}-${item.nodeId ?? ''}-${item.edgeId ?? ''}-${item.path ?? ''}`}
+                item={item}
+                onFocus={onValidationIssueFocus}
+              />
+            )) : (
+              <div className="checklist-pass">
+                <b>全部检查通过</b>
+                <span>当前 draft 可以发布。</span>
+              </div>
+            )
+          ) : (
+            <div className="checklist-empty">点击检查清单后，会展示当前 draft 的真实校验结果。</div>
+          )}
         </div>
       ) : null}
       <header className="studio-head">
@@ -262,4 +439,24 @@ export function StudioChrome({
 function isTestActivity(activity: ActivityOption): boolean {
   const text = `${activity.activityName} ${activity.activityCode} ${activity.id}`.toLowerCase();
   return ['postgresql e2e', 'load fault', 'smoke', 'e2e_', 'load_fault', 'pg_smoke'].some((marker) => text.includes(marker));
+}
+
+function ValidationIssueRow({ item, onFocus }: { item: WorkflowValidationIssue; onFocus: (item: WorkflowValidationIssue) => void }) {
+  const target = [item.nodeId ? `node ${item.nodeId}` : '', item.edgeId ? `edge ${item.edgeId}` : '', item.path ?? ''].filter(Boolean).join(' · ');
+  const canFocus = Boolean(item.nodeId || item.edgeId);
+  return (
+    <button
+      type="button"
+      className={`checklist-row validation-${item.severity.toLowerCase()}`}
+      disabled={!canFocus}
+      onClick={() => onFocus(item)}
+    >
+      <i>{item.severity === 'BLOCK' ? '!' : '?'}</i>
+      <span>
+        <b>{item.code}</b>
+        <em>{item.message}</em>
+        {target ? <small>{target}</small> : null}
+      </span>
+    </button>
+  );
 }

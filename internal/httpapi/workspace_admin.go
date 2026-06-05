@@ -50,12 +50,12 @@ func (h *Handler) getWorkspace(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) updateWorkspace(w http.ResponseWriter, r *http.Request) {
-	var workspace marketing.Workspace
-	if err := decodeStrictJSON(r.Body, &workspace); err != nil {
+	var patch marketing.WorkspacePatch
+	if err := decodeStrictJSON(r.Body, &patch); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid json body")
 		return
 	}
-	updated, err := h.engine.UpdateWorkspace(r.Context(), r.PathValue("workspaceId"), workspace)
+	updated, err := h.engine.PatchWorkspace(r.Context(), r.PathValue("workspaceId"), patch)
 	if err != nil {
 		workspaceError(w, err)
 		return
@@ -93,6 +93,15 @@ func (h *Handler) createWorkspaceMember(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, http.StatusCreated, created)
+}
+
+func (h *Handler) getWorkspaceMember(w http.ResponseWriter, r *http.Request) {
+	member, err := h.engine.GetWorkspaceMember(r.Context(), r.PathValue("workspaceId"), r.PathValue("memberId"))
+	if err != nil {
+		workspaceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, member)
 }
 
 func (h *Handler) updateWorkspaceMember(w http.ResponseWriter, r *http.Request) {
@@ -158,12 +167,12 @@ func (h *Handler) getWorkspaceFolder(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) updateWorkspaceFolder(w http.ResponseWriter, r *http.Request) {
-	var folder marketing.WorkspaceFolder
-	if err := decodeStrictJSON(r.Body, &folder); err != nil {
+	var patch marketing.WorkspaceFolderPatch
+	if err := decodeStrictJSON(r.Body, &patch); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid json body")
 		return
 	}
-	updated, err := h.engine.UpdateWorkspaceFolder(r.Context(), r.PathValue("workspaceId"), r.PathValue("folderId"), folder)
+	updated, err := h.engine.PatchWorkspaceFolder(r.Context(), r.PathValue("workspaceId"), r.PathValue("folderId"), patch)
 	if err != nil {
 		workspaceError(w, err)
 		return
@@ -209,6 +218,29 @@ func (h *Handler) createWorkspaceShareLink(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	writeJSON(w, http.StatusCreated, created)
+}
+
+func (h *Handler) getWorkspaceShareLink(w http.ResponseWriter, r *http.Request) {
+	link, err := h.engine.GetWorkspaceShareLink(r.Context(), r.PathValue("workspaceId"), r.PathValue("linkId"))
+	if err != nil {
+		workspaceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, link)
+}
+
+func (h *Handler) updateWorkspaceShareLink(w http.ResponseWriter, r *http.Request) {
+	var patch marketing.WorkspaceShareLinkPatch
+	if err := decodeStrictJSON(r.Body, &patch); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	updated, err := h.engine.PatchWorkspaceShareLink(r.Context(), r.PathValue("workspaceId"), r.PathValue("linkId"), patch)
+	if err != nil {
+		workspaceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
 }
 
 func (h *Handler) deleteWorkspaceShareLink(w http.ResponseWriter, r *http.Request) {

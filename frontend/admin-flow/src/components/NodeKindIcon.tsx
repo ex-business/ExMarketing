@@ -1,6 +1,7 @@
 import {
   BadgeCheck,
   Bell,
+  Code2,
   ClipboardCheck,
   Database,
   FileSearch,
@@ -50,6 +51,7 @@ const iconById: Record<string, LucideIcon> = {
   qualify: ShieldCheck,
   switch: ListTree,
   'fact-query': FileSearch,
+  code: Code2,
   reward: Gift,
   decimal: Gauge,
   limit: ListChecks,

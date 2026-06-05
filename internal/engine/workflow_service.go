@@ -18,7 +18,7 @@ func (s *Service) SaveWorkflowDraft(ctx context.Context, activityID string, cmd 
 	if err != nil {
 		return marketing.WorkflowDraft{}, err
 	}
-	definition, err := marketing.NormalizeWorkflowDefinition(cmd.Definition)
+	definition, err := marketing.NormalizeWorkflowDraftDefinition(cmd.Definition)
 	if err != nil {
 		return marketing.WorkflowDraft{}, err
 	}
@@ -46,6 +46,40 @@ func (s *Service) GetWorkflowDraft(ctx context.Context, activityID string) (mark
 	return s.repository.GetWorkflowDraft(ctx, strings.TrimSpace(activityID))
 }
 
+func (s *Service) ValidateWorkflowDefinition(ctx context.Context, activityID string, cmd marketing.ValidateWorkflowCommand) (marketing.WorkflowValidationResult, error) {
+	activityID = strings.TrimSpace(activityID)
+	if activityID == "" {
+		return marketing.WorkflowValidationResult{}, marketing.ErrNotFound
+	}
+	if _, err := s.repository.GetActivity(ctx, activityID); err != nil {
+		return marketing.WorkflowValidationResult{}, err
+	}
+	definition := cmd.Definition
+	if len(definition) == 0 {
+		draft, err := s.repository.GetWorkflowDraft(ctx, activityID)
+		if err != nil {
+			return marketing.WorkflowValidationResult{}, err
+		}
+		definition = draft.Definition
+	}
+	return s.workflowValidator.ValidateDefinition(definition), nil
+}
+
+func (s *Service) ValidateWorkflowDraft(ctx context.Context, activityID string) (marketing.WorkflowValidationResult, error) {
+	activityID = strings.TrimSpace(activityID)
+	if activityID == "" {
+		return marketing.WorkflowValidationResult{}, marketing.ErrNotFound
+	}
+	if _, err := s.repository.GetActivity(ctx, activityID); err != nil {
+		return marketing.WorkflowValidationResult{}, err
+	}
+	draft, err := s.repository.GetWorkflowDraft(ctx, activityID)
+	if err != nil {
+		return marketing.WorkflowValidationResult{}, err
+	}
+	return s.workflowValidator.ValidateDefinition(draft.Definition), nil
+}
+
 func (s *Service) PublishWorkflowVersion(ctx context.Context, activityID string, cmd marketing.PublishWorkflowCommand) (marketing.WorkflowVersion, error) {
 	activityID = strings.TrimSpace(activityID)
 	if activityID == "" {
@@ -61,6 +95,9 @@ func (s *Service) PublishWorkflowVersion(ctx context.Context, activityID string,
 			return marketing.WorkflowVersion{}, errors.Join(marketing.ErrInvalidWorkflow, errors.New("workflow draft is required before publish"))
 		}
 		return marketing.WorkflowVersion{}, err
+	}
+	if validation := s.validateWorkflowBeforePublish(draft.Definition); !validation.Valid {
+		return marketing.WorkflowVersion{}, errors.Join(marketing.ErrInvalidWorkflow, errors.New(workflowValidationMessage(validation)))
 	}
 	definition, err := marketing.NormalizeWorkflowDefinition(draft.Definition)
 	if err != nil {
@@ -88,6 +125,10 @@ func (s *Service) PublishWorkflowVersion(ctx context.Context, activityID string,
 	return created, nil
 }
 
+func (s *Service) validateWorkflowBeforePublish(definition json.RawMessage) marketing.WorkflowValidationResult {
+	return s.workflowValidator.ValidateDefinition(definition)
+}
+
 func (s *Service) ListWorkflowVersions(ctx context.Context, activityID string) ([]marketing.WorkflowVersion, error) {
 	return s.repository.ListWorkflowVersions(ctx, strings.TrimSpace(activityID))
 }
@@ -109,6 +150,19 @@ func (s *Service) ListWorkflowNodeExecutions(ctx context.Context, executionID st
 		return nil, marketing.ErrNotFound
 	}
 	return s.repository.ListWorkflowNodeExecutions(ctx, executionID)
+}
+
+func (s *Service) ListWorkflowNodeConfigSchemas() []marketing.WorkflowNodeConfigSchema {
+	return marketing.DefaultWorkflowNodeConfigSchemas().List()
+}
+
+func workflowValidationMessage(validation marketing.WorkflowValidationResult) string {
+	for _, item := range validation.Items {
+		if item.Severity == marketing.WorkflowValidationBlock {
+			return "workflow validation failed: " + item.Code
+		}
+	}
+	return "workflow validation failed"
 }
 
 func marshalWorkflowPayload(value any) json.RawMessage {

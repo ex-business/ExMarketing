@@ -48,6 +48,12 @@ type WorkflowNode struct {
 	Config   json.RawMessage  `json:"config,omitempty"`
 }
 
+type WorkflowNodeInputMappingRef struct {
+	SourceNodeID string `json:"sourceNodeId"`
+	OutputKey    string `json:"outputKey"`
+	Path         string `json:"path,omitempty"`
+}
+
 type WorkflowPosition struct {
 	X float64 `json:"x"`
 	Y float64 `json:"y"`
@@ -125,6 +131,10 @@ type SaveWorkflowDraftCommand struct {
 
 type PublishWorkflowCommand struct {
 	Operator string `json:"operator,omitempty"`
+}
+
+type ValidateWorkflowCommand struct {
+	Definition json.RawMessage `json:"definition,omitempty"`
 }
 
 type WorkflowExecutionQuery struct {
@@ -211,6 +221,24 @@ func NormalizeWorkflowDefinition(raw json.RawMessage) (json.RawMessage, error) {
 	definition, err := ParseWorkflowDefinition(raw)
 	if err != nil {
 		return nil, err
+	}
+	normalized, err := json.Marshal(definition)
+	if err != nil {
+		return nil, err
+	}
+	return normalized, nil
+}
+
+func NormalizeWorkflowDraftDefinition(raw json.RawMessage) (json.RawMessage, error) {
+	raw = json.RawMessage(bytes.TrimSpace(raw))
+	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
+		return nil, errors.Join(ErrInvalidWorkflow, errors.New("definition is required"))
+	}
+	var definition WorkflowDefinition
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&definition); err != nil {
+		return nil, errors.Join(ErrInvalidWorkflow, err)
 	}
 	normalized, err := json.Marshal(definition)
 	if err != nil {

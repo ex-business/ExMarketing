@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -70,11 +72,13 @@ func (s *Service) executeActivityWorkflow(ctx context.Context, runtime workflowR
 	executed := 0
 	skipped := 0
 	failed := 0
+	nodeOutputs := map[string]map[string]any{}
 	for _, node := range workflowExecutionOrder(definition) {
 		handler := handlers[nodeHandlerKey(node)]
 		if handler == nil {
 			handler = genericWorkflowNodeHandler
 		}
+		resolvedInput, inputErr := resolveWorkflowNodeInputs(node, runtime, nodeOutputs)
 		nodeStartedAt := s.now()
 		nodeExecution := marketing.WorkflowNodeExecution{
 			ID:          marketingID("wfnode"),
@@ -84,21 +88,21 @@ func (s *Service) executeActivityWorkflow(ctx context.Context, runtime workflowR
 			NodeType:    nodeHandlerKey(node),
 			NodeTitle:   node.Title,
 			Status:      marketing.WorkflowNodeRunning,
-			Input: marshalWorkflowPayload(map[string]any{
-				"eventId":         runtime.Inbox.Event.EventID,
-				"activityId":      runtime.Activity.ID,
-				"participationId": runtime.Participation.ID,
-				"qualified":       runtime.Qualified,
-			}),
-			StartedAt: nodeStartedAt,
-			CreatedAt: nodeStartedAt,
-			UpdatedAt: nodeStartedAt,
+			Input:       marshalWorkflowPayload(resolvedInput),
+			StartedAt:   nodeStartedAt,
+			CreatedAt:   nodeStartedAt,
+			UpdatedAt:   nodeStartedAt,
 		}
 		nodeExecution, err = s.repository.CreateWorkflowNodeExecution(ctx, nodeExecution)
 		if err != nil {
 			return err
 		}
-		result := handler(ctx, node, runtime)
+		var result workflowNodeResult
+		if inputErr != nil {
+			result = nodeFailed(inputErr.Error(), map[string]any{"inputMappingError": inputErr.Error()})
+		} else {
+			result = handler(ctx, node, runtime)
+		}
 		finishedAt := s.now()
 		nodeExecution.Status = result.Status
 		nodeExecution.Output = marshalWorkflowPayload(result.Output)
@@ -108,6 +112,7 @@ func (s *Service) executeActivityWorkflow(ctx context.Context, runtime workflowR
 		if err := s.repository.UpdateWorkflowNodeExecution(ctx, nodeExecution); err != nil {
 			return err
 		}
+		nodeOutputs[node.ID] = result.Output
 		executed++
 		switch result.Status {
 		case marketing.WorkflowNodeSkipped:
@@ -151,6 +156,7 @@ func (s *Service) workflowNodeHandlers() map[string]workflowNodeHandler {
 		"condition":     decisionWorkflowNodeHandler,
 		"qualify":       decisionWorkflowNodeHandler,
 		"switch":        decisionWorkflowNodeHandler,
+		"code":          codeWorkflowNodeHandler,
 		"reward":        rewardWorkflowNodeHandler,
 		"decimal":       decimalWorkflowNodeHandler,
 		"limit":         limitWorkflowNodeHandler,
@@ -225,6 +231,141 @@ func nodeHandlerKey(node marketing.WorkflowNode) string {
 	return "unknown"
 }
 
+func resolveWorkflowNodeInputs(node marketing.WorkflowNode, runtime workflowRuntime, nodeOutputs map[string]map[string]any) (map[string]any, error) {
+	input := map[string]any{
+		"eventId":         runtime.Inbox.Event.EventID,
+		"activityId":      runtime.Activity.ID,
+		"participationId": runtime.Participation.ID,
+		"qualified":       runtime.Qualified,
+	}
+	mapping := workflowInputMapping(node)
+	if len(mapping) == 0 {
+		return input, nil
+	}
+	resolved := map[string]any{}
+	for inputKey, ref := range mapping {
+		sourceOutput, ok := nodeOutputs[ref.SourceNodeID]
+		if !ok {
+			return input, fmt.Errorf("input %q references source node %q before it has output", inputKey, ref.SourceNodeID)
+		}
+		value, ok := sourceOutput[ref.OutputKey]
+		if !ok {
+			return input, fmt.Errorf("input %q references missing output %q from source node %q", inputKey, ref.OutputKey, ref.SourceNodeID)
+		}
+		extracted, err := extractWorkflowJSONPath(value, ref.Path)
+		if err != nil {
+			return input, fmt.Errorf("input %q path %q cannot be resolved: %w", inputKey, ref.Path, err)
+		}
+		resolved[inputKey] = extracted
+	}
+	input["inputMapping"] = mapping
+	input["resolvedInputs"] = resolved
+	return input, nil
+}
+
+func workflowInputMapping(node marketing.WorkflowNode) map[string]marketing.WorkflowNodeInputMappingRef {
+	if len(node.Config) == 0 {
+		return nil
+	}
+	config := map[string]any{}
+	if err := json.Unmarshal(node.Config, &config); err != nil {
+		return nil
+	}
+	rawMapping, ok := config["inputMapping"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	out := map[string]marketing.WorkflowNodeInputMappingRef{}
+	for inputKey, rawRef := range rawMapping {
+		ref := workflowInputMappingRef(rawRef)
+		if ref.SourceNodeID == "" || ref.OutputKey == "" {
+			continue
+		}
+		out[inputKey] = ref
+	}
+	return out
+}
+
+func workflowInputMappingRef(value any) marketing.WorkflowNodeInputMappingRef {
+	item, ok := value.(map[string]any)
+	if !ok {
+		return marketing.WorkflowNodeInputMappingRef{}
+	}
+	sourceNodeID, _ := item["sourceNodeId"].(string)
+	outputKey, _ := item["outputKey"].(string)
+	path, _ := item["path"].(string)
+	if sourceNodeID == "" {
+		sourceNodeID, _ = item["nodeId"].(string)
+	}
+	if outputKey == "" {
+		outputKey, _ = item["sourceOutputKey"].(string)
+	}
+	if outputKey == "" {
+		outputKey, _ = item["output"].(string)
+	}
+	return marketing.WorkflowNodeInputMappingRef{
+		SourceNodeID: strings.TrimSpace(sourceNodeID),
+		OutputKey:    strings.TrimSpace(outputKey),
+		Path:         strings.TrimSpace(path),
+	}
+}
+
+func extractWorkflowJSONPath(value any, path string) (any, error) {
+	path = strings.TrimSpace(path)
+	if path == "" || path == "$" {
+		return value, nil
+	}
+	if !strings.HasPrefix(path, "$.") {
+		return nil, fmt.Errorf("path must start with $")
+	}
+	current := value
+	for _, part := range strings.Split(strings.TrimPrefix(path, "$."), ".") {
+		if part == "" {
+			return nil, fmt.Errorf("empty path segment")
+		}
+		next, err := extractWorkflowPathSegment(current, part)
+		if err != nil {
+			return nil, err
+		}
+		current = next
+	}
+	return current, nil
+}
+
+func extractWorkflowPathSegment(value any, segment string) (any, error) {
+	switch typed := value.(type) {
+	case map[string]any:
+		next, ok := typed[segment]
+		if !ok {
+			return nil, fmt.Errorf("field %q not found", segment)
+		}
+		return next, nil
+	case []any:
+		index, err := strconv.Atoi(segment)
+		if err != nil {
+			return nil, fmt.Errorf("segment %q is not an array index", segment)
+		}
+		if index < 0 || index >= len(typed) {
+			return nil, fmt.Errorf("array index %d out of range", index)
+		}
+		return typed[index], nil
+	default:
+		return nil, fmt.Errorf("cannot read %q from %T", segment, value)
+	}
+}
+
+func workflowJSONValue(value any) any {
+	bytes, err := json.Marshal(value)
+	if err != nil {
+		return value
+	}
+	var out any
+	if err := json.Unmarshal(bytes, &out); err != nil {
+		return value
+	}
+	return out
+}
+
 func nodeSuccess(output map[string]any) workflowNodeResult {
 	return workflowNodeResult{Status: marketing.WorkflowNodeSuccess, Output: output}
 }
@@ -242,11 +383,28 @@ func nodeFailed(message string, output map[string]any) workflowNodeResult {
 }
 
 func entryWorkflowNodeHandler(_ context.Context, _ marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
-	return nodeSuccess(map[string]any{"eventId": runtime.Inbox.Event.EventID, "eventType": runtime.Inbox.Event.EventType, "tenantId": runtime.Inbox.Event.TenantID})
+	rawEvent := workflowJSONValue(runtime.Inbox.Event)
+	return nodeSuccess(map[string]any{
+		"raw_event": rawEvent,
+		"eventId":   runtime.Inbox.Event.EventID,
+		"eventType": runtime.Inbox.Event.EventType,
+		"tenantId":  runtime.Inbox.Event.TenantID,
+	})
 }
 
 func inboxWorkflowNodeHandler(_ context.Context, _ marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
-	return nodeSuccess(map[string]any{"inboxId": runtime.Inbox.ID, "status": runtime.Inbox.ProcessStatus, "idempotencyKey": runtime.Inbox.IdempotencyKey})
+	rawEvent := workflowJSONValue(runtime.Inbox.Event)
+	return nodeSuccess(map[string]any{
+		"event_context": map[string]any{
+			"inboxId":        runtime.Inbox.ID,
+			"status":         runtime.Inbox.ProcessStatus,
+			"idempotencyKey": runtime.Inbox.IdempotencyKey,
+			"event":          rawEvent,
+		},
+		"inboxId":        runtime.Inbox.ID,
+		"status":         runtime.Inbox.ProcessStatus,
+		"idempotencyKey": runtime.Inbox.IdempotencyKey,
+	})
 }
 
 func normalizeWorkflowNodeHandler(_ context.Context, _ marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
@@ -272,6 +430,20 @@ func decisionWorkflowNodeHandler(_ context.Context, node marketing.WorkflowNode,
 		"qualified":  runtime.Qualified,
 		"reasonCode": runtime.RuleResult.ReasonCode,
 		"reason":     runtime.RuleResult.Reason,
+	})
+}
+
+func codeWorkflowNodeHandler(_ context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
+	rawConfig := map[string]any{}
+	if len(node.Config) > 0 {
+		_ = json.Unmarshal(node.Config, &rawConfig)
+	}
+	return nodeSuccess(map[string]any{
+		"nodeType":     nodeHandlerKey(node),
+		"language":     rawConfig["language"],
+		"outputPath":   rawConfig["outputPath"],
+		"eventId":      runtime.Inbox.Event.EventID,
+		"dryRunResult": true,
 	})
 }
 

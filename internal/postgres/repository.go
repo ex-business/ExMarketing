@@ -53,6 +53,10 @@ func NewRepository(ctx context.Context, databaseURL string) (*Repository, error)
 		_ = db.Close()
 		return nil, err
 	}
+	if err := ensureActivityWorkspaceColumns(ctx, db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	return &Repository{db: db}, nil
 }
 
@@ -73,16 +77,16 @@ func (r *Repository) CreateActivity(ctx context.Context, activity marketing.Acti
 	}
 
 	_, err = tx.ExecContext(ctx, `
-		INSERT INTO marketing_activity (
-			id, tenant_id, activity_code, activity_name, activity_type, status,
-			trigger_events, start_time, end_time, timezone, priority, exclusive_group,
-			stackable, plugin_code, version, config_json, created_at, updated_at
-		) VALUES (
-			$1, $2, $3, $4, $5, $6,
-			$7, $8, $9, $10, $11, $12,
-			$13, $14, $15, $16, $17, $18
-		)
-	`, activity.ID, activity.TenantID, activity.Code, activity.Name, activity.Type, activity.Status,
+			INSERT INTO marketing_activity (
+				id, tenant_id, workspace_id, folder_id, activity_code, activity_name, activity_type, status,
+				trigger_events, start_time, end_time, timezone, priority, exclusive_group,
+				stackable, plugin_code, version, config_json, created_at, updated_at
+			) VALUES (
+				$1, $2, NULLIF($3, ''), NULLIF($4, ''), $5, $6, $7, $8,
+				$9, $10, $11, $12, $13, $14,
+				$15, $16, $17, $18, $19, $20
+			)
+		`, activity.ID, activity.TenantID, activity.WorkspaceID, activity.FolderID, activity.Code, activity.Name, activity.Type, activity.Status,
 		triggerEvents, activity.StartTime, activity.EndTime, activity.Timezone, activity.Priority, activity.ExclusiveGroup,
 		activity.Stackable, activity.PluginCode, activity.Version, nullJSON(activity.Config), activity.CreatedAt, activity.UpdatedAt)
 	if err != nil {
@@ -139,9 +143,9 @@ func (r *Repository) GetActivity(ctx context.Context, id string) (marketing.Acti
 
 func (r *Repository) ListActivities(ctx context.Context) ([]marketing.Activity, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, tenant_id, activity_code, activity_name, activity_type, status,
-		       trigger_events, start_time, end_time, timezone, priority, exclusive_group,
-		       stackable, plugin_code, version, config_json, created_at, updated_at
+			SELECT id, tenant_id, COALESCE(workspace_id, ''), COALESCE(folder_id, ''), activity_code, activity_name, activity_type, status,
+			       trigger_events, start_time, end_time, timezone, priority, exclusive_group,
+			       stackable, plugin_code, version, config_json, created_at, updated_at
 		FROM marketing_activity
 		ORDER BY created_at DESC
 	`)
@@ -190,13 +194,15 @@ func (r *Repository) UpdateActivity(ctx context.Context, activity marketing.Acti
 		    stackable = $9,
 		    version = $10,
 		    config_json = $11,
-		    updated_at = $12
+		    workspace_id = NULLIF($12, ''),
+		    folder_id = NULLIF($13, ''),
+		    updated_at = $14
 		WHERE id = $1
-		RETURNING id, tenant_id, activity_code, activity_name, activity_type, status,
+		RETURNING id, tenant_id, COALESCE(workspace_id, ''), COALESCE(folder_id, ''), activity_code, activity_name, activity_type, status,
 		          trigger_events, start_time, end_time, timezone, priority, exclusive_group,
 		          stackable, plugin_code, version, config_json, created_at, updated_at
 	`, activity.ID, activity.Name, activity.Status, activity.StartTime, activity.EndTime, activity.Timezone,
-		activity.Priority, activity.ExclusiveGroup, activity.Stackable, activity.Version, nullJSON(activity.Config), activity.UpdatedAt)
+		activity.Priority, activity.ExclusiveGroup, activity.Stackable, activity.Version, nullJSON(activity.Config), activity.WorkspaceID, activity.FolderID, activity.UpdatedAt)
 	updated, err := scanActivity(row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -211,8 +217,8 @@ func (r *Repository) UpdateActivity(ctx context.Context, activity marketing.Acti
 
 func (r *Repository) FindMatchingActivities(ctx context.Context, tenantID string, eventType string) ([]marketing.Activity, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, tenant_id, activity_code, activity_name, activity_type, status,
-		       trigger_events, start_time, end_time, timezone, priority, exclusive_group,
+			SELECT id, tenant_id, COALESCE(workspace_id, ''), COALESCE(folder_id, ''), activity_code, activity_name, activity_type, status,
+			       trigger_events, start_time, end_time, timezone, priority, exclusive_group,
 		       stackable, plugin_code, version, config_json, created_at, updated_at
 		FROM marketing_activity
 		WHERE tenant_id = $1
@@ -2056,7 +2062,7 @@ func (r *Repository) rewardsForActivity(ctx context.Context, activityID string) 
 
 func (r *Repository) activityByID(ctx context.Context, db activityQuerier, id string) (marketing.Activity, error) {
 	row := db.QueryRowContext(ctx, `
-		SELECT id, tenant_id, activity_code, activity_name, activity_type, status,
+		SELECT id, tenant_id, COALESCE(workspace_id, ''), COALESCE(folder_id, ''), activity_code, activity_name, activity_type, status,
 		       trigger_events, start_time, end_time, timezone, priority, exclusive_group,
 		       stackable, plugin_code, version, config_json, created_at, updated_at
 		FROM marketing_activity
@@ -2109,7 +2115,7 @@ func scanActivity(scanner activityScanner) (marketing.Activity, error) {
 	var triggerEvents []byte
 	var config sql.NullString
 	err := scanner.Scan(
-		&activity.ID, &activity.TenantID, &activity.Code, &activity.Name, &activity.Type, &activity.Status,
+		&activity.ID, &activity.TenantID, &activity.WorkspaceID, &activity.FolderID, &activity.Code, &activity.Name, &activity.Type, &activity.Status,
 		&triggerEvents, &activity.StartTime, &activity.EndTime, &activity.Timezone, &activity.Priority, &activity.ExclusiveGroup,
 		&activity.Stackable, &activity.PluginCode, &activity.Version, &config, &activity.CreatedAt, &activity.UpdatedAt,
 	)
@@ -2235,6 +2241,51 @@ func ensureActivityUniqueConstraint(ctx context.Context, db *sql.DB) error {
 	return err
 }
 
+func ensureActivityWorkspaceColumns(ctx context.Context, db *sql.DB) error {
+	_, err := db.ExecContext(ctx, `
+		ALTER TABLE marketing_activity
+			ADD COLUMN IF NOT EXISTS workspace_id VARCHAR(64),
+			ADD COLUMN IF NOT EXISTS folder_id VARCHAR(64);
+
+		DO $$
+		BEGIN
+			IF NOT EXISTS (
+				SELECT 1 FROM pg_constraint
+				WHERE conname = 'marketing_activity_workspace_fk'
+				  AND conrelid = 'marketing_activity'::regclass
+			) THEN
+				ALTER TABLE marketing_activity
+					ADD CONSTRAINT marketing_activity_workspace_fk
+					FOREIGN KEY (workspace_id)
+					REFERENCES marketing_workspace(id)
+					ON DELETE SET NULL;
+			END IF;
+			IF NOT EXISTS (
+				SELECT 1 FROM pg_constraint
+				WHERE conname = 'marketing_activity_folder_requires_workspace'
+				  AND conrelid = 'marketing_activity'::regclass
+			) THEN
+				ALTER TABLE marketing_activity
+					ADD CONSTRAINT marketing_activity_folder_requires_workspace
+					CHECK (folder_id IS NULL OR workspace_id IS NOT NULL);
+			END IF;
+			IF NOT EXISTS (
+				SELECT 1 FROM pg_constraint
+				WHERE conname = 'marketing_activity_folder_workspace_fk'
+				  AND conrelid = 'marketing_activity'::regclass
+			) THEN
+				ALTER TABLE marketing_activity
+					ADD CONSTRAINT marketing_activity_folder_workspace_fk
+					FOREIGN KEY (workspace_id, folder_id)
+					REFERENCES marketing_workspace_folder(workspace_id, id)
+					ON DELETE SET NULL;
+			END IF;
+		END
+		$$;
+	`)
+	return err
+}
+
 func ensureManualGrantExportTables(ctx context.Context, db *sql.DB) error {
 	_, err := db.ExecContext(ctx, `
 		CREATE TABLE IF NOT EXISTS marketing_manual_grant_export_file (
@@ -2281,6 +2332,12 @@ func mapPostgresActivityError(err error) error {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "marketing_activity_tenant_code_key" {
 		return marketing.ErrActivityConflict
+	}
+	if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+		return marketing.ErrNotFound
+	}
+	if errors.As(err, &pgErr) && pgErr.Code == "23514" {
+		return marketing.ErrInvalidActivity
 	}
 	return err
 }

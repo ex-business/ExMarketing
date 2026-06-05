@@ -143,6 +143,102 @@ func TestPostgresCreateInboxDetectsDuplicateAndConflict(t *testing.T) {
 	}
 }
 
+func TestPostgresWorkspaceCompositeConstraintsRejectCrossWorkspaceReferences(t *testing.T) {
+	ctx, repo := openPostgresIntegrationRepository(t)
+	prefix := "pg_workspace_fk"
+	cleanupPostgresWorkspaceTest(t, repo, prefix)
+	t.Cleanup(func() { cleanupPostgresWorkspaceTest(t, repo, prefix) })
+
+	now := time.Now().UTC()
+	first := marketing.Workspace{
+		ID:          prefix + "_ws_1",
+		TenantID:    "site_001",
+		Name:        "First",
+		Slug:        prefix + "-first",
+		Visibility:  marketing.WorkspaceTeam,
+		DefaultRole: marketing.WorkspaceRoleViewer,
+		Status:      marketing.WorkspaceActive,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	second := first
+	second.ID = prefix + "_ws_2"
+	second.Name = "Second"
+	second.Slug = prefix + "-second"
+	if _, err := repo.CreateWorkspace(ctx, first); err != nil {
+		t.Fatalf("create first workspace: %v", err)
+	}
+	if _, err := repo.CreateWorkspace(ctx, second); err != nil {
+		t.Fatalf("create second workspace: %v", err)
+	}
+
+	parent := marketing.WorkspaceFolder{
+		ID:          prefix + "_folder_parent",
+		WorkspaceID: first.ID,
+		Name:        "Parent",
+		Visibility:  marketing.WorkspaceFolderTeam,
+		Status:      marketing.WorkspaceFolderActive,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	if _, err := repo.CreateWorkspaceFolder(ctx, parent); err != nil {
+		t.Fatalf("create parent folder: %v", err)
+	}
+
+	_, err := repo.CreateWorkspaceFolder(ctx, marketing.WorkspaceFolder{
+		ID:          prefix + "_folder_child",
+		WorkspaceID: second.ID,
+		ParentID:    parent.ID,
+		Name:        "Invalid child",
+		Visibility:  marketing.WorkspaceFolderTeam,
+		Status:      marketing.WorkspaceFolderActive,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	})
+	if !errors.Is(err, marketing.ErrNotFound) {
+		t.Fatalf("expected not found for cross-workspace parent, got %v", err)
+	}
+
+	_, err = repo.CreateWorkspaceShareLink(ctx, marketing.WorkspaceShareLink{
+		ID:          prefix + "_share",
+		WorkspaceID: second.ID,
+		FolderID:    parent.ID,
+		Token:       prefix + "_token",
+		Scope:       marketing.WorkspaceShareFolder,
+		Permission:  marketing.WorkspaceShareView,
+		Enabled:     true,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	})
+	if !errors.Is(err, marketing.ErrNotFound) {
+		t.Fatalf("expected not found for cross-workspace share folder, got %v", err)
+	}
+
+	_, err = repo.CreateActivity(ctx, marketing.Activity{
+		ID:             prefix + "_activity",
+		TenantID:       "site_001",
+		WorkspaceID:    second.ID,
+		FolderID:       parent.ID,
+		Code:           prefix + "_activity",
+		Name:           "Invalid placement",
+		Type:           "STUDIO_WORKFLOW",
+		Status:         marketing.ActivityDraft,
+		TriggerEvents:  []string{"STUDIO_EVENT"},
+		StartTime:      now.Add(-time.Minute),
+		EndTime:        now.Add(time.Hour),
+		Timezone:       "UTC",
+		Priority:       1,
+		ExclusiveGroup: "",
+		Stackable:      true,
+		Version:        1,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	})
+	if !errors.Is(err, marketing.ErrNotFound) {
+		t.Fatalf("expected not found for cross-workspace activity folder, got %v", err)
+	}
+}
+
 func TestPostgresPluginScheduleEventInboxSmoke(t *testing.T) {
 	databaseURL := os.Getenv("EX_MARKETING_DATABASE_URL")
 	if databaseURL == "" {
@@ -1289,6 +1385,23 @@ func cleanupPostgresActivityTest(t *testing.T, repo *Repository, prefix string) 
 	} {
 		if _, err := repo.db.ExecContext(ctx, stmt, prefix+"_%"); err != nil {
 			t.Fatalf("cleanup activity %q: %v", stmt, err)
+		}
+	}
+}
+
+func cleanupPostgresWorkspaceTest(t *testing.T, repo *Repository, prefix string) {
+	t.Helper()
+	ctx := context.Background()
+	for _, stmt := range []string{
+		`DELETE FROM marketing_activity WHERE id LIKE $1 OR activity_code LIKE $1`,
+		`DELETE FROM marketing_workspace_share_link WHERE id LIKE $1 OR token LIKE $1`,
+		`DELETE FROM marketing_workspace_folder WHERE id LIKE $1`,
+		`DELETE FROM marketing_workspace_audit_log WHERE workspace_id LIKE $1 OR id LIKE $1`,
+		`DELETE FROM marketing_workspace_member WHERE workspace_id LIKE $1 OR id LIKE $1`,
+		`DELETE FROM marketing_workspace WHERE id LIKE $1 OR slug LIKE $1`,
+	} {
+		if _, err := repo.db.ExecContext(ctx, stmt, prefix+"%"); err != nil {
+			t.Fatalf("cleanup workspace %q: %v", stmt, err)
 		}
 	}
 }

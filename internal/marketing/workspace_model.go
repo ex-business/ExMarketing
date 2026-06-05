@@ -71,6 +71,19 @@ type Workspace struct {
 	UpdatedAt   time.Time           `json:"updatedAt"`
 }
 
+type WorkspacePatch struct {
+	Name        *string              `json:"name,omitempty"`
+	Slug        *string              `json:"slug,omitempty"`
+	Description *string              `json:"description,omitempty"`
+	Icon        *string              `json:"icon,omitempty"`
+	Color       *string              `json:"color,omitempty"`
+	Visibility  *WorkspaceVisibility `json:"visibility,omitempty"`
+	DefaultRole *WorkspaceRole       `json:"defaultRole,omitempty"`
+	OwnerID     *string              `json:"ownerId,omitempty"`
+	Status      *WorkspaceStatus     `json:"status,omitempty"`
+	UpdatedBy   *string              `json:"updatedBy,omitempty"`
+}
+
 type WorkspaceMember struct {
 	ID          string                `json:"id"`
 	WorkspaceID string                `json:"workspaceId"`
@@ -103,6 +116,18 @@ type WorkspaceFolder struct {
 	UpdatedAt   time.Time                 `json:"updatedAt"`
 }
 
+type WorkspaceFolderPatch struct {
+	ParentID    *string                    `json:"parentId,omitempty"`
+	Name        *string                    `json:"name,omitempty"`
+	Description *string                    `json:"description,omitempty"`
+	Icon        *string                    `json:"icon,omitempty"`
+	Color       *string                    `json:"color,omitempty"`
+	Visibility  *WorkspaceFolderVisibility `json:"visibility,omitempty"`
+	SortOrder   *int                       `json:"sortOrder,omitempty"`
+	Status      *WorkspaceFolderStatus     `json:"status,omitempty"`
+	UpdatedBy   *string                    `json:"updatedBy,omitempty"`
+}
+
 type WorkspaceShareLink struct {
 	ID           string                   `json:"id"`
 	WorkspaceID  string                   `json:"workspaceId"`
@@ -117,6 +142,18 @@ type WorkspaceShareLink struct {
 	CreatedBy    string                   `json:"createdBy,omitempty"`
 	CreatedAt    time.Time                `json:"createdAt"`
 	UpdatedAt    time.Time                `json:"updatedAt"`
+}
+
+type WorkspaceShareLinkPatch struct {
+	FolderID     *string                   `json:"folderId,omitempty"`
+	ActivityID   *string                   `json:"activityId,omitempty"`
+	Token        *string                   `json:"token,omitempty"`
+	Scope        *WorkspaceShareScope      `json:"scope,omitempty"`
+	Permission   *WorkspaceSharePermission `json:"permission,omitempty"`
+	ExpiresAt    *time.Time                `json:"expiresAt,omitempty"`
+	PasswordHash *string                   `json:"passwordHash,omitempty"`
+	Enabled      *bool                     `json:"enabled,omitempty"`
+	UpdatedBy    *string                   `json:"updatedBy,omitempty"`
 }
 
 type WorkspaceAuditLog struct {

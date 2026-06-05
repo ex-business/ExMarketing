@@ -30,6 +30,7 @@ export type ActivityNodeData = {
   desc: string;
   inputs: string[];
   outputs: string[];
+  config?: Record<string, unknown>;
   runStatus?: 'RUNNING' | 'SUCCESS' | 'FAILED' | 'SKIPPED';
   lastRun?: {
     status: 'RUNNING' | 'SUCCESS' | 'FAILED' | 'SKIPPED';
@@ -133,6 +134,70 @@ export type WorkflowVersion = {
   status: 'ACTIVE' | 'ARCHIVED';
   publishedBy?: string;
   publishedAt: string;
+};
+
+export type WorkflowValidationSeverity = 'BLOCK' | 'WARNING';
+
+export type WorkflowValidationIssue = {
+  severity: WorkflowValidationSeverity;
+  code: string;
+  message: string;
+  nodeId?: string;
+  edgeId?: string;
+  path?: string;
+};
+
+export type WorkflowValidationResult = {
+  valid: boolean;
+  items: WorkflowValidationIssue[];
+  summary: {
+    blockCount: number;
+    warningCount: number;
+  };
+};
+
+export type WorkflowNodeConfigFieldType = 'STRING' | 'NUMBER' | 'BOOLEAN' | 'ARRAY' | 'OBJECT' | 'ENUM';
+
+export type WorkflowNodeConfigValidationRule = {
+  type: 'MIN_LENGTH' | 'MAX_LENGTH' | 'PATTERN' | 'MIN_VALUE' | 'MAX_VALUE' | 'MIN_ITEMS' | 'MAX_ITEMS';
+  value: unknown;
+  message?: string;
+};
+
+export type WorkflowNodeConfigField = {
+  key: string;
+  label: string;
+  type: WorkflowNodeConfigFieldType;
+  required?: boolean;
+  default?: unknown;
+  options?: string[];
+  description?: string;
+  validationRules?: WorkflowNodeConfigValidationRule[];
+};
+
+export type WorkflowNodeConfigSchema = {
+  nodeType: string;
+  version: number;
+  title: string;
+  description?: string;
+  fields: WorkflowNodeConfigField[];
+  inputs: WorkflowNodeInputVar[];
+  outputs: WorkflowNodeOutputVar[];
+};
+
+export type WorkflowNodeInputVar = {
+  key: string;
+  label: string;
+  type?: string;
+  required?: boolean;
+  description?: string;
+};
+
+export type WorkflowNodeOutputVar = {
+  key: string;
+  label: string;
+  type?: string;
+  description?: string;
 };
 
 export type WorkflowNodeExecution = {

@@ -3,6 +3,8 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,6 +21,8 @@ func TestWorkflowDraftPublishAndExecutionLogs(t *testing.T) {
 	activity := marketing.Activity{
 		ID:            "act_workflow_test",
 		TenantID:      "site_001",
+		WorkspaceID:   "workspace-1",
+		FolderID:      "folder-1",
 		Code:          "WORKFLOW_TEST",
 		Name:          "Workflow Test",
 		Type:          "FIRST_DEPOSIT",
@@ -64,9 +68,10 @@ func TestWorkflowDraftPublishAndExecutionLogs(t *testing.T) {
 	}
 
 	definition := json.RawMessage(`{
+		"meta": {"activityId": "act_workflow_test", "workspaceId": "workspace-1", "folderId": "folder-1"},
 		"nodes": [
 			{"id":"event-in","type":"event-in","kind":"entry","code":"Event In","title":"事件入口","position":{"x":80,"y":120},"outputs":["raw_event"]},
-			{"id":"match","type":"match","kind":"logic","code":"MATCH","title":"活动匹配","position":{"x":410,"y":120},"inputs":["raw_event"],"outputs":["matched_event"]},
+			{"id":"match","type":"match","kind":"logic","code":"MATCH","title":"活动匹配","position":{"x":410,"y":120},"inputs":["raw_event"],"outputs":["matched_event"],"config":{"inputMapping":{"event_context":{"sourceNodeId":"event-in","outputKey":"raw_event","path":"$.subject.id"}}}},
 			{"id":"reward","type":"reward","kind":"reward","code":"REWARD","title":"奖励计算","position":{"x":740,"y":120},"inputs":["matched_event"],"outputs":["reward"]},
 			{"id":"outbox","type":"outbox","kind":"dispatch","code":"OUTBOX","title":"发奖队列","position":{"x":1070,"y":120},"inputs":["reward"],"outputs":["HTTP"]}
 		],
@@ -126,5 +131,120 @@ func TestWorkflowDraftPublishAndExecutionLogs(t *testing.T) {
 		if nodeExecution.Status == marketing.WorkflowNodeFailed {
 			t.Fatalf("unexpected failed node execution: %+v", nodeExecution)
 		}
+	}
+	matchInput := map[string]any{}
+	for _, nodeExecution := range nodeExecutions {
+		if nodeExecution.NodeID == "match" {
+			if err := json.Unmarshal(nodeExecution.Input, &matchInput); err != nil {
+				t.Fatalf("unmarshal match input: %v", err)
+			}
+		}
+	}
+	resolvedInputs, ok := matchInput["resolvedInputs"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected resolvedInputs in match node execution input, got %+v", matchInput)
+	}
+	if resolvedInputs["event_context"] != "u_001" {
+		t.Fatalf("expected inputMapping path to resolve user id, got %+v", resolvedInputs)
+	}
+}
+
+func TestPublishWorkflowVersionRequiresValidationPass(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	now := time.Date(2026, 6, 2, 9, 0, 0, 0, time.UTC)
+	activity := marketing.Activity{
+		ID:          "act_workflow_publish_validation",
+		TenantID:    "site_001",
+		WorkspaceID: "workspace-1",
+		FolderID:    "folder-1",
+		Code:        "WORKFLOW_PUBLISH_VALIDATION",
+		Name:        "Workflow Publish Validation",
+		Type:        "FIRST_DEPOSIT",
+		Status:      marketing.ActivityActive,
+		StartTime:   now.Add(-time.Hour),
+		EndTime:     now.Add(time.Hour),
+		Timezone:    "UTC",
+		Priority:    10,
+		Version:     1,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	if _, err := repo.CreateActivity(ctx, activity); err != nil {
+		t.Fatalf("create activity: %v", err)
+	}
+
+	definitionMissingMetadata := json.RawMessage(`{
+		"nodes": [
+			{"id":"event-in","type":"event-in","kind":"entry"},
+			{"id":"match","type":"match"}
+		],
+		"edges": [
+			{"id":"event-in-match","source":"event-in","target":"match"}
+		]
+	}`)
+	if _, err := service.SaveWorkflowDraft(ctx, activity.ID, marketing.SaveWorkflowDraftCommand{Operator: "tester", Definition: definitionMissingMetadata}); err != nil {
+		t.Fatalf("save workflow draft: %v", err)
+	}
+
+	_, err := service.PublishWorkflowVersion(ctx, activity.ID, marketing.PublishWorkflowCommand{Operator: "tester"})
+	if err == nil {
+		t.Fatalf("expected publish to fail")
+	}
+	if !errors.Is(err, marketing.ErrInvalidWorkflow) || !strings.Contains(err.Error(), "WORKFLOW_METADATA_ACTIVITY_ID_REQUIRED") {
+		t.Fatalf("expected publish validation failure, got %v", err)
+	}
+}
+
+func TestSaveWorkflowDraftAllowsValidationInvalidDefinition(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	now := time.Date(2026, 6, 2, 10, 0, 0, 0, time.UTC)
+	activity := marketing.Activity{
+		ID:          "act_invalid_draft_allowed",
+		TenantID:    "site_001",
+		WorkspaceID: "workspace-1",
+		FolderID:    "folder-1",
+		Code:        "INVALID_DRAFT_ALLOWED",
+		Name:        "Invalid Draft Allowed",
+		Type:        "STUDIO_WORKFLOW",
+		Status:      marketing.ActivityDraft,
+		StartTime:   now.Add(-time.Hour),
+		EndTime:     now.Add(time.Hour),
+		Timezone:    "UTC",
+		Priority:    10,
+		Version:     1,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	if _, err := repo.CreateActivity(ctx, activity); err != nil {
+		t.Fatalf("create activity: %v", err)
+	}
+
+	definitionMissingEntry := json.RawMessage(`{
+		"meta": {"activityId": "act_invalid_draft_allowed", "workspaceId": "workspace-1", "folderId": "folder-1"},
+		"nodes": [
+			{"id":"match","type":"match"}
+		],
+		"edges": []
+	}`)
+	if _, err := service.SaveWorkflowDraft(ctx, activity.ID, marketing.SaveWorkflowDraftCommand{Operator: "tester", Definition: definitionMissingEntry}); err != nil {
+		t.Fatalf("expected invalid but parseable draft to save: %v", err)
+	}
+	validation, err := service.ValidateWorkflowDraft(ctx, activity.ID)
+	if err != nil {
+		t.Fatalf("validate workflow draft: %v", err)
+	}
+	if validation.Valid {
+		t.Fatalf("expected saved invalid draft to fail validation")
+	}
+	_, err = service.PublishWorkflowVersion(ctx, activity.ID, marketing.PublishWorkflowCommand{Operator: "tester"})
+	if err == nil {
+		t.Fatalf("expected invalid draft publish to fail")
+	}
+	if !errors.Is(err, marketing.ErrInvalidWorkflow) || !strings.Contains(err.Error(), "WORKFLOW_ENTRY_MISSING") {
+		t.Fatalf("expected invalid draft publish validation failure, got %v", err)
 	}
 }

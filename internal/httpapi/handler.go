@@ -169,6 +169,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("DELETE /admin/v1/workspaces/{workspaceId}", h.deleteWorkspace)
 	mux.HandleFunc("GET /admin/v1/workspaces/{workspaceId}/members", h.listWorkspaceMembers)
 	mux.HandleFunc("POST /admin/v1/workspaces/{workspaceId}/members", h.createWorkspaceMember)
+	mux.HandleFunc("GET /admin/v1/workspaces/{workspaceId}/members/{memberId}", h.getWorkspaceMember)
 	mux.HandleFunc("PUT /admin/v1/workspaces/{workspaceId}/members/{memberId}", h.updateWorkspaceMember)
 	mux.HandleFunc("DELETE /admin/v1/workspaces/{workspaceId}/members/{memberId}", h.deleteWorkspaceMember)
 	mux.HandleFunc("GET /admin/v1/workspaces/{workspaceId}/folders", h.listWorkspaceFolders)
@@ -178,6 +179,8 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("DELETE /admin/v1/workspaces/{workspaceId}/folders/{folderId}", h.deleteWorkspaceFolder)
 	mux.HandleFunc("GET /admin/v1/workspaces/{workspaceId}/share-links", h.listWorkspaceShareLinks)
 	mux.HandleFunc("POST /admin/v1/workspaces/{workspaceId}/share-links", h.createWorkspaceShareLink)
+	mux.HandleFunc("GET /admin/v1/workspaces/{workspaceId}/share-links/{linkId}", h.getWorkspaceShareLink)
+	mux.HandleFunc("PUT /admin/v1/workspaces/{workspaceId}/share-links/{linkId}", h.updateWorkspaceShareLink)
 	mux.HandleFunc("DELETE /admin/v1/workspaces/{workspaceId}/share-links/{linkId}", h.deleteWorkspaceShareLink)
 	mux.HandleFunc("GET /admin/v1/workspaces/{workspaceId}/audit-logs", h.listWorkspaceAuditLogs)
 	mux.HandleFunc("POST /admin/v1/activities", h.createActivity)
@@ -185,10 +188,13 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("PUT /admin/v1/activities/{id}", h.updateActivity)
 	mux.HandleFunc("GET /admin/v1/activities/{id}/workflow/draft", h.getActivityWorkflowDraft)
 	mux.HandleFunc("PUT /admin/v1/activities/{id}/workflow/draft", h.saveActivityWorkflowDraft)
+	mux.HandleFunc("POST /admin/v1/activities/{id}/workflow/validate", h.validateActivityWorkflow)
+	mux.HandleFunc("POST /admin/v1/activities/{id}/workflow/draft/validate", h.validateActivityWorkflowDraft)
 	mux.HandleFunc("POST /admin/v1/activities/{id}/workflow/publish", h.publishActivityWorkflow)
 	mux.HandleFunc("GET /admin/v1/activities/{id}/workflow/versions", h.listActivityWorkflowVersions)
 	mux.HandleFunc("GET /admin/v1/activities/{id}/workflow/executions", h.listActivityWorkflowExecutions)
 	mux.HandleFunc("GET /admin/v1/workflow/executions/{id}/nodes", h.listWorkflowNodeExecutions)
+	mux.HandleFunc("GET /admin/v1/workflow/node-config-schemas", h.listWorkflowNodeConfigSchemas)
 	mux.HandleFunc("POST /admin/v1/activities/{id}/approval/submit", h.submitActivityApproval)
 	mux.HandleFunc("POST /admin/v1/activities/{id}/approval/approve", h.approveActivity)
 	mux.HandleFunc("POST /admin/v1/activities/{id}/approval/reject", h.rejectActivityApproval)
@@ -265,6 +271,10 @@ func (h *Handler) createActivity(w http.ResponseWriter, r *http.Request) {
 
 	activity, err := h.engine.CreateActivity(r.Context(), cmd)
 	if err != nil {
+		if errors.Is(err, marketing.ErrNotFound) {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
 		if errors.Is(err, marketing.ErrInvalidActivity) {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
@@ -375,6 +385,39 @@ func (h *Handler) saveActivityWorkflowDraft(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, draft)
 }
 
+func (h *Handler) validateActivityWorkflow(w http.ResponseWriter, r *http.Request) {
+	var cmd marketing.ValidateWorkflowCommand
+	if r.Body != nil {
+		if err := decodeStrictJSON(r.Body, &cmd); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid json body")
+			return
+		}
+	}
+	result, err := h.engine.ValidateWorkflowDefinition(r.Context(), r.PathValue("id"), cmd)
+	if err != nil {
+		if errors.Is(err, marketing.ErrNotFound) {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) validateActivityWorkflowDraft(w http.ResponseWriter, r *http.Request) {
+	result, err := h.engine.ValidateWorkflowDraft(r.Context(), r.PathValue("id"))
+	if err != nil {
+		if errors.Is(err, marketing.ErrNotFound) {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
 func (h *Handler) publishActivityWorkflow(w http.ResponseWriter, r *http.Request) {
 	var cmd marketing.PublishWorkflowCommand
 	if err := decodeStrictJSON(r.Body, &cmd); err != nil {
@@ -433,6 +476,10 @@ func (h *Handler) listWorkflowNodeExecutions(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": executions})
+}
+
+func (h *Handler) listWorkflowNodeConfigSchemas(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"items": h.engine.ListWorkflowNodeConfigSchemas()})
 }
 
 func (h *Handler) submitActivityApproval(w http.ResponseWriter, r *http.Request) {

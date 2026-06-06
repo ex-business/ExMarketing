@@ -25,6 +25,7 @@ type MemoryRepository struct {
 	workspaceAuditLogs  []WorkspaceAuditLog
 	activities          []Activity
 	workflowDrafts      map[string]WorkflowDraft
+	workflowTemplates   []WorkflowDraftTemplate
 	workflowVersions    []WorkflowVersion
 	workflowExecutions  []WorkflowExecution
 	nodeExecutions      []WorkflowNodeExecution
@@ -159,6 +160,97 @@ func (r *MemoryRepository) GetWorkflowDraft(ctx context.Context, activityID stri
 	return draft, nil
 }
 
+func (r *MemoryRepository) CreateWorkflowDraftTemplate(ctx context.Context, template WorkflowDraftTemplate) (WorkflowDraftTemplate, error) {
+	if err := ctx.Err(); err != nil {
+		return WorkflowDraftTemplate{}, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if template.Version <= 0 {
+		template.Version = 1
+		for _, existing := range r.workflowTemplates {
+			if existing.ID == template.ID && existing.Version >= template.Version {
+				template.Version = existing.Version + 1
+			}
+		}
+	}
+	r.workflowTemplates = append(r.workflowTemplates, template)
+	return template, nil
+}
+
+func (r *MemoryRepository) ListWorkflowDraftTemplates(ctx context.Context, query WorkflowDraftTemplateQuery) ([]WorkflowDraftTemplate, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	items := make([]WorkflowDraftTemplate, 0, len(r.workflowTemplates))
+	for _, template := range r.workflowTemplates {
+		if query.TemplateID != "" && template.ID != query.TemplateID {
+			continue
+		}
+		if query.Source != "" && template.Source != query.Source {
+			continue
+		}
+		if query.Status != "" && template.Status != query.Status {
+			continue
+		}
+		items = append(items, template)
+	}
+	slices.SortFunc(items, func(a, b WorkflowDraftTemplate) int {
+		if a.ID != b.ID {
+			return strings.Compare(a.ID, b.ID)
+		}
+		return b.Version - a.Version
+	})
+	if query.LatestOnly {
+		latest := make([]WorkflowDraftTemplate, 0, len(items))
+		seen := map[string]struct{}{}
+		for _, item := range items {
+			if _, ok := seen[item.ID]; ok {
+				continue
+			}
+			seen[item.ID] = struct{}{}
+			latest = append(latest, item)
+		}
+		items = latest
+	}
+	if query.Limit > 0 && len(items) > query.Limit {
+		items = items[:query.Limit]
+	}
+	return items, nil
+}
+
+func (r *MemoryRepository) GetWorkflowDraftTemplate(ctx context.Context, templateID string, versionID string, version int) (WorkflowDraftTemplate, error) {
+	if err := ctx.Err(); err != nil {
+		return WorkflowDraftTemplate{}, err
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	var latest WorkflowDraftTemplate
+	for _, template := range r.workflowTemplates {
+		if template.ID != templateID {
+			continue
+		}
+		if versionID != "" && template.VersionID != versionID {
+			continue
+		}
+		if version > 0 && template.Version != version {
+			continue
+		}
+		if versionID != "" || version > 0 {
+			return template, nil
+		}
+		if latest.ID == "" || template.Version > latest.Version {
+			latest = template
+		}
+	}
+	if latest.ID == "" {
+		return WorkflowDraftTemplate{}, ErrNotFound
+	}
+	return latest, nil
+}
+
 func (r *MemoryRepository) CreateWorkflowVersion(ctx context.Context, version WorkflowVersion) (WorkflowVersion, error) {
 	if err := ctx.Err(); err != nil {
 		return WorkflowVersion{}, err
@@ -175,7 +267,7 @@ func (r *MemoryRepository) CreateWorkflowVersion(ctx context.Context, version Wo
 	}
 	for i := range r.workflowVersions {
 		if r.workflowVersions[i].ActivityID == version.ActivityID && r.workflowVersions[i].Status == WorkflowVersionActive {
-			r.workflowVersions[i].Status = WorkflowVersionArchived
+			r.workflowVersions[i].Status = WorkflowVersionSuperseded
 		}
 	}
 	r.workflowVersions = append(r.workflowVersions, version)
@@ -191,6 +283,20 @@ func (r *MemoryRepository) GetActiveWorkflowVersion(ctx context.Context, activit
 	for i := len(r.workflowVersions) - 1; i >= 0; i-- {
 		version := r.workflowVersions[i]
 		if version.ActivityID == activityID && version.Status == WorkflowVersionActive {
+			return version, nil
+		}
+	}
+	return WorkflowVersion{}, ErrNotFound
+}
+
+func (r *MemoryRepository) GetWorkflowVersion(ctx context.Context, activityID string, versionID string) (WorkflowVersion, error) {
+	if err := ctx.Err(); err != nil {
+		return WorkflowVersion{}, err
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, version := range r.workflowVersions {
+		if version.ActivityID == activityID && version.ID == versionID {
 			return version, nil
 		}
 	}
@@ -213,6 +319,21 @@ func (r *MemoryRepository) ListWorkflowVersions(ctx context.Context, activityID 
 		return b.Version - a.Version
 	})
 	return out, nil
+}
+
+func (r *MemoryRepository) UpdateWorkflowVersionStatus(ctx context.Context, activityID string, versionID string, status WorkflowVersionStatus) (WorkflowVersion, error) {
+	if err := ctx.Err(); err != nil {
+		return WorkflowVersion{}, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.workflowVersions {
+		if r.workflowVersions[i].ActivityID == activityID && r.workflowVersions[i].ID == versionID {
+			r.workflowVersions[i].Status = status
+			return r.workflowVersions[i], nil
+		}
+	}
+	return WorkflowVersion{}, ErrNotFound
 }
 
 func (r *MemoryRepository) CreateWorkflowExecution(ctx context.Context, execution WorkflowExecution) (WorkflowExecution, error) {
@@ -283,6 +404,9 @@ func (r *MemoryRepository) ListWorkflowExecutions(ctx context.Context, query Wor
 		if query.ActivityID != "" && execution.ActivityID != query.ActivityID {
 			continue
 		}
+		if query.WorkflowVersionID != "" && execution.WorkflowVersionID != query.WorkflowVersionID {
+			continue
+		}
 		if query.EventID != "" && execution.EventID != query.EventID {
 			continue
 		}
@@ -295,12 +419,28 @@ func (r *MemoryRepository) ListWorkflowExecutions(ctx context.Context, query Wor
 		return b.CreatedAt.Compare(a.CreatedAt)
 	})
 	if len(out) > limit {
-		out = out[:limit]
+		offset := query.Offset
+		if offset < 0 {
+			offset = 0
+		}
+		if offset >= len(out) {
+			return nil, nil
+		}
+		end := offset + limit
+		if end > len(out) {
+			end = len(out)
+		}
+		out = out[offset:end]
+	} else if query.Offset > 0 {
+		if query.Offset >= len(out) {
+			return nil, nil
+		}
+		out = out[query.Offset:]
 	}
 	return out, nil
 }
 
-func (r *MemoryRepository) ListWorkflowNodeExecutions(ctx context.Context, executionID string) ([]WorkflowNodeExecution, error) {
+func (r *MemoryRepository) ListWorkflowNodeExecutions(ctx context.Context, query WorkflowNodeExecutionQuery) ([]WorkflowNodeExecution, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -308,13 +448,31 @@ func (r *MemoryRepository) ListWorkflowNodeExecutions(ctx context.Context, execu
 	defer r.mu.RUnlock()
 	var out []WorkflowNodeExecution
 	for _, execution := range r.nodeExecutions {
-		if execution.ExecutionID == executionID {
+		if execution.ExecutionID == query.ExecutionID {
 			out = append(out, execution)
 		}
 	}
 	slices.SortFunc(out, func(a, b WorkflowNodeExecution) int {
 		return a.StartedAt.Compare(b.StartedAt)
 	})
+	if query.Offset < 0 {
+		query.Offset = 0
+	}
+	if query.Limit > 0 {
+		if query.Offset >= len(out) {
+			return nil, nil
+		}
+		end := query.Offset + query.Limit
+		if end > len(out) {
+			end = len(out)
+		}
+		out = out[query.Offset:end]
+	} else if query.Offset > 0 {
+		if query.Offset >= len(out) {
+			return nil, nil
+		}
+		out = out[query.Offset:]
+	}
 	return out, nil
 }
 

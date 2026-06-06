@@ -57,6 +57,14 @@ func NewRepository(ctx context.Context, databaseURL string) (*Repository, error)
 		_ = db.Close()
 		return nil, err
 	}
+	if err := ensureWorkflowVersionColumns(ctx, db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := ensureWorkflowDraftTemplateTables(ctx, db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	return &Repository{db: db}, nil
 }
 
@@ -287,6 +295,79 @@ func (r *Repository) GetWorkflowDraft(ctx context.Context, activityID string) (m
 	return scanWorkflowDraft(row)
 }
 
+func (r *Repository) CreateWorkflowDraftTemplate(ctx context.Context, template marketing.WorkflowDraftTemplate) (marketing.WorkflowDraftTemplate, error) {
+	if template.Version <= 0 {
+		if err := r.db.QueryRowContext(ctx, `
+			SELECT COALESCE(MAX(version), 0) + 1
+			FROM marketing_workflow_draft_template
+			WHERE template_id = $1
+		`, template.ID).Scan(&template.Version); err != nil {
+			return marketing.WorkflowDraftTemplate{}, err
+		}
+	}
+	_, err := r.db.ExecContext(ctx, `
+		INSERT INTO marketing_workflow_draft_template (
+			version_id, template_id, version, name, description, category, source,
+			status, definition_json, created_by, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+	`, template.VersionID, template.ID, template.Version, template.Name, nullString(template.Description),
+		nullString(template.Category), template.Source, template.Status, template.Definition,
+		nullString(template.CreatedBy), template.CreatedAt, template.UpdatedAt)
+	if err != nil {
+		return marketing.WorkflowDraftTemplate{}, err
+	}
+	return template, nil
+}
+
+func (r *Repository) ListWorkflowDraftTemplates(ctx context.Context, query marketing.WorkflowDraftTemplateQuery) ([]marketing.WorkflowDraftTemplate, error) {
+	limit := query.Limit
+	if limit <= 0 || limit > 500 {
+		limit = 200
+	}
+	latestClause := ""
+	if query.LatestOnly {
+		latestClause = "AND version = (SELECT MAX(t2.version) FROM marketing_workflow_draft_template t2 WHERE t2.template_id = t.template_id)"
+	}
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT version_id, template_id, version, name, COALESCE(description, ''), COALESCE(category, ''),
+		       source, status, definition_json, COALESCE(created_by, ''), created_at, updated_at
+		FROM marketing_workflow_draft_template t
+		WHERE ($1 = '' OR template_id = $1)
+		  AND ($2 = '' OR source = $2)
+		  AND ($3 = '' OR status = $3)
+		  `+latestClause+`
+		ORDER BY template_id ASC, version DESC
+		LIMIT $4
+	`, query.TemplateID, query.Source, query.Status, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []marketing.WorkflowDraftTemplate
+	for rows.Next() {
+		item, err := scanWorkflowDraftTemplate(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
+func (r *Repository) GetWorkflowDraftTemplate(ctx context.Context, templateID string, versionID string, version int) (marketing.WorkflowDraftTemplate, error) {
+	row := r.db.QueryRowContext(ctx, `
+		SELECT version_id, template_id, version, name, COALESCE(description, ''), COALESCE(category, ''),
+		       source, status, definition_json, COALESCE(created_by, ''), created_at, updated_at
+		FROM marketing_workflow_draft_template
+		WHERE template_id = $1
+		  AND ($2 = '' OR version_id = $2)
+		  AND ($3 <= 0 OR version = $3)
+		ORDER BY version DESC
+		LIMIT 1
+	`, templateID, versionID, version)
+	return scanWorkflowDraftTemplate(row)
+}
+
 func (r *Repository) CreateWorkflowVersion(ctx context.Context, version marketing.WorkflowVersion) (marketing.WorkflowVersion, error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -324,17 +405,17 @@ func (r *Repository) CreateWorkflowVersion(ctx context.Context, version marketin
 			UPDATE marketing_workflow_version
 			SET status = $2
 			WHERE activity_id = $1 AND status = $3
-		`, version.ActivityID, marketing.WorkflowVersionArchived, marketing.WorkflowVersionActive); err != nil {
+		`, version.ActivityID, marketing.WorkflowVersionSuperseded, marketing.WorkflowVersionActive); err != nil {
 			return marketing.WorkflowVersion{}, err
 		}
 	}
 	_, err = tx.ExecContext(ctx, `
 		INSERT INTO marketing_workflow_version (
 			id, tenant_id, activity_id, version, definition_json, status,
-			published_by, published_at, created_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+			published_by, published_at, release_note, source_version_id, action, created_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 	`, version.ID, version.TenantID, version.ActivityID, version.Version, version.Definition, version.Status,
-		nullString(version.PublishedBy), version.PublishedAt, version.CreatedAt)
+		nullString(version.PublishedBy), version.PublishedAt, nullString(version.ReleaseNote), nullString(version.SourceVersionID), nullString(version.Action), version.CreatedAt)
 	if err != nil {
 		return marketing.WorkflowVersion{}, err
 	}
@@ -347,17 +428,27 @@ func (r *Repository) CreateWorkflowVersion(ctx context.Context, version marketin
 func (r *Repository) GetActiveWorkflowVersion(ctx context.Context, activityID string) (marketing.WorkflowVersion, error) {
 	row := r.db.QueryRowContext(ctx, `
 		SELECT id, tenant_id, activity_id, version, definition_json, status,
-		       COALESCE(published_by, ''), published_at, created_at
+		       COALESCE(published_by, ''), published_at, COALESCE(release_note, ''), COALESCE(source_version_id, ''), COALESCE(action, ''), created_at
 		FROM marketing_workflow_version
 		WHERE activity_id = $1 AND status = $2
 	`, activityID, marketing.WorkflowVersionActive)
 	return scanWorkflowVersion(row)
 }
 
+func (r *Repository) GetWorkflowVersion(ctx context.Context, activityID string, versionID string) (marketing.WorkflowVersion, error) {
+	row := r.db.QueryRowContext(ctx, `
+		SELECT id, tenant_id, activity_id, version, definition_json, status,
+		       COALESCE(published_by, ''), published_at, COALESCE(release_note, ''), COALESCE(source_version_id, ''), COALESCE(action, ''), created_at
+		FROM marketing_workflow_version
+		WHERE activity_id = $1 AND id = $2
+	`, activityID, versionID)
+	return scanWorkflowVersion(row)
+}
+
 func (r *Repository) ListWorkflowVersions(ctx context.Context, activityID string) ([]marketing.WorkflowVersion, error) {
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, tenant_id, activity_id, version, definition_json, status,
-		       COALESCE(published_by, ''), published_at, created_at
+		       COALESCE(published_by, ''), published_at, COALESCE(release_note, ''), COALESCE(source_version_id, ''), COALESCE(action, ''), created_at
 		FROM marketing_workflow_version
 		WHERE activity_id = $1
 		ORDER BY version DESC
@@ -375,6 +466,17 @@ func (r *Repository) ListWorkflowVersions(ctx context.Context, activityID string
 		versions = append(versions, version)
 	}
 	return versions, rows.Err()
+}
+
+func (r *Repository) UpdateWorkflowVersionStatus(ctx context.Context, activityID string, versionID string, status marketing.WorkflowVersionStatus) (marketing.WorkflowVersion, error) {
+	row := r.db.QueryRowContext(ctx, `
+		UPDATE marketing_workflow_version
+		SET status = $3
+		WHERE activity_id = $1 AND id = $2
+		RETURNING id, tenant_id, activity_id, version, definition_json, status,
+		          COALESCE(published_by, ''), published_at, COALESCE(release_note, ''), COALESCE(source_version_id, ''), COALESCE(action, ''), created_at
+	`, activityID, versionID, status)
+	return scanWorkflowVersion(row)
 }
 
 func (r *Repository) CreateWorkflowExecution(ctx context.Context, execution marketing.WorkflowExecution) (marketing.WorkflowExecution, error) {
@@ -462,6 +564,10 @@ func (r *Repository) ListWorkflowExecutions(ctx context.Context, query marketing
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
+	offset := query.Offset
+	if offset < 0 {
+		offset = 0
+	}
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, tenant_id, activity_id, workflow_version_id, workflow_version,
 		       COALESCE(event_inbox_id, ''), COALESCE(event_id, ''), status,
@@ -472,9 +578,11 @@ func (r *Repository) ListWorkflowExecutions(ctx context.Context, query marketing
 		  AND ($2 = '' OR activity_id = $2)
 		  AND ($3 = '' OR event_id = $3)
 		  AND ($4 = '' OR id = $4)
+		  AND ($5 = '' OR workflow_version_id = $5)
 		ORDER BY created_at DESC
-		LIMIT $5
-	`, query.TenantID, query.ActivityID, query.EventID, query.ExecutionID, limit)
+		LIMIT $6
+		OFFSET $7
+	`, query.TenantID, query.ActivityID, query.EventID, query.ExecutionID, query.WorkflowVersionID, limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -490,7 +598,17 @@ func (r *Repository) ListWorkflowExecutions(ctx context.Context, query marketing
 	return executions, rows.Err()
 }
 
-func (r *Repository) ListWorkflowNodeExecutions(ctx context.Context, executionID string) ([]marketing.WorkflowNodeExecution, error) {
+func (r *Repository) ListWorkflowNodeExecutions(ctx context.Context, query marketing.WorkflowNodeExecutionQuery) ([]marketing.WorkflowNodeExecution, error) {
+	limit := query.Limit
+	if limit <= 0 {
+		limit = 10000
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	if query.Offset < 0 {
+		query.Offset = 0
+	}
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, tenant_id, execution_id, node_id, node_type, COALESCE(node_title, ''), status,
 		       input_json, output_json, COALESCE(error_message, ''),
@@ -498,7 +616,8 @@ func (r *Repository) ListWorkflowNodeExecutions(ctx context.Context, executionID
 		FROM marketing_workflow_node_execution
 		WHERE execution_id = $1
 		ORDER BY started_at ASC, created_at ASC
-	`, executionID)
+		LIMIT $2 OFFSET $3
+	`, query.ExecutionID, limit, query.Offset)
 	if err != nil {
 		return nil, err
 	}
@@ -2161,7 +2280,8 @@ func scanWorkflowDraft(scanner outboxScanner) (marketing.WorkflowDraft, error) {
 func scanWorkflowVersion(scanner outboxScanner) (marketing.WorkflowVersion, error) {
 	var version marketing.WorkflowVersion
 	err := scanner.Scan(&version.ID, &version.TenantID, &version.ActivityID, &version.Version,
-		&version.Definition, &version.Status, &version.PublishedBy, &version.PublishedAt, &version.CreatedAt)
+		&version.Definition, &version.Status, &version.PublishedBy, &version.PublishedAt,
+		&version.ReleaseNote, &version.SourceVersionID, &version.Action, &version.CreatedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return marketing.WorkflowVersion{}, marketing.ErrNotFound
@@ -2169,6 +2289,20 @@ func scanWorkflowVersion(scanner outboxScanner) (marketing.WorkflowVersion, erro
 		return marketing.WorkflowVersion{}, err
 	}
 	return version, nil
+}
+
+func scanWorkflowDraftTemplate(scanner outboxScanner) (marketing.WorkflowDraftTemplate, error) {
+	var template marketing.WorkflowDraftTemplate
+	err := scanner.Scan(&template.VersionID, &template.ID, &template.Version, &template.Name,
+		&template.Description, &template.Category, &template.Source, &template.Status,
+		&template.Definition, &template.CreatedBy, &template.CreatedAt, &template.UpdatedAt)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return marketing.WorkflowDraftTemplate{}, marketing.ErrNotFound
+		}
+		return marketing.WorkflowDraftTemplate{}, err
+	}
+	return template, nil
 }
 
 func scanWorkflowExecution(scanner outboxScanner) (marketing.WorkflowExecution, error) {
@@ -2282,6 +2416,41 @@ func ensureActivityWorkspaceColumns(ctx context.Context, db *sql.DB) error {
 			END IF;
 		END
 		$$;
+	`)
+	return err
+}
+
+func ensureWorkflowVersionColumns(ctx context.Context, db *sql.DB) error {
+	_, err := db.ExecContext(ctx, `
+		ALTER TABLE marketing_workflow_version
+			ADD COLUMN IF NOT EXISTS release_note TEXT;
+		ALTER TABLE marketing_workflow_version
+			ADD COLUMN IF NOT EXISTS source_version_id VARCHAR(64);
+		ALTER TABLE marketing_workflow_version
+			ADD COLUMN IF NOT EXISTS action VARCHAR(32);
+	`)
+	return err
+}
+
+func ensureWorkflowDraftTemplateTables(ctx context.Context, db *sql.DB) error {
+	_, err := db.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS marketing_workflow_draft_template (
+			version_id VARCHAR(64) PRIMARY KEY,
+			template_id VARCHAR(128) NOT NULL,
+			version INTEGER NOT NULL,
+			name VARCHAR(255) NOT NULL,
+			description TEXT,
+			category VARCHAR(128),
+			source VARCHAR(32) NOT NULL,
+			status VARCHAR(32) NOT NULL,
+			definition_json JSONB NOT NULL,
+			created_by VARCHAR(128),
+			created_at TIMESTAMPTZ NOT NULL,
+			updated_at TIMESTAMPTZ NOT NULL,
+			UNIQUE(template_id, version)
+		);
+		CREATE INDEX IF NOT EXISTS marketing_workflow_draft_template_catalog_idx
+			ON marketing_workflow_draft_template(template_id, status, version DESC);
 	`)
 	return err
 }

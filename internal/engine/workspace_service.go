@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"regexp"
 	"strings"
 	"time"
@@ -40,6 +41,23 @@ func (s *Service) CreateWorkspace(ctx context.Context, workspace marketing.Works
 	created, err := s.repository.CreateWorkspace(ctx, workspace)
 	if err != nil {
 		return marketing.Workspace{}, err
+	}
+	ownerID := strings.TrimSpace(workspaceFirstNonEmpty(created.OwnerID, created.CreatedBy))
+	if ownerID != "" {
+		_, memberErr := s.repository.CreateWorkspaceMember(ctx, marketing.WorkspaceMember{
+			ID:          marketing.NewID("wsm"),
+			WorkspaceID: created.ID,
+			UserID:      ownerID,
+			DisplayName: ownerID,
+			Role:        marketing.WorkspaceRoleOwner,
+			Status:      marketing.WorkspaceMemberActive,
+			InvitedBy:   created.CreatedBy,
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		})
+		if memberErr != nil && !errors.Is(memberErr, marketing.ErrWorkspaceConflict) {
+			return marketing.Workspace{}, memberErr
+		}
 	}
 	_ = s.repository.CreateWorkspaceAuditLog(ctx, workspaceAudit(created.ID, created.CreatedBy, "CREATE_WORKSPACE", "WORKSPACE", created.ID, nil, created, s.now()))
 	return created, nil
@@ -539,6 +557,15 @@ func workspaceSlug(value string) string {
 
 func boolPtr(value bool) *bool {
 	return &value
+}
+
+func workspaceFirstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func workspaceAudit(workspaceID string, actorID string, action string, targetType string, targetID string, before any, after any, createdAt time.Time) marketing.WorkspaceAuditLog {

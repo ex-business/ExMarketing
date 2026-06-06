@@ -12,19 +12,41 @@ import (
 type WorkflowVersionStatus string
 type WorkflowExecutionStatus string
 type WorkflowNodeExecutionStatus string
+type WorkflowEdgeRouteType string
+type WorkflowDraftTemplateStatus string
+type WorkflowDraftTemplateSource string
 
 const (
-	WorkflowVersionActive   WorkflowVersionStatus = "ACTIVE"
-	WorkflowVersionArchived WorkflowVersionStatus = "ARCHIVED"
+	WorkflowVersionDraft      WorkflowVersionStatus = "DRAFT"
+	WorkflowVersionActive     WorkflowVersionStatus = "ACTIVE"
+	WorkflowVersionSuperseded WorkflowVersionStatus = "SUPERSEDED"
+	WorkflowVersionArchived   WorkflowVersionStatus = "ARCHIVED"
 
-	WorkflowExecutionRunning WorkflowExecutionStatus = "RUNNING"
-	WorkflowExecutionSuccess WorkflowExecutionStatus = "SUCCESS"
-	WorkflowExecutionFailed  WorkflowExecutionStatus = "FAILED"
+	WorkflowExecutionRunning  WorkflowExecutionStatus = "RUNNING"
+	WorkflowExecutionSuccess  WorkflowExecutionStatus = "SUCCESS"
+	WorkflowExecutionFailed   WorkflowExecutionStatus = "FAILED"
+	WorkflowExecutionCanceled WorkflowExecutionStatus = "CANCELED"
 
 	WorkflowNodeRunning WorkflowNodeExecutionStatus = "RUNNING"
 	WorkflowNodeSuccess WorkflowNodeExecutionStatus = "SUCCESS"
 	WorkflowNodeFailed  WorkflowNodeExecutionStatus = "FAILED"
 	WorkflowNodeSkipped WorkflowNodeExecutionStatus = "SKIPPED"
+
+	WorkflowEdgeRouteDefault WorkflowEdgeRouteType = "DEFAULT"
+	WorkflowEdgeRouteOutput  WorkflowEdgeRouteType = "OUTPUT"
+	WorkflowEdgeRouteIF      WorkflowEdgeRouteType = "IF"
+	WorkflowEdgeRouteELIF    WorkflowEdgeRouteType = "ELIF"
+	WorkflowEdgeRouteELSE    WorkflowEdgeRouteType = "ELSE"
+	WorkflowEdgeRoutePASS    WorkflowEdgeRouteType = "PASS"
+	WorkflowEdgeRouteBLOCK   WorkflowEdgeRouteType = "BLOCK"
+	WorkflowEdgeRouteRISK    WorkflowEdgeRouteType = "RISK"
+	WorkflowEdgeRouteSKIP    WorkflowEdgeRouteType = "SKIP"
+
+	WorkflowDraftTemplateActive   WorkflowDraftTemplateStatus = "ACTIVE"
+	WorkflowDraftTemplateArchived WorkflowDraftTemplateStatus = "ARCHIVED"
+
+	WorkflowDraftTemplateBuiltin WorkflowDraftTemplateSource = "BUILTIN"
+	WorkflowDraftTemplateSaved   WorkflowDraftTemplateSource = "SAVED"
 )
 
 type WorkflowDefinition struct {
@@ -60,12 +82,92 @@ type WorkflowPosition struct {
 }
 
 type WorkflowEdge struct {
-	ID           string `json:"id"`
-	Source       string `json:"source"`
-	Target       string `json:"target"`
-	SourceHandle string `json:"sourceHandle,omitempty"`
-	TargetHandle string `json:"targetHandle,omitempty"`
-	Label        string `json:"label,omitempty"`
+	ID           string             `json:"id"`
+	Source       string             `json:"source"`
+	Target       string             `json:"target"`
+	SourceHandle string             `json:"sourceHandle,omitempty"`
+	TargetHandle string             `json:"targetHandle,omitempty"`
+	Label        string             `json:"label,omitempty"`
+	Route        *WorkflowEdgeRoute `json:"route,omitempty"`
+}
+
+type WorkflowEdgeRoute struct {
+	Type         WorkflowEdgeRouteType `json:"type"`
+	Key          string                `json:"key,omitempty"`
+	Label        string                `json:"label,omitempty"`
+	Expression   string                `json:"expression,omitempty"`
+	ConditionRef string                `json:"conditionRef,omitempty"`
+	Default      bool                  `json:"default,omitempty"`
+}
+
+func (route WorkflowEdgeRoute) NormalizedType() WorkflowEdgeRouteType {
+	return WorkflowEdgeRouteType(strings.ToUpper(strings.TrimSpace(string(route.Type))))
+}
+
+func (route WorkflowEdgeRoute) NormalizedKey() string {
+	for _, value := range []string{route.Key, route.Label, string(route.NormalizedType())} {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			return strings.ToUpper(value)
+		}
+	}
+	return ""
+}
+
+func (route WorkflowEdgeRoute) IsSupported() bool {
+	switch route.NormalizedType() {
+	case WorkflowEdgeRouteDefault,
+		WorkflowEdgeRouteOutput,
+		WorkflowEdgeRouteIF,
+		WorkflowEdgeRouteELIF,
+		WorkflowEdgeRouteELSE,
+		WorkflowEdgeRoutePASS,
+		WorkflowEdgeRouteBLOCK,
+		WorkflowEdgeRouteRISK,
+		WorkflowEdgeRouteSKIP:
+		return true
+	default:
+		return false
+	}
+}
+
+func (route WorkflowEdgeRoute) IsDefault() bool {
+	if route.Default {
+		return true
+	}
+	switch route.NormalizedType() {
+	case WorkflowEdgeRouteDefault, WorkflowEdgeRouteELSE:
+		return true
+	default:
+		return false
+	}
+}
+
+func (route WorkflowEdgeRoute) RequiresCondition() bool {
+	if strings.TrimSpace(route.Expression) != "" || strings.TrimSpace(route.ConditionRef) != "" {
+		return false
+	}
+	switch route.NormalizedType() {
+	case WorkflowEdgeRouteIF,
+		WorkflowEdgeRouteELIF,
+		WorkflowEdgeRoutePASS,
+		WorkflowEdgeRouteBLOCK,
+		WorkflowEdgeRouteRISK,
+		WorkflowEdgeRouteSKIP:
+		return true
+	default:
+		return false
+	}
+}
+
+func (route WorkflowEdgeRoute) OutputKey() string {
+	key := route.NormalizedKey()
+	switch key {
+	case "", string(WorkflowEdgeRouteOutput), string(WorkflowEdgeRouteDefault):
+		return ""
+	default:
+		return key
+	}
 }
 
 type WorkflowDraft struct {
@@ -78,15 +180,73 @@ type WorkflowDraft struct {
 }
 
 type WorkflowVersion struct {
-	ID          string                `json:"id"`
-	TenantID    string                `json:"tenantId"`
-	ActivityID  string                `json:"activityId"`
-	Version     int                   `json:"version"`
-	Status      WorkflowVersionStatus `json:"status"`
-	Definition  json.RawMessage       `json:"definition"`
-	PublishedBy string                `json:"publishedBy,omitempty"`
-	PublishedAt time.Time             `json:"publishedAt"`
-	CreatedAt   time.Time             `json:"createdAt"`
+	ID              string                `json:"id"`
+	TenantID        string                `json:"tenantId"`
+	ActivityID      string                `json:"activityId"`
+	Version         int                   `json:"version"`
+	Status          WorkflowVersionStatus `json:"status"`
+	Definition      json.RawMessage       `json:"definition"`
+	PublishedBy     string                `json:"publishedBy,omitempty"`
+	PublishedAt     time.Time             `json:"publishedAt"`
+	ReleaseNote     string                `json:"releaseNote,omitempty"`
+	SourceVersionID string                `json:"sourceVersionId,omitempty"`
+	Action          string                `json:"action,omitempty"`
+	CreatedAt       time.Time             `json:"createdAt"`
+}
+
+type WorkflowDraftTemplate struct {
+	ID          string                      `json:"id"`
+	VersionID   string                      `json:"versionId"`
+	Version     int                         `json:"version"`
+	Name        string                      `json:"name"`
+	Description string                      `json:"description,omitempty"`
+	Category    string                      `json:"category,omitempty"`
+	Source      WorkflowDraftTemplateSource `json:"source"`
+	Status      WorkflowDraftTemplateStatus `json:"status"`
+	Definition  json.RawMessage             `json:"definition"`
+	CreatedBy   string                      `json:"createdBy,omitempty"`
+	CreatedAt   time.Time                   `json:"createdAt"`
+	UpdatedAt   time.Time                   `json:"updatedAt"`
+}
+
+type WorkflowDraftTemplateQuery struct {
+	TemplateID string
+	Source     WorkflowDraftTemplateSource
+	Status     WorkflowDraftTemplateStatus
+	LatestOnly bool
+	Limit      int
+}
+
+type SaveWorkflowDraftTemplateCommand struct {
+	TemplateID    string         `json:"templateId,omitempty"`
+	Name          string         `json:"name"`
+	Description   string         `json:"description,omitempty"`
+	Category      string         `json:"category,omitempty"`
+	Operator      string         `json:"operator,omitempty"`
+	IncludeLayout bool           `json:"includeLayout,omitempty"`
+	WorkspaceID   string         `json:"workspaceId,omitempty"`
+	FolderID      string         `json:"folderId,omitempty"`
+	Visibility    string         `json:"visibility,omitempty"`
+	Parameters    map[string]any `json:"parameters,omitempty"`
+}
+
+type ApplyWorkflowDraftTemplateCommand struct {
+	TemplateID  string         `json:"templateId,omitempty"`
+	VersionID   string         `json:"versionId,omitempty"`
+	Version     int            `json:"version,omitempty"`
+	Operator    string         `json:"operator,omitempty"`
+	Parameters  map[string]any `json:"parameters,omitempty"`
+	WorkspaceID string         `json:"workspaceId,omitempty"`
+	FolderID    string         `json:"folderId,omitempty"`
+}
+
+type WorkflowNodePreset struct {
+	ID          string          `json:"id"`
+	NodeType    string          `json:"nodeType"`
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	Config      json.RawMessage `json:"config,omitempty"`
+	Tags        []string        `json:"tags,omitempty"`
 }
 
 type WorkflowExecution struct {
@@ -124,13 +284,98 @@ type WorkflowNodeExecution struct {
 	UpdatedAt    time.Time                   `json:"updatedAt"`
 }
 
+type WorkflowNodeExecutionQuery struct {
+	ExecutionID string `json:"executionId,omitempty"`
+	Limit       int    `json:"limit,omitempty"`
+	Offset      int    `json:"offset,omitempty"`
+}
+
 type SaveWorkflowDraftCommand struct {
 	Operator   string          `json:"operator,omitempty"`
 	Definition json.RawMessage `json:"definition"`
 }
 
 type PublishWorkflowCommand struct {
+	Operator    string `json:"operator,omitempty"`
+	ReleaseNote string `json:"releaseNote,omitempty"`
+}
+
+type WorkflowVersionActionCommand struct {
 	Operator string `json:"operator,omitempty"`
+	Note     string `json:"note,omitempty"`
+}
+
+type CancelWorkflowExecutionCommand struct {
+	Operator string `json:"operator,omitempty"`
+	Reason   string `json:"reason,omitempty"`
+}
+
+type ResumeWorkflowExecutionCommand struct {
+	Operator    string `json:"operator,omitempty"`
+	Reason      string `json:"reason,omitempty"`
+	StartNodeID string `json:"startNodeId,omitempty"`
+}
+
+type WorkflowDebugRunCommand struct {
+	Operator          string          `json:"operator,omitempty"`
+	Payload           json.RawMessage `json:"payload,omitempty"`
+	Template          string          `json:"template,omitempty"`
+	StartNodeID       string          `json:"startNodeId,omitempty"`
+	SourceExecutionID string          `json:"sourceExecutionId,omitempty"`
+}
+
+type WorkflowExecutionTrace struct {
+	SchemaVersion  string                  `json:"schemaVersion,omitempty"`
+	ExportedAt     time.Time               `json:"exportedAt,omitempty"`
+	Execution      WorkflowExecution       `json:"execution"`
+	NodeExecutions []WorkflowNodeExecution `json:"nodeExecutions"`
+	RouteTrace     any                     `json:"routeTrace,omitempty"`
+}
+
+type WorkflowExecutionCompareSummary struct {
+	ID              string                  `json:"id"`
+	Status          WorkflowExecutionStatus `json:"status"`
+	EventID         string                  `json:"eventId,omitempty"`
+	WorkflowVersion int                     `json:"workflowVersion"`
+	ErrorMessage    string                  `json:"errorMessage,omitempty"`
+	StartedAt       time.Time               `json:"startedAt"`
+	FinishedAt      *time.Time              `json:"finishedAt,omitempty"`
+}
+
+type WorkflowExecutionCompare struct {
+	Current            WorkflowExecutionCompareSummary    `json:"current"`
+	Baseline           WorkflowExecutionCompareSummary    `json:"baseline"`
+	CurrentPath        []string                           `json:"currentPath"`
+	BaselinePath       []string                           `json:"baselinePath"`
+	PathChanged        bool                               `json:"pathChanged"`
+	CurrentFailures    []string                           `json:"currentFailures"`
+	BaselineFailures   []string                           `json:"baselineFailures"`
+	CurrentDurationMs  int64                              `json:"currentDurationMs"`
+	BaselineDurationMs int64                              `json:"baselineDurationMs"`
+	DurationDeltaMs    int64                              `json:"durationDeltaMs"`
+	PayloadChanges     []WorkflowExecutionPayloadNodeDiff `json:"payloadChanges"`
+	PayloadChangeLimit int                                `json:"payloadChangeLimit,omitempty"`
+	JSONDiffLimit      int                                `json:"jsonDiffLimit,omitempty"`
+	Truncated          bool                               `json:"truncated,omitempty"`
+}
+
+type WorkflowExecutionPayloadNodeDiff struct {
+	NodeID string                      `json:"nodeId"`
+	Label  string                      `json:"label"`
+	Input  []WorkflowExecutionJSONDiff `json:"input"`
+	Output []WorkflowExecutionJSONDiff `json:"output"`
+}
+
+type WorkflowExecutionCompareOptions struct {
+	MaxPayloadChangeNodes int
+	MaxJSONDiffRows       int
+}
+
+type WorkflowExecutionJSONDiff struct {
+	Path     string `json:"path"`
+	Type     string `json:"type"`
+	Current  any    `json:"current,omitempty"`
+	Baseline any    `json:"baseline,omitempty"`
 }
 
 type ValidateWorkflowCommand struct {
@@ -138,11 +383,13 @@ type ValidateWorkflowCommand struct {
 }
 
 type WorkflowExecutionQuery struct {
-	TenantID    string `json:"tenantId,omitempty"`
-	ActivityID  string `json:"activityId,omitempty"`
-	EventID     string `json:"eventId,omitempty"`
-	ExecutionID string `json:"executionId,omitempty"`
-	Limit       int    `json:"limit,omitempty"`
+	TenantID          string `json:"tenantId,omitempty"`
+	ActivityID        string `json:"activityId,omitempty"`
+	WorkflowVersionID string `json:"workflowVersionId,omitempty"`
+	EventID           string `json:"eventId,omitempty"`
+	ExecutionID       string `json:"executionId,omitempty"`
+	Limit             int    `json:"limit,omitempty"`
+	Offset            int    `json:"offset,omitempty"`
 }
 
 var ErrInvalidWorkflow = errors.New("invalid workflow")

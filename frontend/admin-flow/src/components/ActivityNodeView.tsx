@@ -93,6 +93,14 @@ export function ActivityNodeView({ id, data, selected }: NodeProps<ActivityNode>
           <strong>{data.title}</strong>
           <span>{data.code}</span>
         </div>
+        {data.validationState ? (
+          <span
+            className={cx('node-validation-dot', data.validationState.toLowerCase())}
+            title={`${data.validationState === 'BLOCK' ? '阻塞错误' : '警告'}${data.validationCount ? ` · ${data.validationCount}` : ''}${data.validationMessage ? ` · ${data.validationMessage}` : ''}`}
+          >
+            {data.validationCount && data.validationCount > 1 ? data.validationCount : ''}
+          </span>
+        ) : null}
         {data.runStatus ? <span className="node-run-dot" title={`上次运行：${data.runStatus}`} /> : null}
         <button
           className="node-delete"
@@ -106,19 +114,37 @@ export function ActivityNodeView({ id, data, selected }: NodeProps<ActivityNode>
         </button>
       </div>
       {isBranchNode ? (
-        <div className="branch-list node-selectable nodrag">
-          {branchRows.map((item, index) => (
-            <div key={`${item.output}-${index}`} className="branch-row">
-              <div className="branch-row-head">
-                <span>{item.caseLabel}</span>
+        <>
+          <div className="branch-list node-selectable nodrag">
+            {branchRows.map((item, index) => (
+              <div key={`${item.output}-${index}`} className="branch-row">
+                <div className="branch-row-head">
+                  <span>{item.caseLabel}</span>
+                </div>
+                <div className="branch-expression">
+                  <span>x</span>
+                  <code>{item.expression}</code>
+                </div>
               </div>
-              <div className="branch-expression">
-                <span>x</span>
-                <code>{item.expression}</code>
-              </div>
+            ))}
+          </div>
+          {data.routeIssues && data.routeIssues.length > 0 ? (
+            <div className="branch-route-check node-selectable nodrag">
+              <b>Route Check</b>
+              {data.routeIssues.slice(0, 3).map((issue) => (
+                <span key={`${issue.code}-${issue.path ?? issue.message}`}>
+                  {issue.code === 'WORKFLOW_BRANCH_DEFAULT_MISSING' ? '缺默认分支' : issue.message}
+                </span>
+              ))}
+              {data.routeIssues.length > 3 ? <em>+{data.routeIssues.length - 3}</em> : null}
             </div>
-          ))}
-        </div>
+          ) : data.routeIssues ? (
+            <div className="branch-route-check ok node-selectable nodrag">
+              <b>Route Check</b>
+              <span>覆盖完整</span>
+            </div>
+          ) : null}
+        </>
       ) : (
         <>
           <div className="field-section node-selectable nodrag">

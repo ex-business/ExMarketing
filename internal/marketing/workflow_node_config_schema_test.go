@@ -183,3 +183,40 @@ func TestDefaultWorkflowNodeConfigSchemasIncludeCodeNodeRequiredSource(t *testin
 		t.Fatalf("expected required source string field, got %+v", fields["source"])
 	}
 }
+
+func TestProductizedCoreNodeConfigSchemasIncludeGroupsAndPreview(t *testing.T) {
+	registry := DefaultWorkflowNodeConfigSchemas()
+	for _, nodeType := range []string{"event-in", "inbox", "match", "reward", "quota"} {
+		schema, ok := registry.Get(nodeType)
+		if !ok {
+			t.Fatalf("expected schema for %s", nodeType)
+		}
+		if len(schema.FieldGroups) < 2 {
+			t.Fatalf("expected grouped config sections for %s, got %+v", nodeType, schema.FieldGroups)
+		}
+		if len(schema.Preview.Reads) == 0 || len(schema.Preview.Writes) == 0 {
+			t.Fatalf("expected config preview for %s, got %+v", nodeType, schema.Preview)
+		}
+		groupedFieldCount := 0
+		for _, group := range schema.FieldGroups {
+			if group.Key == "" || group.Title == "" || len(group.Fields) == 0 {
+				t.Fatalf("expected complete field group metadata for %s, got %+v", nodeType, group)
+			}
+			groupedFieldCount += len(group.Fields)
+			for _, field := range group.Fields {
+				if field.Description == "" {
+					t.Fatalf("expected business description for %s.%s", nodeType, field.Key)
+				}
+				if field.Required && field.Default == nil {
+					t.Fatalf("expected required field %s.%s to include a default value", nodeType, field.Key)
+				}
+				if field.Type == WorkflowNodeConfigEnum && len(field.Options) < 2 {
+					t.Fatalf("expected enum options for %s.%s", nodeType, field.Key)
+				}
+			}
+		}
+		if groupedFieldCount != len(schema.Fields) {
+			t.Fatalf("expected flat fields to mirror groups for %s, grouped=%d flat=%d", nodeType, groupedFieldCount, len(schema.Fields))
+		}
+	}
+}

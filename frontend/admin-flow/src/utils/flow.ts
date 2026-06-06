@@ -1,5 +1,5 @@
 import { MarkerType } from '@xyflow/react';
-import type { ActivityEdge, ActivityNode, FlowNode } from '../types';
+import type { ActivityEdge, ActivityNode, FlowNode, WorkflowEdgeRoute, WorkflowEdgeRouteType } from '../types';
 import { getDef } from '../data/nodeCatalog';
 
 export const ACTIVITY_NODE_WIDTH = 242;
@@ -47,14 +47,44 @@ export function flowNode(defId: string, x: number, y: number, extra: Partial<Act
   };
 }
 
-export function edge(source: string, target: string, label = '', sourceHandle?: string, targetHandle?: string): ActivityEdge {
+const STRUCTURED_ROUTE_LABELS = new Set<WorkflowEdgeRouteType>(['IF', 'ELIF', 'ELSE', 'PASS', 'BLOCK', 'RISK', 'SKIP']);
+
+const DEFAULT_ROUTE_EXPRESSIONS: Partial<Record<WorkflowEdgeRouteType, string>> = {
+  IF: 'condition == true',
+  ELIF: 'condition == true',
+  PASS: 'decision == "PASS"',
+  BLOCK: 'decision == "BLOCK"',
+  RISK: 'decision == "RISK"',
+  SKIP: 'decision == "SKIP"',
+};
+
+const DEFAULT_BRANCH_ROUTE_LABELS = new Set<WorkflowEdgeRouteType>(['ELSE', 'RISK', 'SKIP', 'DEFAULT']);
+
+export function routeFromEdgeLabel(label = '', sourceHandle = ''): WorkflowEdgeRoute {
+  const normalizedLabel = label.trim();
+  const upperLabel = normalizedLabel.toUpperCase() as WorkflowEdgeRouteType;
+  if (STRUCTURED_ROUTE_LABELS.has(upperLabel)) {
+    return { type: upperLabel, key: upperLabel, label: upperLabel, expression: DEFAULT_ROUTE_EXPRESSIONS[upperLabel], default: DEFAULT_BRANCH_ROUTE_LABELS.has(upperLabel) };
+  }
+  if (normalizedLabel) {
+    return { type: 'OUTPUT', key: normalizedLabel, label: normalizedLabel };
+  }
+  if (sourceHandle) {
+    return { type: 'OUTPUT', key: sourceHandle, label: sourceHandle };
+  }
+  return { type: 'DEFAULT', key: 'DEFAULT', label: '默认路径', default: true };
+}
+
+export function edge(source: string, target: string, label = '', sourceHandle?: string, targetHandle?: string, route?: WorkflowEdgeRoute): ActivityEdge {
+  const edgeRoute = route ?? routeFromEdgeLabel(label, sourceHandle);
   return {
     id: `${source}-${target}-${label || 'default'}`,
     source,
     target,
-    label,
+    label: edgeRoute.label ?? label,
     sourceHandle,
     targetHandle,
+    data: { route: edgeRoute },
     markerEnd: { type: MarkerType.ArrowClosed, width: 5, height: 5, color: '#c4ccd8' },
   };
 }

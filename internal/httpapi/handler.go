@@ -190,11 +190,26 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("PUT /admin/v1/activities/{id}/workflow/draft", h.saveActivityWorkflowDraft)
 	mux.HandleFunc("POST /admin/v1/activities/{id}/workflow/validate", h.validateActivityWorkflow)
 	mux.HandleFunc("POST /admin/v1/activities/{id}/workflow/draft/validate", h.validateActivityWorkflowDraft)
+	mux.HandleFunc("POST /admin/v1/activities/{id}/workflow/debug-run", h.runActivityWorkflowDebug)
 	mux.HandleFunc("POST /admin/v1/activities/{id}/workflow/publish", h.publishActivityWorkflow)
+	mux.HandleFunc("POST /admin/v1/activities/{id}/workflow/draft-template", h.saveActivityWorkflowDraftTemplate)
+	mux.HandleFunc("POST /admin/v1/activities/{id}/workflow/draft-templates/{templateId}/apply", h.applyActivityWorkflowDraftTemplate)
 	mux.HandleFunc("GET /admin/v1/activities/{id}/workflow/versions", h.listActivityWorkflowVersions)
+	mux.HandleFunc("POST /admin/v1/activities/{id}/workflow/versions/{versionId}/rollback", h.rollbackActivityWorkflowVersion)
+	mux.HandleFunc("POST /admin/v1/activities/{id}/workflow/versions/{versionId}/archive", h.archiveActivityWorkflowVersion)
 	mux.HandleFunc("GET /admin/v1/activities/{id}/workflow/executions", h.listActivityWorkflowExecutions)
 	mux.HandleFunc("GET /admin/v1/workflow/executions/{id}/nodes", h.listWorkflowNodeExecutions)
+	mux.HandleFunc("GET /admin/v1/workflow/executions/{id}/nodes/{nodeExecutionId}", h.getWorkflowNodeExecution)
+	mux.HandleFunc("GET /admin/v1/workflow/executions/{id}/compare", h.compareWorkflowExecutions)
+	mux.HandleFunc("GET /admin/v1/workflow/executions/{id}/trace", h.exportWorkflowExecutionTrace)
+	mux.HandleFunc("POST /admin/v1/activities/{id}/workflow/executions/{executionId}/rerun", h.rerunWorkflowExecution)
+	mux.HandleFunc("POST /admin/v1/workflow/executions/{id}/cancel", h.cancelWorkflowExecution)
+	mux.HandleFunc("POST /admin/v1/workflow/executions/{id}/resume", h.resumeWorkflowExecution)
 	mux.HandleFunc("GET /admin/v1/workflow/node-config-schemas", h.listWorkflowNodeConfigSchemas)
+	mux.HandleFunc("GET /admin/v1/workflow/node-presets", h.listWorkflowNodePresets)
+	mux.HandleFunc("GET /admin/v1/workflow/draft-templates", h.listWorkflowDraftTemplates)
+	mux.HandleFunc("GET /admin/v1/workflow/draft-templates/{templateId}", h.getWorkflowDraftTemplate)
+	mux.HandleFunc("GET /admin/v1/workflow/draft-templates/{templateId}/versions", h.listWorkflowDraftTemplateVersions)
 	mux.HandleFunc("POST /admin/v1/activities/{id}/approval/submit", h.submitActivityApproval)
 	mux.HandleFunc("POST /admin/v1/activities/{id}/approval/approve", h.approveActivity)
 	mux.HandleFunc("POST /admin/v1/activities/{id}/approval/reject", h.rejectActivityApproval)
@@ -268,6 +283,25 @@ func (h *Handler) createActivity(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid json body")
 		return
 	}
+	if actorID := actorFromRequest(r); actorID != "" && strings.TrimSpace(cmd.Operator) == "" {
+		cmd.Operator = actorID
+	}
+	if strings.TrimSpace(cmd.WorkspaceID) != "" {
+		if !h.requireWorkspacePermission(w, r, cmd.WorkspaceID, workspacePermissionEdit) {
+			return
+		}
+		if strings.TrimSpace(cmd.FolderID) != "" {
+			folder, err := h.engine.GetWorkspaceFolder(r.Context(), cmd.WorkspaceID, cmd.FolderID)
+			if err != nil {
+				workspaceError(w, err)
+				return
+			}
+			if actorFromRequest(r) != "" && !h.canViewFolder(r, cmd.WorkspaceID, folder) {
+				workspaceError(w, marketing.ErrForbidden)
+				return
+			}
+		}
+	}
 
 	activity, err := h.engine.CreateActivity(r.Context(), cmd)
 	if err != nil {
@@ -295,6 +329,9 @@ func (h *Handler) createActivity(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) getActivity(w http.ResponseWriter, r *http.Request) {
+	if !h.requireActivityWorkspacePermission(w, r, r.PathValue("id"), workspacePermissionView) {
+		return
+	}
 	activity, err := h.engine.GetActivity(r.Context(), r.PathValue("id"))
 	if err != nil {
 		if errors.Is(err, marketing.ErrNotFound) {
@@ -325,6 +362,17 @@ func (h *Handler) updateActivity(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid json body")
 		return
 	}
+	if actorID := actorFromRequest(r); actorID != "" && strings.TrimSpace(cmd.Operator) == "" {
+		cmd.Operator = actorID
+	}
+	if !h.requireActivityWorkspacePermission(w, r, r.PathValue("id"), workspacePermissionEdit) {
+		return
+	}
+	if cmd.WorkspaceID != nil && strings.TrimSpace(*cmd.WorkspaceID) != "" {
+		if !h.requireWorkspacePermission(w, r, *cmd.WorkspaceID, workspacePermissionEdit) {
+			return
+		}
+	}
 
 	activity, err := h.engine.UpdateActivity(r.Context(), r.PathValue("id"), cmd)
 	if err != nil {
@@ -351,6 +399,9 @@ func (h *Handler) updateActivity(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) getActivityWorkflowDraft(w http.ResponseWriter, r *http.Request) {
+	if !h.requireActivityWorkspacePermission(w, r, r.PathValue("id"), workspacePermissionView) {
+		return
+	}
 	draft, err := h.engine.GetWorkflowDraft(r.Context(), r.PathValue("id"))
 	if err != nil {
 		if errors.Is(err, marketing.ErrNotFound) {
@@ -367,6 +418,12 @@ func (h *Handler) saveActivityWorkflowDraft(w http.ResponseWriter, r *http.Reque
 	var cmd marketing.SaveWorkflowDraftCommand
 	if err := decodeStrictJSON(r.Body, &cmd); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	if actorID := actorFromRequest(r); actorID != "" && strings.TrimSpace(cmd.Operator) == "" {
+		cmd.Operator = actorID
+	}
+	if !h.requireActivityWorkspacePermission(w, r, r.PathValue("id"), workspacePermissionEdit) {
 		return
 	}
 	draft, err := h.engine.SaveWorkflowDraft(r.Context(), r.PathValue("id"), cmd)
@@ -386,6 +443,9 @@ func (h *Handler) saveActivityWorkflowDraft(w http.ResponseWriter, r *http.Reque
 }
 
 func (h *Handler) validateActivityWorkflow(w http.ResponseWriter, r *http.Request) {
+	if !h.requireActivityWorkspacePermission(w, r, r.PathValue("id"), workspacePermissionView) {
+		return
+	}
 	var cmd marketing.ValidateWorkflowCommand
 	if r.Body != nil {
 		if err := decodeStrictJSON(r.Body, &cmd); err != nil {
@@ -406,6 +466,9 @@ func (h *Handler) validateActivityWorkflow(w http.ResponseWriter, r *http.Reques
 }
 
 func (h *Handler) validateActivityWorkflowDraft(w http.ResponseWriter, r *http.Request) {
+	if !h.requireActivityWorkspacePermission(w, r, r.PathValue("id"), workspacePermissionView) {
+		return
+	}
 	result, err := h.engine.ValidateWorkflowDraft(r.Context(), r.PathValue("id"))
 	if err != nil {
 		if errors.Is(err, marketing.ErrNotFound) {
@@ -418,10 +481,44 @@ func (h *Handler) validateActivityWorkflowDraft(w http.ResponseWriter, r *http.R
 	writeJSON(w, http.StatusOK, result)
 }
 
+func (h *Handler) runActivityWorkflowDebug(w http.ResponseWriter, r *http.Request) {
+	var cmd marketing.WorkflowDebugRunCommand
+	if err := decodeStrictJSON(r.Body, &cmd); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	if actorID := actorFromRequest(r); actorID != "" && strings.TrimSpace(cmd.Operator) == "" {
+		cmd.Operator = actorID
+	}
+	if !h.requireActivityWorkspacePermission(w, r, r.PathValue("id"), workspacePermissionEdit) {
+		return
+	}
+	trace, err := h.engine.RunWorkflowDebug(r.Context(), r.PathValue("id"), cmd)
+	if err != nil {
+		if errors.Is(err, marketing.ErrNotFound) {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		if errors.Is(err, marketing.ErrInvalidWorkflow) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, trace)
+}
+
 func (h *Handler) publishActivityWorkflow(w http.ResponseWriter, r *http.Request) {
 	var cmd marketing.PublishWorkflowCommand
 	if err := decodeStrictJSON(r.Body, &cmd); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	if actorID := actorFromRequest(r); actorID != "" && strings.TrimSpace(cmd.Operator) == "" {
+		cmd.Operator = actorID
+	}
+	if !h.requireActivityWorkspacePermission(w, r, r.PathValue("id"), workspacePermissionAdmin) {
 		return
 	}
 	version, err := h.engine.PublishWorkflowVersion(r.Context(), r.PathValue("id"), cmd)
@@ -440,7 +537,69 @@ func (h *Handler) publishActivityWorkflow(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusCreated, version)
 }
 
+func (h *Handler) saveActivityWorkflowDraftTemplate(w http.ResponseWriter, r *http.Request) {
+	var cmd marketing.SaveWorkflowDraftTemplateCommand
+	if err := decodeStrictJSON(r.Body, &cmd); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	if actorID := actorFromRequest(r); actorID != "" && strings.TrimSpace(cmd.Operator) == "" {
+		cmd.Operator = actorID
+	}
+	if !h.requireActivityWorkspacePermission(w, r, r.PathValue("id"), workspacePermissionEdit) {
+		return
+	}
+	template, err := h.engine.SaveCurrentWorkflowAsTemplate(r.Context(), r.PathValue("id"), cmd)
+	if err != nil {
+		if errors.Is(err, marketing.ErrNotFound) {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		if errors.Is(err, marketing.ErrInvalidWorkflow) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, template)
+}
+
+func (h *Handler) applyActivityWorkflowDraftTemplate(w http.ResponseWriter, r *http.Request) {
+	var cmd marketing.ApplyWorkflowDraftTemplateCommand
+	if err := decodeStrictJSON(r.Body, &cmd); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	if strings.TrimSpace(cmd.TemplateID) == "" {
+		cmd.TemplateID = r.PathValue("templateId")
+	}
+	if actorID := actorFromRequest(r); actorID != "" && strings.TrimSpace(cmd.Operator) == "" {
+		cmd.Operator = actorID
+	}
+	if !h.requireActivityWorkspacePermission(w, r, r.PathValue("id"), workspacePermissionEdit) {
+		return
+	}
+	draft, err := h.engine.ApplyWorkflowDraftTemplate(r.Context(), r.PathValue("id"), cmd)
+	if err != nil {
+		if errors.Is(err, marketing.ErrNotFound) {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		if errors.Is(err, marketing.ErrInvalidWorkflow) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, draft)
+}
+
 func (h *Handler) listActivityWorkflowVersions(w http.ResponseWriter, r *http.Request) {
+	if !h.requireActivityWorkspacePermission(w, r, r.PathValue("id"), workspacePermissionView) {
+		return
+	}
 	versions, err := h.engine.ListWorkflowVersions(r.Context(), r.PathValue("id"))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -449,24 +608,227 @@ func (h *Handler) listActivityWorkflowVersions(w http.ResponseWriter, r *http.Re
 	writeJSON(w, http.StatusOK, map[string]any{"items": versions})
 }
 
+func (h *Handler) rollbackActivityWorkflowVersion(w http.ResponseWriter, r *http.Request) {
+	var cmd marketing.WorkflowVersionActionCommand
+	if err := decodeStrictJSON(r.Body, &cmd); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	if actorID := actorFromRequest(r); actorID != "" && strings.TrimSpace(cmd.Operator) == "" {
+		cmd.Operator = actorID
+	}
+	if !h.requireActivityWorkspacePermission(w, r, r.PathValue("id"), workspacePermissionAdmin) {
+		return
+	}
+	version, err := h.engine.RollbackWorkflowVersion(r.Context(), r.PathValue("id"), r.PathValue("versionId"), cmd)
+	if err != nil {
+		if errors.Is(err, marketing.ErrNotFound) {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		if errors.Is(err, marketing.ErrInvalidWorkflow) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, version)
+}
+
+func (h *Handler) archiveActivityWorkflowVersion(w http.ResponseWriter, r *http.Request) {
+	var cmd marketing.WorkflowVersionActionCommand
+	if err := decodeStrictJSON(r.Body, &cmd); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	if actorID := actorFromRequest(r); actorID != "" && strings.TrimSpace(cmd.Operator) == "" {
+		cmd.Operator = actorID
+	}
+	if !h.requireActivityWorkspacePermission(w, r, r.PathValue("id"), workspacePermissionAdmin) {
+		return
+	}
+	version, err := h.engine.ArchiveWorkflowVersion(r.Context(), r.PathValue("id"), r.PathValue("versionId"), cmd)
+	if err != nil {
+		if errors.Is(err, marketing.ErrNotFound) {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		if errors.Is(err, marketing.ErrInvalidWorkflow) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, version)
+}
+
 func (h *Handler) listActivityWorkflowExecutions(w http.ResponseWriter, r *http.Request) {
+	if !h.requireActivityWorkspacePermission(w, r, r.PathValue("id"), workspacePermissionView) {
+		return
+	}
 	limit, _ := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("limit")))
+	offset, _ := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("offset")))
+	if offset < 0 {
+		offset = 0
+	}
+	pageLimit := limit
+	if pageLimit <= 0 || pageLimit > 100 {
+		pageLimit = 20
+	}
 	query := marketing.WorkflowExecutionQuery{
-		ActivityID: r.PathValue("id"),
-		TenantID:   strings.TrimSpace(r.URL.Query().Get("tenantId")),
-		EventID:    strings.TrimSpace(r.URL.Query().Get("eventId")),
-		Limit:      limit,
+		ActivityID:        r.PathValue("id"),
+		TenantID:          strings.TrimSpace(r.URL.Query().Get("tenantId")),
+		WorkflowVersionID: strings.TrimSpace(r.URL.Query().Get("workflowVersionId")),
+		EventID:           strings.TrimSpace(r.URL.Query().Get("eventId")),
+		Limit:             pageLimit + 1,
+		Offset:            offset,
 	}
 	executions, err := h.engine.ListWorkflowExecutions(r.Context(), query)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": executions})
+	hasMore := len(executions) > pageLimit
+	if hasMore {
+		executions = executions[:pageLimit]
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"items":      executions,
+		"limit":      pageLimit,
+		"offset":     offset,
+		"nextOffset": offset + len(executions),
+		"hasMore":    hasMore,
+	})
+}
+
+type workflowResourceAccess struct {
+	ActivityID  string
+	WorkspaceID string
+	FolderID    string
+}
+
+func (h *Handler) workflowExecutionResource(r *http.Request, executionID string) (marketing.WorkflowExecution, workflowResourceAccess, error) {
+	executionID = strings.TrimSpace(executionID)
+	if executionID == "" {
+		return marketing.WorkflowExecution{}, workflowResourceAccess{}, marketing.ErrNotFound
+	}
+	executions, err := h.engine.ListWorkflowExecutions(r.Context(), marketing.WorkflowExecutionQuery{ExecutionID: executionID, Limit: 1})
+	if err != nil {
+		return marketing.WorkflowExecution{}, workflowResourceAccess{}, err
+	}
+	if len(executions) == 0 {
+		return marketing.WorkflowExecution{}, workflowResourceAccess{}, marketing.ErrNotFound
+	}
+	execution := executions[0]
+	return execution, workflowResourceAccess{ActivityID: execution.ActivityID}, nil
+}
+
+func workflowDraftTemplateResource(template marketing.WorkflowDraftTemplate) workflowResourceAccess {
+	definition, err := marketing.ParseWorkflowDefinition(template.Definition)
+	if err != nil {
+		return workflowResourceAccess{}
+	}
+	return workflowResourceAccess{
+		ActivityID:  workflowMetaString(definition.Meta, "activityId"),
+		WorkspaceID: workflowMetaString(definition.Meta, "workspaceId"),
+		FolderID:    workflowMetaString(definition.Meta, "folderId"),
+	}
+}
+
+func workflowMetaString(meta map[string]any, key string) string {
+	if meta == nil {
+		return ""
+	}
+	switch value := meta[key].(type) {
+	case string:
+		return strings.TrimSpace(value)
+	case fmt.Stringer:
+		return strings.TrimSpace(value.String())
+	default:
+		return ""
+	}
+}
+
+func (h *Handler) hasWorkflowResourcePermission(r *http.Request, resource workflowResourceAccess, permission workspacePermission) (bool, error) {
+	if strings.TrimSpace(resource.ActivityID) != "" {
+		return h.hasActivityWorkspacePermission(r, resource.ActivityID, permission)
+	}
+	workspaceID := strings.TrimSpace(resource.WorkspaceID)
+	if workspaceID == "" {
+		return false, nil
+	}
+	allowed, err := h.hasWorkspacePermission(r, workspaceID, permission)
+	if err != nil || !allowed {
+		return allowed, err
+	}
+	folderID := strings.TrimSpace(resource.FolderID)
+	if folderID == "" || actorFromRequest(r) == "" {
+		return true, nil
+	}
+	folder, err := h.engine.GetWorkspaceFolder(r.Context(), workspaceID, folderID)
+	if err != nil {
+		return false, err
+	}
+	if !h.canViewFolder(r, workspaceID, folder) {
+		return false, nil
+	}
+	return true, nil
+}
+
+func (h *Handler) requireWorkflowResourcePermission(w http.ResponseWriter, r *http.Request, resource workflowResourceAccess, permission workspacePermission) bool {
+	allowed, err := h.hasWorkflowResourcePermission(r, resource, permission)
+	if err != nil {
+		workspaceError(w, err)
+		return false
+	}
+	if !allowed {
+		workspaceError(w, marketing.ErrForbidden)
+		return false
+	}
+	return true
+}
+
+func (h *Handler) requireWorkflowExecutionWorkspacePermission(w http.ResponseWriter, r *http.Request, executionID string, permission workspacePermission) (marketing.WorkflowExecution, bool) {
+	execution, resource, err := h.workflowExecutionResource(r, executionID)
+	if err != nil {
+		workspaceError(w, err)
+		return marketing.WorkflowExecution{}, false
+	}
+	if !h.requireWorkflowResourcePermission(w, r, resource, permission) {
+		return marketing.WorkflowExecution{}, false
+	}
+	return execution, true
 }
 
 func (h *Handler) listWorkflowNodeExecutions(w http.ResponseWriter, r *http.Request) {
-	executions, err := h.engine.ListWorkflowNodeExecutions(r.Context(), r.PathValue("id"))
+	if _, ok := h.requireWorkflowExecutionWorkspacePermission(w, r, r.PathValue("id"), workspacePermissionView); !ok {
+		return
+	}
+	var executions []marketing.WorkflowNodeExecution
+	var err error
+	limit := intQuery(r, "limit")
+	offset := intQuery(r, "offset")
+	if limit <= 0 {
+		limit = 200
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	query := marketing.WorkflowNodeExecutionQuery{ExecutionID: r.PathValue("id"), Limit: limit + 1, Offset: offset}
+	if strings.EqualFold(strings.TrimSpace(r.URL.Query().Get("payload")), "summary") {
+		executions, err = h.engine.ListWorkflowNodeExecutionsPage(r.Context(), query)
+		for index := range executions {
+			executions[index].Input = nil
+			executions[index].Output = nil
+		}
+	} else {
+		executions, err = h.engine.ListWorkflowNodeExecutionsPage(r.Context(), query)
+	}
 	if err != nil {
 		if errors.Is(err, marketing.ErrNotFound) {
 			writeError(w, http.StatusNotFound, err.Error())
@@ -475,11 +837,234 @@ func (h *Handler) listWorkflowNodeExecutions(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"items": executions})
+	hasMore := len(executions) > limit
+	if hasMore {
+		executions = executions[:limit]
+	}
+	nextOffset := offset + len(executions)
+	writeJSON(w, http.StatusOK, map[string]any{"items": executions, "limit": limit, "offset": offset, "nextOffset": nextOffset, "hasMore": hasMore})
+}
+
+func (h *Handler) getWorkflowNodeExecution(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.requireWorkflowExecutionWorkspacePermission(w, r, r.PathValue("id"), workspacePermissionView); !ok {
+		return
+	}
+	execution, err := h.engine.GetWorkflowNodeExecution(r.Context(), r.PathValue("id"), r.PathValue("nodeExecutionId"))
+	if err != nil {
+		if errors.Is(err, marketing.ErrNotFound) {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, execution)
+}
+
+func (h *Handler) compareWorkflowExecutions(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.requireWorkflowExecutionWorkspacePermission(w, r, r.PathValue("id"), workspacePermissionView); !ok {
+		return
+	}
+	baselineExecutionID := strings.TrimSpace(r.URL.Query().Get("baselineExecutionId"))
+	if baselineExecutionID != "" {
+		if _, ok := h.requireWorkflowExecutionWorkspacePermission(w, r, baselineExecutionID, workspacePermissionView); !ok {
+			return
+		}
+	}
+	compare, err := h.engine.CompareWorkflowExecutionsWithOptions(r.Context(), r.PathValue("id"), baselineExecutionID, marketing.WorkflowExecutionCompareOptions{
+		MaxPayloadChangeNodes: intQuery(r, "maxPayloadChangeNodes"),
+		MaxJSONDiffRows:       intQuery(r, "maxJsonDiffRows"),
+	})
+	if err != nil {
+		if errors.Is(err, marketing.ErrNotFound) {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, compare)
+}
+
+func (h *Handler) exportWorkflowExecutionTrace(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.requireWorkflowExecutionWorkspacePermission(w, r, r.PathValue("id"), workspacePermissionView); !ok {
+		return
+	}
+	trace, err := h.engine.ExportWorkflowExecutionTrace(r.Context(), r.PathValue("id"))
+	if err != nil {
+		if errors.Is(err, marketing.ErrNotFound) {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, trace)
+}
+
+func (h *Handler) rerunWorkflowExecution(w http.ResponseWriter, r *http.Request) {
+	var cmd marketing.WorkflowDebugRunCommand
+	if err := decodeStrictJSON(r.Body, &cmd); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	if actorID := actorFromRequest(r); actorID != "" && strings.TrimSpace(cmd.Operator) == "" {
+		cmd.Operator = actorID
+	}
+	if !h.requireActivityWorkspacePermission(w, r, r.PathValue("id"), workspacePermissionEdit) {
+		return
+	}
+	trace, err := h.engine.RerunWorkflowExecution(r.Context(), r.PathValue("id"), r.PathValue("executionId"), cmd)
+	if err != nil {
+		if errors.Is(err, marketing.ErrNotFound) {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		if errors.Is(err, marketing.ErrInvalidWorkflow) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, trace)
+}
+
+func (h *Handler) cancelWorkflowExecution(w http.ResponseWriter, r *http.Request) {
+	var cmd marketing.CancelWorkflowExecutionCommand
+	if err := decodeStrictJSON(r.Body, &cmd); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	if _, ok := h.requireWorkflowExecutionWorkspacePermission(w, r, r.PathValue("id"), workspacePermissionEdit); !ok {
+		return
+	}
+	execution, err := h.engine.CancelWorkflowExecution(r.Context(), r.PathValue("id"), cmd)
+	if err != nil {
+		if errors.Is(err, marketing.ErrNotFound) {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, execution)
+}
+
+func (h *Handler) resumeWorkflowExecution(w http.ResponseWriter, r *http.Request) {
+	var cmd marketing.ResumeWorkflowExecutionCommand
+	if err := decodeStrictJSON(r.Body, &cmd); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	if actorID := actorFromRequest(r); actorID != "" && strings.TrimSpace(cmd.Operator) == "" {
+		cmd.Operator = actorID
+	}
+	if _, ok := h.requireWorkflowExecutionWorkspacePermission(w, r, r.PathValue("id"), workspacePermissionEdit); !ok {
+		return
+	}
+	trace, err := h.engine.ResumeWorkflowExecution(r.Context(), r.PathValue("id"), cmd)
+	if err != nil {
+		if errors.Is(err, marketing.ErrNotFound) {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		if errors.Is(err, marketing.ErrInvalidWorkflow) {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusCreated, trace)
 }
 
 func (h *Handler) listWorkflowNodeConfigSchemas(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"items": h.engine.ListWorkflowNodeConfigSchemas()})
+}
+
+func (h *Handler) listWorkflowNodePresets(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"items": h.engine.ListWorkflowNodePresets()})
+}
+
+func (h *Handler) listWorkflowDraftTemplates(w http.ResponseWriter, r *http.Request) {
+	latestOnly := true
+	if raw := strings.TrimSpace(r.URL.Query().Get("latestOnly")); raw != "" {
+		latestOnly, _ = strconv.ParseBool(raw)
+	}
+	items, err := h.engine.ListWorkflowDraftTemplates(r.Context(), marketing.WorkflowDraftTemplateQuery{
+		TemplateID: strings.TrimSpace(r.URL.Query().Get("templateId")),
+		Source:     marketing.WorkflowDraftTemplateSource(strings.TrimSpace(r.URL.Query().Get("source"))),
+		Status:     marketing.WorkflowDraftTemplateStatus(strings.TrimSpace(r.URL.Query().Get("status"))),
+		LatestOnly: latestOnly,
+		Limit:      intQuery(r, "limit"),
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	items = h.filterVisibleWorkflowDraftTemplates(r, items)
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (h *Handler) getWorkflowDraftTemplate(w http.ResponseWriter, r *http.Request) {
+	version, _ := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("version")))
+	item, err := h.engine.GetWorkflowDraftTemplate(r.Context(), r.PathValue("templateId"), strings.TrimSpace(r.URL.Query().Get("versionId")), version)
+	if err != nil {
+		if errors.Is(err, marketing.ErrNotFound) {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !h.requireWorkflowDraftTemplatePermission(w, r, item, workspacePermissionView) {
+		return
+	}
+	writeJSON(w, http.StatusOK, item)
+}
+
+func (h *Handler) listWorkflowDraftTemplateVersions(w http.ResponseWriter, r *http.Request) {
+	items, err := h.engine.ListWorkflowDraftTemplateVersions(r.Context(), r.PathValue("templateId"))
+	if err != nil {
+		if errors.Is(err, marketing.ErrNotFound) {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	items = h.filterVisibleWorkflowDraftTemplates(r, items)
+	if len(items) == 0 {
+		writeError(w, http.StatusNotFound, marketing.ErrNotFound.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (h *Handler) filterVisibleWorkflowDraftTemplates(r *http.Request, items []marketing.WorkflowDraftTemplate) []marketing.WorkflowDraftTemplate {
+	filtered := items[:0]
+	for _, item := range items {
+		if h.canViewWorkflowDraftTemplate(r, item) {
+			filtered = append(filtered, item)
+		}
+	}
+	return filtered
+}
+
+func (h *Handler) requireWorkflowDraftTemplatePermission(w http.ResponseWriter, r *http.Request, item marketing.WorkflowDraftTemplate, permission workspacePermission) bool {
+	if item.Source == marketing.WorkflowDraftTemplateBuiltin {
+		return true
+	}
+	return h.requireWorkflowResourcePermission(w, r, workflowDraftTemplateResource(item), permission)
+}
+
+func (h *Handler) canViewWorkflowDraftTemplate(r *http.Request, item marketing.WorkflowDraftTemplate) bool {
+	if item.Source == marketing.WorkflowDraftTemplateBuiltin {
+		return true
+	}
+	allowed, err := h.hasWorkflowResourcePermission(r, workflowDraftTemplateResource(item), workspacePermissionView)
+	return err == nil && allowed
 }
 
 func (h *Handler) submitActivityApproval(w http.ResponseWriter, r *http.Request) {

@@ -773,13 +773,28 @@ func (r *workerTestRepo) SaveWorkflowDraft(context.Context, marketing.WorkflowDr
 func (r *workerTestRepo) GetWorkflowDraft(context.Context, string) (marketing.WorkflowDraft, error) {
 	panic("not implemented")
 }
+func (r *workerTestRepo) CreateWorkflowDraftTemplate(context.Context, marketing.WorkflowDraftTemplate) (marketing.WorkflowDraftTemplate, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) ListWorkflowDraftTemplates(context.Context, marketing.WorkflowDraftTemplateQuery) ([]marketing.WorkflowDraftTemplate, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) GetWorkflowDraftTemplate(context.Context, string, string, int) (marketing.WorkflowDraftTemplate, error) {
+	panic("not implemented")
+}
 func (r *workerTestRepo) CreateWorkflowVersion(context.Context, marketing.WorkflowVersion) (marketing.WorkflowVersion, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) GetWorkflowVersion(context.Context, string, string) (marketing.WorkflowVersion, error) {
 	panic("not implemented")
 }
 func (r *workerTestRepo) GetActiveWorkflowVersion(context.Context, string) (marketing.WorkflowVersion, error) {
 	panic("not implemented")
 }
 func (r *workerTestRepo) ListWorkflowVersions(context.Context, string) ([]marketing.WorkflowVersion, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) UpdateWorkflowVersionStatus(context.Context, string, string, marketing.WorkflowVersionStatus) (marketing.WorkflowVersion, error) {
 	panic("not implemented")
 }
 func (r *workerTestRepo) CreateWorkflowExecution(context.Context, marketing.WorkflowExecution) (marketing.WorkflowExecution, error) {
@@ -797,7 +812,7 @@ func (r *workerTestRepo) UpdateWorkflowNodeExecution(context.Context, marketing.
 func (r *workerTestRepo) ListWorkflowExecutions(context.Context, marketing.WorkflowExecutionQuery) ([]marketing.WorkflowExecution, error) {
 	panic("not implemented")
 }
-func (r *workerTestRepo) ListWorkflowNodeExecutions(context.Context, string) ([]marketing.WorkflowNodeExecution, error) {
+func (r *workerTestRepo) ListWorkflowNodeExecutions(context.Context, marketing.WorkflowNodeExecutionQuery) ([]marketing.WorkflowNodeExecution, error) {
 	panic("not implemented")
 }
 func (r *workerTestRepo) SaveFactProvider(context.Context, marketing.FactProvider) (marketing.FactProvider, error) {

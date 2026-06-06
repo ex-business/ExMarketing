@@ -26,13 +26,28 @@ const (
 )
 
 type WorkflowNodeConfigSchema struct {
-	NodeType    string                    `json:"nodeType"`
-	Version     int                       `json:"version"`
+	NodeType    string                         `json:"nodeType"`
+	Version     int                            `json:"version"`
+	Title       string                         `json:"title"`
+	Description string                         `json:"description,omitempty"`
+	Fields      []WorkflowNodeConfigField      `json:"fields"`
+	FieldGroups []WorkflowNodeConfigFieldGroup `json:"fieldGroups,omitempty"`
+	Preview     WorkflowNodeConfigPreview      `json:"preview,omitempty"`
+	Inputs      []WorkflowNodeInputVar         `json:"inputs"`
+	Outputs     []WorkflowNodeOutputVar        `json:"outputs"`
+}
+
+type WorkflowNodeConfigFieldGroup struct {
+	Key         string                    `json:"key"`
 	Title       string                    `json:"title"`
 	Description string                    `json:"description,omitempty"`
 	Fields      []WorkflowNodeConfigField `json:"fields"`
-	Inputs      []WorkflowNodeInputVar    `json:"inputs"`
-	Outputs     []WorkflowNodeOutputVar   `json:"outputs"`
+}
+
+type WorkflowNodeConfigPreview struct {
+	Reads  []string `json:"reads,omitempty"`
+	Writes []string `json:"writes,omitempty"`
+	Notes  []string `json:"notes,omitempty"`
 }
 
 type WorkflowNodeInputVar struct {
@@ -73,21 +88,56 @@ type WorkflowNodeConfigSchemaRegistry struct {
 
 func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 	schemas := []WorkflowNodeConfigSchema{
-		schema("event-in", "事件入口", "标准事件接入", fields(
-			arrayField("eventTypes", "事件类型", false, "允许进入工作流的事件类型列表。"),
-			arrayField("sourceSystems", "来源系统", false, "允许接入的来源系统列表。"),
+		groupedSchema("event-in", "事件入口", "接收活动事件并生成标准 raw_event。", groups(
+			fieldGroup("event-source", "事件来源", "限定哪些业务事件可以触发这个 workflow。", fields(
+				withDefault(arrayField("eventTypes", "允许事件类型", true, "例如 DEPOSIT_SUCCESS、PAY_SUCCESS、ORDER_PAID、USER_REGISTERED。为空会阻止发布。", rules(minItems(1), maxItems(30))), []string{"DEPOSIT_SUCCESS", "PAY_SUCCESS"}),
+				withDefault(arrayField("sourceSystems", "来源系统", true, "允许接入的系统编码，例如 payment、trade、crm。", rules(minItems(1), maxItems(20))), []string{"payment"}),
+				enumField("tenantScope", "租户范围", true, "CURRENT_TENANT", []string{"CURRENT_TENANT", "WORKSPACE_TENANT", "ANY_TENANT"}),
+			)),
+			fieldGroup("payload-contract", "载荷契约", "控制事件载荷版本、未知事件和 trace 字段。", fields(
+				withDescription(stringField("payloadSchemaVersion", "Payload Schema", true, "standard-v1", rules(minLength(3), maxLength(64))), "后端用于解析 raw_event 的版本号。"),
+				booleanField("rejectUnknownEventType", "拒绝未知事件类型", false, true),
+				withDescription(stringField("traceKeyPath", "Trace Key Path", false, "$.traceId", rules(maxLength(128))), "从 raw_event 中读取 trace key 的 JSONPath。"),
+			)),
+		), preview(
+			[]string{"外部事件 payload", "tenantId / eventType / eventId", "sourceSystem"},
+			[]string{"raw_event", "eventId", "eventType", "tenantId"},
+			[]string{"不做业务判断，只负责入口过滤和标准 raw_event 生成。"},
 		)),
-		schema("inbox", "幂等收件箱", "事件幂等与去重", fields(
-			stringField("idempotencyKeyTemplate", "幂等 Key 模板", false, "${tenantId}:${eventId}", rules(minLength(3), maxLength(256))),
-			numberField("ttlSeconds", "幂等保留秒数", false, 86400, rules(minValue(60), maxValue(2592000))),
+		groupedSchema("inbox", "幂等收件箱", "写入事件收件箱，处理重复事件和 payload 冲突。", groups(
+			fieldGroup("idempotency", "幂等策略", "决定同一个业务事件重复进入时如何处理。", fields(
+				withDescription(stringField("idempotencyKeyTemplate", "幂等 Key 模板", true, "${tenantId}:${sourceSystem}:${eventType}:${biz.bizType}:${biz.bizId}", rules(minLength(8), maxLength(256))), "支持从 raw_event 渲染变量，必须能稳定定位同一业务事件。"),
+				enumField("duplicatePolicy", "重复事件策略", true, "RETURN_EXISTING", []string{"RETURN_EXISTING", "REJECT", "REPROCESS"}),
+				numberField("ttlSeconds", "幂等保留秒数", true, 86400, rules(minValue(60), maxValue(2592000))),
+			)),
+			fieldGroup("conflict", "冲突处理", "payload 不一致或上游 trace 缺失时的处理方式。", fields(
+				enumField("payloadConflictPolicy", "Payload 冲突策略", true, "BLOCK_ON_PAYLOAD_MISMATCH", []string{"BLOCK_ON_PAYLOAD_MISMATCH", "KEEP_FIRST", "OVERWRITE"}),
+				booleanField("requireTraceKey", "要求 Trace Key", false, false),
+			)),
+		), preview(
+			[]string{"raw_event", "可选 Idempotency-Key"},
+			[]string{"event_context"},
+			[]string{"重复事件默认直接返回首次处理结果，不继续重复执行下游。"},
 		)),
 		schema("normalize", "事件标准化", "标准化事件字段", fields(
 			objectField("mapping", "字段映射", false, nil),
 			objectField("defaults", "默认值", false, nil),
 		)),
-		schema("match", "活动匹配", "匹配活动和事件上下文", fields(
-			enumField("mode", "匹配模式", false, "FIRST_MATCH", []string{"STRICT", "FIRST_MATCH", "ALL_MATCH"}),
-			booleanField("requireActiveActivity", "仅匹配已上线活动", false, true),
+		groupedSchema("match", "活动匹配", "根据事件上下文匹配可参与的活动。", groups(
+			fieldGroup("strategy", "匹配策略", "控制匹配数量、优先级和活动状态约束。", fields(
+				enumField("mode", "匹配模式", true, "FIRST_MATCH", []string{"FIRST_MATCH", "ALL_MATCHES", "PRIORITY_MATCH"}),
+				booleanField("requireActiveActivity", "仅匹配已上线活动", false, true),
+				enumField("priorityOrder", "优先级排序", false, "PRIORITY_DESC", []string{"PRIORITY_DESC", "CREATED_DESC", "UPDATED_DESC"}),
+			)),
+			fieldGroup("scope", "范围和失败处理", "限定租户和匹配失败时的下游行为。", fields(
+				enumField("tenantMatchPolicy", "租户匹配", true, "SAME_TENANT", []string{"SAME_TENANT", "WORKSPACE_TENANT", "ANY_TENANT"}),
+				enumField("fallbackAction", "未匹配动作", true, "NO_MATCH_FAIL", []string{"NO_MATCH_FAIL", "NO_MATCH_SKIP", "USE_DEFAULT_ACTIVITY"}),
+				withDescription(stringField("activityCodePattern", "活动 Code 规则", false, "", rules(maxLength(128))), "可选正则，用于只匹配特定 code 的活动。"),
+			)),
+		), preview(
+			[]string{"event_context", "activity_config"},
+			[]string{"matched_activity"},
+			[]string{"输出 matched_activity 后，下游 Qualify / Reward 可以直接引用活动配置。"},
 		)),
 		schema("condition", "条件判断", "布尔条件分支", fields(
 			stringField("expression", "表达式", false, ""),
@@ -106,15 +156,31 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 			numberField("timeoutSeconds", "超时秒数", false, 3, rules(minValue(1), maxValue(30))),
 		)),
 		schema("code", "代码执行", "通过代码片段处理上下文并输出结果", fields(
-			enumField("language", "语言", true, "JAVASCRIPT", []string{"JAVASCRIPT", "PYTHON", "EXPRESSION"}),
+			enumField("language", "语言", true, "LUA", []string{"LUA", "EXPRESSION", "JAVASCRIPT", "PYTHON"}),
 			withDescription(stringField("source", "代码", true, "", rules(minLength(1), maxLength(20000))), "节点执行的代码片段或表达式。"),
 			numberField("timeoutSeconds", "超时秒数", false, 5, rules(minValue(1), maxValue(60))),
+			numberField("maxOutputBytes", "最大输出字节数", false, 65536, rules(minValue(1024), maxValue(1048576))),
 			stringField("outputPath", "输出路径", false, "code_result", rules(maxLength(128))),
 		)),
-		schema("reward", "奖励计算", "计算奖励结果", fields(
-			enumField("calculateType", "计算类型", false, "FIXED", []string{"FIXED", "RATIO", "LADDER", "RANDOM", "PROBABILITY", "POOL_SPLIT"}),
-			numberField("amount", "固定金额", false, 0, rules(minValue(0))),
-			stringField("currency", "币种", false, "USD", rules(pattern(`^[A-Z]{3}$`, "币种必须是 3 位大写字母。"))),
+		groupedSchema("reward", "奖励计算", "根据资格结果生成 reward_items。", groups(
+			fieldGroup("reward-definition", "奖励定义", "定义奖励编码、类型和金额计算方式。", fields(
+				withDescription(stringField("rewardCode", "奖励 Code", true, "STUDIO_DEFAULT_REWARD", rules(minLength(2), maxLength(128), pattern(`^[A-Z0-9._-]+$`, "奖励 Code 只能包含大写字母、数字、点、下划线和短横线。"))), "用于后续发奖、审计和对账。"),
+				enumField("rewardType", "奖励类型", true, "BONUS", []string{"BONUS", "CASH", "POINT", "COUPON"}),
+				enumField("calculateType", "计算类型", true, "FIXED", []string{"FIXED", "RATIO", "LADDER", "RANDOM", "PROBABILITY", "POOL_SPLIT"}),
+			)),
+			fieldGroup("amount", "金额和币种", "固定奖励或比例奖励的基础参数。", fields(
+				numberField("amount", "固定金额", true, 10, rules(minValue(0))),
+				stringField("currency", "币种", true, "USD", rules(pattern(`^[A-Z]{3}$`, "币种必须是 3 位大写字母。"))),
+				withDescription(stringField("amountSourcePath", "金额来源 Path", false, "$.qualified_context.order.amount", rules(maxLength(160))), "RATIO / LADDER 模式下从输入上下文读取金额的路径。"),
+			)),
+			fieldGroup("grant", "发放策略", "定义奖励如何被下游发放或导出。", fields(
+				enumField("grantMode", "发放模式", true, "AUTO", []string{"AUTO", "MANUAL", "MANUAL_EXPORT"}),
+				enumField("grantChannel", "发放渠道", true, "HTTP", []string{"HTTP", "MQ", "WEBHOOK", "INTERNAL"}),
+			)),
+		), preview(
+			[]string{"qualified_context", "reward_config"},
+			[]string{"reward_items"},
+			[]string{"reward_items 会包含 rewardCode、rewardType、amount、currency 和 grant metadata。"},
 		)),
 		schema("decimal", "精度处理", "金额和比例精度处理", fields(
 			numberField("scale", "小数位", false, 2, rules(minValue(0), maxValue(18))),
@@ -125,9 +191,22 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 			numberField("maxCount", "最大次数", false, 1, rules(minValue(1))),
 			stringField("period", "周期", false, "ACTIVITY", rules(minLength(3), maxLength(64))),
 		)),
-		schema("quota", "预算库存扣减", "预算和库存原子扣减", fields(
-			stringField("quotaCode", "Quota Code", false, ""),
-			enumField("consumeMode", "扣减模式", false, "ATOMIC", []string{"ATOMIC", "BEST_EFFORT"}),
+		groupedSchema("quota", "预算库存扣减", "对奖励预算、库存或用户额度做原子占用。", groups(
+			fieldGroup("quota-target", "Quota 对象", "定义要扣减的预算或库存维度。", fields(
+				withDescription(stringField("quotaCode", "Quota Code", true, "DEFAULT_REWARD_BUDGET", rules(minLength(2), maxLength(128))), "后端 quota 资源编码。"),
+				enumField("quotaType", "Quota 类型", true, "BUDGET", []string{"BUDGET", "STOCK", "USER_LIMIT", "DAILY_LIMIT"}),
+				enumField("scope", "作用范围", true, "ACTIVITY", []string{"ACTIVITY", "USER", "TENANT", "WORKSPACE"}),
+				withDescription(stringField("scopeKeyTemplate", "Scope Key 模板", true, "${activityId}", rules(minLength(1), maxLength(256))), "用于组成 quota bucket，例如 activityId、userId 或 tenantId。"),
+			)),
+			fieldGroup("consume", "扣减策略", "控制扣减方式、失败动作和扣减数量来源。", fields(
+				enumField("consumeMode", "扣减模式", true, "ATOMIC", []string{"ATOMIC", "RESERVE_ONLY", "CHECK_ONLY"}),
+				withDescription(stringField("amountField", "扣减数量字段", true, "reward_items[0].amount", rules(minLength(1), maxLength(160))), "从 reward_items 或上下文读取扣减金额/数量。"),
+				enumField("failAction", "额度不足动作", true, "BLOCK", []string{"BLOCK", "RISK", "SKIP"}),
+			)),
+		), preview(
+			[]string{"reward_items", "limit_hold"},
+			[]string{"quota_hold"},
+			[]string{"ATOMIC 模式会在 Executor 中记录 quota_hold，失败时走 BLOCK/RISK/SKIP 分支。"},
 		)),
 		schema("participation", "参与记录", "写入参与流水", fields(
 			stringField("status", "初始状态", false, "CREATED"),
@@ -215,8 +294,31 @@ func schema(nodeType string, title string, description string, fields []Workflow
 	}
 }
 
+func groupedSchema(nodeType string, title string, description string, groups []WorkflowNodeConfigFieldGroup, preview WorkflowNodeConfigPreview) WorkflowNodeConfigSchema {
+	var fields []WorkflowNodeConfigField
+	for _, group := range groups {
+		fields = append(fields, group.Fields...)
+	}
+	item := schema(nodeType, title, description, fields)
+	item.FieldGroups = groups
+	item.Preview = preview
+	return item
+}
+
 func fields(items ...WorkflowNodeConfigField) []WorkflowNodeConfigField {
 	return items
+}
+
+func groups(items ...WorkflowNodeConfigFieldGroup) []WorkflowNodeConfigFieldGroup {
+	return items
+}
+
+func fieldGroup(key string, title string, description string, fields []WorkflowNodeConfigField) WorkflowNodeConfigFieldGroup {
+	return WorkflowNodeConfigFieldGroup{Key: key, Title: title, Description: description, Fields: fields}
+}
+
+func preview(reads []string, writes []string, notes []string) WorkflowNodeConfigPreview {
+	return WorkflowNodeConfigPreview{Reads: reads, Writes: writes, Notes: notes}
 }
 
 func defaultWorkflowNodeInputs(nodeType string) []WorkflowNodeInputVar {
@@ -386,15 +488,15 @@ func outputVar(key string, label string, valueType string, description string) W
 }
 
 func stringField(key string, label string, required bool, defaultValue string, validationRules ...[]WorkflowNodeConfigValidationRule) WorkflowNodeConfigField {
-	return WorkflowNodeConfigField{Key: key, Label: label, Type: WorkflowNodeConfigString, Required: required, Default: defaultValue, ValidationRules: flattenRules(validationRules)}
+	return WorkflowNodeConfigField{Key: key, Label: label, Type: WorkflowNodeConfigString, Required: required, Default: defaultValue, Description: "填写" + label + "。", ValidationRules: flattenRules(validationRules)}
 }
 
 func numberField(key string, label string, required bool, defaultValue float64, validationRules ...[]WorkflowNodeConfigValidationRule) WorkflowNodeConfigField {
-	return WorkflowNodeConfigField{Key: key, Label: label, Type: WorkflowNodeConfigNumber, Required: required, Default: defaultValue, ValidationRules: flattenRules(validationRules)}
+	return WorkflowNodeConfigField{Key: key, Label: label, Type: WorkflowNodeConfigNumber, Required: required, Default: defaultValue, Description: "填写" + label + "，需符合数值范围。", ValidationRules: flattenRules(validationRules)}
 }
 
 func booleanField(key string, label string, required bool, defaultValue bool) WorkflowNodeConfigField {
-	return WorkflowNodeConfigField{Key: key, Label: label, Type: WorkflowNodeConfigBoolean, Required: required, Default: defaultValue}
+	return WorkflowNodeConfigField{Key: key, Label: label, Type: WorkflowNodeConfigBoolean, Required: required, Default: defaultValue, Description: "开启或关闭" + label + "。"}
 }
 
 func arrayField(key string, label string, required bool, description string, validationRules ...[]WorkflowNodeConfigValidationRule) WorkflowNodeConfigField {
@@ -402,15 +504,20 @@ func arrayField(key string, label string, required bool, description string, val
 }
 
 func objectField(key string, label string, required bool, defaultValue any) WorkflowNodeConfigField {
-	return WorkflowNodeConfigField{Key: key, Label: label, Type: WorkflowNodeConfigObject, Required: required, Default: defaultValue}
+	return WorkflowNodeConfigField{Key: key, Label: label, Type: WorkflowNodeConfigObject, Required: required, Default: defaultValue, Description: "填写" + label + "的 JSON 对象。"}
 }
 
 func enumField(key string, label string, required bool, defaultValue string, options []string) WorkflowNodeConfigField {
-	return WorkflowNodeConfigField{Key: key, Label: label, Type: WorkflowNodeConfigEnum, Required: required, Default: defaultValue, Options: options}
+	return WorkflowNodeConfigField{Key: key, Label: label, Type: WorkflowNodeConfigEnum, Required: required, Default: defaultValue, Options: options, Description: "选择" + label + "。"}
 }
 
 func withDescription(field WorkflowNodeConfigField, description string) WorkflowNodeConfigField {
 	field.Description = description
+	return field
+}
+
+func withDefault(field WorkflowNodeConfigField, defaultValue any) WorkflowNodeConfigField {
+	field.Default = defaultValue
 	return field
 }
 
@@ -436,6 +543,10 @@ func minValue(value float64) WorkflowNodeConfigValidationRule {
 
 func maxValue(value float64) WorkflowNodeConfigValidationRule {
 	return WorkflowNodeConfigValidationRule{Type: WorkflowNodeConfigRuleMaxValue, Value: value}
+}
+
+func minItems(value int) WorkflowNodeConfigValidationRule {
+	return WorkflowNodeConfigValidationRule{Type: WorkflowNodeConfigRuleMinItems, Value: value}
 }
 
 func maxItems(value int) WorkflowNodeConfigValidationRule {

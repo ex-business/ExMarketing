@@ -32,11 +32,19 @@ export type ActivityNodeData = {
   outputs: string[];
   config?: Record<string, unknown>;
   runStatus?: 'RUNNING' | 'SUCCESS' | 'FAILED' | 'SKIPPED';
+  validationState?: 'BLOCK' | 'WARNING';
+  validationCount?: number;
+  validationMessage?: string;
+  routeIssues?: Array<{ code: string; message: string; path?: string }>;
   lastRun?: {
     status: 'RUNNING' | 'SUCCESS' | 'FAILED' | 'SKIPPED';
     errorMessage?: string;
+    input?: unknown;
     output?: unknown;
+    startedAt?: string;
     finishedAt?: string;
+    durationMs?: number;
+    retryCount?: number;
   };
   onDelete?: (nodeId: string) => void;
   onAddFromOutput?: (request: OutputAddRequest) => void;
@@ -59,7 +67,24 @@ export type ActivityNode = Node<ActivityNodeData, 'activity'>;
 export type GroupNode = Node<GroupNodeData, 'group'>;
 export type NoteNode = Node<NoteNodeData, 'note'>;
 export type FlowNode = ActivityNode | GroupNode | NoteNode;
-export type ActivityEdge = Edge;
+
+export type WorkflowEdgeRouteType = 'DEFAULT' | 'OUTPUT' | 'IF' | 'ELIF' | 'ELSE' | 'PASS' | 'BLOCK' | 'RISK' | 'SKIP';
+
+export type WorkflowEdgeRoute = {
+  type: WorkflowEdgeRouteType;
+  key?: string;
+  label?: string;
+  expression?: string;
+  conditionRef?: string;
+  default?: boolean;
+};
+
+export type ActivityEdgeData = {
+  route?: WorkflowEdgeRoute;
+  runSelected?: boolean;
+};
+
+export type ActivityEdge = Edge<ActivityEdgeData>;
 
 export type CatalogGroup = {
   category: string;
@@ -105,12 +130,13 @@ export type WorkflowDefinition = {
     sourceHandle?: string;
     targetHandle?: string;
     label?: string;
+    route?: WorkflowEdgeRoute;
   }>;
   viewport?: { x: number; y: number; zoom: number };
   meta?: Record<string, unknown>;
 };
 
-export type WorkflowExecutionStatus = 'RUNNING' | 'SUCCESS' | 'FAILED';
+export type WorkflowExecutionStatus = 'RUNNING' | 'SUCCESS' | 'FAILED' | 'CANCELED';
 
 export type WorkflowExecution = {
   id: string;
@@ -121,6 +147,8 @@ export type WorkflowExecution = {
   eventInboxId?: string;
   eventId?: string;
   status: WorkflowExecutionStatus;
+  input?: unknown;
+  output?: unknown;
   startedAt: string;
   finishedAt?: string;
   errorMessage?: string;
@@ -131,9 +159,37 @@ export type WorkflowVersion = {
   tenantId: string;
   activityId: string;
   version: number;
-  status: 'ACTIVE' | 'ARCHIVED';
+  status: 'DRAFT' | 'ACTIVE' | 'SUPERSEDED' | 'ARCHIVED';
+  definition: WorkflowDefinition;
   publishedBy?: string;
   publishedAt: string;
+  releaseNote?: string;
+  sourceVersionId?: string;
+  action?: string;
+  createdAt?: string;
+};
+
+export type WorkflowDiffSummary = {
+  changed: boolean;
+  summary: string;
+  detail: string[];
+};
+
+export type WorkflowDiffItemKind = 'NODE_ADDED' | 'NODE_REMOVED' | 'NODE_CHANGED' | 'EDGE_ADDED' | 'EDGE_REMOVED' | 'EDGE_CHANGED';
+
+export type WorkflowDiffItem = {
+  id: string;
+  kind: WorkflowDiffItemKind;
+  label: string;
+  nodeId?: string;
+  edgeId?: string;
+  source?: string;
+  target?: string;
+  detail?: string;
+};
+
+export type WorkflowDiffDetail = WorkflowDiffSummary & {
+  items: WorkflowDiffItem[];
 };
 
 export type WorkflowValidationSeverity = 'BLOCK' | 'WARNING';
@@ -175,12 +231,27 @@ export type WorkflowNodeConfigField = {
   validationRules?: WorkflowNodeConfigValidationRule[];
 };
 
+export type WorkflowNodeConfigFieldGroup = {
+  key: string;
+  title: string;
+  description?: string;
+  fields: WorkflowNodeConfigField[];
+};
+
+export type WorkflowNodeConfigPreview = {
+  reads?: string[];
+  writes?: string[];
+  notes?: string[];
+};
+
 export type WorkflowNodeConfigSchema = {
   nodeType: string;
   version: number;
   title: string;
   description?: string;
   fields: WorkflowNodeConfigField[];
+  fieldGroups?: WorkflowNodeConfigFieldGroup[];
+  preview?: WorkflowNodeConfigPreview;
   inputs: WorkflowNodeInputVar[];
   outputs: WorkflowNodeOutputVar[];
 };
@@ -207,7 +278,48 @@ export type WorkflowNodeExecution = {
   nodeType: string;
   nodeTitle?: string;
   status: 'RUNNING' | 'SUCCESS' | 'FAILED' | 'SKIPPED';
+  input?: unknown;
   output?: unknown;
   errorMessage?: string;
+  startedAt: string;
   finishedAt?: string;
+};
+
+export type WorkflowExecutionTrace = {
+  schemaVersion?: string;
+  exportedAt?: string;
+  execution: WorkflowExecution;
+  nodeExecutions: WorkflowNodeExecution[];
+  routeTrace?: unknown;
+};
+
+export type WorkflowExecutionJSONDiff = {
+  path: string;
+  type: 'added' | 'removed' | 'changed';
+  current?: unknown;
+  baseline?: unknown;
+};
+
+export type WorkflowExecutionPayloadNodeDiff = {
+  nodeId: string;
+  label: string;
+  input: WorkflowExecutionJSONDiff[];
+  output: WorkflowExecutionJSONDiff[];
+};
+
+export type WorkflowExecutionCompareResult = {
+  current: Pick<WorkflowExecution, 'id' | 'status' | 'eventId' | 'workflowVersion' | 'errorMessage' | 'startedAt' | 'finishedAt'>;
+  baseline: Pick<WorkflowExecution, 'id' | 'status' | 'eventId' | 'workflowVersion' | 'errorMessage' | 'startedAt' | 'finishedAt'>;
+  currentPath: string[];
+  baselinePath: string[];
+  pathChanged: boolean;
+  currentFailures: string[];
+  baselineFailures: string[];
+  currentDurationMs: number;
+  baselineDurationMs: number;
+  durationDeltaMs: number;
+  payloadChanges: WorkflowExecutionPayloadNodeDiff[];
+  payloadChangeLimit?: number;
+  jsonDiffLimit?: number;
+  truncated?: boolean;
 };

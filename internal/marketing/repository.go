@@ -30,15 +30,20 @@ type Repository interface {
 	FindMatchingActivities(ctx context.Context, tenantID string, eventType string) ([]Activity, error)
 	SaveWorkflowDraft(ctx context.Context, draft WorkflowDraft) (WorkflowDraft, error)
 	GetWorkflowDraft(ctx context.Context, activityID string) (WorkflowDraft, error)
+	CreateWorkflowDraftTemplate(ctx context.Context, template WorkflowDraftTemplate) (WorkflowDraftTemplate, error)
+	ListWorkflowDraftTemplates(ctx context.Context, query WorkflowDraftTemplateQuery) ([]WorkflowDraftTemplate, error)
+	GetWorkflowDraftTemplate(ctx context.Context, templateID string, versionID string, version int) (WorkflowDraftTemplate, error)
 	CreateWorkflowVersion(ctx context.Context, version WorkflowVersion) (WorkflowVersion, error)
+	GetWorkflowVersion(ctx context.Context, activityID string, versionID string) (WorkflowVersion, error)
 	GetActiveWorkflowVersion(ctx context.Context, activityID string) (WorkflowVersion, error)
 	ListWorkflowVersions(ctx context.Context, activityID string) ([]WorkflowVersion, error)
+	UpdateWorkflowVersionStatus(ctx context.Context, activityID string, versionID string, status WorkflowVersionStatus) (WorkflowVersion, error)
 	CreateWorkflowExecution(ctx context.Context, execution WorkflowExecution) (WorkflowExecution, error)
 	UpdateWorkflowExecution(ctx context.Context, execution WorkflowExecution) error
 	CreateWorkflowNodeExecution(ctx context.Context, execution WorkflowNodeExecution) (WorkflowNodeExecution, error)
 	UpdateWorkflowNodeExecution(ctx context.Context, execution WorkflowNodeExecution) error
 	ListWorkflowExecutions(ctx context.Context, query WorkflowExecutionQuery) ([]WorkflowExecution, error)
-	ListWorkflowNodeExecutions(ctx context.Context, executionID string) ([]WorkflowNodeExecution, error)
+	ListWorkflowNodeExecutions(ctx context.Context, query WorkflowNodeExecutionQuery) ([]WorkflowNodeExecution, error)
 	SaveFactProvider(ctx context.Context, provider FactProvider) (FactProvider, error)
 	FindEnabledFactProvider(ctx context.Context, tenantID string, factCode string) (FactProvider, error)
 

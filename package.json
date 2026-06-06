@@ -10,6 +10,7 @@
   "scripts": {
     "build:admin-flow": "vite build --config frontend/admin-flow/vite.config.ts",
     "dev:admin-flow": "vite --config frontend/admin-flow/vite.config.ts --host 127.0.0.1",
+    "e2e:admin-flow": "playwright test --config frontend/admin-flow/playwright.config.ts",
     "typecheck:admin-flow": "tsc -p frontend/admin-flow/tsconfig.json"
   },
   "repository": {
@@ -31,6 +32,7 @@
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
+    "@playwright/test": "^1.60.0",
     "@types/react": "^19.2.15",
     "@types/react-dom": "^19.2.3",
     "typescript": "^6.0.3",

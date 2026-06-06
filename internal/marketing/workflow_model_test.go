@@ -45,6 +45,62 @@ func TestWorkflowNodeInputMappingRefJSONFields(t *testing.T) {
 	}
 }
 
+func TestWorkflowEdgeRouteJSONFields(t *testing.T) {
+	bytes, err := json.Marshal(WorkflowEdge{
+		ID:     "qualify-risk",
+		Source: "qualify",
+		Target: "limit",
+		Route: &WorkflowEdgeRoute{
+			Type:         "RISK",
+			Key:          "RISK",
+			Label:        "RISK",
+			Expression:   `decision == "RISK"`,
+			ConditionRef: "qualify.case_3",
+			Default:      true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal workflow edge route: %v", err)
+	}
+	output := string(bytes)
+	for _, field := range []string{
+		`"type":"RISK"`,
+		`"key":"RISK"`,
+		`"label":"RISK"`,
+		`"expression":"decision == \"RISK\""`,
+		`"conditionRef":"qualify.case_3"`,
+		`"default":true`,
+	} {
+		if !strings.Contains(output, field) {
+			t.Fatalf("expected JSON field %s in %s", field, output)
+		}
+	}
+}
+
+func TestWorkflowEdgeRouteModelBehavior(t *testing.T) {
+	risk := WorkflowEdgeRoute{Type: WorkflowEdgeRouteType("risk"), Key: "risk", Expression: `decision == "RISK"`, Default: true}
+	if !risk.IsSupported() {
+		t.Fatalf("expected risk route to be supported")
+	}
+	if risk.NormalizedType() != WorkflowEdgeRouteRISK || risk.NormalizedKey() != "RISK" || risk.OutputKey() != "RISK" {
+		t.Fatalf("unexpected normalized risk route: %+v type=%s key=%s output=%s", risk, risk.NormalizedType(), risk.NormalizedKey(), risk.OutputKey())
+	}
+	if !risk.IsDefault() {
+		t.Fatalf("expected explicit default route")
+	}
+	if risk.RequiresCondition() {
+		t.Fatalf("route with expression should not require condition")
+	}
+	passMissingCondition := WorkflowEdgeRoute{Type: WorkflowEdgeRoutePASS, Key: "PASS"}
+	if !passMissingCondition.RequiresCondition() {
+		t.Fatalf("PASS route without expression or conditionRef must require condition")
+	}
+	unsupported := WorkflowEdgeRoute{Type: WorkflowEdgeRouteType("UNKNOWN")}
+	if unsupported.IsSupported() {
+		t.Fatalf("unknown route type should be unsupported")
+	}
+}
+
 func TestValidateWorkflowDefinitionRequiresEntryNode(t *testing.T) {
 	result := ValidateWorkflowDefinition(json.RawMessage(`{
 		"meta": {"activityId": "activity-1", "workspaceId": "workspace-1", "folderId": "folder-1"},
@@ -291,6 +347,24 @@ func TestValidateWorkflowDefinitionValidatesInputMappingReferences(t *testing.T)
 	}
 }
 
+func TestValidateWorkflowDefinitionAllowsTransitiveUpstreamInputMapping(t *testing.T) {
+	result := ValidateWorkflowDefinition(json.RawMessage(`{
+		"meta": {"activityId": "activity-1", "workspaceId": "workspace-1", "folderId": "folder-1"},
+		"nodes": [
+			{"id": "event-in", "type": "event-in", "kind": "entry"},
+			{"id": "inbox", "type": "inbox"},
+			{"id": "match", "type": "match", "config": {"inputMapping": {"event_context": {"sourceNodeId": "event-in", "outputKey": "raw_event", "path": "$.subject"}}}}
+		],
+		"edges": [
+			{"id": "event-in-inbox", "source": "event-in", "target": "inbox"},
+			{"id": "inbox-match", "source": "inbox", "target": "match"}
+		]
+	}`))
+	if !result.Valid {
+		t.Fatalf("expected transitive upstream input mapping to be valid, got %+v", result)
+	}
+}
+
 func TestWorkflowValidationIssuesAreStableExplicitAndLocatable(t *testing.T) {
 	cases := []struct {
 		name string
@@ -359,6 +433,34 @@ func TestWorkflowValidationIssuesAreStableExplicitAndLocatable(t *testing.T) {
 		{
 			name: "edge endpoint required",
 			raw:  json.RawMessage(`{"meta":{"activityId":"activity-1","workspaceId":"workspace-1","folderId":"folder-1"},"nodes":[{"id":"event-in","type":"event-in","kind":"entry"},{"id":"match","type":"match"}],"edges":[{"id":"bad-edge","source":"event-in"}]}`),
+		},
+		{
+			name: "edge route type required",
+			raw:  json.RawMessage(`{"meta":{"activityId":"activity-1","workspaceId":"workspace-1","folderId":"folder-1"},"nodes":[{"id":"event-in","type":"event-in","kind":"entry"},{"id":"match","type":"match"}],"edges":[{"id":"event-in-match","source":"event-in","target":"match","route":{"key":"raw_event","label":"raw_event"}}]}`),
+		},
+		{
+			name: "edge output route key required",
+			raw:  json.RawMessage(`{"meta":{"activityId":"activity-1","workspaceId":"workspace-1","folderId":"folder-1"},"nodes":[{"id":"event-in","type":"event-in","kind":"entry"},{"id":"match","type":"match"}],"edges":[{"id":"event-in-match","source":"event-in","target":"match","route":{"type":"OUTPUT"}}]}`),
+		},
+		{
+			name: "edge route unsupported",
+			raw:  json.RawMessage(`{"meta":{"activityId":"activity-1","workspaceId":"workspace-1","folderId":"folder-1"},"nodes":[{"id":"event-in","type":"event-in","kind":"entry"},{"id":"match","type":"match"}],"edges":[{"id":"event-in-match","source":"event-in","target":"match","route":{"type":"UNKNOWN","key":"UNKNOWN","label":"Unknown"}}]}`),
+		},
+		{
+			name: "edge route condition required",
+			raw:  json.RawMessage(`{"meta":{"activityId":"activity-1","workspaceId":"workspace-1","folderId":"folder-1"},"nodes":[{"id":"event-in","type":"event-in","kind":"entry"},{"id":"qualify","type":"qualify","kind":"logic"},{"id":"limit","type":"limit","kind":"quota"}],"edges":[{"id":"event-in-qualify","source":"event-in","target":"qualify"},{"id":"qualify-risk","source":"qualify","target":"limit","route":{"type":"RISK","key":"RISK","label":"RISK"}}]}`),
+		},
+		{
+			name: "branch route missing",
+			raw:  json.RawMessage(`{"meta":{"activityId":"activity-1","workspaceId":"workspace-1","folderId":"folder-1"},"nodes":[{"id":"event-in","type":"event-in","kind":"entry"},{"id":"qualify","type":"qualify","kind":"logic"},{"id":"reward","type":"reward","kind":"reward"},{"id":"limit","type":"limit","kind":"quota"}],"edges":[{"id":"event-in-qualify","source":"event-in","target":"qualify"},{"id":"qualify-pass","source":"qualify","target":"reward","route":{"type":"PASS","key":"PASS","label":"PASS","expression":"decision == \"PASS\""}},{"id":"qualify-risk","source":"qualify","target":"limit","route":{"type":"RISK","key":"RISK","label":"RISK","expression":"decision == \"RISK\"","default":true}}]}`),
+		},
+		{
+			name: "branch default missing",
+			raw:  json.RawMessage(`{"meta":{"activityId":"activity-1","workspaceId":"workspace-1","folderId":"folder-1"},"nodes":[{"id":"event-in","type":"event-in","kind":"entry"},{"id":"condition","type":"condition","kind":"logic"},{"id":"reward","type":"reward","kind":"reward"},{"id":"audit","type":"audit","kind":"audit"}],"edges":[{"id":"event-in-condition","source":"event-in","target":"condition"},{"id":"condition-if","source":"condition","target":"reward","route":{"type":"IF","key":"IF","label":"IF","expression":"condition == true"}},{"id":"condition-else","source":"condition","target":"audit","route":{"type":"OUTPUT","key":"ELSE","label":"ELSE"}}]}`),
+		},
+		{
+			name: "branch default duplicated",
+			raw:  json.RawMessage(`{"meta":{"activityId":"activity-1","workspaceId":"workspace-1","folderId":"folder-1"},"nodes":[{"id":"event-in","type":"event-in","kind":"entry"},{"id":"condition","type":"condition","kind":"logic"},{"id":"reward","type":"reward","kind":"reward"},{"id":"audit","type":"audit","kind":"audit"}],"edges":[{"id":"event-in-condition","source":"event-in","target":"condition"},{"id":"condition-if","source":"condition","target":"reward","route":{"type":"IF","key":"IF","label":"IF","expression":"condition == true","default":true}},{"id":"condition-else","source":"condition","target":"audit","route":{"type":"ELSE","key":"ELSE","label":"ELSE"}}]}`),
 		},
 		{
 			name: "topology issues",
@@ -461,6 +563,13 @@ func TestWorkflowValidationIssuesAreStableExplicitAndLocatable(t *testing.T) {
 		"WORKFLOW_NODE_INPUT_MAPPING_PATH_INVALID",
 		"WORKFLOW_ENTRY_MISSING",
 		"WORKFLOW_EDGE_ENDPOINT_REQUIRED",
+		"WORKFLOW_EDGE_ROUTE_TYPE_REQUIRED",
+		"WORKFLOW_EDGE_ROUTE_KEY_REQUIRED",
+		"WORKFLOW_EDGE_ROUTE_TYPE_UNSUPPORTED",
+		"WORKFLOW_EDGE_ROUTE_CONDITION_REQUIRED",
+		"WORKFLOW_BRANCH_ROUTE_MISSING",
+		"WORKFLOW_BRANCH_DEFAULT_MISSING",
+		"WORKFLOW_BRANCH_DEFAULT_DUPLICATED",
 		"WORKFLOW_EDGE_SOURCE_MISSING",
 		"WORKFLOW_EDGE_TARGET_MISSING",
 		"WORKFLOW_OUTPUT_DUPLICATED_EDGE",
@@ -594,6 +703,55 @@ func TestValidateWorkflowDefinitionAllowsDifferentOutputHandles(t *testing.T) {
 	}`))
 	if !result.Valid {
 		t.Fatalf("expected workflow validation to pass, got %+v", result)
+	}
+}
+
+func TestValidateWorkflowDefinitionValidatesBranchRouteCoverage(t *testing.T) {
+	result := ValidateWorkflowDefinition(json.RawMessage(`{
+		"meta": {"activityId": "activity-1", "workspaceId": "workspace-1", "folderId": "folder-1"},
+		"nodes": [
+			{"id": "event-in", "type": "event-in", "kind": "entry"},
+			{"id": "qualify", "type": "qualify", "kind": "logic"},
+			{"id": "reward", "type": "reward", "kind": "reward"},
+			{"id": "limit", "type": "limit", "kind": "quota"}
+		],
+		"edges": [
+			{"id": "event-in-qualify", "source": "event-in", "target": "qualify"},
+			{"id": "qualify-pass", "source": "qualify", "target": "reward", "route": {"type": "PASS", "key": "PASS", "label": "PASS", "expression": "decision == \"PASS\""}},
+			{"id": "qualify-risk", "source": "qualify", "target": "limit", "route": {"type": "RISK", "key": "RISK", "label": "RISK", "expression": "decision == \"RISK\"", "default": true}}
+		]
+	}`))
+	if result.Valid {
+		t.Fatalf("expected branch coverage validation to fail")
+	}
+	if result.Summary.BlockCount != 1 ||
+		len(result.Items) != 1 ||
+		result.Items[0].Code != "WORKFLOW_BRANCH_ROUTE_MISSING" ||
+		result.Items[0].NodeID != "qualify" ||
+		result.Items[0].Path != "nodes[1].outputs.BLOCK" {
+		t.Fatalf("expected missing BLOCK branch issue, got %+v", result.Items)
+	}
+}
+
+func TestValidateWorkflowDefinitionAllowsCoveredBranchRoutes(t *testing.T) {
+	result := ValidateWorkflowDefinition(json.RawMessage(`{
+		"meta": {"activityId": "activity-1", "workspaceId": "workspace-1", "folderId": "folder-1"},
+		"nodes": [
+			{"id": "event-in", "type": "event-in", "kind": "entry"},
+			{"id": "switch", "type": "switch", "kind": "logic"},
+			{"id": "reward", "type": "reward", "kind": "reward"},
+			{"id": "limit", "type": "limit", "kind": "quota"},
+			{"id": "audit", "type": "audit", "kind": "audit"}
+		],
+		"edges": [
+			{"id": "event-in-switch", "source": "event-in", "target": "switch"},
+			{"id": "switch-pass", "source": "switch", "target": "reward", "route": {"type": "PASS", "key": "PASS", "label": "PASS", "expression": "decision == \"PASS\""}},
+			{"id": "switch-block", "source": "switch", "target": "limit", "route": {"type": "BLOCK", "key": "BLOCK", "label": "BLOCK", "expression": "decision == \"BLOCK\""}},
+			{"id": "switch-skip", "source": "switch", "target": "audit", "route": {"type": "SKIP", "key": "SKIP", "label": "SKIP", "expression": "decision == \"SKIP\"", "default": true}}
+		]
+	}`))
+	if !result.Valid {
+		t.Fatalf("expected covered branch routes to pass, got %+v", result)
 	}
 }
 

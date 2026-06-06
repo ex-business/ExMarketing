@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -102,12 +103,55 @@ func (s WorkflowValidationService) ValidateDefinition(raw json.RawMessage) Workf
 	hasIncomingEdge := map[string]bool{}
 	hasOutgoingEdge := map[string]bool{}
 	outgoingEdgeByOutput := map[string]string{}
-	connectedSourceTarget := map[string]bool{}
+	outgoingRoutesByNode := map[string]map[string]string{}
+	defaultRouteByNode := map[string]string{}
 	for index, edge := range definition.Edges {
 		edgeID := strings.TrimSpace(edge.ID)
 		source := strings.TrimSpace(edge.Source)
 		target := strings.TrimSpace(edge.Target)
-		sourceHandle := strings.TrimSpace(edge.SourceHandle)
+		routeKey, routeLabel := workflowEdgeRouteKey(edge)
+		if edge.Route != nil {
+			routeType := edge.Route.NormalizedType()
+			if routeType == "" {
+				result.addIssue(
+					WorkflowValidationBlock,
+					"WORKFLOW_EDGE_ROUTE_TYPE_REQUIRED",
+					fmt.Sprintf("连线 %q 的 route.type 不能为空。", edgeID),
+					fmt.Sprintf("edges[%d].route.type", index),
+					source,
+					edgeID,
+				)
+			} else if !edge.Route.IsSupported() {
+				result.addIssue(
+					WorkflowValidationBlock,
+					"WORKFLOW_EDGE_ROUTE_TYPE_UNSUPPORTED",
+					fmt.Sprintf("连线 %q 的 route.type 不受支持。", edgeID),
+					fmt.Sprintf("edges[%d].route.type", index),
+					source,
+					edgeID,
+				)
+			}
+			if routeType == WorkflowEdgeRouteOutput && edge.Route.OutputKey() == "" {
+				result.addIssue(
+					WorkflowValidationBlock,
+					"WORKFLOW_EDGE_ROUTE_KEY_REQUIRED",
+					fmt.Sprintf("连线 %q 的 OUTPUT route 必须配置 key 或 label。", edgeID),
+					fmt.Sprintf("edges[%d].route.key", index),
+					source,
+					edgeID,
+				)
+			}
+			if workflowEdgeRouteRequiresCondition(edge.Route) {
+				result.addIssue(
+					WorkflowValidationBlock,
+					"WORKFLOW_EDGE_ROUTE_CONDITION_REQUIRED",
+					fmt.Sprintf("连线 %q 的条件路由必须配置 expression 或 conditionRef。", edgeID),
+					fmt.Sprintf("edges[%d].route", index),
+					source,
+					edgeID,
+				)
+			}
+		}
 		if source == "" || target == "" {
 			result.addIssue(
 				WorkflowValidationBlock,
@@ -147,24 +191,47 @@ func (s WorkflowValidationService) ValidateDefinition(raw json.RawMessage) Workf
 				adjacency[source] = append(adjacency[source], target)
 				hasOutgoingEdge[source] = true
 				hasIncomingEdge[target] = true
-				connectedSourceTarget[source+"\x00"+target] = true
-				outputKey := source + "\x00" + sourceHandle
-				if previousEdgeID, ok := outgoingEdgeByOutput[outputKey]; ok {
-					result.addIssue(
-						WorkflowValidationBlock,
-						"WORKFLOW_OUTPUT_DUPLICATED_EDGE",
-						fmt.Sprintf("节点 %q 的同一个输出点 %q 已存在连线 %q，不能重复连出。", source, sourceHandle, previousEdgeID),
-						fmt.Sprintf("edges[%d].sourceHandle", index),
-						source,
-						edgeID,
-					)
-				} else {
-					outgoingEdgeByOutput[outputKey] = edgeID
+				routeOutputKey := workflowEdgeRouteOutputKey(edge, nodeByID[source])
+				if routeOutputKey != "" {
+					if outgoingRoutesByNode[source] == nil {
+						outgoingRoutesByNode[source] = map[string]string{}
+					}
+					outgoingRoutesByNode[source][routeOutputKey] = edgeID
+				}
+				if workflowEdgeRouteIsDefault(edge) {
+					if previousEdgeID, ok := defaultRouteByNode[source]; ok {
+						result.addIssue(
+							WorkflowValidationBlock,
+							"WORKFLOW_BRANCH_DEFAULT_DUPLICATED",
+							fmt.Sprintf("分支节点 %q 已存在默认出口 %q，不能配置多个默认分支。", source, previousEdgeID),
+							fmt.Sprintf("edges[%d].route.default", index),
+							source,
+							edgeID,
+						)
+					} else {
+						defaultRouteByNode[source] = edgeID
+					}
+				}
+				if routeKey != "" {
+					outputKey := source + "\x00" + routeKey
+					if previousEdgeID, ok := outgoingEdgeByOutput[outputKey]; ok {
+						result.addIssue(
+							WorkflowValidationBlock,
+							"WORKFLOW_OUTPUT_DUPLICATED_EDGE",
+							fmt.Sprintf("节点 %q 的同一个输出路由 %q 已存在连线 %q，不能重复连出。", source, routeLabel, previousEdgeID),
+							fmt.Sprintf("edges[%d].route", index),
+							source,
+							edgeID,
+						)
+					} else {
+						outgoingEdgeByOutput[outputKey] = edgeID
+					}
 				}
 			}
 		}
 	}
-	s.validateNodeInputMappings(&result, definition.Nodes, nodeByID, connectedSourceTarget)
+	upstreamSourceTarget := s.upstreamSourceTargets(nodeIDs, adjacency)
+	s.validateNodeInputMappings(&result, definition.Nodes, nodeByID, upstreamSourceTarget)
 	islandNodeIDs := map[string]bool{}
 	if canCheckReachability && len(entryNodeIDs) > 0 {
 		for _, nodeID := range nodeIDs {
@@ -213,10 +280,13 @@ func (s WorkflowValidationService) ValidateDefinition(raw json.RawMessage) Workf
 			)
 		}
 	}
+	if len(result.Items) == 0 {
+		s.validateBranchRouteCoverage(&result, definition.Nodes, outgoingRoutesByNode, defaultRouteByNode)
+	}
 	return result.finalize()
 }
 
-func (s WorkflowValidationService) validateNodeInputMappings(result *WorkflowValidationResult, nodes []WorkflowNode, nodeByID map[string]WorkflowNode, connectedSourceTarget map[string]bool) {
+func (s WorkflowValidationService) validateNodeInputMappings(result *WorkflowValidationResult, nodes []WorkflowNode, nodeByID map[string]WorkflowNode, upstreamSourceTarget map[string]bool) {
 	for nodeIndex, node := range nodes {
 		nodeID := strings.TrimSpace(node.ID)
 		if nodeID == "" {
@@ -287,11 +357,11 @@ func (s WorkflowValidationService) validateNodeInputMappings(result *WorkflowVal
 				)
 				continue
 			}
-			if !connectedSourceTarget[ref.SourceNodeID+"\x00"+nodeID] {
+			if !upstreamSourceTarget[ref.SourceNodeID+"\x00"+nodeID] {
 				result.addIssue(
 					WorkflowValidationBlock,
 					"WORKFLOW_NODE_INPUT_MAPPING_SOURCE_NOT_CONNECTED",
-					fmt.Sprintf("节点 %q 的输入变量 %q 引用了未连接到当前节点的源节点 %q。", nodeID, inputKey, ref.SourceNodeID),
+					fmt.Sprintf("节点 %q 的输入变量 %q 引用了不在上游路径上的源节点 %q。", nodeID, inputKey, ref.SourceNodeID),
 					inputPath+".sourceNodeId",
 					nodeID,
 					"",
@@ -319,6 +389,25 @@ func (s WorkflowValidationService) validateNodeInputMappings(result *WorkflowVal
 			}
 		}
 	}
+}
+
+func (s WorkflowValidationService) upstreamSourceTargets(nodeIDs []string, adjacency map[string][]string) map[string]bool {
+	out := map[string]bool{}
+	for _, source := range nodeIDs {
+		seen := map[string]bool{}
+		queue := append([]string(nil), adjacency[source]...)
+		for len(queue) > 0 {
+			target := queue[0]
+			queue = queue[1:]
+			if target == "" || seen[target] {
+				continue
+			}
+			seen[target] = true
+			out[source+"\x00"+target] = true
+			queue = append(queue, adjacency[target]...)
+		}
+	}
+	return out
 }
 
 func (s WorkflowValidationService) nodeConfigMap(raw json.RawMessage) (map[string]any, bool) {
@@ -351,6 +440,143 @@ func mappingRef(value any) WorkflowNodeInputMappingRef {
 		outputKey, _ = item["output"].(string)
 	}
 	return WorkflowNodeInputMappingRef{SourceNodeID: strings.TrimSpace(sourceNodeID), OutputKey: strings.TrimSpace(outputKey), Path: strings.TrimSpace(path)}
+}
+
+func workflowEdgeRouteKey(edge WorkflowEdge) (string, string) {
+	if edge.Route == nil {
+		fallback := strings.TrimSpace(edge.SourceHandle)
+		if fallback == "" {
+			fallback = strings.TrimSpace(edge.Label)
+		}
+		if fallback == "" {
+			fallback = "DEFAULT"
+		}
+		return "LEGACY:" + strings.ToUpper(fallback), fallback
+	}
+	routeType := string(edge.Route.NormalizedType())
+	label := strings.TrimSpace(edge.Route.Label)
+	if routeType == "" || !edge.Route.IsSupported() {
+		return "", label
+	}
+	if edge.Route.NormalizedType() == WorkflowEdgeRouteOutput && edge.Route.OutputKey() == "" {
+		return "", label
+	}
+	key := strings.TrimSpace(edge.Route.Key)
+	if key == "" {
+		key = label
+	}
+	if key == "" {
+		key = routeType
+	}
+	if label == "" {
+		label = key
+	}
+	return routeType + ":" + strings.ToUpper(key), label
+}
+
+func workflowEdgeRouteRequiresCondition(route *WorkflowEdgeRoute) bool {
+	if route == nil {
+		return false
+	}
+	return route.RequiresCondition()
+}
+
+func workflowEdgeRouteIsDefault(edge WorkflowEdge) bool {
+	if edge.Route == nil {
+		return false
+	}
+	return edge.Route.IsDefault()
+}
+
+func workflowEdgeRouteOutputKey(edge WorkflowEdge, sourceNode WorkflowNode) string {
+	if edge.Route != nil {
+		if value := edge.Route.OutputKey(); value != "" {
+			return value
+		}
+	}
+	for _, value := range []string{edge.Label, edge.SourceHandle} {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if strings.HasPrefix(value, "output-") {
+			if outputKey := workflowNodeOutputByHandle(sourceNode, value); outputKey != "" {
+				return outputKey
+			}
+		}
+		return strings.ToUpper(value)
+	}
+	return ""
+}
+
+func workflowNodeOutputByHandle(node WorkflowNode, sourceHandle string) string {
+	indexText := strings.TrimPrefix(sourceHandle, "output-")
+	index, err := strconv.Atoi(indexText)
+	if err != nil || index < 0 {
+		return ""
+	}
+	outputs := node.Outputs
+	if len(outputs) == 0 {
+		schema, ok := DefaultWorkflowNodeConfigSchemas().Get(strings.TrimSpace(node.Type))
+		if ok {
+			for _, output := range schema.Outputs {
+				outputs = append(outputs, output.Key)
+			}
+		}
+	}
+	if index >= len(outputs) {
+		return ""
+	}
+	return strings.ToUpper(strings.TrimSpace(outputs[index]))
+}
+
+func (s WorkflowValidationService) validateBranchRouteCoverage(result *WorkflowValidationResult, nodes []WorkflowNode, outgoingRoutesByNode map[string]map[string]string, defaultRouteByNode map[string]string) {
+	for index, node := range nodes {
+		nodeID := strings.TrimSpace(node.ID)
+		required := requiredBranchRouteOutputs(s.nodeType(node))
+		if nodeID == "" || len(required) == 0 {
+			continue
+		}
+		covered := outgoingRoutesByNode[nodeID]
+		for _, outputKey := range required {
+			if covered != nil {
+				if _, ok := covered[outputKey]; ok {
+					continue
+				}
+			}
+			result.addIssue(
+				WorkflowValidationBlock,
+				"WORKFLOW_BRANCH_ROUTE_MISSING",
+				fmt.Sprintf("分支节点 %q 缺少出口路由 %q。", nodeID, outputKey),
+				fmt.Sprintf("nodes[%d].outputs.%s", index, outputKey),
+				nodeID,
+				"",
+			)
+		}
+		if _, ok := defaultRouteByNode[nodeID]; !ok {
+			result.addIssue(
+				WorkflowValidationBlock,
+				"WORKFLOW_BRANCH_DEFAULT_MISSING",
+				fmt.Sprintf("分支节点 %q 必须显式配置默认出口。", nodeID),
+				fmt.Sprintf("nodes[%d].route.default", index),
+				nodeID,
+				"",
+			)
+		}
+	}
+}
+
+func requiredBranchRouteOutputs(nodeType string) []string {
+	switch strings.ToLower(strings.TrimSpace(nodeType)) {
+	case "condition":
+		return []string{"IF", "ELSE"}
+	case "qualify":
+		return []string{"PASS", "BLOCK", "RISK"}
+	case "switch":
+		return []string{"PASS", "BLOCK", "SKIP"}
+	default:
+		return nil
+	}
 }
 
 func (s WorkflowValidationService) nodeDeclaresOutput(node WorkflowNode, outputKey string) bool {
@@ -401,6 +627,32 @@ func (s WorkflowValidationService) validateNodeConfig(result *WorkflowValidation
 		value, exists := config[field.Key]
 		path := fmt.Sprintf("nodes[%d].config.%s", nodeIndex, field.Key)
 		if !exists || s.isEmptyConfigValue(value) {
+			if defaultValue, hasDefault := s.defaultConfigValue(field); hasDefault {
+				if !s.configValueMatchesField(defaultValue, field) {
+					result.addIssue(
+						WorkflowValidationBlock,
+						"WORKFLOW_NODE_CONFIG_DEFAULT_INVALID",
+						fmt.Sprintf("节点 %q 的配置 %q 默认值类型不正确，应为 %s。", nodeID, field.Key, field.Type),
+						path,
+						nodeID,
+						"",
+					)
+					continue
+				}
+				if field.Type == WorkflowNodeConfigEnum && !s.enumValueAllowed(defaultValue, field.Options) {
+					result.addIssue(
+						WorkflowValidationBlock,
+						"WORKFLOW_NODE_CONFIG_ENUM_INVALID",
+						fmt.Sprintf("节点 %q 的配置 %q 默认值不在允许范围内。", nodeID, field.Key),
+						path,
+						nodeID,
+						"",
+					)
+					continue
+				}
+				s.validateConfigRules(result, nodeID, path, field, defaultValue)
+				continue
+			}
 			if field.Required {
 				result.addIssue(
 					WorkflowValidationBlock,
@@ -436,6 +688,24 @@ func (s WorkflowValidationService) validateNodeConfig(result *WorkflowValidation
 		}
 		s.validateConfigRules(result, nodeID, path, field, value)
 	}
+}
+
+func (s WorkflowValidationService) defaultConfigValue(field WorkflowNodeConfigField) (any, bool) {
+	if field.Default == nil || s.isEmptyConfigValue(field.Default) {
+		return nil, false
+	}
+	encoded, err := json.Marshal(field.Default)
+	if err != nil {
+		return field.Default, true
+	}
+	var decoded any
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		return field.Default, true
+	}
+	if s.isEmptyConfigValue(decoded) {
+		return nil, false
+	}
+	return decoded, true
 }
 
 func (s WorkflowValidationService) isEmptyConfigValue(value any) bool {

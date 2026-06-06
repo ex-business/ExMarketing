@@ -139,28 +139,85 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 			[]string{"matched_activity"},
 			[]string{"输出 matched_activity 后，下游 Qualify / Reward 可以直接引用活动配置。"},
 		)),
-		schema("condition", "条件判断", "布尔条件分支", fields(
-			stringField("expression", "表达式", false, ""),
-			enumField("missingFieldPolicy", "缺失字段策略", false, "FALSE", []string{"FALSE", "ERROR", "SKIP"}),
+		groupedSchema("condition", "条件判断", "根据表达式输出 IF / ELSE 分支。", groups(
+			fieldGroup("expression", "条件表达式", "定义判断逻辑和输入字段缺失时的处理方式。", fields(
+				withDescription(stringField("expression", "表达式", true, "$.fact.amount >= 100", rules(minLength(1), maxLength(2000))), "支持读取 fact、event_context 或上游输出的条件表达式。"),
+				enumField("expressionLanguage", "表达式语言", true, "RULE_EXPR", []string{"RULE_EXPR", "JSON_LOGIC", "CEL"}),
+				enumField("missingFieldPolicy", "缺失字段策略", true, "FALSE", []string{"FALSE", "ERROR", "SKIP"}),
+			)),
+			fieldGroup("routing", "分支输出", "控制条件成立、不成立和异常时的 route 语义。", fields(
+				withDescription(stringField("trueLabel", "成立分支 Label", true, "IF", rules(minLength(1), maxLength(32))), "表达式为 true 时输出的分支标签。"),
+				withDescription(stringField("falseLabel", "不成立分支 Label", true, "ELSE", rules(minLength(1), maxLength(32))), "表达式为 false 时输出的分支标签。"),
+				enumField("errorAction", "表达式异常动作", true, "BLOCK", []string{"BLOCK", "ELSE", "SKIP"}),
+			)),
+		), preview(
+			[]string{"fact", "condition_expr", "上游变量引用"},
+			[]string{"IF", "ELSE"},
+			[]string{"发布前会校验条件分支必须有默认路径或明确 ELSE。"},
 		)),
-		schema("qualify", "资格校验", "资格、风控和名单规则", fields(
-			arrayField("ruleCodes", "规则编码", false, "要执行的资格规则编码。"),
-			enumField("riskPolicy", "风控策略", false, "BLOCK", []string{"PASS", "BLOCK", "RISK"}),
+		groupedSchema("qualify", "资格校验", "执行资格、风控和名单规则，输出 PASS / BLOCK / RISK。", groups(
+			fieldGroup("rules", "规则集合", "定义需要执行的资格规则和命中策略。", fields(
+				withDefault(arrayField("ruleCodes", "规则编码", true, "要执行的资格规则编码，例如 ELIGIBILITY、KYC、RISK_SCORE。", rules(minItems(1), maxItems(50))), []string{"ELIGIBILITY"}),
+				enumField("evaluationMode", "执行模式", true, "ALL_PASS", []string{"ALL_PASS", "ANY_PASS", "FIRST_DECISION"}),
+				booleanField("stopOnFirstBlock", "阻断即停止", false, true),
+			)),
+			fieldGroup("risk", "风险处理", "控制风险命中和资格失败时的分支。", fields(
+				enumField("riskPolicy", "风控策略", true, "BLOCK", []string{"PASS", "BLOCK", "RISK"}),
+				enumField("blockAction", "资格失败动作", true, "BLOCK", []string{"BLOCK", "RISK", "SKIP"}),
+				withDescription(stringField("reasonPath", "原因输出 Path", false, "qualification.reason", rules(maxLength(160))), "写入资格失败或风险原因的上下文路径。"),
+			)),
+		), preview(
+			[]string{"event_context", "matched_activity", "规则配置"},
+			[]string{"PASS", "BLOCK", "RISK"},
+			[]string{"PASS 分支进入奖励或限制，BLOCK/RISK 分支可接审计、告警或终止。"},
 		)),
-		schema("switch", "条件分支", "按阶段结果选择路径", fields(
-			stringField("sourcePath", "分支字段路径", false, "stage_result.status"),
-			arrayField("cases", "分支项", false, "分支匹配项。"),
+		groupedSchema("switch", "条件分支", "按上游阶段结果选择多个业务分支。", groups(
+			fieldGroup("source", "分支来源", "定义从哪个字段读取分支值。", fields(
+				withDescription(stringField("sourcePath", "分支字段路径", true, "stage_result.status", rules(minLength(1), maxLength(160))), "从 stage_result 或上游输出读取分支 key 的路径。"),
+				enumField("matchMode", "匹配模式", true, "EXACT", []string{"EXACT", "PREFIX", "REGEX", "IN_SET"}),
+				enumField("missingValuePolicy", "缺失值策略", true, "DEFAULT", []string{"DEFAULT", "BLOCK", "SKIP"}),
+			)),
+			fieldGroup("cases", "分支配置", "定义显式分支和默认分支。", fields(
+				withDefault(arrayField("cases", "分支项", true, "分支匹配项，建议包含 key、label、target 语义。", rules(minItems(1), maxItems(30))), []string{"PASS", "BLOCK"}),
+				withDescription(stringField("defaultCase", "默认分支", true, "DEFAULT", rules(minLength(1), maxLength(64))), "没有命中任何 case 时使用的默认分支。"),
+				booleanField("requireDefaultRoute", "要求默认连线", false, true),
+			)),
+		), preview(
+			[]string{"stage_result", "sourcePath 指向的业务状态"},
+			[]string{"PASS", "BLOCK", "SKIP"},
+			[]string{"画布 route label 应与 cases/defaultCase 保持一致，Executor 按 route rule 决定下一节点。"},
 		)),
-		schema("fact-query", "事实查询", "查询外部事实数据", fields(
-			arrayField("factKeys", "事实 Key", false, "需要查询的事实字段。", rules(maxItems(50))),
-			numberField("timeoutSeconds", "超时秒数", false, 3, rules(minValue(1), maxValue(30))),
+		groupedSchema("fact-query", "事实查询", "查询用户、订单、交易或外部事实数据。", groups(
+			fieldGroup("query", "查询定义", "定义要查询的事实 key 和查询范围。", fields(
+				withDefault(arrayField("factKeys", "事实 Key", true, "需要查询的事实字段，例如 USER_PROFILE、ORDER_SUMMARY。", rules(minItems(1), maxItems(50))), []string{"USER_PROFILE"}),
+				enumField("source", "数据来源", true, "FACT_SERVICE", []string{"FACT_SERVICE", "WAREHOUSE", "CACHE", "HTTP_PROVIDER"}),
+				withDescription(stringField("subjectPath", "主体 Path", true, "subject.id", rules(minLength(1), maxLength(160))), "从输入中读取 userId、orderId 或业务主体 ID 的路径。"),
+			)),
+			fieldGroup("runtime", "运行策略", "控制查询超时、缓存和失败时的行为。", fields(
+				numberField("timeoutSeconds", "超时秒数", true, 3, rules(minValue(1), maxValue(30))),
+				numberField("cacheTtlSeconds", "缓存秒数", false, 60, rules(minValue(0), maxValue(86400))),
+				enumField("failureAction", "查询失败动作", true, "BLOCK", []string{"BLOCK", "USE_EMPTY", "SKIP"}),
+			)),
+		), preview(
+			[]string{"subject", "fact_keys", "外部事实源"},
+			[]string{"facts"},
+			[]string{"facts 可供 condition、qualify、reward 等下游节点引用。"},
 		)),
-		schema("code", "代码执行", "通过代码片段处理上下文并输出结果", fields(
-			enumField("language", "语言", true, "LUA", []string{"LUA", "EXPRESSION", "JAVASCRIPT", "PYTHON"}),
-			withDescription(stringField("source", "代码", true, "", rules(minLength(1), maxLength(20000))), "节点执行的代码片段或表达式。"),
-			numberField("timeoutSeconds", "超时秒数", false, 5, rules(minValue(1), maxValue(60))),
-			numberField("maxOutputBytes", "最大输出字节数", false, 65536, rules(minValue(1024), maxValue(1048576))),
-			stringField("outputPath", "输出路径", false, "code_result", rules(maxLength(128))),
+		groupedSchema("code", "代码执行", "用受控代码片段处理上下文并输出 code_result。", groups(
+			fieldGroup("runtime", "运行时", "定义代码语言、执行超时和输出限制。", fields(
+				enumField("language", "语言", true, "LUA", []string{"LUA", "EXPRESSION", "JAVASCRIPT", "PYTHON"}),
+				numberField("timeoutSeconds", "超时秒数", true, 5, rules(minValue(1), maxValue(60))),
+				numberField("maxOutputBytes", "最大输出字节数", true, 65536, rules(minValue(1024), maxValue(1048576))),
+			)),
+			fieldGroup("script", "脚本和输出", "定义实际执行代码和输出路径。", fields(
+				withDescription(stringField("source", "代码", true, "", rules(minLength(1), maxLength(20000))), "节点执行的代码片段或表达式。"),
+				withDescription(stringField("outputPath", "输出路径", true, "code_result", rules(minLength(1), maxLength(128))), "代码执行结果写入上下文的路径。"),
+				booleanField("allowNetwork", "允许网络访问", false, false),
+			)),
+		), preview(
+			[]string{"context", "input", "上游变量引用"},
+			[]string{"code_result"},
+			[]string{"生产建议优先使用 LUA / EXPRESSION；外部网络访问默认关闭。"},
 		)),
 		groupedSchema("reward", "奖励计算", "根据资格结果生成 reward_items。", groups(
 			fieldGroup("reward-definition", "奖励定义", "定义奖励编码、类型和金额计算方式。", fields(
@@ -186,10 +243,21 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 			numberField("scale", "小数位", false, 2, rules(minValue(0), maxValue(18))),
 			enumField("roundingMode", "舍入模式", false, "HALF_UP", []string{"HALF_UP", "DOWN", "UP"}),
 		)),
-		schema("limit", "次数限制", "限制参与次数", fields(
-			enumField("scope", "限制范围", false, "USER", []string{"USER", "ACTIVITY", "TENANT", "BIZ"}),
-			numberField("maxCount", "最大次数", false, 1, rules(minValue(1))),
-			stringField("period", "周期", false, "ACTIVITY", rules(minLength(3), maxLength(64))),
+		groupedSchema("limit", "次数限制", "限制用户、活动、租户或业务维度的参与次数。", groups(
+			fieldGroup("counter", "计数维度", "定义计数 bucket 和周期。", fields(
+				enumField("scope", "限制范围", true, "USER", []string{"USER", "ACTIVITY", "TENANT", "BIZ"}),
+				withDescription(stringField("scopeKeyTemplate", "Scope Key 模板", true, "${subject.id}:${activityId}", rules(minLength(1), maxLength(256))), "用于组成计数 key，必须稳定定位同一限制主体。"),
+				enumField("period", "周期", true, "ACTIVITY", []string{"ACTIVITY", "DAY", "WEEK", "MONTH", "ROLLING_WINDOW"}),
+			)),
+			fieldGroup("policy", "限制策略", "控制最大次数、占用模式和超限分支。", fields(
+				numberField("maxCount", "最大次数", true, 1, rules(minValue(1), maxValue(1000000))),
+				enumField("consumeMode", "占用模式", true, "ATOMIC", []string{"ATOMIC", "CHECK_ONLY", "RESERVE_ONLY"}),
+				enumField("exceedAction", "超限动作", true, "BLOCK", []string{"BLOCK", "RISK", "SKIP"}),
+			)),
+		), preview(
+			[]string{"subject", "activity_id", "历史参与计数"},
+			[]string{"limit_hold"},
+			[]string{"limit_hold 可被 quota 使用；超限时走 BLOCK/RISK/SKIP 分支。"},
 		)),
 		groupedSchema("quota", "预算库存扣减", "对奖励预算、库存或用户额度做原子占用。", groups(
 			fieldGroup("quota-target", "Quota 对象", "定义要扣减的预算或库存维度。", fields(
@@ -235,9 +303,21 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 			withDescription(stringField("receiverCode", "接收方编码", true, "", rules(pattern(`^[a-zA-Z0-9._-]+$`, "接收方编码只能包含字母、数字、点、下划线和短横线。"), maxLength(128))), "后端 Webhook receiver 配置中的业务编码。"),
 			numberField("timeoutSeconds", "超时秒数", false, 5, rules(minValue(1), maxValue(60))),
 		)),
-		schema("callback", "结果回调", "处理发奖回调", fields(
-			stringField("provider", "渠道编码", false, ""),
-			booleanField("requireSignature", "验签", false, true),
+		groupedSchema("callback", "结果回调", "处理发奖渠道、外部系统或活动平台的回调结果。", groups(
+			fieldGroup("provider", "回调来源", "定义允许哪个渠道回调以及如何识别回调事件。", fields(
+				withDescription(stringField("provider", "渠道编码", true, "default", rules(minLength(1), maxLength(128), pattern(`^[a-zA-Z0-9._-]+$`, "渠道编码只能包含字母、数字、点、下划线和短横线。"))), "外部渠道或内部 provider 编码。"),
+				withDescription(stringField("callbackIdPath", "回调 ID Path", true, "$.callbackId", rules(minLength(1), maxLength(160))), "从 provider_callback 中读取回调唯一 ID 的路径。"),
+				withDescription(stringField("statusPath", "状态 Path", true, "$.status", rules(minLength(1), maxLength(160))), "从 provider_callback 中读取 SUCCESS / FAILED 等状态。"),
+			)),
+			fieldGroup("security", "安全和幂等", "控制验签、时间窗口和重复回调处理。", fields(
+				booleanField("requireSignature", "验签", false, true),
+				numberField("maxSkewSeconds", "最大时间偏移秒数", false, 300, rules(minValue(0), maxValue(86400))),
+				enumField("duplicatePolicy", "重复回调策略", true, "RETURN_EXISTING", []string{"RETURN_EXISTING", "REJECT", "OVERWRITE"}),
+			)),
+		), preview(
+			[]string{"provider_callback", "signature headers"},
+			[]string{"callback_result"},
+			[]string{"callback_result 会影响发奖订单最终状态，并可进入 audit / reconcile。"},
 		)),
 		schema("retry", "失败重试", "失败消息重试", fields(
 			numberField("maxAttempts", "最大次数", false, 3, rules(minValue(1), maxValue(10))),
@@ -246,9 +326,21 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 		schema("dlq", "死信队列", "写入死信队列", fields(
 			stringField("reasonTemplate", "原因模板", false, "${lastError}"),
 		)),
-		schema("audit", "审计记录", "写入审计证据", fields(
-			stringField("action", "审计动作", false, "WORKFLOW_NODE"),
-			booleanField("includePayload", "包含上下文", false, true),
+		groupedSchema("audit", "审计记录", "写入 workflow 关键节点的审计证据。", groups(
+			fieldGroup("event", "审计事件", "定义审计动作、对象和严重级别。", fields(
+				withDescription(stringField("action", "审计动作", true, "WORKFLOW_NODE", rules(minLength(2), maxLength(128))), "审计日志中的 action 字段。"),
+				enumField("severity", "级别", true, "INFO", []string{"INFO", "WARN", "ERROR", "CRITICAL"}),
+				withDescription(stringField("targetType", "对象类型", true, "WORKFLOW_NODE", rules(minLength(2), maxLength(128))), "审计日志中的 target type。"),
+			)),
+			fieldGroup("payload", "审计内容", "控制是否记录上下文和敏感字段处理。", fields(
+				booleanField("includePayload", "包含上下文", false, true),
+				withDefault(arrayField("redactPaths", "脱敏 Path", false, "需要从 payload 中脱敏的 JSONPath。", rules(maxItems(50))), []string{"$.token", "$.password"}),
+				enumField("retentionPolicy", "保留策略", true, "STANDARD", []string{"STANDARD", "SHORT", "LONG", "LEGAL_HOLD"}),
+			)),
+		), preview(
+			[]string{"stage_result", "node input/output", "execution metadata"},
+			[]string{"audit_log"},
+			[]string{"建议在 BLOCK、RISK、CALLBACK、RECONCILE 等关键路径后接 Audit。"},
 		)),
 		schema("reconcile", "对账校验", "一致性扫描和修复建议", fields(
 			arrayField("targets", "对账对象", false, "grant、quota、callback、outbox。", rules(maxItems(10))),

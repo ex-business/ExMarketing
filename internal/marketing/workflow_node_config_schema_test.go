@@ -186,7 +186,7 @@ func TestDefaultWorkflowNodeConfigSchemasIncludeCodeNodeRequiredSource(t *testin
 
 func TestProductizedCoreNodeConfigSchemasIncludeGroupsAndPreview(t *testing.T) {
 	registry := DefaultWorkflowNodeConfigSchemas()
-	for _, nodeType := range []string{"event-in", "inbox", "match", "reward", "quota"} {
+	for _, nodeType := range []string{"event-in", "inbox", "match", "condition", "qualify", "switch", "fact-query", "code", "reward", "limit", "quota", "callback", "audit"} {
 		schema, ok := registry.Get(nodeType)
 		if !ok {
 			t.Fatalf("expected schema for %s", nodeType)

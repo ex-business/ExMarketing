@@ -258,7 +258,11 @@ func normalizeWorkflowTemplateParameters(parameters map[string]any) map[string]a
 }
 
 func workflowTemplateParamString(parameters map[string]any, key string) string {
-	switch value := parameters[key].(type) {
+	value, ok := parameters[key]
+	if !ok || value == nil {
+		return ""
+	}
+	switch value := value.(type) {
 	case string:
 		return strings.TrimSpace(value)
 	default:
@@ -394,17 +398,89 @@ func workflowTemplateNodeOutputs(nodeType string) []string {
 
 func workflowTemplateNodeConfig(nodeType string) map[string]any {
 	configs := map[string]map[string]any{
-		"event-in":   {"eventTypes": []string{"DEPOSIT_SUCCESS"}, "sourceSystems": []string{"payment"}},
-		"inbox":      {"idempotencyKeyTemplate": "${tenantId}:${eventId}", "ttlSeconds": 86400},
-		"match":      {"mode": "FIRST_MATCH", "requireActiveActivity": true},
-		"qualify":    {"ruleCodes": []string{"ELIGIBILITY"}, "riskPolicy": "BLOCK"},
-		"reward":     {"calculateType": "FIXED", "amount": 10, "currency": "USD"},
-		"limit":      {"scope": "USER", "maxCount": 1, "period": "ACTIVITY"},
-		"quota":      {"quotaCode": "DEFAULT_REWARD_BUDGET", "consumeMode": "ATOMIC"},
-		"callback":   {"provider": "default", "requireSignature": true},
-		"audit":      {"action": "WORKFLOW_TEMPLATE", "includePayload": true},
-		"fact-query": {"factKeys": []string{"USER_PROFILE"}, "timeoutSeconds": 3},
-		"normalize":  {"mapping": map[string]any{}, "defaults": map[string]any{}},
+		"event-in": {
+			"eventTypes":             []string{"DEPOSIT_SUCCESS"},
+			"sourceSystems":          []string{"payment"},
+			"tenantScope":            "CURRENT_TENANT",
+			"payloadSchemaVersion":   "standard-v1",
+			"rejectUnknownEventType": true,
+			"traceKeyPath":           "$.traceId",
+		},
+		"inbox": {
+			"idempotencyKeyTemplate": "${tenantId}:${eventId}",
+			"duplicatePolicy":        "RETURN_EXISTING",
+			"ttlSeconds":             86400,
+			"payloadConflictPolicy":  "BLOCK_ON_PAYLOAD_MISMATCH",
+			"requireTraceKey":        false,
+		},
+		"match": {
+			"mode":                  "FIRST_MATCH",
+			"requireActiveActivity": true,
+			"priorityOrder":         "PRIORITY_DESC",
+			"tenantMatchPolicy":     "SAME_TENANT",
+			"fallbackAction":        "NO_MATCH_FAIL",
+			"activityCodePattern":   "",
+		},
+		"qualify": {
+			"ruleCodes":        []string{"ELIGIBILITY"},
+			"evaluationMode":   "ALL_PASS",
+			"stopOnFirstBlock": true,
+			"riskPolicy":       "BLOCK",
+			"blockAction":      "BLOCK",
+			"reasonPath":       "qualification.reason",
+		},
+		"reward": {
+			"rewardCode":       "STUDIO_DEFAULT_REWARD",
+			"rewardType":       "BONUS",
+			"calculateType":    "FIXED",
+			"amount":           10,
+			"currency":         "USD",
+			"amountSourcePath": "$.qualified_context.order.amount",
+			"grantMode":        "AUTO",
+			"grantChannel":     "HTTP",
+		},
+		"limit": {
+			"scope":            "USER",
+			"scopeKeyTemplate": "${subject.id}:${activityId}",
+			"period":           "ACTIVITY",
+			"maxCount":         1,
+			"consumeMode":      "ATOMIC",
+			"exceedAction":     "BLOCK",
+		},
+		"quota": {
+			"quotaCode":        "DEFAULT_REWARD_BUDGET",
+			"quotaType":        "BUDGET",
+			"scope":            "ACTIVITY",
+			"scopeKeyTemplate": "${activityId}",
+			"consumeMode":      "ATOMIC",
+			"amountField":      "reward_items[0].amount",
+			"failAction":       "BLOCK",
+		},
+		"callback": {
+			"provider":         "default",
+			"callbackIdPath":   "$.callbackId",
+			"statusPath":       "$.status",
+			"requireSignature": true,
+			"maxSkewSeconds":   300,
+			"duplicatePolicy":  "RETURN_EXISTING",
+		},
+		"audit": {
+			"action":          "WORKFLOW_TEMPLATE",
+			"severity":        "INFO",
+			"targetType":      "WORKFLOW_NODE",
+			"includePayload":  true,
+			"redactPaths":     []string{"$.token", "$.password"},
+			"retentionPolicy": "STANDARD",
+		},
+		"fact-query": {
+			"factKeys":        []string{"USER_PROFILE"},
+			"source":          "FACT_SERVICE",
+			"subjectPath":     "subject.id",
+			"timeoutSeconds":  3,
+			"cacheTtlSeconds": 60,
+			"failureAction":   "BLOCK",
+		},
+		"normalize": {"mapping": map[string]any{}, "defaults": map[string]any{}},
 	}
 	return configs[nodeType]
 }

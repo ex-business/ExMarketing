@@ -239,6 +239,187 @@ func TestPostgresWorkspaceCompositeConstraintsRejectCrossWorkspaceReferences(t *
 	}
 }
 
+func TestPostgresWorkspaceSearchLargeDatasetPerformance(t *testing.T) {
+	ctx, repo := openPostgresIntegrationRepository(t)
+	prefix := fmt.Sprintf("pg_search_perf_%d", time.Now().UnixNano())
+	cleanupPostgresWorkspaceTest(t, repo, prefix)
+	t.Cleanup(func() { cleanupPostgresWorkspaceTest(t, repo, prefix) })
+
+	now := time.Now().UTC()
+	actorID := prefix + "_actor"
+	workspaceID := prefix + "_workspace"
+	if _, err := repo.db.ExecContext(ctx, `
+		INSERT INTO marketing_workspace (
+			id, tenant_id, name, slug, description, icon, color, visibility, default_role, owner_id, status, created_by, updated_by, created_at, updated_at
+		) VALUES ($1, 'site_001', 'Search Performance Workspace', $2, 'large search fixture', '', '', 'TEAM', 'VIEWER', $3, 'ACTIVE', $3, $3, $4, $4)
+	`, workspaceID, prefix+"-workspace", actorID, now); err != nil {
+		t.Fatalf("insert workspace: %v", err)
+	}
+	if _, err := repo.db.ExecContext(ctx, `
+		INSERT INTO marketing_workspace_member (
+			id, workspace_id, user_id, email, display_name, role, status, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, 'Search Actor', 'ADMIN', 'ACTIVE', $5, $5)
+	`, prefix+"_member", workspaceID, actorID, actorID+"@example.com", now); err != nil {
+		t.Fatalf("insert member: %v", err)
+	}
+	if _, err := repo.db.ExecContext(ctx, `
+		INSERT INTO marketing_workspace_folder (
+			id, workspace_id, parent_id, name, description, icon, color, visibility, sort_order, status, created_by, updated_by, created_at, updated_at
+		)
+		SELECT $1 || '_folder_' || gs::text, $2, NULL,
+		       CASE WHEN gs % 97 = 0 THEN 'needle-campaign folder ' || gs::text ELSE 'bulk folder ' || gs::text END,
+		       'folder performance fixture ' || gs::text, '', '', 'TEAM', gs, 'ACTIVE', $3, $3, $4, $4
+		FROM generate_series(1, 1500) AS gs
+	`, prefix, workspaceID, actorID, now); err != nil {
+		t.Fatalf("insert folders: %v", err)
+	}
+	if _, err := repo.db.ExecContext(ctx, `
+		INSERT INTO marketing_activity (
+			id, tenant_id, workspace_id, folder_id, activity_code, activity_name, activity_type, status, visibility,
+			trigger_events, start_time, end_time, timezone, priority, exclusive_group, stackable, plugin_code,
+			version, config_json, created_at, updated_at
+		)
+		SELECT $1 || '_activity_' || gs::text, 'site_001', $2, $1 || '_folder_' || ((gs % 1500) + 1)::text,
+		       $1 || '_ACT_' || gs::text,
+		       CASE WHEN gs % 101 = 0 THEN 'needle-campaign workflow ' || gs::text ELSE 'bulk workflow ' || gs::text END,
+		       'MARKETING', 'ACTIVE', 'TEAM', '[]'::jsonb, $3::timestamptz, $3::timestamptz + interval '30 days', 'UTC', 0, '', false, '',
+		       1, '{}'::jsonb, $3::timestamptz, $3::timestamptz
+		FROM generate_series(1, 3500) AS gs
+	`, prefix, workspaceID, now); err != nil {
+		t.Fatalf("insert activities: %v", err)
+	}
+
+	start := time.Now()
+	result, err := repo.SearchWorkspaceHome(ctx, marketing.WorkspaceHomeSearchQuery{
+		Keyword: "needle-campaign",
+		ActorID: actorID,
+		Limit:   20,
+	})
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("search large dataset: %v", err)
+	}
+	if len(result.Items) == 0 || result.Total == 0 {
+		t.Fatalf("expected search hits, got %+v", result)
+	}
+	if elapsed > 3*time.Second {
+		t.Fatalf("large dataset search exceeded budget: %s total=%d", elapsed, result.Total)
+	}
+	foundHighlight := false
+	foundPermissionSource := false
+	for _, item := range result.Items {
+		if len(item.PermissionSources) >= 2 {
+			foundPermissionSource = true
+		}
+		if fmt.Sprint(item.Highlights["title"]) != "" || fmt.Sprint(item.Highlights["subtitle"]) != "" {
+			foundHighlight = true
+		}
+	}
+	if !foundHighlight || !foundPermissionSource {
+		t.Fatalf("expected highlights and detailed permission sources, got %+v", result.Items)
+	}
+	t.Logf("large workspace search total=%d returned=%d elapsed=%s", result.Total, len(result.Items), elapsed)
+}
+
+func TestPostgresWorkspaceBatchRollsBackWhenOneWorkflowUnauthorized(t *testing.T) {
+	ctx, repo := openPostgresIntegrationRepository(t)
+	prefix := fmt.Sprintf("pg_batch_acl_%d", time.Now().UnixNano())
+	cleanupPostgresWorkspaceTest(t, repo, prefix)
+	t.Cleanup(func() { cleanupPostgresWorkspaceTest(t, repo, prefix) })
+	fixture := createPostgresBatchFixture(t, ctx, repo, prefix)
+	actorID := prefix + "_editor"
+	if _, err := repo.CreateWorkspaceMember(ctx, marketing.WorkspaceMember{
+		ID:          prefix + "_member_editor",
+		WorkspaceID: fixture.workspace.ID,
+		UserID:      actorID,
+		Role:        marketing.WorkspaceRoleViewer,
+		Status:      marketing.WorkspaceMemberActive,
+		CreatedAt:   fixture.now,
+		UpdatedAt:   fixture.now,
+	}); err != nil {
+		t.Fatalf("create editor member: %v", err)
+	}
+	if _, err := repo.CreateWorkspaceActivityGrant(ctx, marketing.WorkspaceActivityGrant{
+		ID:            prefix + "_grant_allowed",
+		WorkspaceID:   fixture.workspace.ID,
+		ActivityID:    fixture.activeWorkflow.ID,
+		PrincipalType: marketing.WorkspacePrincipalUser,
+		PrincipalID:   actorID,
+		Role:          marketing.WorkspaceRoleEditor,
+		CreatedAt:     fixture.now,
+		UpdatedAt:     fixture.now,
+	}); err != nil {
+		t.Fatalf("create workflow grant: %v", err)
+	}
+
+	result, err := repo.ApplyWorkspaceBatch(ctx, marketing.WorkspaceBatchCommand{
+		WorkspaceID: fixture.workspace.ID,
+		Action:      marketing.WorkspaceBatchPermission,
+		Visibility:  marketing.WorkspacePublic,
+		ActorID:     actorID,
+		Items: []marketing.WorkspaceBatchItem{
+			{ID: fixture.activeWorkflow.ID, Type: marketing.WorkspaceBatchWorkflow},
+			{ID: fixture.secondWorkflow.ID, Type: marketing.WorkspaceBatchWorkflow},
+		},
+	})
+	if !errors.Is(err, marketing.ErrInvalidWorkspace) || result.Committed {
+		t.Fatalf("expected invalid uncommitted batch, result=%+v err=%v", result, err)
+	}
+	assertPostgresBatchFailure(t, result, fixture.secondWorkflow.ID, "actor has no permission for workflow")
+	assertPostgresActivityVisibility(t, repo, fixture.activeWorkflow.ID, marketing.WorkspaceTeam)
+	assertPostgresActivityVisibility(t, repo, fixture.secondWorkflow.ID, marketing.WorkspaceTeam)
+}
+
+func TestPostgresWorkspaceBatchRollsBackIllegalFolderHierarchy(t *testing.T) {
+	ctx, repo := openPostgresIntegrationRepository(t)
+	prefix := fmt.Sprintf("pg_batch_hierarchy_%d", time.Now().UnixNano())
+	cleanupPostgresWorkspaceTest(t, repo, prefix)
+	t.Cleanup(func() { cleanupPostgresWorkspaceTest(t, repo, prefix) })
+	fixture := createPostgresBatchFixture(t, ctx, repo, prefix)
+
+	result, err := repo.ApplyWorkspaceBatch(ctx, marketing.WorkspaceBatchCommand{
+		WorkspaceID: fixture.workspace.ID,
+		Action:      marketing.WorkspaceBatchMove,
+		FolderID:    fixture.childFolder.ID,
+		ActorID:     fixture.workspace.OwnerID,
+		Items: []marketing.WorkspaceBatchItem{
+			{ID: fixture.parentFolder.ID, Type: marketing.WorkspaceBatchFolder},
+			{ID: fixture.activeWorkflow.ID, Type: marketing.WorkspaceBatchWorkflow},
+		},
+	})
+	if !errors.Is(err, marketing.ErrInvalidWorkspace) || result.Committed {
+		t.Fatalf("expected invalid uncommitted batch, result=%+v err=%v", result, err)
+	}
+	assertPostgresBatchFailure(t, result, fixture.parentFolder.ID, "cannot move folder into itself or its descendant")
+	assertPostgresFolderParent(t, repo, fixture.parentFolder.ID, "")
+	assertPostgresActivityFolder(t, repo, fixture.activeWorkflow.ID, fixture.parentFolder.ID)
+}
+
+func TestPostgresWorkspaceBatchRollsBackWhenWorkflowArchived(t *testing.T) {
+	ctx, repo := openPostgresIntegrationRepository(t)
+	prefix := fmt.Sprintf("pg_batch_archived_%d", time.Now().UnixNano())
+	cleanupPostgresWorkspaceTest(t, repo, prefix)
+	t.Cleanup(func() { cleanupPostgresWorkspaceTest(t, repo, prefix) })
+	fixture := createPostgresBatchFixture(t, ctx, repo, prefix)
+
+	result, err := repo.ApplyWorkspaceBatch(ctx, marketing.WorkspaceBatchCommand{
+		WorkspaceID: fixture.workspace.ID,
+		Action:      marketing.WorkspaceBatchMove,
+		FolderID:    fixture.targetFolder.ID,
+		ActorID:     fixture.workspace.OwnerID,
+		Items: []marketing.WorkspaceBatchItem{
+			{ID: fixture.activeWorkflow.ID, Type: marketing.WorkspaceBatchWorkflow},
+			{ID: fixture.archivedWorkflow.ID, Type: marketing.WorkspaceBatchWorkflow},
+		},
+	})
+	if !errors.Is(err, marketing.ErrInvalidWorkspace) || result.Committed {
+		t.Fatalf("expected invalid uncommitted batch, result=%+v err=%v", result, err)
+	}
+	assertPostgresBatchFailure(t, result, fixture.archivedWorkflow.ID, "workflow is archived")
+	assertPostgresActivityFolder(t, repo, fixture.activeWorkflow.ID, fixture.parentFolder.ID)
+	assertPostgresActivityFolder(t, repo, fixture.archivedWorkflow.ID, fixture.parentFolder.ID)
+}
+
 func TestPostgresPluginScheduleEventInboxSmoke(t *testing.T) {
 	databaseURL := os.Getenv("EX_MARKETING_DATABASE_URL")
 	if databaseURL == "" {
@@ -1403,6 +1584,129 @@ func cleanupPostgresWorkspaceTest(t *testing.T, repo *Repository, prefix string)
 		if _, err := repo.db.ExecContext(ctx, stmt, prefix+"%"); err != nil {
 			t.Fatalf("cleanup workspace %q: %v", stmt, err)
 		}
+	}
+}
+
+type postgresBatchFixture struct {
+	now              time.Time
+	workspace        marketing.Workspace
+	parentFolder     marketing.WorkspaceFolder
+	childFolder      marketing.WorkspaceFolder
+	targetFolder     marketing.WorkspaceFolder
+	activeWorkflow   marketing.Activity
+	secondWorkflow   marketing.Activity
+	archivedWorkflow marketing.Activity
+}
+
+func createPostgresBatchFixture(t *testing.T, ctx context.Context, repo *Repository, prefix string) postgresBatchFixture {
+	t.Helper()
+	now := time.Now().UTC()
+	workspace := marketing.Workspace{
+		ID:          prefix + "_workspace",
+		TenantID:    "site_001",
+		Name:        "Batch Workspace",
+		Slug:        prefix + "-workspace",
+		Visibility:  marketing.WorkspacePrivate,
+		DefaultRole: marketing.WorkspaceRoleViewer,
+		OwnerID:     prefix + "_owner",
+		Status:      marketing.WorkspaceActive,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	if _, err := repo.CreateWorkspace(ctx, workspace); err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	parent := marketing.WorkspaceFolder{
+		ID:          prefix + "_folder_parent",
+		WorkspaceID: workspace.ID,
+		Name:        "Parent",
+		Visibility:  marketing.WorkspaceFolderTeam,
+		Status:      marketing.WorkspaceFolderActive,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	child := parent
+	child.ID = prefix + "_folder_child"
+	child.ParentID = parent.ID
+	child.Name = "Child"
+	target := parent
+	target.ID = prefix + "_folder_target"
+	target.Name = "Target"
+	for _, folder := range []marketing.WorkspaceFolder{parent, child, target} {
+		if _, err := repo.CreateWorkspaceFolder(ctx, folder); err != nil {
+			t.Fatalf("create folder %s: %v", folder.ID, err)
+		}
+	}
+	active := testPostgresActivity(prefix+"_workflow_active", "site_001", prefix+"_active", now)
+	active.WorkspaceID = workspace.ID
+	active.FolderID = parent.ID
+	active.Visibility = marketing.WorkspaceTeam
+	second := testPostgresActivity(prefix+"_workflow_second", "site_001", prefix+"_second", now)
+	second.WorkspaceID = workspace.ID
+	second.FolderID = parent.ID
+	second.Visibility = marketing.WorkspaceTeam
+	archived := testPostgresActivity(prefix+"_workflow_archived", "site_001", prefix+"_archived", now)
+	archived.WorkspaceID = workspace.ID
+	archived.FolderID = parent.ID
+	archived.Visibility = marketing.WorkspaceTeam
+	archived.Status = marketing.ActivityArchived
+	for _, activity := range []marketing.Activity{active, second, archived} {
+		if _, err := repo.CreateActivity(ctx, activity); err != nil {
+			t.Fatalf("create activity %s: %v", activity.ID, err)
+		}
+	}
+	return postgresBatchFixture{
+		now:              now,
+		workspace:        workspace,
+		parentFolder:     parent,
+		childFolder:      child,
+		targetFolder:     target,
+		activeWorkflow:   active,
+		secondWorkflow:   second,
+		archivedWorkflow: archived,
+	}
+}
+
+func assertPostgresBatchFailure(t *testing.T, result marketing.WorkspaceBatchResult, id string, contains string) {
+	t.Helper()
+	for _, item := range result.Items {
+		if item.ID == id && item.Status == "FAILED" && strings.Contains(item.Error, contains) {
+			return
+		}
+	}
+	t.Fatalf("expected batch failure id=%s containing %q, got %+v", id, contains, result.Items)
+}
+
+func assertPostgresActivityVisibility(t *testing.T, repo *Repository, activityID string, want marketing.WorkspaceVisibility) {
+	t.Helper()
+	var got marketing.WorkspaceVisibility
+	if err := repo.db.QueryRowContext(context.Background(), `SELECT visibility FROM marketing_activity WHERE id = $1`, activityID).Scan(&got); err != nil {
+		t.Fatalf("query activity visibility %s: %v", activityID, err)
+	}
+	if got != want {
+		t.Fatalf("activity %s visibility got %s want %s", activityID, got, want)
+	}
+}
+
+func assertPostgresActivityFolder(t *testing.T, repo *Repository, activityID string, want string) {
+	t.Helper()
+	var got string
+	if err := repo.db.QueryRowContext(context.Background(), `SELECT COALESCE(folder_id, '') FROM marketing_activity WHERE id = $1`, activityID).Scan(&got); err != nil {
+		t.Fatalf("query activity folder %s: %v", activityID, err)
+	}
+	if got != want {
+		t.Fatalf("activity %s folder got %s want %s", activityID, got, want)
+	}
+}
+
+func assertPostgresFolderParent(t *testing.T, repo *Repository, folderID string, want string) {
+	t.Helper()
+	var got string
+	if err := repo.db.QueryRowContext(context.Background(), `SELECT COALESCE(parent_id, '') FROM marketing_workspace_folder WHERE id = $1`, folderID).Scan(&got); err != nil {
+		t.Fatalf("query folder parent %s: %v", folderID, err)
+	}
+	if got != want {
+		t.Fatalf("folder %s parent got %s want %s", folderID, got, want)
 	}
 }
 

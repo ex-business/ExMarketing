@@ -1,11 +1,15 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -18,6 +22,302 @@ import (
 	"github.com/ex-stack/ExMarketing/internal/marketing"
 	"github.com/ex-stack/ExMarketing/internal/workflow"
 )
+
+func createTestWorkspace(t *testing.T, handler *Handler, actor string) marketing.Workspace {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/admin/v1/workspaces", strings.NewReader(`{
+		"tenantId": "site_001",
+		"name": "Storage Test Workspace",
+		"slug": "storage-test-`+strconv.FormatInt(time.Now().UnixNano(), 36)+`",
+		"visibility": "TEAM",
+		"defaultRole": "VIEWER",
+		"ownerId": "`+actor+`",
+		"createdBy": "`+actor+`"
+	}`))
+	req.Header.Set("X-Actor-Id", actor)
+	rec := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create workspace status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var workspace marketing.Workspace
+	if err := json.NewDecoder(rec.Body).Decode(&workspace); err != nil {
+		t.Fatalf("decode workspace: %v", err)
+	}
+	return workspace
+}
+
+func uploadWorkspaceFileForTest(t *testing.T, handler *Handler, actor string, fields map[string]string, filename string, size int) marketing.WorkspaceFileObject {
+	t.Helper()
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	for key, value := range fields {
+		if err := writer.WriteField(key, value); err != nil {
+			t.Fatalf("write field %s: %v", key, err)
+		}
+	}
+	part, err := writer.CreateFormFile("file", filename)
+	if err != nil {
+		t.Fatalf("create file part: %v", err)
+	}
+	if _, err := io.CopyN(part, bytes.NewReader(bytes.Repeat([]byte("x"), size)), int64(size)); err != nil {
+		t.Fatalf("write upload bytes: %v", err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("close multipart writer: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/admin/v1/workspace-files", &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("X-Actor-Id", actor)
+	rec := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("upload file status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var file marketing.WorkspaceFileObject
+	if err := json.NewDecoder(rec.Body).Decode(&file); err != nil {
+		t.Fatalf("decode file: %v", err)
+	}
+	return file
+}
+
+func TestSharePageStatesAndAccessAudit(t *testing.T) {
+	handler := newTestHandler()
+	routes := handler.Routes()
+	workspace := createTestWorkspace(t, handler, "owner")
+
+	createShare := func(body string) marketing.WorkspaceShareLink {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, "/admin/v1/workspaces/"+workspace.ID+"/share-links", strings.NewReader(body))
+		req.Header.Set("X-Actor-Id", "owner")
+		rec := httptest.NewRecorder()
+		routes.ServeHTTP(rec, req)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("create share failed: %d %s", rec.Code, rec.Body.String())
+		}
+		var link marketing.WorkspaceShareLink
+		if err := json.NewDecoder(rec.Body).Decode(&link); err != nil {
+			t.Fatalf("decode share link: %v", err)
+		}
+		return link
+	}
+
+	protected := createShare(`{
+		"scope": "WORKSPACE",
+		"permission": "VIEW",
+		"passwordHash": "open-sesame",
+		"createdBy": "owner"
+	}`)
+
+	page := httptest.NewRecorder()
+	routes.ServeHTTP(page, httptest.NewRequest(http.MethodGet, "/share/"+protected.Token, nil))
+	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), `id="password-error"`) || !strings.Contains(page.Body.String(), "访问审计") {
+		t.Fatalf("share page missing password/audit UI: %d %s", page.Code, page.Body.String())
+	}
+
+	wrongPassword := httptest.NewRecorder()
+	routes.ServeHTTP(wrongPassword, httptest.NewRequest(http.MethodPost, "/share/"+protected.Token, strings.NewReader(`{"password":"bad"}`)))
+	if wrongPassword.Code != http.StatusUnauthorized || !strings.Contains(wrongPassword.Body.String(), `"code":"SHARE_PASSWORD_INVALID"`) {
+		t.Fatalf("expected password invalid response, got %d %s", wrongPassword.Code, wrongPassword.Body.String())
+	}
+
+	resolve := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/share/"+protected.Token, strings.NewReader(`{"password":"open-sesame"}`))
+	req.Header.Set("X-Actor-Id", "viewer")
+	req.Header.Set("User-Agent", "ShareE2E/1.0")
+	routes.ServeHTTP(resolve, req)
+	if resolve.Code != http.StatusOK {
+		t.Fatalf("resolve share failed: %d %s", resolve.Code, resolve.Body.String())
+	}
+	var payload struct {
+		Link   map[string]any   `json:"link"`
+		Audits []map[string]any `json:"audits"`
+	}
+	if err := json.NewDecoder(resolve.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode resolve payload: %v", err)
+	}
+	if payload.Link["scope"] != string(marketing.WorkspaceShareWorkspace) {
+		t.Fatalf("expected public link scope in resolve payload, got %+v", payload.Link)
+	}
+	if _, ok := payload.Link["passwordHash"]; ok {
+		t.Fatalf("resolve payload leaked passwordHash: %+v", payload.Link)
+	}
+	if _, ok := payload.Link["token"]; ok {
+		t.Fatalf("resolve payload leaked token: %+v", payload.Link)
+	}
+	if len(payload.Audits) == 0 || payload.Audits[0]["createdAt"] == "" || payload.Audits[0]["actorLabel"] == "" {
+		t.Fatalf("expected public access audit summary, got %+v", payload.Audits)
+	}
+	if _, ok := payload.Audits[0]["actorId"]; ok {
+		t.Fatalf("share audit payload leaked actorId: %+v", payload.Audits[0])
+	}
+	if _, ok := payload.Audits[0]["userAgent"]; ok {
+		t.Fatalf("share audit payload leaked userAgent: %+v", payload.Audits[0])
+	}
+	if _, ok := payload.Audits[0]["ip"]; ok {
+		t.Fatalf("share audit payload leaked ip: %+v", payload.Audits[0])
+	}
+
+	expiredAt := time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
+	expired := createShare(`{
+		"scope": "WORKSPACE",
+		"permission": "VIEW",
+		"expiresAt": "` + expiredAt + `",
+		"createdBy": "owner"
+	}`)
+	expiredResolve := httptest.NewRecorder()
+	routes.ServeHTTP(expiredResolve, httptest.NewRequest(http.MethodPost, "/share/"+expired.Token, strings.NewReader(`{}`)))
+	if expiredResolve.Code != http.StatusGone || !strings.Contains(expiredResolve.Body.String(), `"code":"SHARE_EXPIRED"`) {
+		t.Fatalf("expected expired response, got %d %s", expiredResolve.Code, expiredResolve.Body.String())
+	}
+}
+
+func TestWorkspaceInviteEmailSendGridRetryAndAudit(t *testing.T) {
+	attempts := 0
+	sendgrid := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if r.Method != http.MethodPost || r.Header.Get("Authorization") != "Bearer sg-test-key" {
+			t.Fatalf("unexpected sendgrid request method/auth: %s %s", r.Method, r.Header.Get("Authorization"))
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode sendgrid payload: %v", err)
+		}
+		if !strings.Contains(fmt.Sprint(payload), "invitee@example.com") || !strings.Contains(fmt.Sprint(payload), "/invite/") {
+			t.Fatalf("sendgrid payload missing recipient/invite link: %+v", payload)
+		}
+		if attempts == 1 {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte("temporary failure token=raw-secret"))
+			return
+		}
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer sendgrid.Close()
+
+	t.Setenv("EX_MARKETING_INVITE_EMAIL_PROVIDER", "sendgrid")
+	t.Setenv("EX_MARKETING_INVITE_EMAIL_FROM", "noreply@example.com")
+	t.Setenv("EX_MARKETING_SENDGRID_API_KEY", "sg-test-key")
+	t.Setenv("EX_MARKETING_SENDGRID_ENDPOINT", sendgrid.URL)
+	t.Setenv("EX_MARKETING_INVITE_EMAIL_RETRY_ATTEMPTS", "2")
+	t.Setenv("EX_MARKETING_INVITE_EMAIL_RETRY_DELAY_MS", "0")
+	t.Setenv("EX_MARKETING_PUBLIC_BASE_URL", "http://127.0.0.1:5173")
+
+	handler := newTestHandler()
+	workspace := createTestWorkspace(t, handler, "owner")
+	memberReq := httptest.NewRequest(http.MethodPost, "/admin/v1/workspaces/"+workspace.ID+"/members", strings.NewReader(`{
+		"email": "invitee@example.com",
+		"displayName": "Invitee",
+		"role": "EDITOR",
+		"status": "INVITED",
+		"invitedBy": "owner"
+	}`))
+	memberReq.Header.Set("X-Actor-Id", "owner")
+	memberRec := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(memberRec, memberReq)
+	if memberRec.Code != http.StatusCreated {
+		t.Fatalf("create invited member failed: %d %s", memberRec.Code, memberRec.Body.String())
+	}
+	var response workspaceMemberInviteResponse
+	if err := json.NewDecoder(memberRec.Body).Decode(&response); err != nil {
+		t.Fatalf("decode invite response: %v", err)
+	}
+	if response.EmailDelivery.Provider != "sendgrid" || response.EmailDelivery.Status != "sent" || response.EmailDelivery.Attempts != 2 {
+		t.Fatalf("unexpected delivery: %+v", response.EmailDelivery)
+	}
+
+	auditReq := httptest.NewRequest(http.MethodGet, "/admin/v1/workspaces/"+workspace.ID+"/audit-logs?action=SEND_MEMBER_INVITE_EMAIL&limit=10", nil)
+	auditReq.Header.Set("X-Actor-Id", "owner")
+	auditRec := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(auditRec, auditReq)
+	if auditRec.Code != http.StatusOK || !strings.Contains(auditRec.Body.String(), `"SEND_MEMBER_INVITE_EMAIL"`) || !strings.Contains(auditRec.Body.String(), `"sendgrid"`) {
+		t.Fatalf("invite send audit missing: %d %s", auditRec.Code, auditRec.Body.String())
+	}
+}
+
+func TestWorkspaceInvitePageIgnoresClientSuppliedUserID(t *testing.T) {
+	handler := newTestHandler()
+	workspace := createTestWorkspace(t, handler, "owner")
+	memberReq := httptest.NewRequest(http.MethodPost, "/admin/v1/workspaces/"+workspace.ID+"/members", strings.NewReader(`{
+		"email": "invitee-bind@example.com",
+		"displayName": "",
+		"role": "VIEWER",
+		"status": "INVITED",
+		"invitedBy": "owner"
+	}`))
+	memberReq.Header.Set("X-Actor-Id", "owner")
+	memberRec := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(memberRec, memberReq)
+	if memberRec.Code != http.StatusCreated {
+		t.Fatalf("create invited member failed: %d %s", memberRec.Code, memberRec.Body.String())
+	}
+	var response workspaceMemberInviteResponse
+	if err := json.NewDecoder(memberRec.Body).Decode(&response); err != nil {
+		t.Fatalf("decode invite response: %v", err)
+	}
+
+	acceptReq := httptest.NewRequest(http.MethodPost, "/invite/"+response.InviteToken, strings.NewReader(`{
+		"userId": "attacker-controlled-user",
+		"displayName": "Accepted Invitee"
+	}`))
+	acceptRec := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(acceptRec, acceptReq)
+	if acceptRec.Code != http.StatusOK {
+		t.Fatalf("accept invite failed: %d %s", acceptRec.Code, acceptRec.Body.String())
+	}
+	var accepted marketing.WorkspaceMember
+	if err := json.NewDecoder(acceptRec.Body).Decode(&accepted); err != nil {
+		t.Fatalf("decode accepted invite: %v", err)
+	}
+	if accepted.UserID != "invitee-bind@example.com" {
+		t.Fatalf("public invite accepted client supplied user id: %+v", accepted)
+	}
+	if accepted.DisplayName != "Accepted Invitee" {
+		t.Fatalf("expected display name update, got %+v", accepted)
+	}
+}
+
+func TestSESInviteEmailSenderSignsAndSends(t *testing.T) {
+	var gotAuth string
+	var gotToken string
+	var gotPayload string
+	ses := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		gotToken = r.Header.Get("X-Amz-Security-Token")
+		payload, _ := io.ReadAll(r.Body)
+		gotPayload = string(payload)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"MessageId":"msg_1"}`))
+	}))
+	defer ses.Close()
+
+	sender := sesInviteEmailSender{
+		cfg: InviteEmailConfig{
+			Provider:           "ses",
+			From:               "noreply@example.com",
+			SESRegion:          "us-east-1",
+			SESAccessKeyID:     "AKIATEST",
+			SESSecretAccessKey: "secret",
+			SESSessionToken:    "session-token",
+			SESEndpoint:        ses.URL + "/v2/email/outbound-emails",
+		},
+		client: ses.Client(),
+	}
+	delivery := sender.SendWorkspaceInvite(context.Background(), inviteEmailMessage{
+		Workspace: marketing.Workspace{Name: "SES Workspace"},
+		Member:    marketing.WorkspaceMember{Email: "ses@example.com", Role: marketing.WorkspaceRoleViewer},
+		InviteURL: "https://example.com/invite/token",
+	})
+	if delivery.Status != "sent" || delivery.Provider != "ses" {
+		t.Fatalf("unexpected ses delivery: %+v", delivery)
+	}
+	if !strings.HasPrefix(gotAuth, "AWS4-HMAC-SHA256 ") || gotToken != "session-token" {
+		t.Fatalf("SES request was not signed correctly: auth=%q token=%q", gotAuth, gotToken)
+	}
+	if !strings.Contains(gotPayload, "ses@example.com") || !strings.Contains(gotPayload, "SES Workspace") {
+		t.Fatalf("SES payload missing invite details: %s", gotPayload)
+	}
+}
 
 func newTestHandler() *Handler {
 	return NewHandler(engine.NewService(marketing.NewMemoryRepository()))
@@ -72,6 +372,140 @@ func TestHealth(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `"status":"ok"`) {
 		t.Fatalf("unexpected body: %s", rec.Body.String())
+	}
+}
+
+func TestWorkspaceFileStorageLargeUploadStatsAndDelete(t *testing.T) {
+	t.Setenv("EX_MARKETING_FILE_STORAGE_PROVIDER", "local")
+	t.Setenv("EX_MARKETING_FILE_STORAGE_DIR", t.TempDir())
+	handler := newTestHandler()
+	workspace := createTestWorkspace(t, handler, "owner")
+
+	largeSize := 8 * 1024 * 1024
+	versionFile := uploadWorkspaceFileForTest(t, handler, "owner", map[string]string{
+		"workspaceId":       workspace.ID,
+		"kind":              string(marketing.WorkspaceFileWorkflowVersion),
+		"workflowVersionId": "wfv_large",
+	}, "workflow-version-large.bin", largeSize)
+	if versionFile.SizeBytes != int64(largeSize) || versionFile.StorageProvider != "local" || versionFile.WorkflowVersionID != "wfv_large" {
+		t.Fatalf("unexpected large version file: %+v", versionFile)
+	}
+	traceFile := uploadWorkspaceFileForTest(t, handler, "owner", map[string]string{
+		"workspaceId": workspace.ID,
+		"kind":        string(marketing.WorkspaceFileExecutionTrace),
+		"executionId": "exec_large",
+	}, "execution-trace.json", 1024)
+	if traceFile.Kind != marketing.WorkspaceFileExecutionTrace || traceFile.ExecutionID != "exec_large" {
+		t.Fatalf("unexpected trace file: %+v", traceFile)
+	}
+
+	storage := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/admin/v1/workspace-home/storage", nil)
+	req.Header.Set("X-Actor-Id", "owner")
+	handler.Routes().ServeHTTP(storage, req)
+	if storage.Code != http.StatusOK {
+		t.Fatalf("storage summary status=%d body=%s", storage.Code, storage.Body.String())
+	}
+	var summary marketing.WorkspaceStorageUsage
+	if err := json.NewDecoder(storage.Body).Decode(&summary); err != nil {
+		t.Fatalf("decode storage summary: %v", err)
+	}
+	if summary.FileObjects != 2 || summary.FileBytes < int64(largeSize+1024) {
+		t.Fatalf("expected file object/bytes summary, got %+v", summary)
+	}
+
+	listWithoutWorkspace := httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/admin/v1/workspace-files", nil)
+	req.Header.Set("X-Actor-Id", "owner")
+	handler.Routes().ServeHTTP(listWithoutWorkspace, req)
+	if listWithoutWorkspace.Code != http.StatusBadRequest {
+		t.Fatalf("expected workspaceId requirement, got %d %s", listWithoutWorkspace.Code, listWithoutWorkspace.Body.String())
+	}
+
+	listForWorkspace := httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/admin/v1/workspace-files?workspaceId="+workspace.ID, nil)
+	req.Header.Set("X-Actor-Id", "owner")
+	handler.Routes().ServeHTTP(listForWorkspace, req)
+	if listForWorkspace.Code != http.StatusOK {
+		t.Fatalf("list workspace files status=%d body=%s", listForWorkspace.Code, listForWorkspace.Body.String())
+	}
+	var listPayload struct {
+		Items []marketing.WorkspaceFileObject `json:"items"`
+	}
+	if err := json.NewDecoder(listForWorkspace.Body).Decode(&listPayload); err != nil {
+		t.Fatalf("decode file list: %v", err)
+	}
+	if len(listPayload.Items) != 2 {
+		t.Fatalf("expected workspace scoped file list, got %+v", listPayload.Items)
+	}
+
+	deleteReq := httptest.NewRequest(http.MethodDelete, "/admin/v1/workspace-files/"+versionFile.ID+"?workspaceId="+workspace.ID, nil)
+	deleteReq.Header.Set("X-Actor-Id", "owner")
+	deleteRec := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(deleteRec, deleteReq)
+	if deleteRec.Code != http.StatusOK {
+		t.Fatalf("delete file status=%d body=%s", deleteRec.Code, deleteRec.Body.String())
+	}
+
+	storageAfterDelete := httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/admin/v1/workspace-home/storage", nil)
+	req.Header.Set("X-Actor-Id", "owner")
+	handler.Routes().ServeHTTP(storageAfterDelete, req)
+	if storageAfterDelete.Code != http.StatusOK {
+		t.Fatalf("storage summary after delete status=%d body=%s", storageAfterDelete.Code, storageAfterDelete.Body.String())
+	}
+	var after marketing.WorkspaceStorageUsage
+	if err := json.NewDecoder(storageAfterDelete.Body).Decode(&after); err != nil {
+		t.Fatalf("decode storage summary after delete: %v", err)
+	}
+	if after.FileObjects != 1 || after.FileBytes != traceFile.SizeBytes {
+		t.Fatalf("expected deleted file bytes to be reclaimed, got %+v", after)
+	}
+}
+
+func TestWorkspaceFileStorageProviderSwitchesToS3Compatible(t *testing.T) {
+	var putPath string
+	var deletePath string
+	s3 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPut:
+			putPath = r.URL.EscapedPath()
+			_, _ = io.Copy(io.Discard, r.Body)
+			w.WriteHeader(http.StatusOK)
+		case http.MethodDelete:
+			deletePath = r.URL.EscapedPath()
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	}))
+	defer s3.Close()
+
+	t.Setenv("EX_MARKETING_FILE_STORAGE_PROVIDER", "minio")
+	t.Setenv("EX_MARKETING_S3_ENDPOINT", s3.URL)
+	t.Setenv("EX_MARKETING_S3_BUCKET", "exmarketing-test")
+	t.Setenv("EX_MARKETING_S3_PREFIX", "workspace-files")
+	handler := newTestHandler()
+	workspace := createTestWorkspace(t, handler, "owner")
+
+	file := uploadWorkspaceFileForTest(t, handler, "owner", map[string]string{
+		"workspaceId": workspace.ID,
+		"kind":        string(marketing.WorkspaceFileExecutionAttachment),
+		"executionId": "exec_minio",
+	}, "minio-object.bin", 2048)
+	if file.StorageProvider != "minio" || !strings.Contains(putPath, "/exmarketing-test/workspace-files/"+workspace.ID+"/") {
+		t.Fatalf("expected minio put path/provider, file=%+v path=%s", file, putPath)
+	}
+
+	deleteReq := httptest.NewRequest(http.MethodDelete, "/admin/v1/workspace-files/"+file.ID+"?workspaceId="+workspace.ID, nil)
+	deleteReq.Header.Set("X-Actor-Id", "owner")
+	deleteRec := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(deleteRec, deleteReq)
+	if deleteRec.Code != http.StatusOK {
+		t.Fatalf("delete minio file status=%d body=%s", deleteRec.Code, deleteRec.Body.String())
+	}
+	if !strings.Contains(deletePath, "/exmarketing-test/workspace-files/"+workspace.ID+"/") {
+		t.Fatalf("expected minio delete path, got %s", deletePath)
 	}
 }
 

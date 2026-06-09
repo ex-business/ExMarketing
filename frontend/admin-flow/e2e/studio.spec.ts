@@ -194,7 +194,7 @@ const schemaItems = [
 
 type StudioTestDefinition = typeof workflowDefinition | typeof conditionWorkflowDefinition;
 
-async function mockStudioApi(page: Page, options: { failFirstDraftSave?: boolean; validationBlocks?: boolean; routeValidationBlocks?: boolean; draftDefinition?: StudioTestDefinition; activeDefinition?: StudioTestDefinition; archivedDefinition?: StudioTestDefinition; withExecution?: boolean } = {}) {
+async function mockStudioApi(page: Page, options: { failFirstDraftSave?: boolean; validationBlocks?: boolean; routeValidationBlocks?: boolean; draftDefinition?: StudioTestDefinition; activeDefinition?: StudioTestDefinition; archivedDefinition?: StudioTestDefinition; withExecution?: boolean; largeWorkspace?: boolean } = {}) {
   let draftSaveCount = 0;
   let published = Boolean(options.activeDefinition);
   let rolledBack = false;
@@ -213,6 +213,23 @@ async function mockStudioApi(page: Page, options: { failFirstDraftSave?: boolean
     });
 
     if (path === '/admin/v1/activities' && method === 'GET') {
+      if (options.largeWorkspace) {
+        return json({
+          items: Array.from({ length: 1200 }).map((_, index) => ({
+            id: `large_activity_${index}`,
+            workspaceId,
+            folderId,
+            activityCode: `LARGE_FLOW_${index}`,
+            activityName: index === 42 ? 'Large Retention Highlight Workflow' : `Large Workflow ${index}`,
+            tenantId: 'site_001',
+            status: index % 7 === 0 ? 'DRAFT' : 'ACTIVE',
+            visibility: index % 5 === 0 ? 'PRIVATE' : 'TEAM',
+            version: (index % 6) + 1,
+            createdAt: runTime(-8_000_000 - index * 1000),
+            updatedAt: runTime(-500_000 - index * 1000),
+          })),
+        });
+      }
       return json({
         items: [{
           id: activityId,
@@ -254,6 +271,18 @@ async function mockStudioApi(page: Page, options: { failFirstDraftSave?: boolean
       });
     }
     if (path === `/admin/v1/workspaces/${workspaceId}/folders` && method === 'GET') {
+      if (options.largeWorkspace) {
+        return json({
+          items: Array.from({ length: 80 }).map((_, index) => ({
+            id: index === 0 ? folderId : `large_folder_${index}`,
+            workspaceId,
+            name: index === 0 ? 'Campaigns' : `Large Folder ${index}`,
+            visibility: 'TEAM',
+            sortOrder: (index + 1) * 10,
+            status: 'ACTIVE',
+          })),
+        });
+      }
       return json({
         items: [
           { id: folderId, workspaceId, name: 'Campaigns', visibility: 'TEAM', sortOrder: 10, status: 'ACTIVE' },
@@ -274,6 +303,23 @@ async function mockStudioApi(page: Page, options: { failFirstDraftSave?: boolean
       return json({ items: [{ id: 'member_owner', workspaceId, userId: 'admin-flow', displayName: 'Admin Flow', role: 'OWNER', status: 'ACTIVE' }] });
     }
     if (path === `/admin/v1/workspaces/${workspaceId}/audit-logs` && method === 'GET') return json({ items: [] });
+    if (path === '/admin/v1/workspace-home/search' && method === 'GET') {
+      return json({
+        items: [{
+          id: 'large_activity_42',
+          type: 'workflow',
+          title: 'Large Retention Highlight Workflow',
+          subtitle: 'LARGE_FLOW_42 · ACTIVE',
+          workspaceId,
+          folderId,
+          matchedBy: 'workflow',
+          highlights: { title: 'Large <mark>Retention</mark> Highlight Workflow', subtitle: 'LARGE_FLOW_42 · ACTIVE' },
+          permission: 'VIEW',
+          permissionReason: 'workspace role OWNER',
+          permissionSources: ['workspace OWNER'],
+        }],
+      });
+    }
     if (path === '/admin/v1/workflow/node-config-schemas' && method === 'GET') return json({ items: schemaItems });
     if (path === '/admin/v1/workflow/draft-templates' && method === 'GET') return json({ items: [workflowTemplateSummary] });
     if (path === '/admin/v1/workflow/draft-templates/reward-template/versions' && method === 'GET') return json({ items: [workflowTemplateSummary, workflowTemplateV1] });
@@ -682,36 +728,57 @@ async function mockStudioApi(page: Page, options: { failFirstDraftSave?: boolean
   });
 }
 
-test('renders Workspace Studio home as a file manager with search, favorites, archive, and folder drag', async ({ page }) => {
+test('renders Workspace Studio home as a file manager with search, favorites, and detail actions', async ({ page }) => {
   await mockStudioApi(page);
 
   await page.goto('/admin-flow/');
-  await expect(page.locator('.studio-file-manager')).toBeVisible();
-  await expect(page.locator('.studio-workspace-list')).toContainText('E2E Workspace');
-  await expect(page.locator('.studio-folder-grid')).toContainText('Campaigns');
-  await expect(page.locator('.studio-folder-grid')).toContainText('Archive');
-  await expect(page.locator('.studio-start-note')).toContainText('已隐藏 1 个测试活动');
-  await expect(page.locator('.studio-recent-card')).toContainText('Retention Workflow');
+  await expect(page.locator('.exm-workspace-layout')).toBeVisible();
+  await expect(page.locator('.exm-sidebar')).toContainText('E2E Workspace');
+  await expect(page.locator('.exm-sidebar-folders')).toContainText('Campaigns');
+  await expect(page.locator('.exm-sidebar-folders')).toContainText('Archive');
+  await expect(page.locator('.exm-table-view')).toContainText('Retention Workflow');
+  await expect(page.locator('.exm-detail-panel')).toContainText('Campaigns');
 
-  await page.locator('.studio-browser-filters input').fill('Retention');
-  await expect(page.locator('.studio-workflow-table')).toContainText('Retention Workflow');
+  await page.locator('.exm-folder-search input').fill('Retention');
+  await expect(page.locator('[data-testid="workspace-row-workflow"]').filter({ hasText: 'Retention Workflow' })).toBeVisible();
 
-  await page.locator('.studio-workflow-row').filter({ hasText: 'Retention Workflow' }).locator('.workflow-actions em').first().click();
-  await page.locator('.studio-browser-filters button').filter({ hasText: '收藏' }).click();
-  await expect(page.locator('.studio-workflow-table')).toContainText('Retention Workflow');
+  await page.locator('[data-testid="workspace-row-workflow"]').filter({ hasText: 'Retention Workflow' }).locator('.actions em').first().click();
+  await page.locator('.exm-sidebar-nav button').filter({ hasText: '收藏' }).click();
+  await expect(page.locator('[data-testid="workspace-row-workflow"]').filter({ hasText: 'Retention Workflow' })).toBeVisible();
 
-  await page.locator('.studio-workflow-row').filter({ hasText: 'Retention Workflow' }).locator('.workflow-actions em').nth(1).click();
-  await expect(page.locator('.studio-browser-panel')).toContainText('当前视图没有 workflow');
-  await page.locator('.studio-browser-filters select').first().selectOption('ARCHIVED');
-  await expect(page.locator('.studio-workflow-table')).toContainText('Retention Workflow');
+  const retentionRow = page.locator('[data-testid="workspace-row-workflow"]').filter({ hasText: 'Retention Workflow' });
+  await retentionRow.locator('[data-testid="workspace-row-more"]').click();
+  await expect(page.getByTestId('workspace-row-action-rename')).toBeVisible();
+});
 
-  await page.locator('.studio-browser-filters input').fill('');
-  await page.locator('.studio-browser-filters button').filter({ hasText: '收藏' }).click();
-  await page.locator('.studio-browser-filters select').first().selectOption('ACTIVE');
-  const campaigns = page.locator('.studio-folder-grid button').filter({ hasText: 'Campaigns' });
-  const archive = page.locator('.studio-folder-grid button').filter({ hasText: 'Archive' });
-  await campaigns.dragTo(archive);
-  await expect(page.locator('.studio-ops-panel')).toContainText('已移动 Campaigns');
+test('keeps workspace responsive with large mocked datasets and highlighted search', async ({ page }) => {
+  await mockStudioApi(page, { largeWorkspace: true });
+
+  await page.goto('/admin-flow/');
+  await expect(page.locator('.exm-workspace-layout')).toBeVisible();
+  await expect(page.locator('[data-testid="workspace-row-workflow"]').first()).toBeVisible();
+  await page.locator('.exm-folder-search input').fill('Retention');
+  await expect(page.locator('[data-testid="workspace-row-workflow"]').filter({ hasText: 'Large Retention Highlight Workflow' })).toBeVisible();
+  await expect(page.locator('.exm-table-view mark')).toContainText('Retention');
+  await page.locator('.exm-global-search input').fill('Retention');
+  await expect(page.locator('.exm-global-search-results mark')).toContainText('Retention');
+});
+
+test('passes a basic workspace accessibility smoke check', async ({ page }) => {
+  await mockStudioApi(page);
+
+  await page.goto('/admin-flow/');
+  await expect(page.locator('.exm-workspace-layout')).toBeVisible();
+  const unnamedButtons = await page.locator('.exm-workspace-layout button').evaluateAll((buttons) => buttons.filter((button) => {
+    const style = window.getComputedStyle(button);
+    const rect = button.getBoundingClientRect();
+    if (style.display === 'none' || style.visibility === 'hidden' || rect.width === 0 || rect.height === 0) return false;
+    const label = button.getAttribute('aria-label') || button.textContent || button.getAttribute('title') || '';
+    return !label.trim();
+  }).length);
+  expect(unnamedButtons).toBe(0);
+  await page.keyboard.press('Tab');
+  await expect(page.locator(':focus')).toBeVisible();
 });
 
 test('loads Studio, retries failed save, and shows validation markers', async ({ page }) => {
@@ -818,7 +885,7 @@ test('previews workflow templates, applies business parameters, and saves a team
   await expect(page.locator('.workflow-template-preview-card')).toContainText('可应用');
   await expect(page.locator('.workflow-template-node-preview')).toContainText('奖励计算');
 
-  await page.locator('.workflow-template-preview select').selectOption('tplv_1');
+  await page.locator('.workflow-template-preview > label').filter({ hasText: '版本' }).locator('select').selectOption('tplv_1');
   await page.locator('.workflow-template-params label').filter({ hasText: '奖励金额' }).locator('input').fill('25');
   await page.locator('.workflow-template-params label').filter({ hasText: '币种' }).locator('input').fill('EUR');
   await page.getByRole('button', { name: '从模板创建 Draft' }).click();

@@ -18,6 +18,8 @@ import { NodePalette } from './components/NodePalette';
 import { NodePicker } from './components/NodePicker';
 import { PropertyPanel } from './components/PropertyPanel';
 import { StudioChrome } from './components/StudioChrome';
+import { WorkspaceContent, WorkspaceDetailPanel, WorkspaceHomeLayout, WorkspaceSidebar, WorkspaceTopBar } from './components/workspace-home';
+import type { GlobalSearchResult, WorkspaceDetailTarget, WorkspaceItemAction, WorkspaceSortMode } from './components/workspace-home';
 import { baseEdges, baseNodes, simpleTemplate } from './data/initialFlow';
 import { getDef, nodeCatalog } from './data/nodeCatalog';
 import type {
@@ -55,6 +57,7 @@ type ActivitySummary = {
   activityName: string;
   tenantId: string;
   status?: string;
+  visibility?: 'PRIVATE' | 'TEAM' | 'PUBLIC';
   version?: number;
   createdAt?: string;
   updatedAt?: string;
@@ -65,6 +68,8 @@ type WorkspaceSummary = {
   tenantId: string;
   name: string;
   slug: string;
+  description?: string;
+  icon?: string;
   color?: string;
   visibility: 'PRIVATE' | 'TEAM' | 'PUBLIC';
   defaultRole?: WorkspaceRole;
@@ -92,6 +97,11 @@ type WorkspaceShareLinkSummary = {
   activityId?: string;
   scope: 'WORKSPACE' | 'FOLDER' | 'ACTIVITY';
   permission?: 'VIEW' | 'EDIT';
+  expiresAt?: string;
+  maxAccessCount?: number;
+  accessCount?: number;
+  lastAccessedAt?: string;
+  disabledReason?: string;
   enabled: boolean;
   token?: string;
   createdBy?: string;
@@ -118,6 +128,66 @@ type WorkspaceAuditLogSummary = {
   createdAt: string;
 };
 
+type WorkspaceActivityGrantSummary = {
+  id: string;
+  workspaceId: string;
+  activityId: string;
+  principalType: 'USER' | 'MEMBER' | 'ROLE';
+  principalId: string;
+  role: Exclude<WorkspaceRole, 'OWNER'>;
+  createdBy?: string;
+  updatedBy?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type WorkspaceHomeSearchResult = {
+  id: string;
+  type: 'workspace' | 'workflow' | 'folder' | 'member';
+  title: string;
+  subtitle: string;
+  workspaceId?: string;
+  folderId?: string;
+  highlights?: {
+    title?: string;
+    subtitle?: string;
+  };
+  permission?: string;
+  permissionReason?: string;
+  permissionSources?: string[];
+  score?: number;
+};
+
+type WorkspaceHomeStorageSummary = {
+  usedBytes: number;
+  totalBytes: number;
+  workspaces: number;
+  folders: number;
+  workflows: number;
+  members: number;
+  shareLinks: number;
+  auditLogs: number;
+  drafts?: number;
+  versions?: number;
+  executions?: number;
+  nodeExecutions?: number;
+  activityGrants?: number;
+  fileObjects?: number;
+  fileBytes?: number;
+};
+
+type OpsToast = {
+  id: number;
+  message: string;
+  tone: 'success' | 'error' | 'info';
+};
+
+function opsToastTone(message: string): OpsToast['tone'] {
+  if (/(失败|错误|不可用|不能|需要|先选择|不存在|无权限)/.test(message)) return 'error';
+  if (/(正在|处理中|加载)/.test(message)) return 'info';
+  return 'success';
+}
+
 type WorkflowDraftTemplateSummary = {
   id: string;
   versionId: string;
@@ -125,12 +195,29 @@ type WorkflowDraftTemplateSummary = {
   name: string;
   description?: string;
   category?: string;
+  workspaceId?: string;
+  folderId?: string;
+  visibility?: 'PRIVATE' | 'TEAM' | 'PUBLIC';
+  tags?: string[];
   source: 'BUILTIN' | 'SAVED';
   status: 'ACTIVE' | 'ARCHIVED';
   definition: WorkflowDefinition;
   createdBy?: string;
   createdAt?: string;
   updatedAt?: string;
+};
+
+type WorkflowDraftTemplateCompareResult = {
+  leftVersionId: string;
+  rightVersionId: string;
+  leftVersion: number;
+  rightVersion: number;
+  nodeDelta: number;
+  edgeDelta: number;
+  addedNodes: string[];
+  removedNodes: string[];
+  commonNodes: number;
+  changedMeta?: Record<string, unknown>;
 };
 
 type WorkflowNodePresetSummary = {
@@ -167,12 +254,16 @@ type CreateStudioActivityInput = {
   activityCode: string;
   workspaceId: string;
   folderId: string;
+  definition?: WorkflowDefinition;
+  visibility?: 'PRIVATE' | 'TEAM' | 'PUBLIC';
 };
 
 type StudioFolderPatch = {
   parentId?: string;
+  name?: string;
   visibility?: string;
   sortOrder?: number;
+  status?: string;
 };
 
 type ActivitySettingsInput = {
@@ -734,6 +825,9 @@ function WorkflowTemplatePanel({
   onClose,
   onApply,
   onSave,
+  onUpdate,
+  onCopy,
+  onCompare,
   onLoadVersions,
 }: {
   open: boolean;
@@ -751,6 +845,9 @@ function WorkflowTemplatePanel({
   onClose: () => void;
   onApply: (templateId: string, input: { versionId?: string; version?: number; parameters: Record<string, string | number> }) => void;
   onSave: (input: { name: string; workspaceId: string; folderId: string; visibility: string }) => void;
+  onUpdate: (templateId: string, input: { versionId?: string; name?: string; description?: string; category?: string; workspaceId?: string; folderId?: string; visibility?: string; tags?: string[]; status?: string }) => void;
+  onCopy: (templateId: string, input: { versionId?: string; name: string; category?: string; workspaceId: string; folderId?: string; visibility: string; tags?: string[] }) => Promise<WorkflowDraftTemplateSummary>;
+  onCompare: (templateId: string, leftVersionId: string, rightVersionId: string) => Promise<WorkflowDraftTemplateCompareResult>;
   onLoadVersions: (templateId: string) => void;
 }) {
   const [saveName, setSaveName] = useState('');
@@ -759,6 +856,25 @@ function WorkflowTemplatePanel({
   const [saveVisibility, setSaveVisibility] = useState('TEAM');
   const [selectedTemplateId, setSelectedTemplateId] = useState('');
   const [selectedVersionId, setSelectedVersionId] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState('ALL');
+  const [statusFilter, setStatusFilter] = useState<'ACTIVE' | 'ARCHIVED' | 'ALL'>('ACTIVE');
+  const [sourceFilter, setSourceFilter] = useState<'ALL' | 'BUILTIN' | 'SAVED'>('ALL');
+  const [templateSearch, setTemplateSearch] = useState('');
+  const [manageName, setManageName] = useState('');
+  const [manageDescription, setManageDescription] = useState('');
+  const [manageCategory, setManageCategory] = useState('');
+  const [manageWorkspaceId, setManageWorkspaceId] = useState('');
+  const [manageFolderId, setManageFolderId] = useState('');
+  const [manageVisibility, setManageVisibility] = useState('TEAM');
+  const [manageTags, setManageTags] = useState('');
+  const [copyName, setCopyName] = useState('');
+  const [copyWorkspaceId, setCopyWorkspaceId] = useState('');
+  const [copyFolderId, setCopyFolderId] = useState('');
+  const [copyVisibility, setCopyVisibility] = useState('TEAM');
+  const [compareLeftId, setCompareLeftId] = useState('');
+  const [compareRightId, setCompareRightId] = useState('');
+  const [compareResult, setCompareResult] = useState<WorkflowDraftTemplateCompareResult | null>(null);
+  const [compareBusy, setCompareBusy] = useState(false);
   const [parameters, setParameters] = useState<Record<string, string>>({
     eventType: 'DEPOSIT_SUCCESS',
     rewardAmount: '10',
@@ -778,17 +894,58 @@ function WorkflowTemplatePanel({
     setSelectedVersionId(templates[0].versionId);
     onLoadVersions(templates[0].id);
   }, [onLoadVersions, open, selectedTemplateId, templates]);
-  if (!open) return null;
-  const grouped = templates.reduce<Record<string, WorkflowDraftTemplateSummary[]>>((acc, item) => {
+  const categories = Array.from(new Set(templates.map((template) => template.category || template.source))).sort();
+  const filteredTemplates = templates.filter((template) => {
+    const keyword = templateSearch.trim().toLowerCase();
+    if (statusFilter !== 'ALL' && template.status !== statusFilter) return false;
+    if (sourceFilter !== 'ALL' && template.source !== sourceFilter) return false;
+    if (categoryFilter !== 'ALL' && (template.category || template.source) !== categoryFilter) return false;
+    if (!keyword) return true;
+    return `${template.name} ${template.description ?? ''} ${template.id} ${template.category ?? ''} ${template.tags?.join(' ') ?? ''}`.toLowerCase().includes(keyword);
+  });
+  const grouped = filteredTemplates.reduce<Record<string, WorkflowDraftTemplateSummary[]>>((acc, item) => {
     const key = item.category || item.source;
     acc[key] = [...(acc[key] ?? []), item];
     return acc;
   }, {});
-  const selectedTemplate = templates.find((template) => template.id === selectedTemplateId) ?? templates[0];
+  const selectedTemplate = templates.find((template) => template.id === selectedTemplateId) ?? filteredTemplates[0] ?? templates[0];
   const versions = templateVersions.filter((template) => template.id === selectedTemplate?.id);
   const selectedVersion = versions.find((template) => template.versionId === selectedVersionId) ?? selectedTemplate;
   const selectedValidation = selectedVersion ? workflowTemplateValidation(selectedVersion) : undefined;
   const selectedWorkspaceFolders = folders.filter((folder) => folder.workspaceId === saveWorkspaceId && folder.status !== 'DELETED');
+  const manageWorkspaceFolders = folders.filter((folder) => folder.workspaceId === manageWorkspaceId && folder.status !== 'DELETED');
+  const copyWorkspaceFolders = folders.filter((folder) => folder.workspaceId === copyWorkspaceId && folder.status !== 'DELETED');
+  useEffect(() => {
+    if (!selectedVersion || !open) return;
+    setManageName(selectedVersion.name);
+    setManageDescription(selectedVersion.description || '');
+    setManageCategory(selectedVersion.category || '');
+    setManageWorkspaceId(selectedVersion.workspaceId || activeWorkspaceId || workspaces[0]?.id || '');
+    setManageFolderId(selectedVersion.folderId || '');
+    setManageVisibility(selectedVersion.visibility || 'TEAM');
+    setManageTags((selectedVersion.tags || []).join(', '));
+    setCopyName(`${selectedVersion.name} Copy`);
+    setCopyWorkspaceId(activeWorkspaceId || selectedVersion.workspaceId || workspaces[0]?.id || '');
+    setCopyFolderId(activeFolderId || selectedVersion.folderId || '');
+    setCopyVisibility(selectedVersion.visibility || 'TEAM');
+    setCompareResult(null);
+  }, [activeFolderId, activeWorkspaceId, open, selectedVersion?.versionId, workspaces]);
+  useEffect(() => {
+    if (!versions.length) return;
+    setCompareLeftId(versions[versions.length - 1]?.versionId || versions[0].versionId);
+    setCompareRightId(versions[0].versionId);
+  }, [versions]);
+  const parseTags = (value: string) => value.split(',').map((tag) => tag.trim()).filter(Boolean);
+  const runCompare = async () => {
+    if (!selectedTemplate || !compareLeftId || !compareRightId) return;
+    setCompareBusy(true);
+    try {
+      setCompareResult(await onCompare(selectedTemplate.id, compareLeftId, compareRightId));
+    } finally {
+      setCompareBusy(false);
+    }
+  };
+  if (!open) return null;
   return (
     <aside className="workflow-template-panel">
       <header>
@@ -799,6 +956,35 @@ function WorkflowTemplatePanel({
         <button onClick={onClose}>×</button>
       </header>
       <div className="workflow-template-scroll">
+        <section className="workflow-template-manager-bar">
+          <label>
+            <span>搜索</span>
+            <input value={templateSearch} onChange={(event) => setTemplateSearch(event.target.value)} placeholder="模板名称、分类、标签" />
+          </label>
+          <label>
+            <span>分类</span>
+            <select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)}>
+              <option value="ALL">全部分类</option>
+              {categories.map((category) => <option key={category} value={category}>{category}</option>)}
+            </select>
+          </label>
+          <label>
+            <span>来源</span>
+            <select data-testid="template-source-filter" value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value as typeof sourceFilter)}>
+              <option value="ALL">全部来源</option>
+              <option value="BUILTIN">Builtin</option>
+              <option value="SAVED">Saved</option>
+            </select>
+          </label>
+          <label>
+            <span>状态</span>
+            <select data-testid="template-status-filter" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as typeof statusFilter)}>
+              <option value="ACTIVE">Active</option>
+              <option value="ARCHIVED">Archived</option>
+              <option value="ALL">全部状态</option>
+            </select>
+          </label>
+        </section>
         <div className="workflow-template-layout">
           <section className="workflow-template-catalog">
             {Object.entries(grouped).map(([category, items]) => (
@@ -809,6 +995,7 @@ function WorkflowTemplatePanel({
                   return (
                     <button
                       key={`${template.id}-${template.version}`}
+                      data-testid="template-catalog-item"
                       className={cx(template.id === selectedTemplate?.id && 'active')}
                       onClick={() => {
                         setSelectedTemplateId(template.id);
@@ -828,7 +1015,7 @@ function WorkflowTemplatePanel({
             ))}
           </section>
           <section className="workflow-template-preview">
-            <h3>模板预览</h3>
+            <h3>模板预览 / 管理</h3>
             {selectedVersion ? (
               <>
                 <div className="workflow-template-preview-card">
@@ -859,6 +1046,155 @@ function WorkflowTemplatePanel({
                   </select>
                 </label>
                 {loadingVersions ? <p>版本加载中...</p> : null}
+                <div className="workflow-template-manage-grid">
+                  <label>
+                    <span>名称</span>
+                    <input data-testid="template-manage-name" value={manageName} disabled={selectedVersion.source === 'BUILTIN'} onChange={(event) => setManageName(event.target.value)} />
+                  </label>
+                  <label>
+                    <span>分类</span>
+                    <input value={manageCategory} disabled={selectedVersion.source === 'BUILTIN'} onChange={(event) => setManageCategory(event.target.value)} />
+                  </label>
+                  <label className="wide">
+                    <span>描述</span>
+                    <input value={manageDescription} disabled={selectedVersion.source === 'BUILTIN'} onChange={(event) => setManageDescription(event.target.value)} />
+                  </label>
+                  <label>
+                    <span>权限</span>
+                    <select value={manageVisibility} disabled={selectedVersion.source === 'BUILTIN'} onChange={(event) => setManageVisibility(event.target.value)}>
+                      <option value="PRIVATE">Private</option>
+                      <option value="TEAM">Team</option>
+                      <option value="PUBLIC">Public</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>Workspace</span>
+                    <select value={manageWorkspaceId} disabled={selectedVersion.source === 'BUILTIN'} onChange={(event) => {
+                      const workspaceId = event.target.value;
+                      setManageWorkspaceId(workspaceId);
+                      setManageFolderId(folders.find((folder) => folder.workspaceId === workspaceId && folder.status !== 'DELETED')?.id ?? '');
+                    }}>
+                      <option value="">无 workspace</option>
+                      {workspaces.filter((workspace) => workspace.status !== 'DELETED').map((workspace) => (
+                        <option key={workspace.id} value={workspace.id}>{workspace.name}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    <span>Folder</span>
+                    <select value={manageFolderId} disabled={selectedVersion.source === 'BUILTIN'} onChange={(event) => setManageFolderId(event.target.value)}>
+                      <option value="">Workspace Root</option>
+                      {manageWorkspaceFolders.map((folder) => (
+                        <option key={folder.id} value={folder.id}>{folder.name}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="wide">
+                    <span>Tags</span>
+                    <input value={manageTags} disabled={selectedVersion.source === 'BUILTIN'} onChange={(event) => setManageTags(event.target.value)} placeholder="risk, reward, audit" />
+                  </label>
+                  <div className="workflow-template-actions">
+                    <button
+                      data-testid="template-save-metadata"
+                      disabled={selectedVersion.source === 'BUILTIN'}
+                      onClick={() => selectedTemplate && onUpdate(selectedTemplate.id, {
+                        versionId: selectedVersion.versionId,
+                        name: manageName,
+                        description: manageDescription,
+                        category: manageCategory,
+                        workspaceId: manageWorkspaceId,
+                        folderId: manageFolderId,
+                        visibility: manageVisibility,
+                        tags: parseTags(manageTags),
+                      })}
+                    >
+                      保存元数据
+                    </button>
+                    <button
+                      data-testid="template-archive-toggle"
+                      disabled={selectedVersion.source === 'BUILTIN'}
+                      onClick={() => selectedTemplate && onUpdate(selectedTemplate.id, {
+                        versionId: selectedVersion.versionId,
+                        status: selectedVersion.status === 'ARCHIVED' ? 'ACTIVE' : 'ARCHIVED',
+                      })}
+                    >
+                      {selectedVersion.status === 'ARCHIVED' ? '恢复模板' : '归档模板'}
+                    </button>
+                  </div>
+                </div>
+                <div className="workflow-template-copy">
+                  <h3>复制到 Workspace</h3>
+                  <label>
+                    <span>新名称</span>
+                    <input data-testid="template-copy-name" value={copyName} onChange={(event) => setCopyName(event.target.value)} />
+                  </label>
+                  <label>
+                    <span>Workspace</span>
+                    <select value={copyWorkspaceId} onChange={(event) => {
+                      const workspaceId = event.target.value;
+                      setCopyWorkspaceId(workspaceId);
+                      setCopyFolderId(folders.find((folder) => folder.workspaceId === workspaceId && folder.status !== 'DELETED')?.id ?? '');
+                    }}>
+                      {workspaces.filter((workspace) => workspace.status !== 'DELETED').map((workspace) => (
+                        <option key={workspace.id} value={workspace.id}>{workspace.name}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    <span>Folder</span>
+                    <select value={copyFolderId} onChange={(event) => setCopyFolderId(event.target.value)}>
+                      <option value="">Workspace Root</option>
+                      {copyWorkspaceFolders.map((folder) => (
+                        <option key={folder.id} value={folder.id}>{folder.name}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    <span>权限</span>
+                    <select value={copyVisibility} onChange={(event) => setCopyVisibility(event.target.value)}>
+                      <option value="PRIVATE">Private</option>
+                      <option value="TEAM">Team</option>
+                      <option value="PUBLIC">Public</option>
+                    </select>
+                  </label>
+                  <button data-testid="template-copy-submit" disabled={!copyWorkspaceId || !copyName.trim()} onClick={() => selectedTemplate && void onCopy(selectedTemplate.id, {
+                    versionId: selectedVersion.versionId,
+                    name: copyName,
+                    category: manageCategory || selectedVersion.category,
+                    workspaceId: copyWorkspaceId,
+                    folderId: copyFolderId,
+                    visibility: copyVisibility,
+                    tags: parseTags(manageTags),
+                  })}>复制模板</button>
+                </div>
+                <div className="workflow-template-compare">
+                  <h3>版本对比</h3>
+                  <label>
+                    <span>左版本</span>
+                    <select value={compareLeftId} onChange={(event) => setCompareLeftId(event.target.value)}>
+                      {(versions.length ? versions : [selectedVersion]).map((version) => (
+                        <option key={version.versionId} value={version.versionId}>v{version.version}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    <span>右版本</span>
+                    <select value={compareRightId} onChange={(event) => setCompareRightId(event.target.value)}>
+                      {(versions.length ? versions : [selectedVersion]).map((version) => (
+                        <option key={version.versionId} value={version.versionId}>v{version.version}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <button data-testid="template-compare-submit" disabled={compareBusy || !compareLeftId || !compareRightId} onClick={() => void runCompare()}>{compareBusy ? '对比中...' : '对比版本'}</button>
+                  {compareResult ? (
+                    <div className="workflow-template-diff" data-testid="template-compare-result">
+                      <b>v{compareResult.leftVersion} → v{compareResult.rightVersion}</b>
+                      <span>Nodes {compareResult.nodeDelta >= 0 ? '+' : ''}{compareResult.nodeDelta} · Edges {compareResult.edgeDelta >= 0 ? '+' : ''}{compareResult.edgeDelta} · Common {compareResult.commonNodes}</span>
+                      <em>Added: {(compareResult.addedNodes ?? []).join(', ') || '-'}</em>
+                      <em>Removed: {(compareResult.removedNodes ?? []).join(', ') || '-'}</em>
+                    </div>
+                  ) : null}
+                </div>
                 <div className="workflow-template-params">
                   <h3>业务参数</h3>
                   {[
@@ -903,7 +1239,7 @@ function WorkflowTemplatePanel({
         </section>
         <section className="workflow-template-save">
           <h3>保存当前 Workflow 为模板</h3>
-          <input value={saveName} placeholder="模板名称" onChange={(event) => setSaveName(event.target.value)} />
+          <input data-testid="template-save-name" value={saveName} placeholder="模板名称" onChange={(event) => setSaveName(event.target.value)} />
           <div className="workflow-template-save-grid">
             <label>
               <span>Workspace</span>
@@ -935,7 +1271,7 @@ function WorkflowTemplatePanel({
               </select>
             </label>
           </div>
-          <button disabled={!canEdit || saving} onClick={() => onSave({ name: saveName, workspaceId: saveWorkspaceId, folderId: saveFolderId, visibility: saveVisibility })}>
+          <button data-testid="template-save-submit" disabled={!canEdit || saving} onClick={() => onSave({ name: saveName, workspaceId: saveWorkspaceId, folderId: saveFolderId, visibility: saveVisibility })}>
             {saving ? '保存中...' : '保存模板版本'}
           </button>
         </section>
@@ -1603,6 +1939,7 @@ function buildStudioActivityPayload(input: CreateStudioActivityInput) {
     activityName: activityName || activityCode,
     activityType: 'STUDIO_WORKFLOW',
     status: 'DRAFT',
+    visibility: input.visibility || 'TEAM',
     triggerEvents: ['STUDIO_EVENT'],
     startTime: start,
     endTime: end,
@@ -1838,6 +2175,30 @@ async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+async function uploadWorkspaceFile(input: {
+  workspaceId: string;
+  folderId?: string;
+  activityId?: string;
+  kind: string;
+  file: File;
+}): Promise<void> {
+  const form = new FormData();
+  form.set('workspaceId', input.workspaceId);
+  if (input.folderId) form.set('folderId', input.folderId);
+  if (input.activityId) form.set('activityId', input.activityId);
+  form.set('kind', input.kind);
+  form.set('file', input.file);
+  const response = await fetch('/admin/v1/workspace-files', {
+    method: 'POST',
+    headers: { 'X-Actor-Id': studioActorId() },
+    body: form,
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new APIError(body.error ?? body.message ?? `${response.status} ${response.statusText}`, response.status, response.statusText);
+  }
+}
+
 function StudioActivityStart({
   activities,
   workspaces,
@@ -1845,10 +2206,13 @@ function StudioActivityStart({
   membersByWorkspace,
   shareLinksByWorkspace,
   auditLogsByWorkspace,
+  activityGrantsByActivity,
+  templates,
   currentActorId,
   placements,
   hiddenTestActivityCount,
   workflowStatus,
+  workspaceDataReady,
   initialWorkspaceId,
   initialFolderId,
   onSelectActivity,
@@ -1856,11 +2220,19 @@ function StudioActivityStart({
   onCreateActivity,
   onCreateFolder,
   onUpdateFolder,
+  onUpdateActivity,
+  onDeleteFolder,
+  onRestoreFolder,
+  onUpdateWorkspace,
+  onDeleteWorkspace,
   onCreateMember,
   onUpdateMemberRole,
   onRemoveMember,
   onCreateShareLink,
   onDisableShareLink,
+  onRefreshActivityACL,
+  onCreateActivityACL,
+  onDeleteActivityACL,
   onRefreshWorkspaceOps,
 }: {
   activities: ActivitySummary[];
@@ -1869,27 +2241,38 @@ function StudioActivityStart({
   membersByWorkspace: Record<string, WorkspaceMemberSummary[]>;
   shareLinksByWorkspace: Record<string, WorkspaceShareLinkSummary[]>;
   auditLogsByWorkspace: Record<string, WorkspaceAuditLogSummary[]>;
+  activityGrantsByActivity: Record<string, WorkspaceActivityGrantSummary[]>;
+  templates: WorkflowDraftTemplateSummary[];
   currentActorId: string;
   placements: Record<string, ActivityPlacement>;
   hiddenTestActivityCount: number;
   workflowStatus: string;
+  workspaceDataReady: boolean;
   initialWorkspaceId: string;
   initialFolderId: string;
   onSelectActivity: (activityId: string) => void;
   onCreateWorkspace: (input: CreateStudioWorkspaceInput) => Promise<WorkspaceSummary>;
-  onCreateActivity: (input: CreateStudioActivityInput) => Promise<void>;
+  onCreateActivity: (input: CreateStudioActivityInput) => Promise<ActivitySummary>;
   onCreateFolder: (workspaceId: string, name: string) => Promise<WorkspaceFolderSummary>;
   onUpdateFolder: (workspaceId: string, folderId: string, patch: StudioFolderPatch) => Promise<WorkspaceFolderSummary>;
+  onUpdateActivity: (activityId: string, patch: { activityName?: string; workspaceId?: string; folderId?: string; status?: string; visibility?: string }) => Promise<ActivitySummary>;
+  onDeleteFolder: (workspaceId: string, folderId: string) => Promise<WorkspaceFolderSummary>;
+  onRestoreFolder: (workspaceId: string, folderId: string) => Promise<WorkspaceFolderSummary>;
+  onUpdateWorkspace: (workspaceId: string, patch: { name?: string; slug?: string; description?: string; icon?: string; color?: string; visibility?: string; defaultRole?: WorkspaceRole; ownerId?: string; status?: string }) => Promise<WorkspaceSummary>;
+  onDeleteWorkspace: (workspaceId: string) => Promise<WorkspaceSummary>;
   onCreateMember: (workspaceId: string, input: { userId: string; email: string; displayName: string; role: WorkspaceRole }) => Promise<void>;
   onUpdateMemberRole: (workspaceId: string, memberId: string, role: WorkspaceRole) => Promise<void>;
   onRemoveMember: (workspaceId: string, memberId: string) => Promise<void>;
-  onCreateShareLink: (workspaceId: string, input: { scope: 'WORKSPACE' | 'FOLDER' | 'ACTIVITY'; folderId?: string; activityId?: string; permission: 'VIEW' | 'EDIT' }) => Promise<void>;
+  onCreateShareLink: (workspaceId: string, input: { scope: 'WORKSPACE' | 'FOLDER' | 'ACTIVITY'; folderId?: string; activityId?: string; permission: 'VIEW' | 'EDIT' }) => Promise<WorkspaceShareLinkSummary>;
   onDisableShareLink: (workspaceId: string, linkId: string) => Promise<void>;
+  onRefreshActivityACL: (activityId: string) => Promise<WorkspaceActivityGrantSummary[]>;
+  onCreateActivityACL: (activityId: string, input: { principalType: 'USER' | 'MEMBER' | 'ROLE'; principalId: string; role: Exclude<WorkspaceRole, 'OWNER'> }) => Promise<WorkspaceActivityGrantSummary>;
+  onDeleteActivityACL: (activityId: string, grantId: string) => Promise<void>;
   onRefreshWorkspaceOps: (workspaceId: string) => Promise<void>;
 }) {
   const [search, setSearch] = useState('');
-  const [statusFilter, setStatusFilter] = useState<'ACTIVE' | 'DRAFT' | 'ARCHIVED' | 'ALL'>('ACTIVE');
-  const [sortMode, setSortMode] = useState<'recent' | 'name' | 'code' | 'version'>('recent');
+  const [statusFilter, setStatusFilter] = useState<'ACTIVE' | 'DRAFT' | 'ARCHIVED' | 'ALL'>('ALL');
+  const [sortMode, setSortMode] = useState<WorkspaceSortMode>('recent');
   const [showFavoritesOnly, setShowFavoritesOnly] = useState(false);
   const [favoriteActivityIds, setFavoriteActivityIds] = useState<Set<string>>(() => loadStudioStringSet('exmarketing.studio.favoriteActivities'));
   const [archivedActivityIds, setArchivedActivityIds] = useState<Set<string>>(() => loadStudioStringSet('exmarketing.studio.archivedActivities'));
@@ -1919,6 +2302,37 @@ function StudioActivityStart({
   const [memberEmail, setMemberEmail] = useState('');
   const [memberRole, setMemberRole] = useState<WorkspaceRole>('EDITOR');
   const [opsMessage, setOpsMessage] = useState('');
+  const [opsToasts, setOpsToasts] = useState<OpsToast[]>([]);
+  const opsToastIdRef = useRef(0);
+  const opsToastTimersRef = useRef<number[]>([]);
+  const [serverSearchResults, setServerSearchResults] = useState<WorkspaceHomeSearchResult[]>([]);
+  const [storageSummary, setStorageSummary] = useState<WorkspaceHomeStorageSummary | null>(null);
+  const [selectedDetail, setSelectedDetail] = useState<{ id: string; type: 'Folder' | 'Workflow'; name: string; visibility: string; status?: string; version?: string; owner?: string } | null>(null);
+  const [detailVisibilityOverride, setDetailVisibilityOverride] = useState<WorkspaceDetailTarget['visibility'] | ''>('');
+  const [detailAction, setDetailAction] = useState<'rename' | 'move' | 'archive' | ''>('');
+  const [detailActionName, setDetailActionName] = useState('');
+  const [detailActionFolderId, setDetailActionFolderId] = useState('');
+  const [detailActionBusy, setDetailActionBusy] = useState(false);
+  const [detailActionError, setDetailActionError] = useState('');
+  const [batchAction, setBatchAction] = useState<'move' | 'permission' | ''>('');
+  const [batchActionItems, setBatchActionItems] = useState<Array<{ id: string; type: 'Folder' | 'Workflow'; name: string; visibility: string; status?: string; version?: string; owner?: string }>>([]);
+  const [batchActionFolderId, setBatchActionFolderId] = useState('');
+  const [batchActionVisibility, setBatchActionVisibility] = useState<WorkspaceDetailTarget['visibility']>('Workspace');
+  const [batchActionBusy, setBatchActionBusy] = useState(false);
+  const [batchActionError, setBatchActionError] = useState('');
+  const [homeUtilityDialog, setHomeUtilityDialog] = useState<'settings' | 'storage' | 'members' | 'share' | 'audit' | ''>('');
+  const [workspaceSettingsDraft, setWorkspaceSettingsDraft] = useState({
+    name: '',
+    slug: '',
+    description: '',
+    icon: '',
+    color: '',
+    visibility: 'TEAM',
+    defaultRole: 'VIEWER' as WorkspaceRole,
+    ownerId: '',
+  });
+  const demoSeedStartedRef = useRef(false);
+  const importWorkflowInputRef = useRef<HTMLInputElement | null>(null);
   const foldersByWorkspace = useMemo(() => {
     const next: Record<string, WorkspaceFolderSummary[]> = {};
     folders
@@ -1931,9 +2345,98 @@ function StudioActivityStart({
   }, [folders]);
   const activeWorkspaces = useMemo(() => workspaces.filter((workspace) => workspace.status !== 'DELETED'), [workspaces]);
   useEffect(() => {
+    const isLocalDemo = ['localhost', '127.0.0.1'].includes(window.location.hostname);
+    if (!isLocalDemo || !workspaceDataReady || demoSeedStartedRef.current || activeWorkspaces.length) return;
+    demoSeedStartedRef.current = true;
+    void (async () => {
+      try {
+        const workspace = await onCreateWorkspace({ name: 'hello', tenantId: 'site_001' });
+        const root = await onCreateFolder(workspace.id, '风控活动');
+        const childNames = ['高风险策略', '额度保护', '回调审计'];
+        for (const name of childNames) {
+          const folder = await onCreateFolder(workspace.id, name);
+          await onUpdateFolder(workspace.id, folder.id, { parentId: root.id });
+        }
+        const workflowNames = [
+          '资格校验链路',
+          'Quota 保护奖励链路',
+          'Fact Query 数据增强',
+          '新用户奖励链路',
+          '高风险策略',
+          '活动匹配链路',
+          'Reward 计算',
+          'Limit 次数限制',
+        ];
+        for (const [index, name] of workflowNames.entries()) {
+          await onCreateActivity({
+            tenantId: workspace.tenantId,
+            activityName: name,
+            activityCode: `${normalizeActivityCode(name)}_${index + 1}`,
+            workspaceId: workspace.id,
+            folderId: root.id,
+            visibility: index % 3 === 0 ? 'PRIVATE' : 'TEAM',
+          });
+        }
+        setSelectedWorkspaceId(workspace.id);
+        setSelectedFolderId(root.id);
+        await onRefreshWorkspaceOps(workspace.id);
+        setOpsMessage('已初始化本地 demo 工作台');
+      } catch (error) {
+        setOpsMessage(`初始化 demo 数据失败：${(error as Error).message}`);
+      }
+    })();
+  }, [activeWorkspaces.length, activities.length, folders.length, onCreateActivity, onCreateFolder, onCreateWorkspace, onRefreshWorkspaceOps, onUpdateFolder, workspaceDataReady]);
+  useEffect(() => {
     if (initialWorkspaceId) setSelectedWorkspaceId(initialWorkspaceId);
     if (initialFolderId) setSelectedFolderId(initialFolderId);
   }, [initialFolderId, initialWorkspaceId]);
+  useEffect(() => {
+    const closeWorkspaceDialogs = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      setDetailAction('');
+      setBatchAction('');
+      setHomeUtilityDialog('');
+      setShowWorkspaceDialog(false);
+      setShowFolderDialog(false);
+      setShowCreateDialog(false);
+    };
+    document.addEventListener('keydown', closeWorkspaceDialogs);
+    return () => document.removeEventListener('keydown', closeWorkspaceDialogs);
+  }, []);
+  useEffect(() => {
+    let cancelled = false;
+    fetchJSON<WorkspaceHomeStorageSummary>('/admin/v1/workspace-home/storage')
+      .then((summary) => {
+        if (!cancelled) setStorageSummary(summary);
+      })
+      .catch(() => {
+        if (!cancelled) setStorageSummary(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  useEffect(() => {
+    const keyword = search.trim();
+    if (!keyword) {
+      setServerSearchResults([]);
+      return;
+    }
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      fetchJSON<{ items: WorkspaceHomeSearchResult[] }>(`/admin/v1/workspace-home/search?q=${encodeURIComponent(keyword)}&limit=20`)
+        .then((body) => {
+          if (!cancelled) setServerSearchResults(body.items ?? []);
+        })
+        .catch(() => {
+          if (!cancelled) setServerSearchResults([]);
+        });
+    }, 180);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [search]);
   const workflowCountByWorkspace = useMemo(() => {
     const next: Record<string, number> = {};
     activities.forEach((activity) => {
@@ -1958,10 +2461,64 @@ function StudioActivityStart({
   const selectedMembers = selectedWorkspace ? membersByWorkspace[selectedWorkspace.id] ?? [] : [];
   const selectedShareLinks = selectedWorkspace ? shareLinksByWorkspace[selectedWorkspace.id] ?? [] : [];
   const selectedAuditLogs = selectedWorkspace ? auditLogsByWorkspace[selectedWorkspace.id] ?? [] : [];
+  const shareUrlForLink = (link?: WorkspaceShareLinkSummary) => {
+    const token = link?.token || link?.id;
+    return token ? `${window.location.origin}/share/${token}` : '';
+  };
+  const shareLinkForTarget = (target: { id: string; type: 'Workspace' | 'Folder' | 'Workflow' }) => selectedShareLinks.find((link) => {
+    if (!link.enabled) return false;
+    if (target.type === 'Workspace') return link.scope === 'WORKSPACE' && link.workspaceId === target.id;
+    if (target.type === 'Folder') return link.scope === 'FOLDER' && link.folderId === target.id;
+    return link.scope === 'ACTIVITY' && link.activityId === target.id;
+  });
   const selectedRole = workspaceRoleForActor(selectedWorkspace, selectedMembers, currentActorId);
   const canEditWorkspace = workspaceRoleAllows(selectedRole, 'EDITOR');
   const canManageFolders = workspaceRoleAllows(selectedRole, 'ADMIN');
   const canManageMembers = workspaceRoleAllows(selectedRole, 'OWNER');
+  const permissionCapabilities = {
+    role: selectedRole,
+    canEditWorkspace,
+    canManageFolders,
+    canManageMembers,
+    reason: `当前角色 ${selectedRole} 权限不足`,
+  };
+  const workspaceStatusError = workflowStatus.includes('失败') || workflowStatus.includes('不可用') || workflowStatus.includes('异常')
+    ? workflowStatus
+    : '';
+  const dismissOpsToast = useCallback((id: number) => {
+    setOpsToasts((items) => items.filter((item) => item.id !== id));
+  }, []);
+  useEffect(() => () => {
+    opsToastTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+    opsToastTimersRef.current = [];
+  }, []);
+  useEffect(() => {
+    const message = opsMessage.trim();
+    if (!message) return;
+    const id = Date.now() + opsToastIdRef.current++;
+    const timer = window.setTimeout(() => {
+      dismissOpsToast(id);
+      opsToastTimersRef.current = opsToastTimersRef.current.filter((item) => item !== timer);
+    }, 4000);
+    opsToastTimersRef.current.push(timer);
+    setOpsToasts((items) => [...items.slice(-3), { id, message, tone: opsToastTone(message) }]);
+  }, [dismissOpsToast, opsMessage]);
+  useEffect(() => {
+    if (!selectedWorkspace) return;
+    setWorkspaceSettingsDraft({
+      name: selectedWorkspace.name || '',
+      slug: selectedWorkspace.slug || '',
+      description: selectedWorkspace.description || '',
+      icon: selectedWorkspace.icon || '',
+      color: selectedWorkspace.color || '',
+      visibility: selectedWorkspace.visibility || 'TEAM',
+      defaultRole: selectedWorkspace.defaultRole || 'VIEWER',
+      ownerId: selectedWorkspace.ownerId || '',
+    });
+  }, [selectedWorkspace?.id, selectedWorkspace?.name, selectedWorkspace?.slug, selectedWorkspace?.description, selectedWorkspace?.icon, selectedWorkspace?.color, selectedWorkspace?.visibility, selectedWorkspace?.defaultRole, selectedWorkspace?.ownerId]);
+  useEffect(() => {
+    setDetailVisibilityOverride('');
+  }, [selectedDetail?.id, selectedFolder?.id, selectedWorkspace?.id]);
   useEffect(() => {
     if (!selectedWorkspace && selectedWorkspaceId) {
       setSelectedWorkspaceId('');
@@ -1975,6 +2532,11 @@ function StudioActivityStart({
       setSelectedFolderId('');
     }
   }, [selectedFolder, selectedFolderId, selectedWorkspace, selectedWorkspaceId]);
+  useEffect(() => {
+    if (!selectedWorkspace || selectedFolderId) return;
+    const defaultFolder = selectedWorkspaceFolders.find((folder) => folder.name === '风控活动') ?? selectedWorkspaceFolders[0];
+    if (defaultFolder) setSelectedFolderId(defaultFolder.id);
+  }, [selectedFolderId, selectedWorkspace, selectedWorkspaceFolders]);
   const selectedChildFolders = useMemo(() => {
     if (!selectedWorkspace) return [];
     const parentId = selectedFolder?.id ?? '';
@@ -1984,7 +2546,7 @@ function StudioActivityStart({
     const keyword = search.trim().toLowerCase();
     return activities
       .filter((activity) => {
-        const archived = archivedActivityIds.has(activity.id);
+        const archived = archivedActivityIds.has(activity.id) || activity.status === 'ARCHIVED';
         if (statusFilter === 'ARCHIVED') {
           if (!archived) return false;
         } else if (statusFilter !== 'ALL' && archived) {
@@ -2014,11 +2576,56 @@ function StudioActivityStart({
       .filter((activity) => {
         const placement = placements[activity.id];
         if (!selectedWorkspace || placement?.workspaceId !== selectedWorkspace.id) return false;
-        return !archivedActivityIds.has(activity.id);
+        return !archivedActivityIds.has(activity.id) && activity.status !== 'ARCHIVED';
       })
       .sort((a, b) => activityTimestamp(b) - activityTimestamp(a))
       .slice(0, 5)
   ), [activities, archivedActivityIds, placements, selectedWorkspace]);
+  const sharedWorkflowCount = useMemo(() => (
+    selectedWorkspace ? selectedShareLinks.filter((link) => link.enabled && link.scope === 'ACTIVITY').length : 0
+  ), [selectedShareLinks, selectedWorkspace]);
+  const archivedWorkflowCount = useMemo(() => (
+    activities.filter((activity) => archivedActivityIds.has(activity.id) || activity.status === 'ARCHIVED').length
+  ), [activities, archivedActivityIds]);
+  const storageUsedGb = storageSummary ? storageSummary.usedBytes / 1024 / 1024 / 1024 : 32.4;
+  const storageTotalGb = storageSummary ? storageSummary.totalBytes / 1024 / 1024 / 1024 : 100;
+  const globalSearchResults = useMemo<GlobalSearchResult[]>(() => {
+    const keyword = search.trim().toLowerCase();
+    if (!keyword) return [];
+    const workflowResults = activities
+      .filter((activity) => `${activity.activityName} ${activity.activityCode} ${activity.tenantId}`.toLowerCase().includes(keyword))
+      .slice(0, 6)
+      .map((activity) => ({
+        id: activity.id,
+        type: 'workflow' as const,
+        title: activity.activityName || activity.activityCode,
+        subtitle: `${activity.activityCode} · ${activity.status || 'ACTIVE'}`,
+        workspaceId: placements[activity.id]?.workspaceId,
+        folderId: placements[activity.id]?.folderId,
+      }));
+    const folderResults = folders
+      .filter((folder) => folder.name.toLowerCase().includes(keyword))
+      .slice(0, 6)
+      .map((folder) => ({
+        id: folder.id,
+        type: 'folder' as const,
+        title: folder.name,
+        subtitle: `${folder.visibility} · ${workflowCountByFolder[folder.id] ?? 0} workflows`,
+        workspaceId: folder.workspaceId,
+        folderId: folder.id,
+      }));
+    const memberResults = selectedMembers
+      .filter((member) => `${member.displayName ?? ''} ${member.userId ?? ''} ${member.email ?? ''}`.toLowerCase().includes(keyword))
+      .slice(0, 5)
+      .map((member) => ({
+        id: member.id,
+        type: 'member' as const,
+        title: member.displayName || member.userId || member.email || 'Member',
+        subtitle: `${member.role} · ${member.status}`,
+        workspaceId: member.workspaceId,
+      }));
+    return serverSearchResults.length ? serverSearchResults : [...workflowResults, ...folderResults, ...memberResults].slice(0, 10);
+  }, [activities, folders, placements, search, selectedMembers, serverSearchResults, workflowCountByFolder]);
   const suggestedCode = normalizeActivityCode(createCode || createName || search);
   const openCreateDialog = (name?: string, context?: { workspaceId?: string; folderId?: string }) => {
     if (name) setCreateName(name);
@@ -2156,14 +2763,360 @@ function StudioActivityStart({
     if (!selectedWorkspace) return;
     setOpsMessage('');
     try {
-      await onCreateShareLink(selectedWorkspace.id, {
+      const link = await onCreateShareLink(selectedWorkspace.id, {
         scope: selectedFolder ? 'FOLDER' : 'WORKSPACE',
         folderId: selectedFolder?.id,
         permission: 'VIEW',
       });
-      setOpsMessage('分享链接已创建');
+      void navigator.clipboard?.writeText(shareUrlForLink(link));
+      setOpsMessage('分享链接已创建并复制');
     } catch (error) {
       setOpsMessage((error as Error).message);
+    }
+  };
+  const updateStudioActivityFromHome = async (workflowId: string, patch: { activityName?: string; workspaceId?: string; folderId?: string; status?: string; visibility?: string }) => {
+    const updated = await onUpdateActivity(workflowId, patch);
+    if (selectedDetail?.id === workflowId) {
+      setSelectedDetail((item) => item ? {
+        ...item,
+        name: updated.activityName || updated.activityCode,
+        status: updated.status || item.status,
+        visibility: updated.visibility || item.visibility,
+      } : item);
+    }
+    return updated;
+  };
+  const deleteWorkspaceFolderFromHome = async (workspaceId: string, folderId: string) => {
+    const deleted = await onDeleteFolder(workspaceId, folderId);
+    if (selectedFolderId === folderId) setSelectedFolderId('');
+    if (selectedDetail?.id === folderId) setSelectedDetail(null);
+    return deleted;
+  };
+  const updateWorkspaceFromHome = async (workspaceId: string, patch: { name?: string; status?: string }) => {
+    return onUpdateWorkspace(workspaceId, patch);
+  };
+  const deleteWorkspaceFromHome = async (workspaceId: string) => {
+    const deleted = await onDeleteWorkspace(workspaceId);
+    if (selectedWorkspaceId === workspaceId) {
+      setSelectedWorkspaceId('');
+      setSelectedFolderId('');
+    }
+    setSelectedDetail(null);
+    return deleted;
+  };
+  const importWorkflowFromHome = () => {
+    importWorkflowInputRef.current?.click();
+  };
+  const importWorkflowJSONToHome = async (file: File | null | undefined) => {
+    if (!file) return;
+    if (!selectedWorkspace?.id) {
+      setOpsMessage('先选择 workspace 后再导入 workflow。');
+      return;
+    }
+    const targetFolderId = selectedFolder?.id || selectedWorkspaceFolders[0]?.id || '';
+    if (!targetFolderId) {
+      setOpsMessage('先创建 folder 后再导入 workflow。');
+      return;
+    }
+    try {
+      const raw = await file.text();
+      const parsed = JSON.parse(raw) as WorkflowDefinition | { definition?: WorkflowDefinition; name?: string };
+      const definition = 'definition' in parsed && parsed.definition ? parsed.definition : parsed as WorkflowDefinition;
+      const metaName = typeof definition.meta?.name === 'string' ? definition.meta.name : '';
+      const baseName = ('name' in parsed && typeof parsed.name === 'string' && parsed.name) || metaName || file.name.replace(/\.json$/i, '') || '导入 Workflow';
+      const created = await onCreateActivity({
+        tenantId: selectedWorkspace.tenantId,
+        activityName: baseName,
+        activityCode: normalizeActivityCode(baseName),
+        workspaceId: selectedWorkspace.id,
+        folderId: targetFolderId,
+        definition,
+      });
+      await uploadWorkspaceFile({
+        workspaceId: selectedWorkspace.id,
+        folderId: targetFolderId,
+        activityId: created.id,
+        kind: 'IMPORT_WORKFLOW',
+        file,
+      });
+      setOpsMessage(`已导入 workflow 并保存原文件：${baseName}`);
+    } catch (error) {
+      setOpsMessage(`导入 Workflow 失败：${(error as Error).message}`);
+    } finally {
+      if (importWorkflowInputRef.current) importWorkflowInputRef.current.value = '';
+    }
+  };
+  const openWorkspaceSettings = () => {
+    setHomeUtilityDialog('settings');
+  };
+  const openStorageManager = () => {
+    setHomeUtilityDialog('storage');
+  };
+  const normalizeDetailVisibility = (value?: string): WorkspaceDetailTarget['visibility'] => {
+    const normalized = (value || '').toLowerCase();
+    if (normalized.includes('public')) return 'Public';
+    if (normalized.includes('team') || normalized.includes('workspace')) return 'Workspace';
+    return 'Private';
+  };
+  const detailTarget: WorkspaceDetailTarget = useMemo(() => {
+    if (selectedDetail) {
+      return {
+        id: selectedDetail.id,
+        type: selectedDetail.type,
+        name: selectedDetail.name,
+        visibility: detailVisibilityOverride || normalizeDetailVisibility(selectedDetail.visibility),
+        workflowCount: selectedDetail.type === 'Folder' ? workflowCountByFolder[selectedDetail.id] ?? 0 : 1,
+        folderCount: selectedDetail.type === 'Folder' ? selectedWorkspaceFolders.filter((folder) => (folder.parentId ?? '') === selectedDetail.id).length : 0,
+        memberCount: selectedMembers.filter((member) => member.status !== 'REMOVED').length,
+        updatedLabel: 'updated 2h ago',
+        owner: selectedDetail.owner,
+        version: selectedDetail.type === 'Workflow' ? selectedDetail.version : undefined,
+        status: selectedDetail.type === 'Workflow' ? selectedDetail.status : undefined,
+      };
+    }
+    return {
+      id: selectedFolder?.id || selectedWorkspace?.id || 'workspace-root',
+      type: selectedFolder ? 'Folder' : 'Workspace',
+      name: selectedFolder?.name || selectedWorkspace?.name || '风控活动',
+      visibility: detailVisibilityOverride || normalizeDetailVisibility(selectedFolder?.visibility || selectedWorkspace?.visibility),
+      workflowCount: selectedFolder ? workflowCountByFolder[selectedFolder.id] ?? selectedWorkflows.length : selectedWorkflows.length,
+      folderCount: selectedChildFolders.length,
+      memberCount: selectedMembers.filter((member) => member.status !== 'REMOVED').length,
+      updatedLabel: workflowStatus.includes('失败') || workflowStatus.includes('不可用') ? workflowStatus : 'updated 2h ago',
+    };
+  }, [detailVisibilityOverride, selectedChildFolders.length, selectedDetail, selectedFolder, selectedMembers, selectedWorkspace, selectedWorkflows.length, selectedWorkspaceFolders, workflowCountByFolder, workflowStatus]);
+  const detailActivityGrants = detailTarget.type === 'Workflow' ? activityGrantsByActivity[detailTarget.id] ?? [] : [];
+  useEffect(() => {
+    if (detailTarget.type !== 'Workflow' || activityGrantsByActivity[detailTarget.id]) return;
+    void onRefreshActivityACL(detailTarget.id).catch((error) => setOpsMessage((error as Error).message));
+  }, [activityGrantsByActivity, detailTarget.id, detailTarget.type, onRefreshActivityACL]);
+  const detailShareLink = shareLinkForTarget(detailTarget);
+  const detailShareUrl = shareUrlForLink(detailShareLink) || `${window.location.origin}/share/pending-${detailTarget.type.toLowerCase()}-${detailTarget.id}`;
+  const detailDataSources = useMemo(() => {
+    const storageSource = storageSummary
+      ? storageSummary.fileObjects !== undefined
+        ? `文件存储已接入 · ${storageSummary.fileObjects} objects`
+        : 'PostgreSQL 对象统计'
+      : '默认容量估算';
+    const storageTone = storageSummary ? 'good' : 'warn';
+    const shareValue = detailShareLink
+      ? `Active · used ${detailShareLink.accessCount ?? 0}${detailShareLink.expiresAt ? ` · expires ${new Date(detailShareLink.expiresAt).toLocaleDateString()}` : ''}`
+      : '未创建真实 share link';
+    return [
+      {
+        label: `${detailTarget.type} 数据源`,
+        value: 'Admin API -> PostgreSQL',
+        tone: 'good' as const,
+      },
+      {
+        label: '权限来源',
+        value: detailTarget.type === 'Workflow'
+          ? `Visibility + Workflow ACL (${detailActivityGrants.length})`
+          : 'Workspace role + Visibility',
+        tone: 'info' as const,
+      },
+      {
+        label: '存储统计',
+        value: storageSource,
+        tone: storageTone as 'good' | 'warn',
+      },
+      {
+        label: 'Share link',
+        value: shareValue,
+        tone: detailShareLink ? 'good' as const : 'warn' as const,
+      },
+    ];
+  }, [detailActivityGrants.length, detailShareLink, detailTarget.type, storageSummary]);
+  const updateDetailVisibility = (visibility: WorkspaceDetailTarget['visibility']) => {
+    setDetailVisibilityOverride(visibility);
+    if (detailTarget.type === 'Workspace') {
+      void (async () => {
+        const nextVisibility = visibility === 'Workspace' ? 'TEAM' : visibility.toUpperCase();
+        const updated = await onUpdateWorkspace(detailTarget.id, { visibility: nextVisibility });
+        setOpsMessage(`${updated.name} 可见性已切换为 ${visibility}`);
+      })().catch((error) => setOpsMessage((error as Error).message));
+    } else if (selectedFolder && detailTarget.type === 'Folder') {
+      void updateSelectedFolderVisibility(visibility === 'Workspace' ? 'TEAM' : visibility.toUpperCase());
+    } else {
+      void updateStudioActivityFromHome(detailTarget.id, { visibility: visibility === 'Workspace' ? 'TEAM' : visibility.toUpperCase() })
+        .then((updated) => setOpsMessage(`${updated.activityName || updated.activityCode} 可见性已切换为 ${visibility}`))
+        .catch((error) => setOpsMessage((error as Error).message));
+    }
+  };
+  const openDetailAction = (action: 'rename' | 'move' | 'archive') => {
+    setDetailAction(action);
+    setDetailActionName(detailTarget.name);
+    setDetailActionFolderId(selectedFolder?.id || selectedWorkspaceFolders[0]?.id || '');
+    setDetailActionError('');
+  };
+  const openDetailActionFor = (action: WorkspaceItemAction, item: { id: string; type: 'Folder' | 'Workflow'; name: string; visibility: string; status?: string; version?: string; owner?: string }) => {
+    setSelectedDetail(item);
+    if (action === 'copyLink') {
+      const url = shareUrlForLink(shareLinkForTarget(item)) || `${window.location.origin}/share/pending-${item.type.toLowerCase()}-${item.id}`;
+      void navigator.clipboard?.writeText(url);
+      setOpsMessage(`已复制链接：${item.name}`);
+      return;
+    }
+    if (action === 'permission') {
+      setDetailVisibilityOverride(item.visibility === 'Workspace' ? 'Workspace' : normalizeDetailVisibility(item.visibility));
+      setOpsMessage(`已打开权限：${item.name}`);
+      return;
+    }
+    if (action === 'share') {
+      if (selectedWorkspace) {
+        let created: Promise<WorkspaceShareLinkSummary>;
+        if (item.type === 'Folder') {
+          created = onCreateShareLink(selectedWorkspace.id, { scope: 'FOLDER', folderId: item.id, permission: 'VIEW' });
+        } else {
+          created = onCreateShareLink(selectedWorkspace.id, { scope: 'ACTIVITY', activityId: item.id, folderId: selectedFolder?.id, permission: 'VIEW' });
+        }
+        void created.then((link) => {
+          void navigator.clipboard?.writeText(shareUrlForLink(link));
+          setOpsMessage(`已创建分享并复制链接：${item.name}`);
+        }).catch((error) => setOpsMessage((error as Error).message));
+      }
+      return;
+    }
+    setDetailAction(action);
+    setDetailActionName(item.name);
+    setDetailActionFolderId(selectedFolder?.id || selectedWorkspaceFolders.find((folder) => folder.id !== item.id)?.id || '');
+    setDetailActionError('');
+  };
+  const handleCurrentAction = (action: WorkspaceItemAction) => {
+    if (action === 'copyLink') {
+      void navigator.clipboard?.writeText(detailShareUrl);
+      setOpsMessage(`已复制链接：${detailTarget.name}`);
+      return;
+    }
+    if (action === 'permission') {
+      setOpsMessage(`已打开权限：${detailTarget.name}`);
+      return;
+    }
+    if (action === 'share') {
+      if (selectedWorkspace) void createFolderShare();
+      else setOpsMessage('先选择 workspace。');
+      return;
+    }
+    openDetailAction(action);
+  };
+  const archiveItems = async (items: Array<{ id: string; type: 'Folder' | 'Workflow'; name: string; visibility: string; status?: string; version?: string; owner?: string }>) => {
+    if (!selectedWorkspace) {
+      setOpsMessage('先选择 workspace。');
+      return;
+    }
+    setOpsMessage(`正在归档 ${items.length} 项...`);
+    try {
+      await fetchJSON<{ count: number }>(`/admin/v1/workspaces/${selectedWorkspace.id}/batch`, {
+        method: 'POST',
+        body: JSON.stringify({ action: 'ARCHIVE', items: items.map((item) => ({ id: item.id, type: item.type })) }),
+      });
+      setOpsMessage(`已归档 ${items.length} 项`);
+      await onRefreshWorkspaceOps(selectedWorkspace.id);
+      window.location.reload();
+    } catch (error) {
+      setOpsMessage(`批量归档失败：${(error as Error).message}`);
+    }
+  };
+  const openBatchAction = (action: 'move' | 'permission' | 'copyLink', items: Array<{ id: string; type: 'Folder' | 'Workflow'; name: string; visibility: string; status?: string; version?: string; owner?: string }>) => {
+    if (action === 'copyLink') {
+      const links = items.map((item) => shareUrlForLink(shareLinkForTarget(item)) || `${window.location.origin}/share/pending-${item.type.toLowerCase()}-${item.id}`).join('\n');
+      void navigator.clipboard?.writeText(links);
+      setOpsMessage(`已复制 ${items.length} 个链接`);
+      return;
+    }
+    setBatchAction(action);
+    setBatchActionItems(items);
+    setBatchActionFolderId(selectedFolder?.id || selectedWorkspaceFolders[0]?.id || '');
+    setBatchActionVisibility('Workspace');
+    setBatchActionError('');
+  };
+  const submitBatchAction = async () => {
+    if (!selectedWorkspace) {
+      setBatchActionError('先选择 workspace。');
+      return;
+    }
+    setBatchActionBusy(true);
+    setBatchActionError('');
+    try {
+      if (batchAction === 'move') {
+        if (!batchActionFolderId) throw new Error('请选择目标 folder');
+        await fetchJSON<{ count: number }>(`/admin/v1/workspaces/${selectedWorkspace.id}/batch`, {
+          method: 'POST',
+          body: JSON.stringify({ action: 'MOVE', folderId: batchActionFolderId, items: batchActionItems.map((item) => ({ id: item.id, type: item.type })) }),
+        });
+        setOpsMessage(`已移动 ${batchActionItems.length} 项`);
+      }
+      if (batchAction === 'permission') {
+        const visibility = batchActionVisibility === 'Workspace' ? 'TEAM' : batchActionVisibility.toUpperCase();
+        await fetchJSON<{ count: number }>(`/admin/v1/workspaces/${selectedWorkspace.id}/batch`, {
+          method: 'POST',
+          body: JSON.stringify({ action: 'PERMISSION', visibility, items: batchActionItems.map((item) => ({ id: item.id, type: item.type })) }),
+        });
+        setOpsMessage(`已更新 ${batchActionItems.length} 项权限`);
+      }
+      await onRefreshWorkspaceOps(selectedWorkspace.id);
+      window.location.reload();
+      setBatchAction('');
+      setBatchActionItems([]);
+    } catch (error) {
+      setBatchActionError((error as Error).message);
+    } finally {
+      setBatchActionBusy(false);
+    }
+  };
+  const submitDetailAction = async () => {
+    if (!selectedWorkspace) {
+      setDetailActionError('先选择 workspace。');
+      return;
+    }
+    setDetailActionBusy(true);
+    setDetailActionError('');
+    try {
+      if (detailAction === 'rename') {
+        const nextName = detailActionName.trim();
+        if (!nextName) throw new Error('名称不能为空');
+        if (detailTarget.type === 'Workspace') {
+          const updated = await updateWorkspaceFromHome(detailTarget.id, { name: nextName });
+          setOpsMessage(`已重命名 workspace：${updated.name}`);
+        } else if (detailTarget.type === 'Folder') {
+          const updated = await onUpdateFolder(selectedWorkspace.id, detailTarget.id, { name: nextName });
+          setSelectedDetail((item) => item && item.id === updated.id ? { ...item, name: updated.name } : item);
+          setOpsMessage(`已重命名 folder：${updated.name}`);
+        } else if (detailTarget.type === 'Workflow') {
+          const updated = await updateStudioActivityFromHome(detailTarget.id, { activityName: nextName });
+          setOpsMessage(`已重命名 workflow：${updated.activityName}`);
+        }
+      }
+      if (detailAction === 'move') {
+        if (detailTarget.type === 'Workspace') throw new Error('Workspace 不支持移动');
+        if (!detailActionFolderId) throw new Error('请选择目标 folder');
+        if (detailTarget.type === 'Folder') {
+          const siblings = selectedWorkspaceFolders.filter((folder) => (folder.parentId ?? '') === detailActionFolderId);
+          const updated = await onUpdateFolder(selectedWorkspace.id, detailTarget.id, { parentId: detailActionFolderId, sortOrder: (siblings.length + 1) * 10 });
+          setSelectedDetail((item) => item && item.id === updated.id ? { ...item, name: updated.name } : item);
+          setOpsMessage(`已移动 folder：${updated.name}`);
+        } else if (detailTarget.type === 'Workflow') {
+          const updated = await updateStudioActivityFromHome(detailTarget.id, { workspaceId: selectedWorkspace.id, folderId: detailActionFolderId });
+          setOpsMessage(`已移动 workflow：${updated.activityName}`);
+        }
+      }
+      if (detailAction === 'archive') {
+        if (detailTarget.type === 'Workspace') {
+          await deleteWorkspaceFromHome(detailTarget.id);
+          setOpsMessage(`已归档 workspace：${detailTarget.name}`);
+        } else if (detailTarget.type === 'Folder') {
+          await deleteWorkspaceFolderFromHome(selectedWorkspace.id, detailTarget.id);
+          setOpsMessage(`已归档 folder：${detailTarget.name}`);
+        } else if (detailTarget.type === 'Workflow') {
+          const updated = await updateStudioActivityFromHome(detailTarget.id, { status: 'ARCHIVED' });
+          setOpsMessage(`已归档 workflow：${updated.activityName}`);
+        }
+      }
+      setDetailAction('');
+    } catch (error) {
+      setDetailActionError((error as Error).message);
+    } finally {
+      setDetailActionBusy(false);
     }
   };
   const toggleFavorite = (activityId: string) => {
@@ -2176,13 +3129,19 @@ function StudioActivityStart({
     });
   };
   const toggleArchived = (activityId: string) => {
-    setArchivedActivityIds((items) => {
-      const next = new Set(items);
-      if (next.has(activityId)) next.delete(activityId);
-      else next.add(activityId);
-      saveStudioStringSet('exmarketing.studio.archivedActivities', next);
-      return next;
-    });
+    const activity = activities.find((item) => item.id === activityId);
+    const nextStatus = activity?.status === 'ARCHIVED' || archivedActivityIds.has(activityId) ? 'ACTIVE' : 'ARCHIVED';
+    void updateStudioActivityFromHome(activityId, { status: nextStatus })
+      .then(() => {
+        setArchivedActivityIds((items) => {
+          const next = new Set(items);
+          next.delete(activityId);
+          saveStudioStringSet('exmarketing.studio.archivedActivities', next);
+          return next;
+        });
+        setOpsMessage(nextStatus === 'ARCHIVED' ? 'Workflow 已归档' : 'Workflow 已恢复');
+      })
+      .catch((error) => setOpsMessage((error as Error).message));
   };
   const isFolderDescendant = (folderId: string, ancestorId: string) => {
     let cursor = selectedWorkspaceFolders.find((folder) => folder.id === folderId);
@@ -2217,311 +3176,534 @@ function StudioActivityStart({
   return (
     <div className="studio-start-overlay">
       <section className="studio-start-shell">
-        <header className="studio-home-top">
-          <div>
-            <b>ExMarketing</b>
-            <span>Activity Studio</span>
-          </div>
-          <a href="/admin/">活动后台</a>
-        </header>
-        <div className="studio-start-body studio-file-manager">
-          <aside className="studio-workspace-panel">
-            <div className="studio-section-head">
-              <div>
-                <b>Workspace</b>
-                <p>{activeWorkspaces.length} 个工作区</p>
-              </div>
-              <button aria-label="新建 Workspace" onClick={() => {
+        <WorkspaceTopBar
+          workspaceName={selectedWorkspace?.name ?? 'hello'}
+          folderName={selectedFolder?.name ?? '风控活动'}
+          searchValue={search}
+          workflowCount={selectedWorkflows.length}
+          folderCount={selectedChildFolders.length}
+          memberCount={selectedMembers.filter((member) => member.status !== 'REMOVED').length}
+          searchResults={globalSearchResults}
+          actorInitial={currentActorId || 'D'}
+          isLoading={!workspaceDataReady}
+          onSearchChange={setSearch}
+          onSearchResultSelect={(result) => {
+            if (result.type === 'workspace') {
+              setSelectedWorkspaceId(result.workspaceId || result.id);
+              setSelectedFolderId('');
+              return;
+            }
+            if (result.type === 'workflow') {
+              const placement = result.workspaceId || result.folderId ? { workspaceId: result.workspaceId, folderId: result.folderId } : placements[result.id];
+              if (placement?.workspaceId) setSelectedWorkspaceId(placement.workspaceId);
+              if (placement?.folderId) setSelectedFolderId(placement.folderId);
+              onSelectActivity(result.id);
+              return;
+            }
+            if (result.type === 'folder') {
+              const folder = folders.find((item) => item.id === (result.folderId || result.id));
+              if (folder?.workspaceId) setSelectedWorkspaceId(folder.workspaceId);
+              else if (result.workspaceId) setSelectedWorkspaceId(result.workspaceId);
+              setSelectedFolderId(result.folderId || result.id);
+              setSelectedDetail({ id: result.folderId || result.id, type: 'Folder', name: result.title, visibility: folder?.visibility || 'TEAM' });
+              return;
+            }
+            setOpsMessage(`成员已定位：${result.title}`);
+          }}
+          onNewWorkflow={() => {
+            if (!canEditWorkspace) {
+              setOpsMessage(`${permissionCapabilities.reason}，不能新建 workflow。`);
+              return;
+            }
+            openCreateDialog('新 workflow', { workspaceId: selectedWorkspace?.id, folderId: selectedFolder?.id });
+          }}
+          onImport={() => {
+            if (!canEditWorkspace) {
+              setOpsMessage(`${permissionCapabilities.reason}，不能导入 workflow。`);
+              return;
+            }
+            importWorkflowFromHome();
+          }}
+          onSettings={openWorkspaceSettings}
+        />
+        <WorkspaceHomeLayout
+          sidebar={(
+            <WorkspaceSidebar
+              workspaces={activeWorkspaces}
+              folders={selectedWorkspaceFolders}
+              selectedWorkspaceId={selectedWorkspace?.id}
+              selectedFolderId={selectedFolder?.id}
+              workflowCountByFolder={workflowCountByFolder}
+              recentCount={recentWorkflows.length}
+              sharedCount={sharedWorkflowCount}
+              favoriteCount={favoriteActivityIds.size}
+              archivedCount={archivedWorkflowCount}
+              memberCount={selectedMembers.filter((member) => member.status !== 'REMOVED').length}
+              auditCount={selectedAuditLogs.length}
+              storageUsedGb={storageUsedGb}
+              storageTotalGb={storageTotalGb}
+              isLoading={!workspaceDataReady}
+              onWorkspaceChange={(workspaceId) => {
+                setSelectedWorkspaceId(workspaceId);
+                setSelectedFolderId('');
+              }}
+              onFolderSelect={setSelectedFolderId}
+              onCreateWorkspace={() => {
                 setWorkspaceError('');
                 setShowWorkspaceDialog(true);
-              }}>+</button>
-            </div>
-            <div className="studio-workspace-list">
-              {activeWorkspaces.length ? activeWorkspaces.map((workspace) => (
-                <button
-                  key={workspace.id}
-                  className={cx(workspace.id === selectedWorkspace?.id && 'active')}
-                  onClick={() => {
-                    setSelectedWorkspaceId(workspace.id);
-                    setSelectedFolderId('');
-                  }}
-                >
-                  <span style={{ background: workspace.color || '#155eef' }}>{(workspace.name || workspace.slug || 'W').slice(0, 1).toUpperCase()}</span>
-                  <div>
-                    <b>{workspace.name}</b>
-                    <em>{workspace.slug} · {workspace.visibility}</em>
-                  </div>
-                  <strong>{workflowCountByWorkspace[workspace.id] ?? 0}</strong>
-                </button>
-              )) : <div className="studio-start-empty">暂无 workspace</div>}
-            </div>
-            <div className="studio-home-side-note">
-              <b>{selectedRole}</b>
-              <span>{currentActorId}</span>
-            </div>
-            {hiddenTestActivityCount > 0 ? (
-              <p className="studio-start-note">已隐藏 {hiddenTestActivityCount} 个测试活动</p>
-            ) : null}
-          </aside>
-
-          <section className="studio-browser-panel">
-            <div className="studio-browser-toolbar">
-              <div>
-                <span>Activity Studio</span>
-                <b>{selectedWorkspace?.name ?? '选择 Workspace'}</b>
-                <p>{selectedFolder ? `/${selectedFolder.name}` : '/ Workspace Root'} · {workflowStatus}</p>
-              </div>
-              <div className="studio-browser-actions">
-                <button onClick={() => {
-                  setFolderError('');
-                  setShowFolderDialog(true);
-                }} disabled={!selectedWorkspace || !canManageFolders}>新建 Folder</button>
-                <button className="primary" onClick={() => openCreateDialog('新 workflow', { workspaceId: selectedWorkspace?.id, folderId: selectedFolder?.id })} disabled={!selectedWorkspace || !canEditWorkspace}>新建 Workflow</button>
-              </div>
-            </div>
-
-            <div className="studio-browser-filters">
-              <input value={search} placeholder="搜索 activity 名称、code、tenant、folder" onChange={(event) => setSearch(event.target.value)} />
-              <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as typeof statusFilter)}>
-                <option value="ACTIVE">Active</option>
-                <option value="DRAFT">Draft</option>
-                <option value="ARCHIVED">Archived</option>
-                <option value="ALL">All</option>
-              </select>
-              <select value={sortMode} onChange={(event) => setSortMode(event.target.value as typeof sortMode)}>
-                <option value="recent">最近编辑</option>
-                <option value="name">名称</option>
-                <option value="code">Code</option>
-                <option value="version">版本</option>
-              </select>
-              <button className={cx(showFavoritesOnly && 'active')} onClick={() => setShowFavoritesOnly((value) => !value)}>收藏</button>
-            </div>
-
-            <nav className="studio-browser-breadcrumb">
-              <button onClick={() => setSelectedFolderId('')}>{selectedWorkspace?.name ?? 'Workspace'}</button>
-              {selectedFolder ? (
-                <>
-                  <span>/</span>
-                  <button>{selectedFolder.name}</button>
-                </>
-              ) : null}
-            </nav>
-
-            <div
-              className={cx('studio-folder-drop-root', draggingFolderId && 'dragging')}
-              onDragOver={(event) => {
-                if (!draggingFolderId) return;
-                event.preventDefault();
               }}
-              onDrop={(event) => {
-                event.preventDefault();
-                const folder = selectedWorkspaceFolders.find((item) => item.id === draggingFolderId);
-                if (folder) void moveFolder(folder, '');
+              onNavRecent={() => {
+                setSortMode('recent');
+                setStatusFilter('ALL');
+                setShowFavoritesOnly(false);
               }}
-            >
-              <span>拖到这里移回 Workspace 根目录</span>
-            </div>
+              onNavWorkspace={() => {
+                setStatusFilter('ACTIVE');
+                setShowFavoritesOnly(false);
+              }}
+              onNavShared={() => setHomeUtilityDialog('share')}
+              onNavFavorites={() => {
+                setShowFavoritesOnly(true);
+                setStatusFilter('ALL');
+              }}
+              onNavArchived={() => {
+                setStatusFilter('ARCHIVED');
+                setShowFavoritesOnly(false);
+              }}
+              onNavMembers={() => setHomeUtilityDialog('members')}
+              onNavAudit={() => setHomeUtilityDialog('audit')}
+              onManageStorage={openStorageManager}
+            />
+          )}
 
-            <div className="studio-file-section">
-              <div className="studio-file-section-title">
-                <b>Folders</b>
-                <span>{selectedChildFolders.length}</span>
-              </div>
-              {selectedChildFolders.length ? (
-                <div className="studio-folder-grid">
-                  {selectedChildFolders.map((folder) => (
-                    <button
-                      key={folder.id}
-                      draggable
-                      className={cx(folder.id === selectedFolder?.id && 'active', draggingFolderId === folder.id && 'dragging', movingFolderId === folder.id && 'moving')}
-                      onClick={() => setSelectedFolderId(folder.id)}
-                      onDragStart={(event) => {
-                        event.dataTransfer.effectAllowed = 'move';
-                        setDraggingFolderId(folder.id);
-                      }}
-                      onDragEnd={() => setDraggingFolderId('')}
-                      onDragOver={(event) => {
-                        if (!draggingFolderId || draggingFolderId === folder.id) return;
-                        event.preventDefault();
-                      }}
-                      onDrop={(event) => {
-                        event.preventDefault();
-                        const dragged = selectedWorkspaceFolders.find((item) => item.id === draggingFolderId);
-                        if (dragged) void moveFolder(dragged, folder.id);
-                      }}
-                    >
-                      <i style={{ background: folder.color || '#e8f1ff' }}>▰</i>
-                      <span>
-                        <b>{folder.name}</b>
-                        <em>{folder.visibility} · {workflowCountByFolder[folder.id] ?? 0} workflows</em>
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              ) : <div className="studio-folder-empty-line">当前层级没有子文件夹</div>}
-            </div>
+          content={(
+            <WorkspaceContent
+              workspaceName={selectedWorkspace?.name ?? 'hello'}
+              folderName={selectedFolder?.name ?? '风控活动'}
+              folderVisibility={selectedFolder?.visibility ?? selectedWorkspace?.visibility ?? 'Private'}
+              folderUpdatedLabel={workflowStatus.includes('失败') || workflowStatus.includes('不可用') ? workflowStatus : 'updated 2h ago'}
+              folders={selectedChildFolders}
+              workflows={selectedWorkflows}
+              templates={templates}
+              workflowCountByFolder={workflowCountByFolder}
+              searchValue={search}
+              statusFilter={statusFilter}
+              sortMode={sortMode}
+              favoriteWorkflowIds={favoriteActivityIds}
+              archivedWorkflowIds={archivedActivityIds}
+              isLoading={!workspaceDataReady}
+              errorMessage={workspaceStatusError}
+              capabilities={permissionCapabilities}
+              onRetryLoad={() => {
+                if (selectedWorkspace?.id) void onRefreshWorkspaceOps(selectedWorkspace.id);
+                fetchJSON<WorkspaceHomeStorageSummary>('/admin/v1/workspace-home/storage')
+                  .then(setStorageSummary)
+                  .catch((error) => setOpsMessage((error as Error).message));
+              }}
+              onSearchChange={setSearch}
+              onStatusFilterChange={setStatusFilter}
+              onSortChange={setSortMode}
+              onCreateFolder={() => {
+                setFolderError('');
+                setShowFolderDialog(true);
+              }}
+              onCreateWorkflow={() => openCreateDialog(search || '新 workflow', { workspaceId: selectedWorkspace?.id, folderId: selectedFolder?.id })}
+              onImportWorkflow={importWorkflowFromHome}
+              onCurrentAction={handleCurrentAction}
+              onItemSelect={(item) => setSelectedDetail(item)}
+              onFolderOpen={setSelectedFolderId}
+              onWorkflowOpen={onSelectActivity}
+              onTemplateOpen={(templateId) => {
+                const template = templates.find((item) => item.id === templateId);
+                if (!template) {
+                  setOpsMessage('模板不存在或尚未加载');
+                  return;
+                }
+                if (!selectedWorkspace?.id || !selectedFolder?.id) {
+                  setOpsMessage('先选择目标 workspace 和 folder 后再从模板创建');
+                  return;
+                }
+                void onCreateActivity({
+                  tenantId: selectedWorkspace.tenantId,
+                  activityName: template.name,
+                  activityCode: normalizeActivityCode(template.name),
+                  workspaceId: selectedWorkspace.id,
+                  folderId: selectedFolder.id,
+                  definition: template.definition,
+                });
+              }}
+              onToggleFavorite={toggleFavorite}
+              onToggleArchived={toggleArchived}
+              onItemAction={openDetailActionFor}
+              onBulkAction={openBatchAction}
+              onBulkArchive={archiveItems}
+            />
+          )}
 
-            <div className="studio-file-section">
-              <div className="studio-file-section-title">
-                <b>Workflows</b>
-                <span>{selectedWorkflows.length}</span>
-              </div>
-              {selectedWorkflows.length ? (
-                <div className="studio-workflow-table">
-                  <div className="studio-workflow-row head">
-                    <span>Name</span>
-                    <span>Code</span>
-                    <span>Status</span>
-                    <span>Version</span>
-                    <span>Updated</span>
-                    <span>Actions</span>
-                  </div>
-                  {selectedWorkflows.map((activity) => (
-                    <button key={activity.id} className="studio-workflow-row" onClick={() => onSelectActivity(activity.id)}>
-                      <span className="workflow-name">
-                        <i>{(activity.activityName || activity.activityCode || 'W').slice(0, 1).toUpperCase()}</i>
-                        <b>{activity.activityName || activity.activityCode}</b>
-                      </span>
-                      <span>{activity.activityCode}</span>
-                      <span><strong>{archivedActivityIds.has(activity.id) ? 'ARCHIVED' : activity.status || 'ACTIVE'}</strong></span>
-                      <span>v{activity.version ?? 1}</span>
-                      <span>{formatStudioDate(activity.updatedAt || activity.createdAt)}</span>
-                      <span className="workflow-actions">
-                        <em
-                          role="button"
-                          tabIndex={0}
-                          className={cx(favoriteActivityIds.has(activity.id) && 'active')}
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            toggleFavorite(activity.id);
-                          }}
-                        >
-                          ★
-                        </em>
-                        <em
-                          role="button"
-                          tabIndex={0}
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            toggleArchived(activity.id);
-                          }}
-                        >
-                          {archivedActivityIds.has(activity.id) ? '恢复' : '归档'}
-                        </em>
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              ) : (
-                <div className="studio-empty-state compact">
-                  <div className="studio-empty-icon">＋</div>
-                  <b>{statusFilter === 'ARCHIVED' ? '没有归档 workflow' : '当前视图没有 workflow'}</b>
-                  <span>可以新建空白活动、切换 folder，或调整搜索和筛选条件。</span>
-                  <div className="studio-empty-actions">
-                    <button onClick={() => openCreateDialog(search || '新 workflow', { workspaceId: selectedWorkspace?.id, folderId: selectedFolder?.id })} disabled={!canEditWorkspace}>创建 Workflow</button>
-                  </div>
-                </div>
+          detail={(
+            <WorkspaceDetailPanel
+              target={detailTarget}
+              members={selectedMembers}
+              audits={selectedAuditLogs}
+              activityGrants={detailActivityGrants}
+              shareUrl={detailShareUrl}
+              dataSources={detailDataSources}
+              isLoading={!workspaceDataReady}
+              errorMessage={workspaceStatusError}
+              capabilities={permissionCapabilities}
+              onVisibilityChange={updateDetailVisibility}
+              onCreateActivityGrant={(input) => (
+                onCreateActivityACL(detailTarget.id, input)
+                  .then(() => setOpsMessage('Workflow 单独授权已添加'))
+                  .catch((error) => {
+                    setOpsMessage((error as Error).message);
+                    throw error;
+                  })
               )}
-            </div>
-          </section>
-
-          <aside className="studio-ops-panel">
-            <section className="studio-recent-card">
-              <h3>最近编辑</h3>
-              <div className="studio-recent-list">
-                {recentWorkflows.length ? recentWorkflows.map((activity) => (
-                  <button key={activity.id} onClick={() => onSelectActivity(activity.id)}>
-                    <span>
-                      <b>{activity.activityName || activity.activityCode}</b>
-                      <em>{formatStudioDate(activity.updatedAt || activity.createdAt)}</em>
-                    </span>
-                    <strong>v{activity.version ?? 1}</strong>
-                  </button>
-                )) : <div className="studio-folder-empty-line">暂无最近编辑</div>}
+              onDeleteActivityGrant={(grantId) => (
+                onDeleteActivityACL(detailTarget.id, grantId)
+                  .then(() => setOpsMessage('Workflow 单独授权已删除'))
+                  .catch((error) => {
+                    setOpsMessage((error as Error).message);
+                    throw error;
+                  })
+              )}
+              onCopyShare={() => {
+                const existing = shareLinkForTarget(detailTarget);
+                if (existing) {
+                  void navigator.clipboard?.writeText(shareUrlForLink(existing));
+                  setOpsMessage('分享链接已复制');
+                  return;
+                }
+                if (!selectedWorkspace) {
+                  setOpsMessage('先选择 workspace。');
+                  return;
+                }
+                void onCreateShareLink(selectedWorkspace.id, {
+                  scope: detailTarget.type === 'Workspace' ? 'WORKSPACE' : detailTarget.type === 'Folder' ? 'FOLDER' : 'ACTIVITY',
+                  folderId: detailTarget.type === 'Folder' ? detailTarget.id : selectedFolder?.id,
+                  activityId: detailTarget.type === 'Workflow' ? detailTarget.id : undefined,
+                  permission: 'VIEW',
+                }).then((link) => {
+                  void navigator.clipboard?.writeText(shareUrlForLink(link));
+                  setOpsMessage('分享链接已创建并复制');
+                }).catch((error) => setOpsMessage((error as Error).message));
+              }}
+              onManageMembers={() => setHomeUtilityDialog('members')}
+              onManageShare={() => {
+                setHomeUtilityDialog('share');
+              }}
+              onViewAllAudit={() => setHomeUtilityDialog('audit')}
+              onRename={() => openDetailAction('rename')}
+              onMove={() => openDetailAction('move')}
+              onArchive={() => openDetailAction('archive')}
+              onClose={() => {
+                setSelectedDetail(null);
+                setOpsMessage('详情面板已回到当前文件夹');
+              }}
+            />
+          )}
+        />
+        <input
+          ref={importWorkflowInputRef}
+          className="workflow-import-input"
+          type="file"
+          accept="application/json,.json"
+          onChange={(event) => {
+            void importWorkflowJSONToHome(event.target.files?.[0]);
+          }}
+        />
+        {opsToasts.length ? (
+          <div className="exm-toast-stack" role="status" aria-live="polite">
+            {opsToasts.map((toast) => (
+              <div key={toast.id} className={`exm-toast ${toast.tone}`}>
+                <span className="exm-toast-dot" />
+                <p>{toast.message}</p>
+                <button type="button" aria-label="关闭提示" onClick={() => dismissOpsToast(toast.id)}>×</button>
               </div>
-            </section>
-            <div className="studio-section-head">
+            ))}
+          </div>
+        ) : null}
+      </section>
+      {detailAction ? (
+        <div className="studio-create-dialog-backdrop" onClick={() => setDetailAction('')}>
+          <section className="studio-create-dialog" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+            <div className="studio-create-dialog-head">
               <div>
-                <b>Workspace Ops</b>
-                <p>{selectedRole} · {currentActorId}</p>
+                <b>{detailAction === 'rename' ? '重命名' : detailAction === 'move' ? '移动' : '归档'} {detailTarget.type}</b>
+                <span>{detailTarget.name}</span>
               </div>
-              <button disabled={!selectedWorkspace} onClick={() => selectedWorkspace && void onRefreshWorkspaceOps(selectedWorkspace.id)}>↻</button>
+              <button onClick={() => setDetailAction('')}>×</button>
             </div>
-            <section>
-              <h3>Folder 权限</h3>
-              <select value={selectedFolder?.visibility ?? 'TEAM'} disabled={!selectedFolder || !canManageFolders} onChange={(event) => void updateSelectedFolderVisibility(event.target.value)}>
-                <option value="INHERIT">Inherit</option>
-                <option value="PRIVATE">Private</option>
-                <option value="TEAM">Team</option>
-                <option value="PUBLIC">Public</option>
-              </select>
-              <span>{canManageFolders ? 'Admin 可修改' : '当前角色只读'}</span>
-            </section>
-            <section>
-              <h3>成员</h3>
-              <div className="studio-ops-list">
-                {selectedMembers.filter((member) => member.status !== 'REMOVED').slice(0, 6).map((member) => (
-                  <div key={member.id} className="studio-ops-row">
-                    <span>
-                      <b>{member.displayName || member.userId || member.email}</b>
-                      <em>{member.userId || member.email}</em>
-                    </span>
-                    <select value={member.role} disabled={!canManageMembers} onChange={(event) => void onUpdateMemberRole(member.workspaceId, member.id, event.target.value as WorkspaceRole)}>
-                      {(['VIEWER', 'EDITOR', 'ADMIN', 'OWNER'] as WorkspaceRole[]).map((role) => <option key={role} value={role}>{role}</option>)}
-                    </select>
-                    {canManageMembers ? <button onClick={() => void onRemoveMember(member.workspaceId, member.id)}>×</button> : null}
-                  </div>
-                ))}
-              </div>
-              {canManageMembers ? (
-                <div className="studio-ops-inline-form">
-                  <input value={memberUserId} placeholder="userId" onChange={(event) => setMemberUserId(event.target.value)} />
-                  <input value={memberEmail} placeholder="email" onChange={(event) => setMemberEmail(event.target.value)} />
-                  <select value={memberRole} onChange={(event) => setMemberRole(event.target.value as WorkspaceRole)}>
-                    <option value="VIEWER">VIEWER</option>
-                    <option value="EDITOR">EDITOR</option>
-                    <option value="ADMIN">ADMIN</option>
-                    <option value="OWNER">OWNER</option>
+            <div className="studio-create-grid">
+              {detailAction === 'rename' ? (
+                <label>
+                  <span>名称</span>
+                  <input value={detailActionName} onChange={(event) => setDetailActionName(event.target.value)} />
+                </label>
+              ) : null}
+              {detailAction === 'move' ? (
+                <label>
+                  <span>目标 Folder</span>
+                  <select data-testid="detail-action-target-folder" value={detailActionFolderId} onChange={(event) => setDetailActionFolderId(event.target.value)}>
+                    <option value="">选择 folder</option>
+                    {selectedWorkspaceFolders.filter((folder) => folder.id !== detailTarget.id).map((folder) => (
+                      <option key={folder.id} value={folder.id}>{folder.name}</option>
+                    ))}
                   </select>
-                  <button onClick={submitMember}>添加</button>
+                </label>
+              ) : null}
+              {detailAction === 'archive' ? (
+                <div className="studio-confirm-copy">
+                  <b>确认归档？</b>
+                  <span>{detailTarget.type === 'Folder' ? 'Folder 会从当前目录树移除。' : 'Workflow 状态会更新为 ARCHIVED。'}</span>
                 </div>
               ) : null}
-            </section>
-            <section>
-              <h3>分享</h3>
-              <div className="studio-ops-list">
-                {selectedShareLinks.filter((link) => link.enabled).slice(0, 5).map((link) => (
-                  <div key={link.id} className="studio-ops-row">
-                    <span>
-                      <b>{link.scope} · {link.permission ?? 'VIEW'}</b>
-                      <em>{link.token || link.id}</em>
-                    </span>
-                    {canManageMembers ? <button onClick={() => void onDisableShareLink(link.workspaceId, link.id)}>停用</button> : null}
-                  </div>
-                ))}
+              <div className="studio-dialog-actions">
+                <button className="dialog-secondary" type="button" onClick={() => setDetailAction('')}>取消</button>
+                <button className={detailAction === 'archive' ? 'dialog-danger' : 'dialog-primary'} data-testid="detail-action-confirm" type="button" onClick={submitDetailAction} disabled={detailActionBusy}>
+                  {detailActionBusy ? '处理中...' : detailAction === 'archive' ? '确认归档' : '确认'}
+                </button>
               </div>
-              {canManageMembers ? <button className="studio-ops-primary" onClick={createFolderShare}>创建当前分享</button> : null}
-            </section>
-            <section>
-              <h3>Audit Log</h3>
-              <div className="studio-ops-list audit">
-                {selectedAuditLogs.slice(0, 8).map((log) => (
-                  <div key={log.id} className="studio-ops-row">
-                    <span>
-                      <b>{log.action}</b>
-                      <em>{log.actorId || 'system'} · {log.targetType}</em>
-                    </span>
-                  </div>
-                ))}
-              </div>
-            </section>
-            {opsMessage ? <p>{opsMessage}</p> : null}
-          </aside>
+            </div>
+            {detailActionError ? <p>{detailActionError}</p> : null}
+          </section>
         </div>
-      </section>
+      ) : null}
+      {homeUtilityDialog ? (
+        <div className="studio-create-dialog-backdrop">
+          <section className="studio-create-dialog" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+            <div className="studio-create-dialog-head">
+              <div>
+                <b>{homeUtilityDialog === 'settings' ? 'Workspace 设置' : homeUtilityDialog === 'storage' ? '存储空间' : homeUtilityDialog === 'members' ? '成员管理' : homeUtilityDialog === 'share' ? '分享管理' : '审计记录'}</b>
+                <span>{selectedWorkspace?.name ?? 'hello'}</span>
+              </div>
+              <button onClick={() => setHomeUtilityDialog('')}>×</button>
+            </div>
+            {homeUtilityDialog === 'settings' ? (
+              <div className="studio-create-grid">
+                <div className="studio-connection-status">
+                  <b>产品连接状态</b>
+                  {detailDataSources.map((source) => (
+                    <span key={source.label}>
+                      <i>{source.label}</i>
+                      <strong className={source.tone ?? 'info'}>{source.value}</strong>
+                    </span>
+                  ))}
+                  <span>
+                    <i>搜索索引</i>
+                    <strong className={serverSearchResults.length || !search.trim() ? 'good' : 'warn'}>
+                      PostgreSQL fuzzy/index + fallback contains
+                    </strong>
+                  </span>
+                  <span>
+                    <i>邮件邀请</i>
+                    <strong className="info">SMTP/SendGrid/SES 配置驱动</strong>
+                  </span>
+                </div>
+                <label>
+                  <span>Workspace</span>
+                  <input value={workspaceSettingsDraft.name} onChange={(event) => setWorkspaceSettingsDraft((draft) => ({ ...draft, name: event.target.value }))} />
+                </label>
+                <label>
+                  <span>Slug</span>
+                  <input value={workspaceSettingsDraft.slug} onChange={(event) => setWorkspaceSettingsDraft((draft) => ({ ...draft, slug: event.target.value }))} />
+                </label>
+                <label>
+                  <span>Icon</span>
+                  <input value={workspaceSettingsDraft.icon} onChange={(event) => setWorkspaceSettingsDraft((draft) => ({ ...draft, icon: event.target.value }))} />
+                </label>
+                <label>
+                  <span>Color</span>
+                  <input type="color" value={workspaceSettingsDraft.color || '#2563eb'} onChange={(event) => setWorkspaceSettingsDraft((draft) => ({ ...draft, color: event.target.value }))} />
+                </label>
+                <label>
+                  <span>描述</span>
+                  <input value={workspaceSettingsDraft.description} onChange={(event) => setWorkspaceSettingsDraft((draft) => ({ ...draft, description: event.target.value }))} />
+                </label>
+                <label>
+                  <span>Visibility</span>
+                  <select value={workspaceSettingsDraft.visibility} onChange={(event) => setWorkspaceSettingsDraft((draft) => ({ ...draft, visibility: event.target.value }))}>
+                    <option value="PRIVATE">Private</option>
+                    <option value="TEAM">Workspace</option>
+                    <option value="PUBLIC">Public</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Default Role</span>
+                  <select value={workspaceSettingsDraft.defaultRole} onChange={(event) => setWorkspaceSettingsDraft((draft) => ({ ...draft, defaultRole: event.target.value as WorkspaceRole }))}>
+                    <option value="VIEWER">Viewer</option>
+                    <option value="EDITOR">Editor</option>
+                    <option value="ADMIN">Admin</option>
+                  </select>
+                </label>
+                <label>
+                  <span>Owner</span>
+                  <input value={workspaceSettingsDraft.ownerId} onChange={(event) => setWorkspaceSettingsDraft((draft) => ({ ...draft, ownerId: event.target.value }))} />
+                </label>
+                <label>
+                  <span>当前角色</span>
+                  <input value={`${selectedRole} · ${currentActorId}`} readOnly />
+                </label>
+                <button disabled={!selectedWorkspace || !canManageFolders} onClick={() => {
+                  if (!selectedWorkspace) return;
+                  void onUpdateWorkspace(selectedWorkspace.id, {
+                    name: workspaceSettingsDraft.name,
+                    slug: workspaceSettingsDraft.slug,
+                    description: workspaceSettingsDraft.description,
+                    icon: workspaceSettingsDraft.icon,
+                    color: workspaceSettingsDraft.color,
+                    visibility: workspaceSettingsDraft.visibility,
+                    defaultRole: workspaceSettingsDraft.defaultRole,
+                    ownerId: workspaceSettingsDraft.ownerId,
+                  }).then((updated) => setOpsMessage(`Workspace 设置已保存：${updated.name}`)).catch((error) => setOpsMessage((error as Error).message));
+                }}>保存设置</button>
+                <button onClick={() => selectedWorkspace && void onRefreshWorkspaceOps(selectedWorkspace.id)}>刷新成员 / 分享 / 审计</button>
+              </div>
+            ) : homeUtilityDialog === 'storage' ? (
+              <div className="studio-create-grid">
+                <div className="studio-confirm-copy">
+                  <b>{storageUsedGb.toFixed(2)} GB / {storageTotalGb.toFixed(0)} GB</b>
+                  <span>{storageSummary ? `${storageSummary.workflows} workflows · ${storageSummary.folders} folders · ${storageSummary.members} members · ${storageSummary.auditLogs} audit logs · ${storageSummary.versions ?? 0} versions · ${storageSummary.executions ?? 0} runs` : '后端存储统计不可用，正在显示默认容量。'}</span>
+                </div>
+                <button onClick={() => {
+                  fetchJSON<WorkspaceHomeStorageSummary>('/admin/v1/workspace-home/storage')
+                    .then(setStorageSummary)
+                    .catch((error) => setOpsMessage((error as Error).message));
+                }}>刷新存储统计</button>
+                <button onClick={() => {
+                  setArchivedActivityIds(new Set());
+                  saveStudioStringSet('exmarketing.studio.archivedActivities', new Set());
+                  setOpsMessage('已清理本地归档标记');
+                  setHomeUtilityDialog('');
+                }}>清理本地归档标记</button>
+              </div>
+            ) : homeUtilityDialog === 'members' ? (
+              <div className="studio-create-grid">
+                <label>
+                  <span>User ID</span>
+                  <input value={memberUserId} onChange={(event) => setMemberUserId(event.target.value)} placeholder="user_123" />
+                </label>
+                <label>
+                  <span>Email</span>
+                  <input value={memberEmail} onChange={(event) => setMemberEmail(event.target.value)} placeholder="member@example.com" />
+                </label>
+                <label>
+                  <span>Role</span>
+                  <select value={memberRole} onChange={(event) => setMemberRole(event.target.value as WorkspaceRole)}>
+                    <option value="EDITOR">Editor</option>
+                    <option value="ADMIN">Admin</option>
+                    <option value="VIEWER">Viewer</option>
+                  </select>
+                </label>
+                <button disabled={!canManageMembers} onClick={() => void submitMember()}>添加成员</button>
+                <div className="studio-confirm-copy">
+                  {selectedMembers.filter((member) => member.status !== 'REMOVED').map((member) => (
+                    <span key={member.id}>
+                      {(member.displayName || member.userId || member.email || member.id)} · {member.role}
+                      <select value={member.role} disabled={!canManageMembers} onChange={(event) => selectedWorkspace && void onUpdateMemberRole(selectedWorkspace.id, member.id, event.target.value as WorkspaceRole)}>
+                        <option value="OWNER">Owner</option>
+                        <option value="ADMIN">Admin</option>
+                        <option value="EDITOR">Editor</option>
+                        <option value="VIEWER">Viewer</option>
+                      </select>
+                      <button disabled={!canManageMembers} onClick={() => selectedWorkspace && void onRemoveMember(selectedWorkspace.id, member.id)}>移除</button>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ) : homeUtilityDialog === 'share' ? (
+              <div className="studio-create-grid">
+                <button disabled={!selectedWorkspace || !canManageMembers} onClick={() => selectedWorkspace && void onCreateShareLink(selectedWorkspace.id, {
+                  scope: detailTarget.type === 'Workspace' ? 'WORKSPACE' : detailTarget.type === 'Folder' ? 'FOLDER' : 'ACTIVITY',
+                  folderId: detailTarget.type === 'Folder' ? detailTarget.id : selectedFolder?.id,
+                  activityId: detailTarget.type === 'Workflow' ? detailTarget.id : undefined,
+                  permission: 'VIEW',
+                }).then(() => setOpsMessage('分享链接已创建')).catch((error) => setOpsMessage((error as Error).message))}>创建 View 链接</button>
+                <button disabled={!selectedWorkspace || !canManageMembers} onClick={() => selectedWorkspace && void onCreateShareLink(selectedWorkspace.id, {
+                  scope: detailTarget.type === 'Workspace' ? 'WORKSPACE' : detailTarget.type === 'Folder' ? 'FOLDER' : 'ACTIVITY',
+                  folderId: detailTarget.type === 'Folder' ? detailTarget.id : selectedFolder?.id,
+                  activityId: detailTarget.type === 'Workflow' ? detailTarget.id : undefined,
+                  permission: 'EDIT',
+                }).then(() => setOpsMessage('编辑分享链接已创建')).catch((error) => setOpsMessage((error as Error).message))}>创建 Edit 链接</button>
+                <div className="studio-confirm-copy">
+                  {selectedShareLinks.map((link) => (
+                    <span key={link.id}>
+                      {link.scope} · {link.permission || 'VIEW'} · {link.enabled ? 'Enabled' : `Disabled${link.disabledReason ? `:${link.disabledReason}` : ''}`} · used {link.accessCount ?? 0}{link.maxAccessCount ? `/${link.maxAccessCount}` : ''} · {link.token || link.id}
+                      <button onClick={() => void navigator.clipboard?.writeText(shareUrlForLink(link))}>复制</button>
+                      <button disabled={!canManageMembers || !link.enabled} onClick={() => selectedWorkspace && void onDisableShareLink(selectedWorkspace.id, link.id)}>停用</button>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="studio-create-grid">
+                <button onClick={() => selectedWorkspace && void onRefreshWorkspaceOps(selectedWorkspace.id)}>刷新审计</button>
+                <div className="studio-confirm-copy">
+                  {selectedAuditLogs.length ? selectedAuditLogs.map((audit) => (
+                    <span key={audit.id}>{audit.createdAt} · {audit.actorId || 'system'} · {audit.action} · {audit.targetType}</span>
+                  )) : <span>暂无审计记录</span>}
+                </div>
+              </div>
+            )}
+          </section>
+        </div>
+      ) : null}
+      {batchAction ? (
+        <div className="studio-create-dialog-backdrop" onClick={() => setBatchAction('')}>
+          <section className="studio-create-dialog" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+            <div className="studio-create-dialog-head">
+              <div>
+                <b>{batchAction === 'move' ? '批量移动' : '批量权限'}</b>
+                <span>已选择 {batchActionItems.length} 项</span>
+              </div>
+              <button onClick={() => setBatchAction('')}>×</button>
+            </div>
+            <div className="studio-create-grid">
+              <div className="studio-selected-preview">
+                <b>选中项</b>
+                {batchActionItems.slice(0, 6).map((item) => (
+                  <span key={`${item.type}-${item.id}`}>
+                    <i>{item.type}</i>
+                    <strong>{item.name}</strong>
+                    <em>{item.visibility}{item.status ? ` · ${item.status}` : ''}</em>
+                  </span>
+                ))}
+                {batchActionItems.length > 6 ? <small>还有 {batchActionItems.length - 6} 项未显示</small> : null}
+              </div>
+              {batchAction === 'move' ? (
+                <label>
+                  <span>目标 Folder</span>
+                  <select data-testid="batch-target-folder" value={batchActionFolderId} onChange={(event) => setBatchActionFolderId(event.target.value)}>
+                    <option value="">选择 folder</option>
+                    {selectedWorkspaceFolders.map((folder) => (
+                      <option key={folder.id} value={folder.id}>{folder.name}</option>
+                    ))}
+                  </select>
+                </label>
+              ) : null}
+              {batchAction === 'permission' ? (
+                <label>
+                  <span>可见性</span>
+                  <select data-testid="batch-visibility" value={batchActionVisibility} onChange={(event) => setBatchActionVisibility(event.target.value as WorkspaceDetailTarget['visibility'])}>
+                    <option value="Private">Private</option>
+                    <option value="Workspace">Workspace</option>
+                    <option value="Public">Public</option>
+                  </select>
+                </label>
+              ) : null}
+              <div className="studio-dialog-actions">
+                <button className="dialog-secondary" type="button" onClick={() => setBatchAction('')}>取消</button>
+                <button className="dialog-primary" data-testid="batch-confirm" type="button" onClick={submitBatchAction} disabled={batchActionBusy}>{batchActionBusy ? '处理中...' : '确认'}</button>
+              </div>
+            </div>
+            {batchActionError ? <p>{batchActionError}</p> : null}
+          </section>
+        </div>
+      ) : null}
       {showWorkspaceDialog ? (
         <div className="studio-create-dialog-backdrop">
-          <section className="studio-create-dialog" onClick={(event) => event.stopPropagation()}>
+          <section className="studio-create-dialog" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
             <div className="studio-create-dialog-head">
               <div>
                 <b>新建 Workspace</b>
@@ -2546,7 +3728,7 @@ function StudioActivityStart({
       ) : null}
       {showFolderDialog ? (
         <div className="studio-create-dialog-backdrop">
-          <section className="studio-create-dialog" onClick={(event) => event.stopPropagation()}>
+          <section className="studio-create-dialog" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
             <div className="studio-create-dialog-head">
               <div>
                 <b>新建 Folder</b>
@@ -2557,9 +3739,9 @@ function StudioActivityStart({
             <div className="studio-create-grid">
               <label>
                 <span>名称</span>
-                <input value={folderName} placeholder="增长活动" onChange={(event) => setFolderName(event.target.value)} />
+                <input data-testid="folder-name-input" value={folderName} placeholder="增长活动" onChange={(event) => setFolderName(event.target.value)} />
               </label>
-              <button onClick={submitFolder} disabled={creatingFolder || !selectedWorkspace || !canManageFolders}>{creatingFolder ? '创建中...' : '创建 Folder'}</button>
+              <button data-testid="folder-create-confirm" onClick={submitFolder} disabled={creatingFolder || !selectedWorkspace || !canManageFolders}>{creatingFolder ? '创建中...' : '创建 Folder'}</button>
             </div>
             {folderError ? <p>{folderError}</p> : null}
           </section>
@@ -2567,7 +3749,7 @@ function StudioActivityStart({
       ) : null}
       {showCreateDialog ? (
         <div className="studio-create-dialog-backdrop">
-          <section className="studio-create-dialog" onClick={(event) => event.stopPropagation()}>
+          <section className="studio-create-dialog" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
             <div className="studio-create-dialog-head">
               <div>
                 <b>新建活动</b>
@@ -2578,11 +3760,11 @@ function StudioActivityStart({
             <div className="studio-create-grid">
               <label>
                 <span>名称</span>
-                <input value={createName} placeholder="618 拉新活动" onChange={(event) => setCreateName(event.target.value)} />
+                <input data-testid="workflow-name-input" value={createName} placeholder="618 拉新活动" onChange={(event) => setCreateName(event.target.value)} />
               </label>
               <label>
                 <span>Code</span>
-                <input value={createCode} placeholder={suggestedCode} onChange={(event) => setCreateCode(event.target.value)} />
+                <input data-testid="workflow-code-input" value={createCode} placeholder={suggestedCode} onChange={(event) => setCreateCode(event.target.value)} />
               </label>
               <label>
                 <span>Tenant</span>
@@ -2616,7 +3798,7 @@ function StudioActivityStart({
                 <span>新文件夹</span>
                 <input value={createFolderName} placeholder="没有文件夹时填写" onChange={(event) => setCreateFolderName(event.target.value)} />
               </label>
-              <button onClick={submitCreate} disabled={creating || !canEditWorkspace}>{creating ? '创建中...' : '创建并编排'}</button>
+              <button data-testid="workflow-create-confirm" onClick={submitCreate} disabled={creating || !canEditWorkspace}>{creating ? '创建中...' : '创建并编排'}</button>
             </div>
             {createError ? <p>{createError}</p> : null}
           </section>
@@ -2662,6 +3844,7 @@ export function App() {
   const [workspaceMembers, setWorkspaceMembers] = useState<Record<string, WorkspaceMemberSummary[]>>({});
   const [workspaceShareLinks, setWorkspaceShareLinks] = useState<Record<string, WorkspaceShareLinkSummary[]>>({});
   const [workspaceAuditLogs, setWorkspaceAuditLogs] = useState<Record<string, WorkspaceAuditLogSummary[]>>({});
+  const [workspaceActivityGrants, setWorkspaceActivityGrants] = useState<Record<string, WorkspaceActivityGrantSummary[]>>({});
   const [activityPlacements, setActivityPlacements] = useState<Record<string, ActivityPlacement>>({});
   const [activityId, setActivityId] = useState('');
   const [activityLabel, setActivityLabel] = useState('选择活动');
@@ -2719,6 +3902,7 @@ export function App() {
   const [debugPayloadTemplates, setDebugPayloadTemplates] = useState<DebugPayloadTemplate[]>(() => loadDebugPayloadTemplates());
   const [homeWorkspaceId, setHomeWorkspaceId] = useState('');
   const [homeFolderId, setHomeFolderId] = useState('');
+  const [workspaceDataReady, setWorkspaceDataReady] = useState(false);
 
   const nodeTypes = useMemo(() => ({ activity: ActivityNodeView, group: GroupNodeView, note: NoteNodeView }), []);
   const selectedCount = selectedNodeIds.length + selectedEdgeIds.length;
@@ -2827,6 +4011,7 @@ export function App() {
         setWorkspaceMembers(nextMembers);
         setWorkspaceAuditLogs(nextAudits);
         setActivityPlacements(nextPlacements);
+        setWorkspaceDataReady(true);
         if (!activityItems.length) {
           setWorkflowStatus('后端已连接 · 暂无 workflow');
           return;
@@ -2847,6 +4032,7 @@ export function App() {
       .catch((error: Error) => {
         if (cancelled) return;
         setWorkflowStatus(`后端未连接：${error.message}`);
+        setWorkspaceDataReady(true);
       });
     return () => {
       cancelled = true;
@@ -3871,6 +5057,58 @@ export function App() {
     return updated;
   }, [refreshWorkspaceOps]);
 
+  const deleteWorkspaceFolder = useCallback(async (workspaceId: string, folderId: string) => {
+    const deleted = await fetchJSON<WorkspaceFolderSummary>(`/admin/v1/workspaces/${workspaceId}/folders/${folderId}`, { method: 'DELETE' });
+    setWorkspaceFolders((items) => items.map((item) => (item.id === deleted.id ? deleted : item)).filter((item) => item.status !== 'DELETED'));
+    await refreshWorkspaceOps(workspaceId);
+    return deleted;
+  }, [refreshWorkspaceOps]);
+
+  const restoreWorkspaceFolder = useCallback(async (workspaceId: string, folderId: string) => {
+    const restored = await fetchJSON<WorkspaceFolderSummary>(`/admin/v1/workspaces/${workspaceId}/folders/${folderId}/restore`, { method: 'POST' });
+    setWorkspaceFolders((items) => [restored, ...items.filter((item) => item.id !== restored.id)]);
+    await refreshWorkspaceOps(workspaceId);
+    return restored;
+  }, [refreshWorkspaceOps]);
+
+  const updateStudioActivity = useCallback(async (nextActivityId: string, patch: { activityName?: string; workspaceId?: string; folderId?: string; status?: string; visibility?: string }) => {
+    const current = activities.find((activity) => activity.id === nextActivityId);
+    if (!current) throw new Error('workflow 不存在');
+    const updated = await fetchJSON<ActivitySummary>(`/admin/v1/activities/${nextActivityId}`, {
+      method: 'PUT',
+      body: JSON.stringify({
+        operator: currentActorId,
+        reason: 'workspace-home-action',
+        ...patch,
+      }),
+    });
+    setActivities((items) => items.map((item) => (item.id === updated.id ? updated : item)));
+    setActivityPlacements((items) => ({
+      ...items,
+      [updated.id]: {
+        workspaceId: updated.workspaceId || patch.workspaceId || current.workspaceId || items[updated.id]?.workspaceId || '',
+        folderId: updated.folderId || patch.folderId || current.folderId || items[updated.id]?.folderId || '',
+      },
+    }));
+    return updated;
+  }, [activities, currentActorId]);
+
+  const updateWorkspace = useCallback(async (workspaceId: string, patch: { name?: string; slug?: string; description?: string; icon?: string; color?: string; visibility?: string; defaultRole?: WorkspaceRole; ownerId?: string; status?: string }) => {
+    const updated = await fetchJSON<WorkspaceSummary>(`/admin/v1/workspaces/${workspaceId}`, {
+      method: 'PUT',
+      body: JSON.stringify({ ...patch, updatedBy: currentActorId }),
+    });
+    setWorkspaces((items) => items.map((item) => (item.id === updated.id ? updated : item)).filter((item) => item.status !== 'DELETED'));
+    await refreshWorkspaceOps(workspaceId);
+    return updated;
+  }, [currentActorId, refreshWorkspaceOps]);
+
+  const deleteWorkspace = useCallback(async (workspaceId: string) => {
+    const deleted = await fetchJSON<WorkspaceSummary>(`/admin/v1/workspaces/${workspaceId}`, { method: 'DELETE' });
+    setWorkspaces((items) => items.map((item) => (item.id === deleted.id ? deleted : item)).filter((item) => item.status !== 'DELETED'));
+    return deleted;
+  }, []);
+
   const createWorkspaceMember = useCallback(async (workspaceId: string, input: { userId: string; email: string; displayName: string; role: WorkspaceRole }) => {
     await fetchJSON<WorkspaceMemberSummary>(`/admin/v1/workspaces/${workspaceId}/members`, {
       method: 'POST',
@@ -3879,7 +5117,7 @@ export function App() {
         email: input.email,
         displayName: input.displayName,
         role: input.role,
-        status: 'ACTIVE',
+        status: 'INVITED',
       }),
     });
     await refreshWorkspaceOps(workspaceId);
@@ -3899,17 +5137,47 @@ export function App() {
   }, [refreshWorkspaceOps]);
 
   const createWorkspaceShareLink = useCallback(async (workspaceId: string, input: { scope: 'WORKSPACE' | 'FOLDER' | 'ACTIVITY'; folderId?: string; activityId?: string; permission: 'VIEW' | 'EDIT' }) => {
-    await fetchJSON<WorkspaceShareLinkSummary>(`/admin/v1/workspaces/${workspaceId}/share-links`, {
+    const created = await fetchJSON<WorkspaceShareLinkSummary>(`/admin/v1/workspaces/${workspaceId}/share-links`, {
       method: 'POST',
       body: JSON.stringify(input),
     });
     await refreshWorkspaceOps(workspaceId);
+    return created;
   }, [refreshWorkspaceOps]);
 
   const disableWorkspaceShareLink = useCallback(async (workspaceId: string, linkId: string) => {
     await fetchJSON<WorkspaceShareLinkSummary>(`/admin/v1/workspaces/${workspaceId}/share-links/${linkId}`, { method: 'DELETE' });
     await refreshWorkspaceOps(workspaceId);
   }, [refreshWorkspaceOps]);
+
+  const refreshActivityACL = useCallback(async (activityId: string) => {
+    const grants = await fetchJSON<{ items: WorkspaceActivityGrantSummary[] }>(`/admin/v1/activities/${activityId}/acl`).then((body) => body.items ?? []);
+    setWorkspaceActivityGrants((items) => ({ ...items, [activityId]: grants }));
+    return grants;
+  }, []);
+
+  const createActivityACL = useCallback(async (activityId: string, input: { principalType: 'USER' | 'MEMBER' | 'ROLE'; principalId: string; role: Exclude<WorkspaceRole, 'OWNER'> }) => {
+    const created = await fetchJSON<WorkspaceActivityGrantSummary>(`/admin/v1/activities/${activityId}/acl`, {
+      method: 'POST',
+      body: JSON.stringify({
+        principalType: input.principalType,
+        principalId: input.principalId,
+        role: input.role,
+        createdBy: currentActorId,
+        updatedBy: currentActorId,
+      }),
+    });
+    await refreshActivityACL(activityId);
+    if (created.workspaceId) await refreshWorkspaceOps(created.workspaceId);
+    return created;
+  }, [currentActorId, refreshActivityACL, refreshWorkspaceOps]);
+
+  const deleteActivityACL = useCallback(async (activityId: string, grantId: string) => {
+    await fetchJSON<{ deleted: string }>(`/admin/v1/activities/${activityId}/acl/${grantId}`, { method: 'DELETE' });
+    await refreshActivityACL(activityId);
+    const activity = activities.find((item) => item.id === activityId);
+    if (activity?.workspaceId) await refreshWorkspaceOps(activity.workspaceId);
+  }, [activities, refreshActivityACL, refreshWorkspaceOps]);
 
   const saveEmptyWorkflowDraft = useCallback(async (created: ActivitySummary, input: { workspaceId: string; folderId: string }) => {
     const definition = emptyWorkflowDefinition({
@@ -3929,7 +5197,26 @@ export function App() {
       method: 'POST',
       body: JSON.stringify(payload),
     });
-    await saveEmptyWorkflowDraft(created, input);
+    if (input.definition) {
+      await fetchJSON(`/admin/v1/activities/${created.id}/workflow/draft`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          operator: currentActorId,
+          definition: {
+            ...input.definition,
+            meta: {
+              ...(input.definition.meta ?? {}),
+              activityId: created.id,
+              workspaceId: created.workspaceId || input.workspaceId,
+              folderId: created.folderId || input.folderId,
+              importedAt: new Date().toISOString(),
+            },
+          },
+        }),
+      });
+    } else {
+      await saveEmptyWorkflowDraft(created, input);
+    }
     setActivities((items) => [created, ...items.filter((item) => item.id !== created.id)]);
     setActivityPlacements((items) => ({
       ...items,
@@ -3947,7 +5234,7 @@ export function App() {
     setNodes([]);
     setEdges([]);
     setSelectedTemplate('default');
-    setWorkflowStatus('活动已创建，空 draft 已保存');
+    setWorkflowStatus(input.definition ? '活动已创建，导入 draft 已保存' : '活动已创建，空 draft 已保存');
     setWorkflowVersionLabel('workflow 未发布');
     setDraftDirty(false);
     setDraftSaveState('saved');
@@ -3956,7 +5243,8 @@ export function App() {
     draftRevisionRef.current = 0;
     savedDraftRevisionRef.current = 0;
     setIsPublished(false);
-  }, [saveEmptyWorkflowDraft, setEdges, setNodes]);
+    return created;
+  }, [currentActorId, saveEmptyWorkflowDraft, setEdges, setNodes]);
 
   const updateActivitySettings = useCallback(async (input: ActivitySettingsInput) => {
     if (!activityId) return;
@@ -4463,6 +5751,72 @@ export function App() {
     }
   }, [activityId, activityLabel, activePlacement?.folderId, activePlacement?.workspaceId, activeWorkspaceRole, canEditActiveWorkflow, currentActorId, refreshWorkflowTemplates, saveDraft]);
 
+  const updateWorkflowTemplate = useCallback(async (templateId: string, input: {
+    versionId?: string;
+    name?: string;
+    description?: string;
+    category?: string;
+    workspaceId?: string;
+    folderId?: string;
+    visibility?: string;
+    tags?: string[];
+    status?: string;
+  }) => {
+    setTemplateMessage('正在更新模板...');
+    try {
+      const query = input.versionId ? `?versionId=${encodeURIComponent(input.versionId)}` : '';
+      const updated = await fetchJSON<WorkflowDraftTemplateSummary>(`/admin/v1/workflow/draft-templates/${templateId}${query}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          ...input,
+          description: input.description ?? '',
+          category: input.category ?? '',
+          workspaceId: input.workspaceId ?? '',
+          folderId: input.folderId ?? '',
+          visibility: input.visibility ?? 'TEAM',
+          operator: currentActorId,
+        }),
+      });
+      await refreshWorkflowTemplates();
+      await loadWorkflowTemplateVersions(templateId);
+      setTemplateMessage(`模板已更新：${updated.name} v${updated.version}`);
+      return updated;
+    } catch (error) {
+      setTemplateMessage(`更新模板失败：${(error as Error).message}`);
+      throw error;
+    }
+  }, [currentActorId, loadWorkflowTemplateVersions, refreshWorkflowTemplates]);
+
+  const copyWorkflowTemplate = useCallback(async (templateId: string, input: {
+    versionId?: string;
+    name: string;
+    category?: string;
+    workspaceId: string;
+    folderId?: string;
+    visibility: string;
+    tags?: string[];
+  }) => {
+    setTemplateMessage('正在复制模板...');
+    try {
+      const query = input.versionId ? `?versionId=${encodeURIComponent(input.versionId)}` : '';
+      const copied = await fetchJSON<WorkflowDraftTemplateSummary>(`/admin/v1/workflow/draft-templates/${templateId}/copy${query}`, {
+        method: 'POST',
+        body: JSON.stringify({ ...input, operator: currentActorId }),
+      });
+      await refreshWorkflowTemplates();
+      setTemplateMessage(`模板已复制到 workspace：${copied.name}`);
+      return copied;
+    } catch (error) {
+      setTemplateMessage(`复制模板失败：${(error as Error).message}`);
+      throw error;
+    }
+  }, [currentActorId, refreshWorkflowTemplates]);
+
+  const compareWorkflowTemplateVersions = useCallback(async (templateId: string, leftVersionId: string, rightVersionId: string) => {
+    const query = new URLSearchParams({ leftVersionId, rightVersionId });
+    return fetchJSON<WorkflowDraftTemplateCompareResult>(`/admin/v1/workflow/draft-templates/${templateId}/compare?${query.toString()}`);
+  }, []);
+
   return (
     <div className="flow-shell">
       <NodePalette open={activityId ? showPalette : false} selectedTemplate={selectedTemplate} onAddNode={addCatalogNode} onDefault={resetDefault} onSimple={loadSimpleTemplate} />
@@ -4679,10 +6033,13 @@ export function App() {
                 membersByWorkspace={workspaceMembers}
                 shareLinksByWorkspace={workspaceShareLinks}
                 auditLogsByWorkspace={workspaceAuditLogs}
+                activityGrantsByActivity={workspaceActivityGrants}
+                templates={workflowTemplates}
                 currentActorId={currentActorId}
                 placements={activityPlacements}
                 hiddenTestActivityCount={hiddenTestActivityCount}
                 workflowStatus={workflowStatus}
+                workspaceDataReady={workspaceDataReady}
                 initialWorkspaceId={homeWorkspaceId}
                 initialFolderId={homeFolderId}
                 onSelectActivity={changeActivity}
@@ -4690,11 +6047,19 @@ export function App() {
                 onCreateActivity={createStudioActivity}
                 onCreateFolder={createWorkspaceFolder}
                 onUpdateFolder={updateWorkspaceFolder}
+                onUpdateActivity={updateStudioActivity}
+                onDeleteFolder={deleteWorkspaceFolder}
+                onRestoreFolder={restoreWorkspaceFolder}
+                onUpdateWorkspace={updateWorkspace}
+                onDeleteWorkspace={deleteWorkspace}
                 onCreateMember={createWorkspaceMember}
                 onUpdateMemberRole={updateWorkspaceMemberRole}
                 onRemoveMember={removeWorkspaceMember}
                 onCreateShareLink={createWorkspaceShareLink}
                 onDisableShareLink={disableWorkspaceShareLink}
+                onRefreshActivityACL={refreshActivityACL}
+                onCreateActivityACL={createActivityACL}
+                onDeleteActivityACL={deleteActivityACL}
                 onRefreshWorkspaceOps={refreshWorkspaceOps}
               />
             )}
@@ -4770,6 +6135,11 @@ export function App() {
         onSave={(input) => {
           void saveWorkflowTemplate(input);
         }}
+        onUpdate={(templateId, input) => {
+          void updateWorkflowTemplate(templateId, input);
+        }}
+        onCopy={(templateId, input) => copyWorkflowTemplate(templateId, input)}
+        onCompare={compareWorkflowTemplateVersions}
         onLoadVersions={loadWorkflowTemplateVersions}
       />
       {showActivitySettings && activityId ? (() => {

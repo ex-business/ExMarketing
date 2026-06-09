@@ -161,6 +161,7 @@ func (s *Service) CreateActivity(ctx context.Context, cmd marketing.CreateActivi
 		Name:           cmd.Name,
 		Type:           cmd.Type,
 		Status:         normalizeActivityStatus(cmd.Status, now, cmd.StartTime, cmd.EndTime),
+		Visibility:     normalizeActivityVisibility(cmd.Visibility),
 		TriggerEvents:  cmd.TriggerEvents,
 		StartTime:      cmd.StartTime,
 		EndTime:        cmd.EndTime,
@@ -331,8 +332,8 @@ func (s *Service) SubmitActivityApproval(ctx context.Context, id string, cmd mar
 		return marketing.Activity{}, err
 	}
 	activity = s.hydrateApproval(ctx, activity)
-	if activity.Status == marketing.ActivityEnded {
-		return marketing.Activity{}, errors.Join(marketing.ErrInvalidOperation, errors.New("ENDED activity cannot be submitted for approval"))
+	if activity.Status == marketing.ActivityEnded || activity.Status == marketing.ActivityArchived {
+		return marketing.Activity{}, errors.Join(marketing.ErrInvalidOperation, errors.New(string(activity.Status)+" activity cannot be submitted for approval"))
 	}
 	if activity.Version != cmd.ExpectedVersion {
 		return marketing.Activity{}, errors.Join(marketing.ErrInvalidOperation, errors.New("APPROVAL_VERSION_MISMATCH: activity version changed"))
@@ -2516,6 +2517,13 @@ func normalizeActivityStatus(status marketing.ActivityStatus, now, start, end ti
 		return statusForWindow(now, start, end)
 	}
 	return status
+}
+
+func normalizeActivityVisibility(visibility marketing.WorkspaceVisibility) marketing.WorkspaceVisibility {
+	if visibility == "" {
+		return marketing.WorkspaceTeam
+	}
+	return visibility
 }
 
 func statusForWindow(now, start, end time.Time) marketing.ActivityStatus {

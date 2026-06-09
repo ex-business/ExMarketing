@@ -12,6 +12,7 @@ type Repository interface {
 	UpdateWorkspace(ctx context.Context, workspace Workspace) (Workspace, error)
 	CreateWorkspaceMember(ctx context.Context, member WorkspaceMember) (WorkspaceMember, error)
 	ListWorkspaceMembers(ctx context.Context, workspaceID string) ([]WorkspaceMember, error)
+	FindWorkspaceMemberByInviteToken(ctx context.Context, token string) (WorkspaceMember, error)
 	UpdateWorkspaceMember(ctx context.Context, member WorkspaceMember) (WorkspaceMember, error)
 	CreateWorkspaceFolder(ctx context.Context, folder WorkspaceFolder) (WorkspaceFolder, error)
 	GetWorkspaceFolder(ctx context.Context, id string) (WorkspaceFolder, error)
@@ -20,6 +21,14 @@ type Repository interface {
 	CreateWorkspaceShareLink(ctx context.Context, link WorkspaceShareLink) (WorkspaceShareLink, error)
 	ListWorkspaceShareLinks(ctx context.Context, query WorkspaceShareLinkQuery) ([]WorkspaceShareLink, error)
 	UpdateWorkspaceShareLink(ctx context.Context, link WorkspaceShareLink) (WorkspaceShareLink, error)
+	CreateWorkspaceActivityGrant(ctx context.Context, grant WorkspaceActivityGrant) (WorkspaceActivityGrant, error)
+	ListWorkspaceActivityGrants(ctx context.Context, query WorkspaceActivityGrantQuery) ([]WorkspaceActivityGrant, error)
+	UpdateWorkspaceActivityGrant(ctx context.Context, grant WorkspaceActivityGrant) (WorkspaceActivityGrant, error)
+	DeleteWorkspaceActivityGrant(ctx context.Context, id string) error
+	CreateWorkspaceFileObject(ctx context.Context, file WorkspaceFileObject) (WorkspaceFileObject, error)
+	ListWorkspaceFileObjects(ctx context.Context, query WorkspaceFileObjectQuery) ([]WorkspaceFileObject, error)
+	DeleteWorkspaceFileObject(ctx context.Context, workspaceID string, fileID string) (WorkspaceFileObject, error)
+	ApplyWorkspaceBatch(ctx context.Context, cmd WorkspaceBatchCommand) (WorkspaceBatchResult, error)
 	CreateWorkspaceAuditLog(ctx context.Context, log WorkspaceAuditLog) error
 	ListWorkspaceAuditLogs(ctx context.Context, query WorkspaceAuditLogQuery) ([]WorkspaceAuditLog, error)
 

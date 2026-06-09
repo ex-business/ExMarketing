@@ -17,28 +17,30 @@ import (
 )
 
 type MemoryRepository struct {
-	mu                  sync.RWMutex
-	workspaces          []Workspace
-	workspaceMembers    []WorkspaceMember
-	workspaceFolders    []WorkspaceFolder
-	workspaceShareLinks []WorkspaceShareLink
-	workspaceAuditLogs  []WorkspaceAuditLog
-	activities          []Activity
-	workflowDrafts      map[string]WorkflowDraft
-	workflowTemplates   []WorkflowDraftTemplate
-	workflowVersions    []WorkflowVersion
-	workflowExecutions  []WorkflowExecution
-	nodeExecutions      []WorkflowNodeExecution
-	factProviders       map[string]FactProvider
-	inboxByIdempotency  map[string]EventInbox
-	participations      []Participation
-	grantOrders         []GrantOrder
-	quotaReservations   []QuotaReservation
-	outboxMessages      []OutboxMessage
-	quotas              []Quota
-	manualExportFiles   []ManualGrantExportFile
-	manualExportDetails []ManualGrantExportDetail
-	auditRecords        []AuditRecord
+	mu                      sync.RWMutex
+	workspaces              []Workspace
+	workspaceMembers        []WorkspaceMember
+	workspaceFolders        []WorkspaceFolder
+	workspaceShareLinks     []WorkspaceShareLink
+	workspaceActivityGrants []WorkspaceActivityGrant
+	workspaceFileObjects    []WorkspaceFileObject
+	workspaceAuditLogs      []WorkspaceAuditLog
+	activities              []Activity
+	workflowDrafts          map[string]WorkflowDraft
+	workflowTemplates       []WorkflowDraftTemplate
+	workflowVersions        []WorkflowVersion
+	workflowExecutions      []WorkflowExecution
+	nodeExecutions          []WorkflowNodeExecution
+	factProviders           map[string]FactProvider
+	inboxByIdempotency      map[string]EventInbox
+	participations          []Participation
+	grantOrders             []GrantOrder
+	quotaReservations       []QuotaReservation
+	outboxMessages          []OutboxMessage
+	quotas                  []Quota
+	manualExportFiles       []ManualGrantExportFile
+	manualExportDetails     []ManualGrantExportDetail
+	auditRecords            []AuditRecord
 }
 
 func NewMemoryRepository() *MemoryRepository {
@@ -195,6 +197,15 @@ func (r *MemoryRepository) ListWorkflowDraftTemplates(ctx context.Context, query
 		if query.Status != "" && template.Status != query.Status {
 			continue
 		}
+		if query.WorkspaceID != "" && template.WorkspaceID != query.WorkspaceID {
+			continue
+		}
+		if query.FolderID != "" && template.FolderID != query.FolderID {
+			continue
+		}
+		if query.Visibility != "" && template.Visibility != query.Visibility {
+			continue
+		}
 		items = append(items, template)
 	}
 	slices.SortFunc(items, func(a, b WorkflowDraftTemplate) int {
@@ -249,6 +260,21 @@ func (r *MemoryRepository) GetWorkflowDraftTemplate(ctx context.Context, templat
 		return WorkflowDraftTemplate{}, ErrNotFound
 	}
 	return latest, nil
+}
+
+func (r *MemoryRepository) UpdateWorkflowDraftTemplate(ctx context.Context, template WorkflowDraftTemplate) (WorkflowDraftTemplate, error) {
+	if err := ctx.Err(); err != nil {
+		return WorkflowDraftTemplate{}, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.workflowTemplates {
+		if r.workflowTemplates[i].VersionID == template.VersionID {
+			r.workflowTemplates[i] = template
+			return template, nil
+		}
+	}
+	return WorkflowDraftTemplate{}, ErrNotFound
 }
 
 func (r *MemoryRepository) CreateWorkflowVersion(ctx context.Context, version WorkflowVersion) (WorkflowVersion, error) {

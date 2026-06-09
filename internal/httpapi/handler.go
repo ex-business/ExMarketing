@@ -44,6 +44,8 @@ type Handler struct {
 	openAPIEventCfg   OpenAPIEventConfig
 	webhookCfg        WebhookReceiverConfig
 	rewardCallbackCfg RewardCallbackConfig
+	inviteEmailCfg    InviteEmailConfig
+	inviteEmailSender inviteEmailSender
 }
 
 type RewardCallbackConfig struct {
@@ -68,7 +70,15 @@ func NewHandlerWithConfigs(engine *engine.Service, cfg OpenAPIEventConfig, webho
 		webhookCfg.MaxBodyBytes = defaultEventMaxBodyBytes
 	}
 	rewardCallbackCfg := RewardCallbackConfig{MaxSkew: 5 * time.Minute, MaxBodyBytes: defaultEventMaxBodyBytes}
-	return &Handler{engine: engine, openAPIEventCfg: cfg, webhookCfg: webhookCfg, rewardCallbackCfg: rewardCallbackCfg}
+	inviteEmailCfg := LoadInviteEmailConfigFromEnv()
+	return &Handler{
+		engine:            engine,
+		openAPIEventCfg:   cfg,
+		webhookCfg:        webhookCfg,
+		rewardCallbackCfg: rewardCallbackCfg,
+		inviteEmailCfg:    inviteEmailCfg,
+		inviteEmailSender: newInviteEmailSender(inviteEmailCfg),
+	}
 }
 
 func NewHandlerWithRewardCallbackConfig(engine *engine.Service, cfg OpenAPIEventConfig, webhookCfg WebhookReceiverConfig, rewardCallbackCfg RewardCallbackConfig) *Handler {
@@ -161,7 +171,14 @@ func (h *Handler) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", h.health)
 	mux.HandleFunc("GET /metrics", h.metrics)
+	mux.HandleFunc("GET /invite/{token}", h.workspaceInvitePage)
+	mux.HandleFunc("POST /invite/{token}", h.acceptWorkspaceInviteByToken)
 	mux.HandleFunc("GET /admin/v1/activities", h.listActivities)
+	mux.HandleFunc("GET /admin/v1/workspace-home/search", h.searchWorkspaceHome)
+	mux.HandleFunc("GET /admin/v1/workspace-home/storage", h.getWorkspaceHomeStorage)
+	mux.HandleFunc("GET /admin/v1/workspace-files", h.listWorkspaceFileObjects)
+	mux.HandleFunc("POST /admin/v1/workspace-files", h.uploadWorkspaceFileObject)
+	mux.HandleFunc("DELETE /admin/v1/workspace-files/{fileId}", h.deleteWorkspaceFileObject)
 	mux.HandleFunc("GET /admin/v1/workspaces", h.listWorkspaces)
 	mux.HandleFunc("POST /admin/v1/workspaces", h.createWorkspace)
 	mux.HandleFunc("GET /admin/v1/workspaces/{workspaceId}", h.getWorkspace)
@@ -172,20 +189,30 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /admin/v1/workspaces/{workspaceId}/members/{memberId}", h.getWorkspaceMember)
 	mux.HandleFunc("PUT /admin/v1/workspaces/{workspaceId}/members/{memberId}", h.updateWorkspaceMember)
 	mux.HandleFunc("DELETE /admin/v1/workspaces/{workspaceId}/members/{memberId}", h.deleteWorkspaceMember)
+	mux.HandleFunc("POST /admin/v1/workspaces/{workspaceId}/members/{memberId}/resend-invite", h.resendWorkspaceMemberInvite)
+	mux.HandleFunc("POST /admin/v1/workspaces/{workspaceId}/members/{memberId}/accept-invite", h.acceptWorkspaceMemberInvite)
 	mux.HandleFunc("GET /admin/v1/workspaces/{workspaceId}/folders", h.listWorkspaceFolders)
 	mux.HandleFunc("POST /admin/v1/workspaces/{workspaceId}/folders", h.createWorkspaceFolder)
 	mux.HandleFunc("GET /admin/v1/workspaces/{workspaceId}/folders/{folderId}", h.getWorkspaceFolder)
 	mux.HandleFunc("PUT /admin/v1/workspaces/{workspaceId}/folders/{folderId}", h.updateWorkspaceFolder)
 	mux.HandleFunc("DELETE /admin/v1/workspaces/{workspaceId}/folders/{folderId}", h.deleteWorkspaceFolder)
+	mux.HandleFunc("POST /admin/v1/workspaces/{workspaceId}/folders/{folderId}/restore", h.restoreWorkspaceFolder)
+	mux.HandleFunc("POST /admin/v1/workspaces/{workspaceId}/batch", h.batchWorkspaceHome)
 	mux.HandleFunc("GET /admin/v1/workspaces/{workspaceId}/share-links", h.listWorkspaceShareLinks)
 	mux.HandleFunc("POST /admin/v1/workspaces/{workspaceId}/share-links", h.createWorkspaceShareLink)
 	mux.HandleFunc("GET /admin/v1/workspaces/{workspaceId}/share-links/{linkId}", h.getWorkspaceShareLink)
 	mux.HandleFunc("PUT /admin/v1/workspaces/{workspaceId}/share-links/{linkId}", h.updateWorkspaceShareLink)
 	mux.HandleFunc("DELETE /admin/v1/workspaces/{workspaceId}/share-links/{linkId}", h.deleteWorkspaceShareLink)
+	mux.HandleFunc("POST /admin/v1/workspaces/{workspaceId}/share-links/{linkId}/regenerate", h.regenerateWorkspaceShareLink)
 	mux.HandleFunc("GET /admin/v1/workspaces/{workspaceId}/audit-logs", h.listWorkspaceAuditLogs)
+	mux.HandleFunc("GET /share/{token}", h.shareLinkPage)
+	mux.HandleFunc("POST /share/{token}", h.resolveShareLink)
 	mux.HandleFunc("POST /admin/v1/activities", h.createActivity)
 	mux.HandleFunc("GET /admin/v1/activities/{id}", h.getActivity)
 	mux.HandleFunc("PUT /admin/v1/activities/{id}", h.updateActivity)
+	mux.HandleFunc("GET /admin/v1/activities/{id}/acl", h.listActivityACL)
+	mux.HandleFunc("POST /admin/v1/activities/{id}/acl", h.createActivityACL)
+	mux.HandleFunc("DELETE /admin/v1/activities/{id}/acl/{grantId}", h.deleteActivityACL)
 	mux.HandleFunc("GET /admin/v1/activities/{id}/workflow/draft", h.getActivityWorkflowDraft)
 	mux.HandleFunc("PUT /admin/v1/activities/{id}/workflow/draft", h.saveActivityWorkflowDraft)
 	mux.HandleFunc("POST /admin/v1/activities/{id}/workflow/validate", h.validateActivityWorkflow)
@@ -209,6 +236,9 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /admin/v1/workflow/node-presets", h.listWorkflowNodePresets)
 	mux.HandleFunc("GET /admin/v1/workflow/draft-templates", h.listWorkflowDraftTemplates)
 	mux.HandleFunc("GET /admin/v1/workflow/draft-templates/{templateId}", h.getWorkflowDraftTemplate)
+	mux.HandleFunc("PUT /admin/v1/workflow/draft-templates/{templateId}", h.updateWorkflowDraftTemplate)
+	mux.HandleFunc("POST /admin/v1/workflow/draft-templates/{templateId}/copy", h.copyWorkflowDraftTemplate)
+	mux.HandleFunc("GET /admin/v1/workflow/draft-templates/{templateId}/compare", h.compareWorkflowDraftTemplateVersions)
 	mux.HandleFunc("GET /admin/v1/workflow/draft-templates/{templateId}/versions", h.listWorkflowDraftTemplateVersions)
 	mux.HandleFunc("POST /admin/v1/activities/{id}/approval/submit", h.submitActivityApproval)
 	mux.HandleFunc("POST /admin/v1/activities/{id}/approval/approve", h.approveActivity)
@@ -271,6 +301,9 @@ func (h *Handler) listActivities(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	if actorFromRequest(r) != "" {
+		activities = h.filterVisibleActivities(r, activities)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"items": activities})
 }
@@ -370,6 +403,33 @@ func (h *Handler) updateActivity(w http.ResponseWriter, r *http.Request) {
 	}
 	if cmd.WorkspaceID != nil && strings.TrimSpace(*cmd.WorkspaceID) != "" {
 		if !h.requireWorkspacePermission(w, r, *cmd.WorkspaceID, workspacePermissionEdit) {
+			return
+		}
+	}
+	if cmd.WorkspaceID != nil && cmd.FolderID != nil && strings.TrimSpace(*cmd.FolderID) != "" {
+		folder, err := h.engine.GetWorkspaceFolder(r.Context(), strings.TrimSpace(*cmd.WorkspaceID), strings.TrimSpace(*cmd.FolderID))
+		if err != nil {
+			workspaceError(w, err)
+			return
+		}
+		if actorFromRequest(r) != "" && !h.canViewFolder(r, strings.TrimSpace(*cmd.WorkspaceID), folder) {
+			workspaceError(w, marketing.ErrForbidden)
+			return
+		}
+	}
+	if cmd.WorkspaceID == nil && cmd.FolderID != nil && strings.TrimSpace(*cmd.FolderID) != "" {
+		current, err := h.engine.GetActivity(r.Context(), r.PathValue("id"))
+		if err != nil {
+			workspaceError(w, err)
+			return
+		}
+		folder, err := h.engine.GetWorkspaceFolder(r.Context(), current.WorkspaceID, strings.TrimSpace(*cmd.FolderID))
+		if err != nil {
+			workspaceError(w, err)
+			return
+		}
+		if actorFromRequest(r) != "" && !h.canViewFolder(r, current.WorkspaceID, folder) {
+			workspaceError(w, marketing.ErrForbidden)
 			return
 		}
 	}
@@ -533,6 +593,16 @@ func (h *Handler) publishActivityWorkflow(w http.ResponseWriter, r *http.Request
 		}
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	activity, activityErr := h.engine.GetActivity(r.Context(), version.ActivityID)
+	if activityErr == nil && strings.TrimSpace(activity.WorkspaceID) != "" {
+		_, _ = h.storeWorkspaceJSONFile(r, activity.WorkspaceID, "workflow-version-"+version.ID+".json", version.Definition, workspaceFileMeta{
+			FolderID:          activity.FolderID,
+			ActivityID:        activity.ID,
+			WorkflowVersionID: version.ID,
+			Kind:              marketing.WorkspaceFileWorkflowVersion,
+			CreatedBy:         actorFromRequest(r),
+		})
 	}
 	writeJSON(w, http.StatusCreated, version)
 }
@@ -726,15 +796,43 @@ func (h *Handler) workflowExecutionResource(r *http.Request, executionID string)
 }
 
 func workflowDraftTemplateResource(template marketing.WorkflowDraftTemplate) workflowResourceAccess {
+	resource := workflowResourceAccess{
+		WorkspaceID: strings.TrimSpace(template.WorkspaceID),
+		FolderID:    strings.TrimSpace(template.FolderID),
+	}
 	definition, err := marketing.ParseWorkflowDefinition(template.Definition)
 	if err != nil {
-		return workflowResourceAccess{}
+		return resource
 	}
-	return workflowResourceAccess{
-		ActivityID:  workflowMetaString(definition.Meta, "activityId"),
-		WorkspaceID: workflowMetaString(definition.Meta, "workspaceId"),
-		FolderID:    workflowMetaString(definition.Meta, "folderId"),
+	if resource.WorkspaceID == "" {
+		resource.WorkspaceID = workflowTemplateRealMeta(definition.Meta, "workspaceId")
 	}
+	if resource.FolderID == "" {
+		resource.FolderID = workflowTemplateRealMeta(definition.Meta, "folderId")
+	}
+	resource.ActivityID = workflowTemplateRealMeta(definition.Meta, "activityId")
+	return resource
+}
+
+func workflowTemplateRealMeta(meta map[string]any, key string) string {
+	value := workflowMetaString(meta, key)
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "", "template":
+		return ""
+	default:
+		return value
+	}
+}
+
+func workflowDraftTemplateVisibility(template marketing.WorkflowDraftTemplate) marketing.WorkspaceVisibility {
+	if template.Visibility != "" {
+		return template.Visibility
+	}
+	definition, err := marketing.ParseWorkflowDefinition(template.Definition)
+	if err != nil {
+		return marketing.WorkspaceTeam
+	}
+	return marketing.WorkspaceVisibility(workflowMetaString(definition.Meta, "visibility"))
 }
 
 func workflowMetaString(meta map[string]any, key string) string {
@@ -899,6 +997,17 @@ func (h *Handler) exportWorkflowExecutionTrace(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	activity, activityErr := h.engine.GetActivity(r.Context(), trace.Execution.ActivityID)
+	if activityErr == nil && strings.TrimSpace(activity.WorkspaceID) != "" {
+		_, _ = h.storeWorkspaceJSONFile(r, activity.WorkspaceID, "execution-trace-"+trace.Execution.ID+".json", trace, workspaceFileMeta{
+			FolderID:          activity.FolderID,
+			ActivityID:        activity.ID,
+			WorkflowVersionID: trace.Execution.WorkflowVersionID,
+			ExecutionID:       trace.Execution.ID,
+			Kind:              marketing.WorkspaceFileExecutionTrace,
+			CreatedBy:         actorFromRequest(r),
+		})
+	}
 	writeJSON(w, http.StatusOK, trace)
 }
 
@@ -993,11 +1102,14 @@ func (h *Handler) listWorkflowDraftTemplates(w http.ResponseWriter, r *http.Requ
 		latestOnly, _ = strconv.ParseBool(raw)
 	}
 	items, err := h.engine.ListWorkflowDraftTemplates(r.Context(), marketing.WorkflowDraftTemplateQuery{
-		TemplateID: strings.TrimSpace(r.URL.Query().Get("templateId")),
-		Source:     marketing.WorkflowDraftTemplateSource(strings.TrimSpace(r.URL.Query().Get("source"))),
-		Status:     marketing.WorkflowDraftTemplateStatus(strings.TrimSpace(r.URL.Query().Get("status"))),
-		LatestOnly: latestOnly,
-		Limit:      intQuery(r, "limit"),
+		TemplateID:  strings.TrimSpace(r.URL.Query().Get("templateId")),
+		Source:      marketing.WorkflowDraftTemplateSource(strings.TrimSpace(r.URL.Query().Get("source"))),
+		Status:      marketing.WorkflowDraftTemplateStatus(strings.TrimSpace(r.URL.Query().Get("status"))),
+		WorkspaceID: strings.TrimSpace(r.URL.Query().Get("workspaceId")),
+		FolderID:    strings.TrimSpace(r.URL.Query().Get("folderId")),
+		Visibility:  marketing.WorkspaceVisibility(strings.TrimSpace(r.URL.Query().Get("visibility"))),
+		LatestOnly:  latestOnly,
+		Limit:       intQuery(r, "limit"),
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -1022,6 +1134,104 @@ func (h *Handler) getWorkflowDraftTemplate(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	writeJSON(w, http.StatusOK, item)
+}
+
+func (h *Handler) updateWorkflowDraftTemplate(w http.ResponseWriter, r *http.Request) {
+	version, _ := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("version")))
+	existing, err := h.engine.GetWorkflowDraftTemplate(r.Context(), r.PathValue("templateId"), strings.TrimSpace(r.URL.Query().Get("versionId")), version)
+	if err != nil {
+		if errors.Is(err, marketing.ErrNotFound) {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !h.requireWorkflowDraftTemplatePermission(w, r, existing, workspacePermissionAdmin) {
+		return
+	}
+	var cmd marketing.UpdateWorkflowDraftTemplateCommand
+	if err := decodeStrictJSON(r.Body, &cmd); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	if strings.TrimSpace(cmd.VersionID) == "" {
+		cmd.VersionID = strings.TrimSpace(r.URL.Query().Get("versionId"))
+	}
+	if cmd.Version <= 0 {
+		cmd.Version = version
+	}
+	if actorID := actorFromRequest(r); actorID != "" && strings.TrimSpace(cmd.Operator) == "" {
+		cmd.Operator = actorID
+	}
+	updated, err := h.engine.UpdateWorkflowDraftTemplate(r.Context(), r.PathValue("templateId"), cmd)
+	if err != nil {
+		workspaceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
+}
+
+func (h *Handler) copyWorkflowDraftTemplate(w http.ResponseWriter, r *http.Request) {
+	version, _ := strconv.Atoi(strings.TrimSpace(r.URL.Query().Get("version")))
+	source, err := h.engine.GetWorkflowDraftTemplate(r.Context(), r.PathValue("templateId"), strings.TrimSpace(r.URL.Query().Get("versionId")), version)
+	if err != nil {
+		if errors.Is(err, marketing.ErrNotFound) {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !h.requireWorkflowDraftTemplatePermission(w, r, source, workspacePermissionView) {
+		return
+	}
+	var cmd marketing.CopyWorkflowDraftTemplateCommand
+	if err := decodeStrictJSON(r.Body, &cmd); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json body")
+		return
+	}
+	if strings.TrimSpace(cmd.VersionID) == "" {
+		cmd.VersionID = strings.TrimSpace(r.URL.Query().Get("versionId"))
+	}
+	if cmd.Version <= 0 {
+		cmd.Version = version
+	}
+	if actorID := actorFromRequest(r); actorID != "" && strings.TrimSpace(cmd.Operator) == "" {
+		cmd.Operator = actorID
+	}
+	if strings.TrimSpace(cmd.WorkspaceID) != "" && !h.requireWorkspacePermission(w, r, cmd.WorkspaceID, workspacePermissionEdit) {
+		return
+	}
+	copied, err := h.engine.CopyWorkflowDraftTemplate(r.Context(), r.PathValue("templateId"), cmd)
+	if err != nil {
+		workspaceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, copied)
+}
+
+func (h *Handler) compareWorkflowDraftTemplateVersions(w http.ResponseWriter, r *http.Request) {
+	leftVersionID := strings.TrimSpace(r.URL.Query().Get("leftVersionId"))
+	rightVersionID := strings.TrimSpace(r.URL.Query().Get("rightVersionId"))
+	item, err := h.engine.GetWorkflowDraftTemplate(r.Context(), r.PathValue("templateId"), firstNonEmpty(leftVersionID, rightVersionID), 0)
+	if err != nil {
+		if errors.Is(err, marketing.ErrNotFound) {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !h.requireWorkflowDraftTemplatePermission(w, r, item, workspacePermissionView) {
+		return
+	}
+	result, err := h.engine.CompareWorkflowDraftTemplateVersions(r.Context(), r.PathValue("templateId"), leftVersionID, rightVersionID)
+	if err != nil {
+		workspaceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (h *Handler) listWorkflowDraftTemplateVersions(w http.ResponseWriter, r *http.Request) {

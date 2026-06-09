@@ -725,6 +725,9 @@ func (r *workerTestRepo) CreateWorkspaceMember(context.Context, marketing.Worksp
 func (r *workerTestRepo) ListWorkspaceMembers(context.Context, string) ([]marketing.WorkspaceMember, error) {
 	panic("not implemented")
 }
+func (r *workerTestRepo) FindWorkspaceMemberByInviteToken(context.Context, string) (marketing.WorkspaceMember, error) {
+	panic("not implemented")
+}
 func (r *workerTestRepo) UpdateWorkspaceMember(context.Context, marketing.WorkspaceMember) (marketing.WorkspaceMember, error) {
 	panic("not implemented")
 }
@@ -747,6 +750,30 @@ func (r *workerTestRepo) ListWorkspaceShareLinks(context.Context, marketing.Work
 	panic("not implemented")
 }
 func (r *workerTestRepo) UpdateWorkspaceShareLink(context.Context, marketing.WorkspaceShareLink) (marketing.WorkspaceShareLink, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) CreateWorkspaceActivityGrant(context.Context, marketing.WorkspaceActivityGrant) (marketing.WorkspaceActivityGrant, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) ListWorkspaceActivityGrants(context.Context, marketing.WorkspaceActivityGrantQuery) ([]marketing.WorkspaceActivityGrant, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) UpdateWorkspaceActivityGrant(context.Context, marketing.WorkspaceActivityGrant) (marketing.WorkspaceActivityGrant, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) DeleteWorkspaceActivityGrant(context.Context, string) error {
+	panic("not implemented")
+}
+func (r *workerTestRepo) CreateWorkspaceFileObject(context.Context, marketing.WorkspaceFileObject) (marketing.WorkspaceFileObject, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) ListWorkspaceFileObjects(context.Context, marketing.WorkspaceFileObjectQuery) ([]marketing.WorkspaceFileObject, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) DeleteWorkspaceFileObject(context.Context, string, string) (marketing.WorkspaceFileObject, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) ApplyWorkspaceBatch(context.Context, marketing.WorkspaceBatchCommand) (marketing.WorkspaceBatchResult, error) {
 	panic("not implemented")
 }
 func (r *workerTestRepo) CreateWorkspaceAuditLog(context.Context, marketing.WorkspaceAuditLog) error {

@@ -53,6 +53,7 @@ const (
 	ActivityActive    ActivityStatus = "ACTIVE"
 	ActivityPaused    ActivityStatus = "PAUSED"
 	ActivityEnded     ActivityStatus = "ENDED"
+	ActivityArchived  ActivityStatus = "ARCHIVED"
 
 	RulePhaseMatch   RulePhase = "MATCH"
 	RulePhaseQualify RulePhase = "QUALIFY"
@@ -141,29 +142,30 @@ const (
 )
 
 type Activity struct {
-	ID             string           `json:"id"`
-	TenantID       string           `json:"tenantId"`
-	WorkspaceID    string           `json:"workspaceId,omitempty"`
-	FolderID       string           `json:"folderId,omitempty"`
-	Code           string           `json:"activityCode"`
-	Name           string           `json:"activityName"`
-	Type           string           `json:"activityType"`
-	Status         ActivityStatus   `json:"status"`
-	TriggerEvents  []string         `json:"triggerEvents"`
-	StartTime      time.Time        `json:"startTime"`
-	EndTime        time.Time        `json:"endTime"`
-	Timezone       string           `json:"timezone"`
-	Priority       int              `json:"priority"`
-	ExclusiveGroup string           `json:"exclusiveGroup"`
-	Stackable      bool             `json:"stackable"`
-	PluginCode     string           `json:"pluginCode,omitempty"`
-	Version        int              `json:"version"`
-	Approval       ApprovalSnapshot `json:"approval,omitempty"`
-	Config         json.RawMessage  `json:"config,omitempty"`
-	Rules          []Rule           `json:"rules"`
-	Rewards        []Reward         `json:"rewards"`
-	CreatedAt      time.Time        `json:"createdAt"`
-	UpdatedAt      time.Time        `json:"updatedAt"`
+	ID             string              `json:"id"`
+	TenantID       string              `json:"tenantId"`
+	WorkspaceID    string              `json:"workspaceId,omitempty"`
+	FolderID       string              `json:"folderId,omitempty"`
+	Code           string              `json:"activityCode"`
+	Name           string              `json:"activityName"`
+	Type           string              `json:"activityType"`
+	Status         ActivityStatus      `json:"status"`
+	Visibility     WorkspaceVisibility `json:"visibility"`
+	TriggerEvents  []string            `json:"triggerEvents"`
+	StartTime      time.Time           `json:"startTime"`
+	EndTime        time.Time           `json:"endTime"`
+	Timezone       string              `json:"timezone"`
+	Priority       int                 `json:"priority"`
+	ExclusiveGroup string              `json:"exclusiveGroup"`
+	Stackable      bool                `json:"stackable"`
+	PluginCode     string              `json:"pluginCode,omitempty"`
+	Version        int                 `json:"version"`
+	Approval       ApprovalSnapshot    `json:"approval,omitempty"`
+	Config         json.RawMessage     `json:"config,omitempty"`
+	Rules          []Rule              `json:"rules"`
+	Rewards        []Reward            `json:"rewards"`
+	CreatedAt      time.Time           `json:"createdAt"`
+	UpdatedAt      time.Time           `json:"updatedAt"`
 }
 
 type Rule struct {
@@ -1243,46 +1245,48 @@ type RewardReconciliationQuery struct {
 }
 
 type CreateActivityCommand struct {
-	Operator       string          `json:"operator,omitempty"`
-	TenantID       string          `json:"tenantId"`
-	WorkspaceID    string          `json:"workspaceId,omitempty"`
-	FolderID       string          `json:"folderId,omitempty"`
-	Code           string          `json:"activityCode"`
-	Name           string          `json:"activityName"`
-	Type           string          `json:"activityType"`
-	Status         ActivityStatus  `json:"status"`
-	TriggerEvents  []string        `json:"triggerEvents"`
-	StartTime      time.Time       `json:"startTime"`
-	EndTime        time.Time       `json:"endTime"`
-	Timezone       string          `json:"timezone"`
-	Priority       int             `json:"priority"`
-	ExclusiveGroup string          `json:"exclusiveGroup"`
-	Stackable      bool            `json:"stackable"`
-	PluginCode     string          `json:"pluginCode,omitempty"`
-	Version        int             `json:"version"`
-	Config         json.RawMessage `json:"config,omitempty"`
-	ConfigJSON     json.RawMessage `json:"configJson,omitempty"`
-	ConfigSnake    json.RawMessage `json:"config_json,omitempty"`
-	Rules          []Rule          `json:"rules"`
-	Rewards        []Reward        `json:"rewards"`
+	Operator       string              `json:"operator,omitempty"`
+	TenantID       string              `json:"tenantId"`
+	WorkspaceID    string              `json:"workspaceId,omitempty"`
+	FolderID       string              `json:"folderId,omitempty"`
+	Code           string              `json:"activityCode"`
+	Name           string              `json:"activityName"`
+	Type           string              `json:"activityType"`
+	Status         ActivityStatus      `json:"status"`
+	Visibility     WorkspaceVisibility `json:"visibility,omitempty"`
+	TriggerEvents  []string            `json:"triggerEvents"`
+	StartTime      time.Time           `json:"startTime"`
+	EndTime        time.Time           `json:"endTime"`
+	Timezone       string              `json:"timezone"`
+	Priority       int                 `json:"priority"`
+	ExclusiveGroup string              `json:"exclusiveGroup"`
+	Stackable      bool                `json:"stackable"`
+	PluginCode     string              `json:"pluginCode,omitempty"`
+	Version        int                 `json:"version"`
+	Config         json.RawMessage     `json:"config,omitempty"`
+	ConfigJSON     json.RawMessage     `json:"configJson,omitempty"`
+	ConfigSnake    json.RawMessage     `json:"config_json,omitempty"`
+	Rules          []Rule              `json:"rules"`
+	Rewards        []Reward            `json:"rewards"`
 }
 
 type UpdateActivityCommand struct {
-	Operator       string          `json:"operator,omitempty"`
-	Reason         string          `json:"reason,omitempty"`
-	WorkspaceID    *string         `json:"workspaceId,omitempty"`
-	FolderID       *string         `json:"folderId,omitempty"`
-	Name           *string         `json:"activityName,omitempty"`
-	Status         *ActivityStatus `json:"status,omitempty"`
-	StartTime      *time.Time      `json:"startTime,omitempty"`
-	EndTime        *time.Time      `json:"endTime,omitempty"`
-	Timezone       *string         `json:"timezone,omitempty"`
-	Priority       *int            `json:"priority,omitempty"`
-	ExclusiveGroup *string         `json:"exclusiveGroup,omitempty"`
-	Stackable      *bool           `json:"stackable,omitempty"`
-	Config         json.RawMessage `json:"config,omitempty"`
-	ConfigJSON     json.RawMessage `json:"configJson,omitempty"`
-	ConfigSnake    json.RawMessage `json:"config_json,omitempty"`
+	Operator       string               `json:"operator,omitempty"`
+	Reason         string               `json:"reason,omitempty"`
+	WorkspaceID    *string              `json:"workspaceId,omitempty"`
+	FolderID       *string              `json:"folderId,omitempty"`
+	Name           *string              `json:"activityName,omitempty"`
+	Status         *ActivityStatus      `json:"status,omitempty"`
+	Visibility     *WorkspaceVisibility `json:"visibility,omitempty"`
+	StartTime      *time.Time           `json:"startTime,omitempty"`
+	EndTime        *time.Time           `json:"endTime,omitempty"`
+	Timezone       *string              `json:"timezone,omitempty"`
+	Priority       *int                 `json:"priority,omitempty"`
+	ExclusiveGroup *string              `json:"exclusiveGroup,omitempty"`
+	Stackable      *bool                `json:"stackable,omitempty"`
+	Config         json.RawMessage      `json:"config,omitempty"`
+	ConfigJSON     json.RawMessage      `json:"configJson,omitempty"`
+	ConfigSnake    json.RawMessage      `json:"config_json,omitempty"`
 }
 
 type SubmitApprovalCommand struct {
@@ -1491,6 +1495,9 @@ func (cmd CreateActivityCommand) Validate(now time.Time) error {
 	if cmd.Status != "" && !validActivityStatus(cmd.Status) {
 		return invalidActivityf("status is invalid")
 	}
+	if cmd.Visibility != "" && !validWorkspaceVisibility(cmd.Visibility) {
+		return invalidActivityf("visibility is invalid")
+	}
 	if cmd.Version > 1 {
 		return invalidActivityf("version must be 0 or 1")
 	}
@@ -1553,6 +1560,12 @@ func (cmd UpdateActivityCommand) ApplyTo(activity Activity, now time.Time) (Acti
 			return Activity{}, invalidActivityf("status is invalid")
 		}
 		activity.Status = *cmd.Status
+	}
+	if cmd.Visibility != nil {
+		if !validWorkspaceVisibility(*cmd.Visibility) {
+			return Activity{}, invalidActivityf("visibility is invalid")
+		}
+		activity.Visibility = *cmd.Visibility
 	}
 	if cmd.StartTime != nil {
 		activity.StartTime = *cmd.StartTime
@@ -1632,7 +1645,7 @@ func invalidActivityf(format string, args ...any) error {
 
 func validActivityStatus(status ActivityStatus) bool {
 	switch status {
-	case ActivityDraft, ActivityScheduled, ActivityActive, ActivityPaused, ActivityEnded:
+	case ActivityDraft, ActivityScheduled, ActivityActive, ActivityPaused, ActivityEnded, ActivityArchived:
 		return true
 	default:
 		return false

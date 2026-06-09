@@ -201,6 +201,10 @@ type WorkflowDraftTemplate struct {
 	Name        string                      `json:"name"`
 	Description string                      `json:"description,omitempty"`
 	Category    string                      `json:"category,omitempty"`
+	WorkspaceID string                      `json:"workspaceId,omitempty"`
+	FolderID    string                      `json:"folderId,omitempty"`
+	Visibility  WorkspaceVisibility         `json:"visibility,omitempty"`
+	Tags        []string                    `json:"tags,omitempty"`
 	Source      WorkflowDraftTemplateSource `json:"source"`
 	Status      WorkflowDraftTemplateStatus `json:"status"`
 	Definition  json.RawMessage             `json:"definition"`
@@ -210,11 +214,14 @@ type WorkflowDraftTemplate struct {
 }
 
 type WorkflowDraftTemplateQuery struct {
-	TemplateID string
-	Source     WorkflowDraftTemplateSource
-	Status     WorkflowDraftTemplateStatus
-	LatestOnly bool
-	Limit      int
+	TemplateID  string
+	Source      WorkflowDraftTemplateSource
+	Status      WorkflowDraftTemplateStatus
+	WorkspaceID string
+	FolderID    string
+	Visibility  WorkspaceVisibility
+	LatestOnly  bool
+	Limit       int
 }
 
 type SaveWorkflowDraftTemplateCommand struct {
@@ -227,6 +234,7 @@ type SaveWorkflowDraftTemplateCommand struct {
 	WorkspaceID   string         `json:"workspaceId,omitempty"`
 	FolderID      string         `json:"folderId,omitempty"`
 	Visibility    string         `json:"visibility,omitempty"`
+	Tags          []string       `json:"tags,omitempty"`
 	Parameters    map[string]any `json:"parameters,omitempty"`
 }
 
@@ -238,6 +246,45 @@ type ApplyWorkflowDraftTemplateCommand struct {
 	Parameters  map[string]any `json:"parameters,omitempty"`
 	WorkspaceID string         `json:"workspaceId,omitempty"`
 	FolderID    string         `json:"folderId,omitempty"`
+}
+
+type UpdateWorkflowDraftTemplateCommand struct {
+	VersionID   string   `json:"versionId,omitempty"`
+	Version     int      `json:"version,omitempty"`
+	Name        string   `json:"name,omitempty"`
+	Description *string  `json:"description,omitempty"`
+	Category    *string  `json:"category,omitempty"`
+	WorkspaceID *string  `json:"workspaceId,omitempty"`
+	FolderID    *string  `json:"folderId,omitempty"`
+	Visibility  *string  `json:"visibility,omitempty"`
+	Tags        []string `json:"tags,omitempty"`
+	Status      string   `json:"status,omitempty"`
+	Operator    string   `json:"operator,omitempty"`
+}
+
+type CopyWorkflowDraftTemplateCommand struct {
+	VersionID   string   `json:"versionId,omitempty"`
+	Version     int      `json:"version,omitempty"`
+	Name        string   `json:"name,omitempty"`
+	Category    string   `json:"category,omitempty"`
+	WorkspaceID string   `json:"workspaceId,omitempty"`
+	FolderID    string   `json:"folderId,omitempty"`
+	Visibility  string   `json:"visibility,omitempty"`
+	Tags        []string `json:"tags,omitempty"`
+	Operator    string   `json:"operator,omitempty"`
+}
+
+type WorkflowDraftTemplateCompareResult struct {
+	LeftVersionID  string         `json:"leftVersionId"`
+	RightVersionID string         `json:"rightVersionId"`
+	LeftVersion    int            `json:"leftVersion"`
+	RightVersion   int            `json:"rightVersion"`
+	NodeDelta      int            `json:"nodeDelta"`
+	EdgeDelta      int            `json:"edgeDelta"`
+	AddedNodes     []string       `json:"addedNodes"`
+	RemovedNodes   []string       `json:"removedNodes"`
+	CommonNodes    int            `json:"commonNodes"`
+	ChangedMeta    map[string]any `json:"changedMeta,omitempty"`
 }
 
 type WorkflowNodePreset struct {

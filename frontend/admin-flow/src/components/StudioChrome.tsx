@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import type { WorkflowDefinition, WorkflowDiffDetail, WorkflowDiffItem, WorkflowDiffSummary, WorkflowValidationIssue, WorkflowValidationResult, WorkflowVersion } from '../types';
+import { BrandMark } from './workspace-home';
 
 type ActivityOption = {
   id: string;
@@ -714,7 +715,7 @@ export function StudioChrome({
     <>
       <div className="workspace-topbar">
         <div className="workspace-brand">
-          <strong>ExMarketing</strong>
+          <BrandMark />
           <span>/</span>
           {homeMode ? (
             <div className="workspace-section-title">Activity Studio</div>

@@ -134,6 +134,10 @@ func (s *Service) SaveCurrentWorkflowAsTemplate(ctx context.Context, activityID 
 		Name:        name,
 		Description: strings.TrimSpace(cmd.Description),
 		Category:    strings.TrimSpace(cmd.Category),
+		WorkspaceID: strings.TrimSpace(firstNonEmptyString(cmd.WorkspaceID, activity.WorkspaceID)),
+		FolderID:    strings.TrimSpace(firstNonEmptyString(cmd.FolderID, activity.FolderID)),
+		Visibility:  marketing.WorkspaceVisibility(strings.TrimSpace(firstNonEmptyString(cmd.Visibility, string(activity.Visibility), string(marketing.WorkspaceTeam)))),
+		Tags:        cleanWorkflowTemplateTags(cmd.Tags),
 		Source:      marketing.WorkflowDraftTemplateSaved,
 		Status:      marketing.WorkflowDraftTemplateActive,
 		Definition:  workflowTemplateDefinitionForSave(draft.Definition, activity, cmd),
@@ -151,6 +155,160 @@ func (s *Service) SaveCurrentWorkflowAsTemplate(ctx context.Context, activityID 
 		"version":    created.Version,
 	}))
 	return created, nil
+}
+
+type workflowDraftTemplateUpdater interface {
+	UpdateWorkflowDraftTemplate(ctx context.Context, template marketing.WorkflowDraftTemplate) (marketing.WorkflowDraftTemplate, error)
+}
+
+func (s *Service) UpdateWorkflowDraftTemplate(ctx context.Context, templateID string, cmd marketing.UpdateWorkflowDraftTemplateCommand) (marketing.WorkflowDraftTemplate, error) {
+	updater, ok := s.repository.(workflowDraftTemplateUpdater)
+	if !ok {
+		return marketing.WorkflowDraftTemplate{}, errors.New("workflow draft template update is not supported by repository")
+	}
+	template, err := s.GetWorkflowDraftTemplate(ctx, templateID, cmd.VersionID, cmd.Version)
+	if err != nil {
+		return marketing.WorkflowDraftTemplate{}, err
+	}
+	if template.Source == marketing.WorkflowDraftTemplateBuiltin {
+		return marketing.WorkflowDraftTemplate{}, errors.Join(marketing.ErrInvalidWorkflow, errors.New("builtin template cannot be updated"))
+	}
+	before := template
+	if strings.TrimSpace(cmd.Name) != "" {
+		template.Name = strings.TrimSpace(cmd.Name)
+	}
+	if cmd.Description != nil {
+		template.Description = strings.TrimSpace(*cmd.Description)
+	}
+	if cmd.Category != nil {
+		template.Category = strings.TrimSpace(*cmd.Category)
+	}
+	if cmd.WorkspaceID != nil {
+		template.WorkspaceID = strings.TrimSpace(*cmd.WorkspaceID)
+	}
+	if cmd.FolderID != nil {
+		template.FolderID = strings.TrimSpace(*cmd.FolderID)
+	}
+	if cmd.Visibility != nil {
+		template.Visibility = marketing.WorkspaceVisibility(strings.TrimSpace(*cmd.Visibility))
+	}
+	if cmd.Tags != nil {
+		template.Tags = cleanWorkflowTemplateTags(cmd.Tags)
+	}
+	if strings.TrimSpace(cmd.Status) != "" {
+		template.Status = marketing.WorkflowDraftTemplateStatus(strings.TrimSpace(cmd.Status))
+	}
+	template.UpdatedAt = s.now()
+	updated, err := updater.UpdateWorkflowDraftTemplate(ctx, template)
+	if err != nil {
+		return marketing.WorkflowDraftTemplate{}, err
+	}
+	_ = s.audit(ctx, "", actorOrSystem(cmd.Operator), "UPDATE_WORKFLOW_TEMPLATE", "WORKFLOW_TEMPLATE", updated.VersionID, auditSnapshot(before, updated, map[string]any{
+		"templateId": updated.ID,
+		"version":    updated.Version,
+	}))
+	return updated, nil
+}
+
+func (s *Service) CopyWorkflowDraftTemplate(ctx context.Context, templateID string, cmd marketing.CopyWorkflowDraftTemplateCommand) (marketing.WorkflowDraftTemplate, error) {
+	source, err := s.GetWorkflowDraftTemplate(ctx, templateID, cmd.VersionID, cmd.Version)
+	if err != nil {
+		return marketing.WorkflowDraftTemplate{}, err
+	}
+	name := strings.TrimSpace(cmd.Name)
+	if name == "" {
+		name = source.Name + " Copy"
+	}
+	now := s.now()
+	copied := marketing.WorkflowDraftTemplate{
+		ID:          workflowTemplateSlug(name + "-" + marketing.NewID("copy")),
+		VersionID:   marketing.NewID("wftplv"),
+		Version:     1,
+		Name:        name,
+		Description: source.Description,
+		Category:    strings.TrimSpace(firstNonEmptyString(cmd.Category, source.Category)),
+		WorkspaceID: strings.TrimSpace(firstNonEmptyString(cmd.WorkspaceID, source.WorkspaceID)),
+		FolderID:    strings.TrimSpace(firstNonEmptyString(cmd.FolderID, source.FolderID)),
+		Visibility:  marketing.WorkspaceVisibility(strings.TrimSpace(firstNonEmptyString(cmd.Visibility, string(source.Visibility), string(marketing.WorkspaceTeam)))),
+		Tags:        cleanWorkflowTemplateTags(append(source.Tags, cmd.Tags...)),
+		Source:      marketing.WorkflowDraftTemplateSaved,
+		Status:      marketing.WorkflowDraftTemplateActive,
+		Definition:  workflowTemplateDefinitionForCopy(source.Definition, cmd),
+		CreatedBy:   strings.TrimSpace(cmd.Operator),
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	created, err := s.repository.CreateWorkflowDraftTemplate(ctx, copied)
+	if err != nil {
+		return marketing.WorkflowDraftTemplate{}, err
+	}
+	_ = s.audit(ctx, "", actorOrSystem(cmd.Operator), "COPY_WORKFLOW_TEMPLATE", "WORKFLOW_TEMPLATE", created.VersionID, auditSnapshot(source, created, map[string]any{
+		"sourceTemplateId": source.ID,
+		"sourceVersion":    source.Version,
+	}))
+	return created, nil
+}
+
+func (s *Service) CompareWorkflowDraftTemplateVersions(ctx context.Context, templateID string, leftVersionID string, rightVersionID string) (marketing.WorkflowDraftTemplateCompareResult, error) {
+	versions, err := s.ListWorkflowDraftTemplateVersions(ctx, templateID)
+	if err != nil {
+		return marketing.WorkflowDraftTemplateCompareResult{}, err
+	}
+	if len(versions) == 0 {
+		return marketing.WorkflowDraftTemplateCompareResult{}, marketing.ErrNotFound
+	}
+	left := versions[len(versions)-1]
+	right := versions[0]
+	for _, item := range versions {
+		if leftVersionID != "" && item.VersionID == leftVersionID {
+			left = item
+		}
+		if rightVersionID != "" && item.VersionID == rightVersionID {
+			right = item
+		}
+	}
+	leftDef, err := marketing.ParseWorkflowDefinition(left.Definition)
+	if err != nil {
+		return marketing.WorkflowDraftTemplateCompareResult{}, err
+	}
+	rightDef, err := marketing.ParseWorkflowDefinition(right.Definition)
+	if err != nil {
+		return marketing.WorkflowDraftTemplateCompareResult{}, err
+	}
+	leftNodes := workflowTemplateNodeIDSet(leftDef.Nodes)
+	rightNodes := workflowTemplateNodeIDSet(rightDef.Nodes)
+	var added []string
+	var removed []string
+	common := 0
+	for id := range rightNodes {
+		if _, ok := leftNodes[id]; ok {
+			common++
+		} else {
+			added = append(added, id)
+		}
+	}
+	for id := range leftNodes {
+		if _, ok := rightNodes[id]; !ok {
+			removed = append(removed, id)
+		}
+	}
+	return marketing.WorkflowDraftTemplateCompareResult{
+		LeftVersionID:  left.VersionID,
+		RightVersionID: right.VersionID,
+		LeftVersion:    left.Version,
+		RightVersion:   right.Version,
+		NodeDelta:      len(rightDef.Nodes) - len(leftDef.Nodes),
+		EdgeDelta:      len(rightDef.Edges) - len(leftDef.Edges),
+		AddedNodes:     added,
+		RemovedNodes:   removed,
+		CommonNodes:    common,
+		ChangedMeta: map[string]any{
+			"name":       []string{left.Name, right.Name},
+			"category":   []string{left.Category, right.Category},
+			"visibility": []string{string(left.Visibility), string(right.Visibility)},
+			"status":     []string{string(left.Status), string(right.Status)},
+		},
+	}, nil
 }
 
 func (s *Service) ListWorkflowNodePresets() []marketing.WorkflowNodePreset {
@@ -197,10 +355,61 @@ func workflowTemplateDefinitionForSave(raw json.RawMessage, activity marketing.A
 	definition.Meta["workspaceId"] = firstNonEmptyString(cmd.WorkspaceID, activity.WorkspaceID)
 	definition.Meta["folderId"] = firstNonEmptyString(cmd.FolderID, activity.FolderID)
 	definition.Meta["visibility"] = firstNonEmptyString(cmd.Visibility, "TEAM")
+	if len(cmd.Tags) > 0 {
+		definition.Meta["tags"] = cleanWorkflowTemplateTags(cmd.Tags)
+	}
 	definition.Meta["templateParameters"] = normalizeWorkflowTemplateParameters(cmd.Parameters)
 	out, err := json.Marshal(definition)
 	if err != nil {
 		return raw
+	}
+	return out
+}
+
+func workflowTemplateDefinitionForCopy(raw json.RawMessage, cmd marketing.CopyWorkflowDraftTemplateCommand) json.RawMessage {
+	definition, err := marketing.ParseWorkflowDefinition(raw)
+	if err != nil {
+		return raw
+	}
+	if definition.Meta == nil {
+		definition.Meta = map[string]any{}
+	}
+	definition.Meta["activityId"] = "template"
+	definition.Meta["workspaceId"] = strings.TrimSpace(cmd.WorkspaceID)
+	definition.Meta["folderId"] = strings.TrimSpace(cmd.FolderID)
+	definition.Meta["visibility"] = firstNonEmptyString(cmd.Visibility, "TEAM")
+	out, err := json.Marshal(definition)
+	if err != nil {
+		return raw
+	}
+	return out
+}
+
+func cleanWorkflowTemplateTags(tags []string) []string {
+	seen := map[string]struct{}{}
+	out := make([]string, 0, len(tags))
+	for _, tag := range tags {
+		tag = strings.TrimSpace(tag)
+		if tag == "" {
+			continue
+		}
+		key := strings.ToLower(tag)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, tag)
+	}
+	return out
+}
+
+func workflowTemplateNodeIDSet(nodes []marketing.WorkflowNode) map[string]struct{} {
+	out := make(map[string]struct{}, len(nodes))
+	for _, node := range nodes {
+		id := strings.TrimSpace(node.ID)
+		if id != "" {
+			out[id] = struct{}{}
+		}
 	}
 	return out
 }

@@ -10,3 +10,6 @@ playwright-report/
 test-results/
 
 tasks/*/runs/
+
+data/
+internal/httpapi/data/

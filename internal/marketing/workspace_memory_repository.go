@@ -4,6 +4,7 @@ import (
 	"context"
 	"slices"
 	"strings"
+	"time"
 )
 
 func (r *MemoryRepository) CreateWorkspace(ctx context.Context, workspace Workspace) (Workspace, error) {
@@ -121,6 +122,24 @@ func (r *MemoryRepository) ListWorkspaceMembers(ctx context.Context, workspaceID
 		}
 	}
 	return out, nil
+}
+
+func (r *MemoryRepository) FindWorkspaceMemberByInviteToken(ctx context.Context, token string) (WorkspaceMember, error) {
+	if err := ctx.Err(); err != nil {
+		return WorkspaceMember{}, err
+	}
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return WorkspaceMember{}, ErrNotFound
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, member := range r.workspaceMembers {
+		if strings.TrimSpace(member.InviteToken) == token {
+			return member, nil
+		}
+	}
+	return WorkspaceMember{}, ErrNotFound
 }
 
 func (r *MemoryRepository) UpdateWorkspaceMember(ctx context.Context, member WorkspaceMember) (WorkspaceMember, error) {
@@ -256,6 +275,9 @@ func (r *MemoryRepository) ListWorkspaceShareLinks(ctx context.Context, query Wo
 		if query.WorkspaceID != "" && link.WorkspaceID != query.WorkspaceID {
 			continue
 		}
+		if query.Token != "" && link.Token != query.Token {
+			continue
+		}
 		if query.Scope != "" && link.Scope != query.Scope {
 			continue
 		}
@@ -291,9 +313,333 @@ func (r *MemoryRepository) UpdateWorkspaceShareLink(ctx context.Context, link Wo
 	return WorkspaceShareLink{}, ErrNotFound
 }
 
+func (r *MemoryRepository) CreateWorkspaceActivityGrant(ctx context.Context, grant WorkspaceActivityGrant) (WorkspaceActivityGrant, error) {
+	if err := ctx.Err(); err != nil {
+		return WorkspaceActivityGrant{}, err
+	}
+	if err := grant.Validate(); err != nil {
+		return WorkspaceActivityGrant{}, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, existing := range r.workspaceActivityGrants {
+		if sameWorkspaceActivityGrant(existing, grant) {
+			return WorkspaceActivityGrant{}, ErrWorkspaceConflict
+		}
+	}
+	r.workspaceActivityGrants = append(r.workspaceActivityGrants, grant)
+	return grant, nil
+}
+
+func (r *MemoryRepository) ListWorkspaceActivityGrants(ctx context.Context, query WorkspaceActivityGrantQuery) ([]WorkspaceActivityGrant, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	limit := workspaceLimit(query.Limit)
+	var out []WorkspaceActivityGrant
+	for _, grant := range r.workspaceActivityGrants {
+		if len(out) >= limit {
+			break
+		}
+		if query.WorkspaceID != "" && grant.WorkspaceID != query.WorkspaceID {
+			continue
+		}
+		if query.ActivityID != "" && grant.ActivityID != query.ActivityID {
+			continue
+		}
+		if query.PrincipalType != "" && grant.PrincipalType != query.PrincipalType {
+			continue
+		}
+		if query.PrincipalID != "" && grant.PrincipalID != query.PrincipalID {
+			continue
+		}
+		out = append(out, grant)
+	}
+	return out, nil
+}
+
+func (r *MemoryRepository) UpdateWorkspaceActivityGrant(ctx context.Context, grant WorkspaceActivityGrant) (WorkspaceActivityGrant, error) {
+	if err := ctx.Err(); err != nil {
+		return WorkspaceActivityGrant{}, err
+	}
+	if err := grant.Validate(); err != nil {
+		return WorkspaceActivityGrant{}, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, existing := range r.workspaceActivityGrants {
+		if existing.ID != grant.ID && sameWorkspaceActivityGrant(existing, grant) {
+			return WorkspaceActivityGrant{}, ErrWorkspaceConflict
+		}
+	}
+	for i := range r.workspaceActivityGrants {
+		if r.workspaceActivityGrants[i].ID == grant.ID {
+			r.workspaceActivityGrants[i] = grant
+			return grant, nil
+		}
+	}
+	return WorkspaceActivityGrant{}, ErrNotFound
+}
+
+func (r *MemoryRepository) DeleteWorkspaceActivityGrant(ctx context.Context, id string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.workspaceActivityGrants {
+		if r.workspaceActivityGrants[i].ID == id {
+			r.workspaceActivityGrants = append(r.workspaceActivityGrants[:i], r.workspaceActivityGrants[i+1:]...)
+			return nil
+		}
+	}
+	return ErrNotFound
+}
+
+func (r *MemoryRepository) CreateWorkspaceFileObject(ctx context.Context, file WorkspaceFileObject) (WorkspaceFileObject, error) {
+	if err := ctx.Err(); err != nil {
+		return WorkspaceFileObject{}, err
+	}
+	if err := file.Validate(); err != nil {
+		return WorkspaceFileObject{}, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.workspaceFileObjects = append(r.workspaceFileObjects, file)
+	return file, nil
+}
+
+func (r *MemoryRepository) ListWorkspaceFileObjects(ctx context.Context, query WorkspaceFileObjectQuery) ([]WorkspaceFileObject, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	limit := query.Limit
+	if limit <= 0 || limit > 1000 {
+		limit = 500
+	}
+	out := make([]WorkspaceFileObject, 0, len(r.workspaceFileObjects))
+	for _, file := range r.workspaceFileObjects {
+		if query.WorkspaceID != "" && file.WorkspaceID != query.WorkspaceID {
+			continue
+		}
+		if query.FolderID != "" && file.FolderID != query.FolderID {
+			continue
+		}
+		if query.ActivityID != "" && file.ActivityID != query.ActivityID {
+			continue
+		}
+		if query.WorkflowVersionID != "" && file.WorkflowVersionID != query.WorkflowVersionID {
+			continue
+		}
+		if query.ExecutionID != "" && file.ExecutionID != query.ExecutionID {
+			continue
+		}
+		if query.Kind != "" && file.Kind != query.Kind {
+			continue
+		}
+		out = append(out, file)
+	}
+	slices.SortFunc(out, func(a, b WorkspaceFileObject) int {
+		return b.CreatedAt.Compare(a.CreatedAt)
+	})
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+func (r *MemoryRepository) DeleteWorkspaceFileObject(ctx context.Context, workspaceID string, fileID string) (WorkspaceFileObject, error) {
+	if err := ctx.Err(); err != nil {
+		return WorkspaceFileObject{}, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for index, file := range r.workspaceFileObjects {
+		if file.ID != fileID || file.WorkspaceID != workspaceID {
+			continue
+		}
+		r.workspaceFileObjects = append(r.workspaceFileObjects[:index], r.workspaceFileObjects[index+1:]...)
+		return file, nil
+	}
+	return WorkspaceFileObject{}, ErrNotFound
+}
+
+func (r *MemoryRepository) ApplyWorkspaceBatch(ctx context.Context, cmd WorkspaceBatchCommand) (WorkspaceBatchResult, error) {
+	if err := ctx.Err(); err != nil {
+		return WorkspaceBatchResult{}, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	result := validateMemoryWorkspaceBatch(r, cmd)
+	if len(result.Items) > 0 {
+		return result, ErrInvalidWorkspace
+	}
+	snapshotFolders := slices.Clone(r.workspaceFolders)
+	snapshotActivities := slices.Clone(r.activities)
+	for _, item := range cmd.Items {
+		if err := applyMemoryWorkspaceBatchItem(r, cmd, item); err != nil {
+			r.workspaceFolders = snapshotFolders
+			r.activities = snapshotActivities
+			return WorkspaceBatchResult{Committed: false, Items: []WorkspaceBatchItemResult{{ID: item.ID, Type: item.Type, Status: "FAILED", Error: err.Error()}}}, err
+		}
+		result.Items = append(result.Items, WorkspaceBatchItemResult{ID: item.ID, Type: item.Type, Status: "OK"})
+	}
+	result.Committed = true
+	result.Count = len(result.Items)
+	return result, nil
+}
+
+func validateMemoryWorkspaceBatch(r *MemoryRepository, cmd WorkspaceBatchCommand) WorkspaceBatchResult {
+	var result WorkspaceBatchResult
+	seen := map[string]struct{}{}
+	fail := func(item WorkspaceBatchItem, message string) {
+		result.Items = append(result.Items, WorkspaceBatchItemResult{ID: item.ID, Type: item.Type, Status: "FAILED", Error: message})
+	}
+	switch cmd.Action {
+	case WorkspaceBatchMove:
+		if strings.TrimSpace(cmd.FolderID) == "" {
+			fail(WorkspaceBatchItem{}, "folderId is required")
+		}
+	case WorkspaceBatchPermission:
+		if !validWorkspaceVisibility(cmd.Visibility) {
+			fail(WorkspaceBatchItem{}, "visibility is invalid")
+		}
+	case WorkspaceBatchArchive, WorkspaceBatchRestore:
+	default:
+		fail(WorkspaceBatchItem{}, "unsupported batch action")
+	}
+	for _, item := range cmd.Items {
+		key := string(item.Type) + ":" + item.ID
+		if item.ID == "" || item.Type == "" {
+			fail(item, "item id and type are required")
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			fail(item, "duplicate item")
+			continue
+		}
+		seen[key] = struct{}{}
+		switch item.Type {
+		case WorkspaceBatchFolder:
+			folder := memoryFolderByID(r.workspaceFolders, item.ID)
+			if folder == nil || folder.WorkspaceID != cmd.WorkspaceID {
+				fail(item, "folder not found")
+				continue
+			}
+			if cmd.Action == WorkspaceBatchMove {
+				if item.ID == cmd.FolderID || memoryFolderDescendant(r.workspaceFolders, cmd.FolderID, item.ID) {
+					fail(item, "cannot move folder into itself or its descendant")
+				}
+			}
+		case WorkspaceBatchWorkflow:
+			activity := memoryActivityByID(r.activities, item.ID)
+			if activity == nil || activity.WorkspaceID != cmd.WorkspaceID {
+				fail(item, "workflow not found")
+			}
+		default:
+			fail(item, "item type is invalid")
+		}
+	}
+	return result
+}
+
+func applyMemoryWorkspaceBatchItem(r *MemoryRepository, cmd WorkspaceBatchCommand, item WorkspaceBatchItem) error {
+	now := time.Now().UTC()
+	if item.Type == WorkspaceBatchFolder {
+		for index := range r.workspaceFolders {
+			if r.workspaceFolders[index].ID != item.ID {
+				continue
+			}
+			switch cmd.Action {
+			case WorkspaceBatchMove:
+				r.workspaceFolders[index].ParentID = cmd.FolderID
+			case WorkspaceBatchPermission:
+				r.workspaceFolders[index].Visibility = WorkspaceFolderVisibility(cmd.Visibility)
+			case WorkspaceBatchArchive:
+				r.workspaceFolders[index].Status = WorkspaceFolderDeleted
+			case WorkspaceBatchRestore:
+				r.workspaceFolders[index].Status = WorkspaceFolderActive
+			}
+			r.workspaceFolders[index].UpdatedBy = cmd.ActorID
+			r.workspaceFolders[index].UpdatedAt = now
+			return nil
+		}
+		return ErrNotFound
+	}
+	for index := range r.activities {
+		if r.activities[index].ID != item.ID {
+			continue
+		}
+		switch cmd.Action {
+		case WorkspaceBatchMove:
+			r.activities[index].FolderID = cmd.FolderID
+		case WorkspaceBatchPermission:
+			r.activities[index].Visibility = cmd.Visibility
+		case WorkspaceBatchArchive:
+			r.activities[index].Status = ActivityArchived
+		case WorkspaceBatchRestore:
+			r.activities[index].Status = ActivityActive
+		}
+		r.activities[index].UpdatedAt = now
+		return nil
+	}
+	return ErrNotFound
+}
+
+func memoryFolderByID(folders []WorkspaceFolder, id string) *WorkspaceFolder {
+	for index := range folders {
+		if folders[index].ID == id {
+			return &folders[index]
+		}
+	}
+	return nil
+}
+
+func memoryActivityByID(activities []Activity, id string) *Activity {
+	for index := range activities {
+		if activities[index].ID == id {
+			return &activities[index]
+		}
+	}
+	return nil
+}
+
+func memoryFolderDescendant(folders []WorkspaceFolder, folderID string, ancestorID string) bool {
+	cursor := strings.TrimSpace(folderID)
+	for cursor != "" {
+		if cursor == ancestorID {
+			return true
+		}
+		next := ""
+		for _, folder := range folders {
+			if folder.ID == cursor {
+				next = folder.ParentID
+				break
+			}
+		}
+		cursor = next
+	}
+	return false
+}
+
 func (r *MemoryRepository) CreateWorkspaceAuditLog(ctx context.Context, log WorkspaceAuditLog) error {
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	source := AuditSourceFromContext(ctx)
+	if log.IP == "" {
+		if ip, ok := source["ip"].(string); ok {
+			log.IP = ip
+		}
+	}
+	if log.UserAgent == "" {
+		if ua, ok := source["userAgent"].(string); ok {
+			log.UserAgent = ua
+		}
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -361,6 +707,13 @@ func sameWorkspaceMember(a WorkspaceMember, b WorkspaceMember) bool {
 		return true
 	}
 	return strings.TrimSpace(a.Email) != "" && strings.EqualFold(strings.TrimSpace(a.Email), strings.TrimSpace(b.Email))
+}
+
+func sameWorkspaceActivityGrant(a WorkspaceActivityGrant, b WorkspaceActivityGrant) bool {
+	return a.WorkspaceID == b.WorkspaceID &&
+		a.ActivityID == b.ActivityID &&
+		a.PrincipalType == b.PrincipalType &&
+		strings.TrimSpace(a.PrincipalID) == strings.TrimSpace(b.PrincipalID)
 }
 
 func workspaceLimit(limit int) int {

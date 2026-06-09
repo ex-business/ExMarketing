@@ -73,6 +73,9 @@ func (r *Repository) Close() error {
 }
 
 func (r *Repository) CreateActivity(ctx context.Context, activity marketing.Activity) (marketing.Activity, error) {
+	if activity.Visibility == "" {
+		activity.Visibility = marketing.WorkspaceTeam
+	}
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return marketing.Activity{}, mapPostgresActivityError(err)
@@ -86,15 +89,15 @@ func (r *Repository) CreateActivity(ctx context.Context, activity marketing.Acti
 
 	_, err = tx.ExecContext(ctx, `
 			INSERT INTO marketing_activity (
-				id, tenant_id, workspace_id, folder_id, activity_code, activity_name, activity_type, status,
+				id, tenant_id, workspace_id, folder_id, activity_code, activity_name, activity_type, status, visibility,
 				trigger_events, start_time, end_time, timezone, priority, exclusive_group,
 				stackable, plugin_code, version, config_json, created_at, updated_at
 			) VALUES (
-				$1, $2, NULLIF($3, ''), NULLIF($4, ''), $5, $6, $7, $8,
-				$9, $10, $11, $12, $13, $14,
-				$15, $16, $17, $18, $19, $20
+				$1, $2, NULLIF($3, ''), NULLIF($4, ''), $5, $6, $7, $8, $9,
+				$10, $11, $12, $13, $14, $15,
+				$16, $17, $18, $19, $20, $21
 			)
-		`, activity.ID, activity.TenantID, activity.WorkspaceID, activity.FolderID, activity.Code, activity.Name, activity.Type, activity.Status,
+		`, activity.ID, activity.TenantID, activity.WorkspaceID, activity.FolderID, activity.Code, activity.Name, activity.Type, activity.Status, activity.Visibility,
 		triggerEvents, activity.StartTime, activity.EndTime, activity.Timezone, activity.Priority, activity.ExclusiveGroup,
 		activity.Stackable, activity.PluginCode, activity.Version, nullJSON(activity.Config), activity.CreatedAt, activity.UpdatedAt)
 	if err != nil {
@@ -151,7 +154,7 @@ func (r *Repository) GetActivity(ctx context.Context, id string) (marketing.Acti
 
 func (r *Repository) ListActivities(ctx context.Context) ([]marketing.Activity, error) {
 	rows, err := r.db.QueryContext(ctx, `
-			SELECT id, tenant_id, COALESCE(workspace_id, ''), COALESCE(folder_id, ''), activity_code, activity_name, activity_type, status,
+			SELECT id, tenant_id, COALESCE(workspace_id, ''), COALESCE(folder_id, ''), activity_code, activity_name, activity_type, status, COALESCE(visibility, 'TEAM'),
 			       trigger_events, start_time, end_time, timezone, priority, exclusive_group,
 			       stackable, plugin_code, version, config_json, created_at, updated_at
 		FROM marketing_activity
@@ -190,26 +193,30 @@ func (r *Repository) ListActivities(ctx context.Context) ([]marketing.Activity, 
 }
 
 func (r *Repository) UpdateActivity(ctx context.Context, activity marketing.Activity) (marketing.Activity, error) {
+	if activity.Visibility == "" {
+		activity.Visibility = marketing.WorkspaceTeam
+	}
 	row := r.db.QueryRowContext(ctx, `
 		UPDATE marketing_activity
 		SET activity_name = $2,
 		    status = $3,
-		    start_time = $4,
-		    end_time = $5,
-		    timezone = $6,
-		    priority = $7,
-		    exclusive_group = $8,
-		    stackable = $9,
-		    version = $10,
-		    config_json = $11,
-		    workspace_id = NULLIF($12, ''),
-		    folder_id = NULLIF($13, ''),
-		    updated_at = $14
+		    visibility = $4,
+		    start_time = $5,
+		    end_time = $6,
+		    timezone = $7,
+		    priority = $8,
+		    exclusive_group = $9,
+		    stackable = $10,
+		    version = $11,
+		    config_json = $12,
+		    workspace_id = NULLIF($13, ''),
+		    folder_id = NULLIF($14, ''),
+		    updated_at = $15
 		WHERE id = $1
-		RETURNING id, tenant_id, COALESCE(workspace_id, ''), COALESCE(folder_id, ''), activity_code, activity_name, activity_type, status,
+		RETURNING id, tenant_id, COALESCE(workspace_id, ''), COALESCE(folder_id, ''), activity_code, activity_name, activity_type, status, COALESCE(visibility, 'TEAM'),
 		          trigger_events, start_time, end_time, timezone, priority, exclusive_group,
 		          stackable, plugin_code, version, config_json, created_at, updated_at
-	`, activity.ID, activity.Name, activity.Status, activity.StartTime, activity.EndTime, activity.Timezone,
+	`, activity.ID, activity.Name, activity.Status, activity.Visibility, activity.StartTime, activity.EndTime, activity.Timezone,
 		activity.Priority, activity.ExclusiveGroup, activity.Stackable, activity.Version, nullJSON(activity.Config), activity.WorkspaceID, activity.FolderID, activity.UpdatedAt)
 	updated, err := scanActivity(row)
 	if err != nil {
@@ -225,7 +232,7 @@ func (r *Repository) UpdateActivity(ctx context.Context, activity marketing.Acti
 
 func (r *Repository) FindMatchingActivities(ctx context.Context, tenantID string, eventType string) ([]marketing.Activity, error) {
 	rows, err := r.db.QueryContext(ctx, `
-			SELECT id, tenant_id, COALESCE(workspace_id, ''), COALESCE(folder_id, ''), activity_code, activity_name, activity_type, status,
+			SELECT id, tenant_id, COALESCE(workspace_id, ''), COALESCE(folder_id, ''), activity_code, activity_name, activity_type, status, COALESCE(visibility, 'TEAM'),
 			       trigger_events, start_time, end_time, timezone, priority, exclusive_group,
 		       stackable, plugin_code, version, config_json, created_at, updated_at
 		FROM marketing_activity
@@ -307,12 +314,13 @@ func (r *Repository) CreateWorkflowDraftTemplate(ctx context.Context, template m
 	}
 	_, err := r.db.ExecContext(ctx, `
 		INSERT INTO marketing_workflow_draft_template (
-			version_id, template_id, version, name, description, category, source,
+			version_id, template_id, version, name, description, category,
+			workspace_id, folder_id, visibility, tags_json, source,
 			status, definition_json, created_by, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 	`, template.VersionID, template.ID, template.Version, template.Name, nullString(template.Description),
-		nullString(template.Category), template.Source, template.Status, template.Definition,
-		nullString(template.CreatedBy), template.CreatedAt, template.UpdatedAt)
+		nullString(template.Category), template.WorkspaceID, template.FolderID, template.Visibility, jsonString(template.Tags),
+		template.Source, template.Status, template.Definition, nullString(template.CreatedBy), template.CreatedAt, template.UpdatedAt)
 	if err != nil {
 		return marketing.WorkflowDraftTemplate{}, err
 	}
@@ -330,15 +338,19 @@ func (r *Repository) ListWorkflowDraftTemplates(ctx context.Context, query marke
 	}
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT version_id, template_id, version, name, COALESCE(description, ''), COALESCE(category, ''),
+		       COALESCE(workspace_id, ''), COALESCE(folder_id, ''), COALESCE(visibility, ''), COALESCE(tags_json, '[]'::jsonb),
 		       source, status, definition_json, COALESCE(created_by, ''), created_at, updated_at
 		FROM marketing_workflow_draft_template t
 		WHERE ($1 = '' OR template_id = $1)
 		  AND ($2 = '' OR source = $2)
 		  AND ($3 = '' OR status = $3)
+		  AND ($4 = '' OR COALESCE(workspace_id, '') = $4)
+		  AND ($5 = '' OR COALESCE(folder_id, '') = $5)
+		  AND ($6 = '' OR COALESCE(visibility, '') = $6)
 		  `+latestClause+`
 		ORDER BY template_id ASC, version DESC
-		LIMIT $4
-	`, query.TemplateID, query.Source, query.Status, limit)
+		LIMIT $7
+	`, query.TemplateID, query.Source, query.Status, query.WorkspaceID, query.FolderID, query.Visibility, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -357,6 +369,7 @@ func (r *Repository) ListWorkflowDraftTemplates(ctx context.Context, query marke
 func (r *Repository) GetWorkflowDraftTemplate(ctx context.Context, templateID string, versionID string, version int) (marketing.WorkflowDraftTemplate, error) {
 	row := r.db.QueryRowContext(ctx, `
 		SELECT version_id, template_id, version, name, COALESCE(description, ''), COALESCE(category, ''),
+		       COALESCE(workspace_id, ''), COALESCE(folder_id, ''), COALESCE(visibility, ''), COALESCE(tags_json, '[]'::jsonb),
 		       source, status, definition_json, COALESCE(created_by, ''), created_at, updated_at
 		FROM marketing_workflow_draft_template
 		WHERE template_id = $1
@@ -366,6 +379,24 @@ func (r *Repository) GetWorkflowDraftTemplate(ctx context.Context, templateID st
 		LIMIT 1
 	`, templateID, versionID, version)
 	return scanWorkflowDraftTemplate(row)
+}
+
+func (r *Repository) UpdateWorkflowDraftTemplate(ctx context.Context, template marketing.WorkflowDraftTemplate) (marketing.WorkflowDraftTemplate, error) {
+	updated, err := scanWorkflowDraftTemplate(r.db.QueryRowContext(ctx, `
+		UPDATE marketing_workflow_draft_template
+		SET name = $2, description = NULLIF($3, ''), category = NULLIF($4, ''),
+		    workspace_id = $5, folder_id = $6, visibility = $7,
+		    tags_json = $8, status = $9, updated_at = $10
+		WHERE version_id = $1
+		RETURNING version_id, template_id, version, name, COALESCE(description, ''), COALESCE(category, ''),
+		          COALESCE(workspace_id, ''), COALESCE(folder_id, ''), COALESCE(visibility, ''), COALESCE(tags_json, '[]'::jsonb),
+		          source, status, definition_json, COALESCE(created_by, ''), created_at, updated_at
+	`, template.VersionID, template.Name, template.Description, template.Category, template.WorkspaceID, template.FolderID,
+		template.Visibility, jsonString(template.Tags), template.Status, template.UpdatedAt))
+	if err != nil {
+		return marketing.WorkflowDraftTemplate{}, mapPostgresActivityError(err)
+	}
+	return updated, nil
 }
 
 func (r *Repository) CreateWorkflowVersion(ctx context.Context, version marketing.WorkflowVersion) (marketing.WorkflowVersion, error) {
@@ -2181,7 +2212,7 @@ func (r *Repository) rewardsForActivity(ctx context.Context, activityID string) 
 
 func (r *Repository) activityByID(ctx context.Context, db activityQuerier, id string) (marketing.Activity, error) {
 	row := db.QueryRowContext(ctx, `
-		SELECT id, tenant_id, COALESCE(workspace_id, ''), COALESCE(folder_id, ''), activity_code, activity_name, activity_type, status,
+		SELECT id, tenant_id, COALESCE(workspace_id, ''), COALESCE(folder_id, ''), activity_code, activity_name, activity_type, status, COALESCE(visibility, 'TEAM'),
 		       trigger_events, start_time, end_time, timezone, priority, exclusive_group,
 		       stackable, plugin_code, version, config_json, created_at, updated_at
 		FROM marketing_activity
@@ -2234,7 +2265,7 @@ func scanActivity(scanner activityScanner) (marketing.Activity, error) {
 	var triggerEvents []byte
 	var config sql.NullString
 	err := scanner.Scan(
-		&activity.ID, &activity.TenantID, &activity.WorkspaceID, &activity.FolderID, &activity.Code, &activity.Name, &activity.Type, &activity.Status,
+		&activity.ID, &activity.TenantID, &activity.WorkspaceID, &activity.FolderID, &activity.Code, &activity.Name, &activity.Type, &activity.Status, &activity.Visibility,
 		&triggerEvents, &activity.StartTime, &activity.EndTime, &activity.Timezone, &activity.Priority, &activity.ExclusiveGroup,
 		&activity.Stackable, &activity.PluginCode, &activity.Version, &config, &activity.CreatedAt, &activity.UpdatedAt,
 	)
@@ -2246,6 +2277,9 @@ func scanActivity(scanner activityScanner) (marketing.Activity, error) {
 	}
 	if config.Valid {
 		activity.Config = json.RawMessage(config.String)
+	}
+	if activity.Visibility == "" {
+		activity.Visibility = marketing.WorkspaceTeam
 	}
 	return activity, nil
 }
@@ -2293,8 +2327,10 @@ func scanWorkflowVersion(scanner outboxScanner) (marketing.WorkflowVersion, erro
 
 func scanWorkflowDraftTemplate(scanner outboxScanner) (marketing.WorkflowDraftTemplate, error) {
 	var template marketing.WorkflowDraftTemplate
+	var tagsRaw []byte
 	err := scanner.Scan(&template.VersionID, &template.ID, &template.Version, &template.Name,
-		&template.Description, &template.Category, &template.Source, &template.Status,
+		&template.Description, &template.Category, &template.WorkspaceID, &template.FolderID,
+		&template.Visibility, &tagsRaw, &template.Source, &template.Status,
 		&template.Definition, &template.CreatedBy, &template.CreatedAt, &template.UpdatedAt)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -2302,6 +2338,7 @@ func scanWorkflowDraftTemplate(scanner outboxScanner) (marketing.WorkflowDraftTe
 		}
 		return marketing.WorkflowDraftTemplate{}, err
 	}
+	_ = json.Unmarshal(tagsRaw, &template.Tags)
 	return template, nil
 }
 
@@ -2377,9 +2414,12 @@ func ensureActivityUniqueConstraint(ctx context.Context, db *sql.DB) error {
 
 func ensureActivityWorkspaceColumns(ctx context.Context, db *sql.DB) error {
 	_, err := db.ExecContext(ctx, `
+		CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
 		ALTER TABLE marketing_activity
 			ADD COLUMN IF NOT EXISTS workspace_id VARCHAR(64),
-			ADD COLUMN IF NOT EXISTS folder_id VARCHAR(64);
+			ADD COLUMN IF NOT EXISTS folder_id VARCHAR(64),
+			ADD COLUMN IF NOT EXISTS visibility VARCHAR(32) NOT NULL DEFAULT 'TEAM';
 
 		DO $$
 		BEGIN
@@ -2416,6 +2456,11 @@ func ensureActivityWorkspaceColumns(ctx context.Context, db *sql.DB) error {
 			END IF;
 		END
 		$$;
+
+		CREATE INDEX IF NOT EXISTS marketing_activity_search_trgm_idx
+			ON marketing_activity USING gin (lower(activity_name || ' ' || activity_code || ' ' || tenant_id || ' ' || status || ' ' || COALESCE(visibility, 'TEAM')) gin_trgm_ops);
+		CREATE INDEX IF NOT EXISTS marketing_activity_workspace_visibility_idx
+			ON marketing_activity(workspace_id, folder_id, status, visibility, updated_at DESC);
 	`)
 	return err
 }
@@ -2441,6 +2486,10 @@ func ensureWorkflowDraftTemplateTables(ctx context.Context, db *sql.DB) error {
 			name VARCHAR(255) NOT NULL,
 			description TEXT,
 			category VARCHAR(128),
+			workspace_id VARCHAR(64) NOT NULL DEFAULT '',
+			folder_id VARCHAR(64) NOT NULL DEFAULT '',
+			visibility VARCHAR(32) NOT NULL DEFAULT '',
+			tags_json JSONB NOT NULL DEFAULT '[]'::jsonb,
 			source VARCHAR(32) NOT NULL,
 			status VARCHAR(32) NOT NULL,
 			definition_json JSONB NOT NULL,
@@ -2451,6 +2500,13 @@ func ensureWorkflowDraftTemplateTables(ctx context.Context, db *sql.DB) error {
 		);
 		CREATE INDEX IF NOT EXISTS marketing_workflow_draft_template_catalog_idx
 			ON marketing_workflow_draft_template(template_id, status, version DESC);
+		ALTER TABLE marketing_workflow_draft_template
+			ADD COLUMN IF NOT EXISTS workspace_id VARCHAR(64) NOT NULL DEFAULT '',
+			ADD COLUMN IF NOT EXISTS folder_id VARCHAR(64) NOT NULL DEFAULT '',
+			ADD COLUMN IF NOT EXISTS visibility VARCHAR(32) NOT NULL DEFAULT '',
+			ADD COLUMN IF NOT EXISTS tags_json JSONB NOT NULL DEFAULT '[]'::jsonb;
+		CREATE INDEX IF NOT EXISTS marketing_workflow_draft_template_scope_idx
+			ON marketing_workflow_draft_template(workspace_id, folder_id, visibility);
 	`)
 	return err
 }
@@ -2523,6 +2579,14 @@ func nullString(value string) any {
 		return nil
 	}
 	return value
+}
+
+func jsonString(value any) string {
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return "null"
+	}
+	return string(raw)
 }
 
 func emptyDecimal(value string) string {

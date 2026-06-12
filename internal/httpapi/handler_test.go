@@ -1132,7 +1132,11 @@ func TestActivityWorkflowHTTPAPI(t *testing.T) {
 
 		listPresets := httptest.NewRecorder()
 		handler.Routes().ServeHTTP(listPresets, httptest.NewRequest(http.MethodGet, "/admin/v1/workflow/node-presets", nil))
-		if listPresets.Code != http.StatusOK || !strings.Contains(listPresets.Body.String(), "reward-fixed-usd") {
+		if listPresets.Code != http.StatusOK ||
+			!strings.Contains(listPresets.Body.String(), "reward-fixed-usd") ||
+			!strings.Contains(listPresets.Body.String(), "event-in-checkin-success") ||
+			!strings.Contains(listPresets.Body.String(), "limit-daily-checkin-once") ||
+			!strings.Contains(listPresets.Body.String(), "quota-daily-checkin-budget") {
 			t.Fatalf("expected node presets, got %d: %s", listPresets.Code, listPresets.Body.String())
 		}
 

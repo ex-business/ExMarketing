@@ -1,6 +1,9 @@
 package marketing
 
-import "testing"
+import (
+	"slices"
+	"testing"
+)
 
 func TestDefaultWorkflowNodeConfigSchemasCoverSupportedNodeTypes(t *testing.T) {
 	registry := DefaultWorkflowNodeConfigSchemas()
@@ -148,6 +151,10 @@ func TestDefaultWorkflowNodeConfigSchemasClassifyCoreAdvancedAndOpsNodes(t *test
 	registry := DefaultWorkflowNodeConfigSchemas()
 	cases := map[string]string{
 		"event-in":  "CORE",
+		"condition": "ADVANCED",
+		"switch":    "ADVANCED",
+		"code":      "ADVANCED",
+		"decimal":   "ADVANCED",
 		"quota":     "CORE",
 		"outbox":    "CORE",
 		"http-call": "ADVANCED",
@@ -204,8 +211,58 @@ func TestDefaultWorkflowNodeConfigSchemasIncludeCodeNodeRequiredSource(t *testin
 	if fields["language"].Type != WorkflowNodeConfigEnum || !fields["language"].Required {
 		t.Fatalf("expected required language enum field, got %+v", fields["language"])
 	}
+	if slices.Contains(fields["language"].Options, "JAVASCRIPT") || slices.Contains(fields["language"].Options, "PYTHON") {
+		t.Fatalf("code schema must only expose implemented languages, got %+v", fields["language"].Options)
+	}
 	if fields["source"].Type != WorkflowNodeConfigString || !fields["source"].Required {
 		t.Fatalf("expected required source string field, got %+v", fields["source"])
+	}
+}
+
+func TestDefaultWorkflowNodeConfigSchemasExposeOnlyImplementedHandlerOptions(t *testing.T) {
+	registry := DefaultWorkflowNodeConfigSchemas()
+	conditionSchema, ok := registry.Get("condition")
+	if !ok {
+		t.Fatalf("expected condition schema")
+	}
+	conditionFields := workflowSchemaFieldsByKey(conditionSchema)
+	if got := conditionFields["expressionLanguage"].Options; slices.Contains(got, "CEL") {
+		t.Fatalf("condition schema must not expose unsupported CEL, got %+v", got)
+	}
+	if !slices.Contains(conditionFields["expressionLanguage"].Options, "RULE_EXPR") || !slices.Contains(conditionFields["expressionLanguage"].Options, "JSON_LOGIC") {
+		t.Fatalf("condition schema must expose implemented expression languages, got %+v", conditionFields["expressionLanguage"].Options)
+	}
+
+	decimalSchema, ok := registry.Get("decimal")
+	if !ok {
+		t.Fatalf("expected decimal schema")
+	}
+	decimalFields := workflowSchemaFieldsByKey(decimalSchema)
+	if _, ok := decimalFields["scale"]; ok {
+		t.Fatalf("decimal schema must not expose unused scale config")
+	}
+	if _, ok := decimalFields["roundingMode"]; ok {
+		t.Fatalf("decimal schema must not expose unused roundingMode config")
+	}
+	if decimalFields["amountExpr"].Type != WorkflowNodeConfigString {
+		t.Fatalf("decimal schema must expose handler-supported amountExpr, got %+v", decimalFields["amountExpr"])
+	}
+}
+
+func TestAdvancedAndOpsSchemasExposeExecutionSemantics(t *testing.T) {
+	registry := DefaultWorkflowNodeConfigSchemas()
+	for _, nodeType := range []string{"http-call", "mq-publish", "webhook", "callback", "retry", "dlq", "reconcile", "alert"} {
+		schema, ok := registry.Get(nodeType)
+		if !ok {
+			t.Fatalf("expected schema for %s", nodeType)
+		}
+		fields := workflowSchemaFieldsByKey(schema)
+		if fields["executionMode"].Type != WorkflowNodeConfigString || fields["executionMode"].Default == "" {
+			t.Fatalf("expected executionMode for %s, got %+v", nodeType, fields["executionMode"])
+		}
+		if fields["executionAuthority"].Type != WorkflowNodeConfigString || fields["executionAuthority"].Default == "" {
+			t.Fatalf("expected executionAuthority for %s, got %+v", nodeType, fields["executionAuthority"])
+		}
 	}
 }
 
@@ -244,4 +301,12 @@ func TestProductizedCoreNodeConfigSchemasIncludeGroupsAndPreview(t *testing.T) {
 			t.Fatalf("expected flat fields to mirror groups for %s, grouped=%d flat=%d", nodeType, groupedFieldCount, len(schema.Fields))
 		}
 	}
+}
+
+func workflowSchemaFieldsByKey(schema WorkflowNodeConfigSchema) map[string]WorkflowNodeConfigField {
+	fields := map[string]WorkflowNodeConfigField{}
+	for _, field := range schema.Fields {
+		fields[field.Key] = field
+	}
+	return fields
 }

@@ -143,7 +143,7 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 		groupedSchema("condition", "条件判断", "根据表达式输出 IF / ELSE 分支。", groups(
 			fieldGroup("expression", "条件表达式", "定义判断逻辑和输入字段缺失时的处理方式。", fields(
 				withDescription(stringField("expression", "表达式", true, "$.fact.amount >= 100", rules(minLength(1), maxLength(2000))), "支持读取 fact、event_context 或上游输出的条件表达式。"),
-				enumField("expressionLanguage", "表达式语言", true, "RULE_EXPR", []string{"RULE_EXPR", "JSON_LOGIC", "CEL"}),
+				enumField("expressionLanguage", "表达式语言", true, "RULE_EXPR", []string{"RULE_EXPR", "JSON_LOGIC"}),
 				enumField("missingFieldPolicy", "缺失字段策略", true, "FALSE", []string{"FALSE", "ERROR", "SKIP"}),
 			)),
 			fieldGroup("routing", "分支输出", "控制条件成立、不成立和异常时的 route 语义。", fields(
@@ -206,7 +206,7 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 		)),
 		groupedSchema("code", "代码执行", "用受控代码片段处理上下文并输出 code_result。", groups(
 			fieldGroup("runtime", "运行时", "定义代码语言、执行超时和输出限制。", fields(
-				enumField("language", "语言", true, "LUA", []string{"LUA", "EXPRESSION", "JAVASCRIPT", "PYTHON"}),
+				enumField("language", "语言", true, "LUA", []string{"LUA", "EXPRESSION"}),
 				numberField("timeoutSeconds", "超时秒数", true, 5, rules(minValue(1), maxValue(60))),
 				numberField("maxOutputBytes", "最大输出字节数", true, 65536, rules(minValue(1024), maxValue(1048576))),
 			)),
@@ -218,7 +218,7 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 		), preview(
 			[]string{"context", "input", "上游变量引用"},
 			[]string{"code_result"},
-			[]string{"生产建议优先使用 LUA / EXPRESSION；外部网络访问默认关闭。"},
+			[]string{"仅暴露当前 Executor 真实支持的 LUA / EXPRESSION；外部网络访问默认关闭。"},
 		)),
 		groupedSchema("reward", "奖励计算", "根据资格结果生成 reward_items。", groups(
 			fieldGroup("reward-definition", "奖励定义", "定义奖励编码、类型和金额计算方式。", fields(
@@ -240,9 +240,9 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 			[]string{"reward_items"},
 			[]string{"reward_items 会包含 rewardCode、rewardType、amount、currency 和 grant metadata。"},
 		)),
-		schema("decimal", "精度处理", "金额和比例精度处理", fields(
-			numberField("scale", "小数位", false, 2, rules(minValue(0), maxValue(18))),
-			enumField("roundingMode", "舍入模式", false, "HALF_UP", []string{"HALF_UP", "DOWN", "UP"}),
+		schema("decimal", "精度处理", "按当前 Decimal 契约把金额解析为固定 4 位小数字符串。", fields(
+			withDescription(stringField("amountExpr", "金额表达式", false, "", rules(maxLength(160))), "当没有映射 amount_expr 或上游金额输出时使用的金额表达式。当前 handler 输出固定 4 位小数字符串。"),
+			withDescription(stringField("amount", "固定金额", false, "", rules(maxLength(64), pattern(`^-?\d+(\.\d+)?$`, "固定金额必须是十进制数字。"))), "amountExpr 为空时的固定金额兜底。"),
 		)),
 		groupedSchema("limit", "次数限制", "限制用户、活动、租户或业务维度的参与次数。", groups(
 			fieldGroup("counter", "计数维度", "定义计数 bucket 和周期。", fields(
@@ -294,15 +294,21 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 			enumField("method", "方法", false, "POST", []string{"GET", "POST", "PUT", "PATCH"}),
 			numberField("timeoutSeconds", "超时秒数", false, 5, rules(minValue(1), maxValue(60))),
 			objectField("headers", "请求头", false, nil),
+			executionModeField("EXPLAIN_ONLY"),
+			executionAuthorityField("OutboxWorker"),
 		)),
 		schema("mq-publish", "MQ 发奖", "发布消息到队列", fields(
 			withDescription(stringField("topic", "Topic", true, "", rules(minLength(1), maxLength(256))), "消息队列 topic 或 routing key。"),
 			stringField("keyTemplate", "消息 Key 模板", false, "${eventId}", rules(maxLength(256))),
 			objectField("headers", "消息头", false, nil),
+			executionModeField("EXPLAIN_ONLY"),
+			executionAuthorityField("OutboxWorker"),
 		)),
 		schema("webhook", "Webhook 通知", "推送业务通知", fields(
 			withDescription(stringField("receiverCode", "接收方编码", true, "", rules(pattern(`^[a-zA-Z0-9._-]+$`, "接收方编码只能包含字母、数字、点、下划线和短横线。"), maxLength(128))), "后端 Webhook receiver 配置中的业务编码。"),
 			numberField("timeoutSeconds", "超时秒数", false, 5, rules(minValue(1), maxValue(60))),
+			executionModeField("EXPLAIN_ONLY"),
+			executionAuthorityField("WebhookWorker"),
 		)),
 		groupedSchema("callback", "结果回调", "处理发奖渠道、外部系统或活动平台的回调结果。", groups(
 			fieldGroup("provider", "回调来源", "定义允许哪个渠道回调以及如何识别回调事件。", fields(
@@ -315,6 +321,10 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 				numberField("maxSkewSeconds", "最大时间偏移秒数", false, 300, rules(minValue(0), maxValue(86400))),
 				enumField("duplicatePolicy", "重复回调策略", true, "RETURN_EXISTING", []string{"RETURN_EXISTING", "REJECT", "OVERWRITE"}),
 			)),
+			fieldGroup("execution", "执行语义", "回调节点解释回调结果，最终事实来自外部回调入口或对账任务。", fields(
+				executionModeField("EXTERNAL_ENDPOINT"),
+				executionAuthorityField("RewardCallback/Reconciliation"),
+			)),
 		), preview(
 			[]string{"provider_callback", "signature headers"},
 			[]string{"callback_result"},
@@ -323,9 +333,13 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 		schema("retry", "失败重试", "失败消息重试", fields(
 			numberField("maxAttempts", "最大次数", false, 3, rules(minValue(1), maxValue(10))),
 			numberField("backoffSeconds", "退避秒数", false, 30, rules(minValue(1), maxValue(3600))),
+			executionModeField("EXPLAIN_ONLY"),
+			executionAuthorityField("RetryWorker/AdminAPI"),
 		)),
 		schema("dlq", "死信队列", "写入死信队列", fields(
 			stringField("reasonTemplate", "原因模板", false, "${lastError}"),
+			executionModeField("EXPLAIN_ONLY"),
+			executionAuthorityField("DLQWorker/AdminAPI"),
 		)),
 		groupedSchema("audit", "审计记录", "写入 workflow 关键节点的审计证据。", groups(
 			fieldGroup("event", "审计事件", "定义审计动作、对象和严重级别。", fields(
@@ -346,10 +360,14 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 		schema("reconcile", "对账校验", "一致性扫描和修复建议", fields(
 			arrayField("targets", "对账对象", false, "grant、quota、callback、outbox。", rules(maxItems(10))),
 			booleanField("autoRepair", "自动修复", false, false),
+			executionModeField("EXPLAIN_ONLY"),
+			executionAuthorityField("ReconciliationJob"),
 		)),
 		schema("alert", "告警通知", "发送告警事件", fields(
 			enumField("level", "级别", false, "WARN", []string{"INFO", "WARN", "ERROR", "CRITICAL"}),
 			stringField("channel", "通知渠道", false, "default"),
+			executionModeField("EXPLAIN_ONLY"),
+			executionAuthorityField("Metrics/AlertingService"),
 		)),
 	}
 	registry := WorkflowNodeConfigSchemaRegistry{schemas: map[string]WorkflowNodeConfigSchema{}}
@@ -362,7 +380,7 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 
 func defaultWorkflowNodeCategory(nodeType string) string {
 	switch strings.TrimSpace(nodeType) {
-	case "http-call", "mq-publish", "webhook", "callback":
+	case "condition", "switch", "code", "decimal", "http-call", "mq-publish", "webhook", "callback":
 		return "ADVANCED"
 	case "retry", "dlq", "audit", "reconcile", "alert":
 		return "OPS"
@@ -620,6 +638,14 @@ func objectField(key string, label string, required bool, defaultValue any) Work
 
 func enumField(key string, label string, required bool, defaultValue string, options []string) WorkflowNodeConfigField {
 	return WorkflowNodeConfigField{Key: key, Label: label, Type: WorkflowNodeConfigEnum, Required: required, Default: defaultValue, Options: options, Description: "选择" + label + "。"}
+}
+
+func executionModeField(defaultValue string) WorkflowNodeConfigField {
+	return withDescription(stringField("executionMode", "执行语义", false, defaultValue, rules(maxLength(64), pattern("^"+defaultValue+"$", "执行语义由节点契约固定，不能在画布配置中改写。"))), "说明该节点由 Executor 真实执行、解释执行，还是由外部入口/后台任务负责最终事实。")
+}
+
+func executionAuthorityField(defaultValue string) WorkflowNodeConfigField {
+	return withDescription(stringField("executionAuthority", "执行权威", false, defaultValue, rules(maxLength(128))), "说明该节点最终副作用或事实状态归属的系统组件。")
 }
 
 func withDescription(field WorkflowNodeConfigField, description string) WorkflowNodeConfigField {

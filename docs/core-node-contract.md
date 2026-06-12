@@ -15,15 +15,16 @@ event-in -> inbox -> normalize -> match -> fact-query -> qualify -> reward -> li
 `audit` is a mandatory sidecar/terminal node for blocked, risk, skipped, and
 successful terminal paths. It is not counted as a business main-chain node.
 
-`condition`, `switch`, `callback`, `retry`, `dlq`, `reconcile`, `alert`,
+`condition`, `switch`, `code`, `callback`, `retry`, `dlq`, `reconcile`, `alert`,
 `http-call`, `mq-publish`, `webhook`, and `decimal` remain advanced or
 operational nodes. They must not be required by the default production chain.
 
 Node schema categories are:
 
 - `CORE`: default production-chain nodes.
-- `ADVANCED`: external dispatch/callback integration nodes such as `http-call`,
-  `mq-publish`, `webhook`, and `callback`.
+- `ADVANCED`: controlled branch/extension and external integration nodes such
+  as `condition`, `switch`, `code`, `decimal`, `http-call`, `mq-publish`,
+  `webhook`, and `callback`.
 - `OPS`: operational observability/recovery nodes such as `retry`, `dlq`,
   `audit`, `reconcile`, and `alert`.
 
@@ -67,6 +68,13 @@ outside the default quick-start path.
   workflow node synchronously delivered HTTP/MQ/Webhook, consumed callback, ran
   reconciliation, or fired alerts when that authority belongs to outbox workers,
   callback endpoints, reconciliation jobs, metrics, or Admin APIs.
+- Node config schema must only expose handler-supported semantics. `condition`
+  supports `RULE_EXPR` and `JSON_LOGIC`; `CEL` must not be offered until a real
+  CEL evaluator exists. `code` supports `LUA` and `EXPRESSION`; JavaScript and
+  Python must fail fast until real runtimes are wired. `decimal` currently
+  parses `amount_expr` / `amountExpr` / `amount` and emits the fixed 4-decimal
+  Decimal output; `scale` and `roundingMode` must not be advertised until the
+  handler implements them.
 - PostgreSQL and in-memory behavior must be checked with the same Event In to
   Outbox contract: unit tests run against memory by default; PostgreSQL smoke
   uses `EX_MARKETING_DATABASE_URL go run ./cmd/engine-e2e-postgres` and must

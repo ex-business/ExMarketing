@@ -224,7 +224,7 @@ func TestValidateWorkflowDefinitionValidatesNodeConfigSchema(t *testing.T) {
 		"meta": {"activityId": "activity-1", "workspaceId": "workspace-1", "folderId": "folder-1"},
 		"nodes": [
 			{"id": "event-in", "type": "event-in", "kind": "entry"},
-			{"id": "code", "type": "code", "config": {"language": "JAVASCRIPT"}}
+			{"id": "code", "type": "code", "config": {"language": "LUA"}}
 		],
 		"edges": [
 			{"id": "event-in-code", "source": "event-in", "target": "code"}

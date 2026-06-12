@@ -846,6 +846,22 @@ func TestConditionWorkflowNodeHandlerEvaluatesJSONLogic(t *testing.T) {
 	}
 }
 
+func TestConditionWorkflowNodeHandlerRejectsUnsupportedExpressionLanguage(t *testing.T) {
+	node := marketing.WorkflowNode{
+		ID:   "condition",
+		Type: "condition",
+		Config: json.RawMessage(`{
+			"expressionLanguage": "CEL",
+			"expression": "$.fact.amount >= 100",
+			"errorAction": "BLOCK"
+		}`),
+	}
+	result := decisionWorkflowNodeHandler(context.Background(), node, testWorkflowHandlerRuntime(true))
+	if result.Status != marketing.WorkflowNodeFailed || result.Output["errorCode"] != "CONDITION_LANGUAGE_UNSUPPORTED" || !strings.Contains(result.Error, "CEL") {
+		t.Fatalf("expected unsupported CEL failure, got %+v", result)
+	}
+}
+
 func TestRewardWorkflowNodeHandlerCalculatesConfiguredReward(t *testing.T) {
 	runtime := testWorkflowHandlerRuntime(true)
 	runtime.Activity.Rewards = []marketing.Reward{{
@@ -1086,6 +1102,19 @@ func TestCodeWorkflowNodeHandlerExecutesLuaWithWorkflowContext(t *testing.T) {
 	codeResult, ok := result.Output["code_result"].(map[string]any)
 	if !ok || codeResult["value"] == nil {
 		t.Fatalf("expected code_result value, got %+v", result.Output["code_result"])
+	}
+}
+
+func TestCodeWorkflowNodeHandlerRejectsUnsupportedLanguage(t *testing.T) {
+	node := marketing.WorkflowNode{
+		ID:     "js_code",
+		Type:   "code",
+		Config: json.RawMessage(`{"language":"JAVASCRIPT","source":"return 1"}`),
+	}
+
+	result := codeWorkflowNodeHandler(context.Background(), node, testWorkflowHandlerRuntime(true))
+	if result.Status != marketing.WorkflowNodeFailed || result.Output["errorCode"] != "CODE_LANGUAGE_UNSUPPORTED" {
+		t.Fatalf("expected unsupported code language failure, got %+v", result)
 	}
 }
 

@@ -1100,7 +1100,7 @@ func workflowConditionInput(ctx context.Context, runtime workflowRuntime) map[st
 
 func workflowEvaluateConditionExpression(language string, expression string, input map[string]any) (bool, error) {
 	switch strings.ToUpper(firstWorkflowString(language, "RULE_EXPR")) {
-	case "RULE_EXPR", "CEL":
+	case "RULE_EXPR":
 		return workflowRouteExpressionMatches(expression, input), nil
 	case "JSON_LOGIC":
 		var logic any
@@ -1973,8 +1973,16 @@ func decisionWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNod
 	}
 	if strings.EqualFold(node.Type, "condition") && len(node.Config) > 0 {
 		if expression := workflowConfigString(config, "expression"); expression != "" {
+			language := strings.ToUpper(firstWorkflowString(workflowConfigString(config, "expressionLanguage"), "RULE_EXPR"))
+			if language != "RULE_EXPR" && language != "JSON_LOGIC" {
+				return nodeFailed("CONDITION_LANGUAGE_UNSUPPORTED: expressionLanguage "+language+" is not supported", map[string]any{
+					"errorCode":          "CONDITION_LANGUAGE_UNSUPPORTED",
+					"expressionLanguage": language,
+					"audit":              workflowHandlerAudit(node, runtime),
+				})
+			}
 			conditionInput := workflowConditionInput(ctx, runtime)
-			matched, evalErr := workflowEvaluateConditionExpression(workflowConfigString(config, "expressionLanguage"), expression, conditionInput)
+			matched, evalErr := workflowEvaluateConditionExpression(language, expression, conditionInput)
 			if evalErr != nil {
 				ruleResult.ReasonCode = "CONDITION_EXPRESSION_ERROR"
 				ruleResult.Reason = evalErr.Error()
@@ -2098,7 +2106,12 @@ func codeWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, r
 			result["error"] = err.Error()
 		}
 	} else {
-		result["dryRunResult"] = true
+		return nodeFailed("CODE_LANGUAGE_UNSUPPORTED: language "+language+" is not supported", map[string]any{
+			"errorCode": "CODE_LANGUAGE_UNSUPPORTED",
+			"language":  language,
+			"eventId":   runtime.Inbox.Event.EventID,
+			"audit":     workflowHandlerAudit(node, runtime),
+		})
 	}
 	outputPath := workflowConfigString(config, "outputPath")
 	if outputPath == "" {

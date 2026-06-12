@@ -77,12 +77,8 @@ export const nodeCatalog: CatalogGroup[] = [
       nodeDef('normalize', 'CORE', 'Normalize', '事件标准化', 'transform', '字段映射、默认值、时间格式、租户和业务主体规范化', ['raw_event'], ['normalized_event']),
       nodeDef('match', 'CORE', 'MATCH', '活动匹配', 'logic', '按活动状态、时间窗、事件类型、来源系统匹配活动', ['event_context', 'activity_config'], ['matched_activity']),
       nodeDef('fact-query', 'CORE', 'Fact Query', '事实查询', 'query', '查询用户、订单、交易、历史参与和外部事实数据', ['subject', 'fact_keys'], ['facts']),
-      nodeDef('condition', 'CORE', 'CONDITION', '条件判断', 'logic', '字段路径读取、类型转换、缺失字段处理和错误原因输出', ['fact', 'condition_expr'], ['IF', 'ELSE']),
       nodeDef('qualify', 'CORE', 'QUALIFY', '资格校验', 'logic', '用户资格、活动门槛、参与范围、黑白名单和风险规则校验', ['event_context', 'matched_activity'], ['PASS', 'BLOCK', 'RISK']),
-      nodeDef('switch', 'CORE', 'SWITCH', '条件分支', 'logic', '基于阶段结果选择后续路径，支持 PASS / BLOCK / SKIP', ['stage_result'], ['PASS', 'BLOCK', 'SKIP']),
-      nodeDef('code', 'CORE', 'CODE', '代码节点', 'transform', '用受控代码片段处理上下文，输出中间变量给下游节点', ['context', 'input'], ['code_result']),
       nodeDef('reward', 'CORE', 'REWARD', '奖励计算', 'reward', '支持 FIXED / RATIO / LADDER / RANDOM / PROBABILITY / POOL_SPLIT', ['qualified_context', 'reward_config'], ['reward_items']),
-      nodeDef('decimal', 'CORE', 'Decimal', '精度处理', 'transform', '金额、比例、阶梯、概率和奖池拆分使用 Decimal 精度', ['amount_expr'], ['decimal_amount']),
       nodeDef('limit', 'CORE', 'LIMIT', '次数限制', 'quota', '用户、活动、周期、事件维度参与次数限制', ['subject', 'activity_id'], ['limit_hold']),
       nodeDef('quota', 'CORE', 'Quota', '预算库存扣减', 'quota', '预算、库存、次数限制冻结/确认/释放，保证并发原子性', ['reward_items', 'limit_hold'], ['quota_hold']),
       nodeDef('participation', 'CORE', 'Participation', '参与记录', 'store', '写入参与流水，关联事件、活动、奖励、quota 和阶段结果', ['qualified_context', 'quota_hold'], ['participation_id']),
@@ -93,6 +89,10 @@ export const nodeCatalog: CatalogGroup[] = [
   {
     category: 'ADVANCED 高级集成',
     items: [
+      nodeDef('condition', 'ADVANCED', 'CONDITION', '条件判断', 'logic', '字段路径读取、类型转换、缺失字段处理和错误原因输出', ['fact', 'condition_expr'], ['IF', 'ELSE']),
+      nodeDef('switch', 'ADVANCED', 'SWITCH', '条件分支', 'logic', '基于阶段结果选择后续路径，支持 PASS / BLOCK / SKIP', ['stage_result'], ['PASS', 'BLOCK', 'SKIP']),
+      nodeDef('code', 'ADVANCED', 'CODE', '代码节点', 'transform', '用受控 LUA 或表达式处理上下文，输出中间变量给下游节点', ['context', 'input'], ['code_result']),
+      nodeDef('decimal', 'ADVANCED', 'Decimal', '精度处理', 'transform', '把金额解析为固定 4 位小数字符串，供金额链路显式复用', ['amount_expr'], ['decimal_amount']),
       nodeDef('http-call', 'ADVANCED', 'HTTP Call', 'HTTP 发奖', 'dispatch', '调用外部发奖接口，记录响应、耗时和错误码', ['outbox_message'], ['http_result']),
       nodeDef('mq-publish', 'ADVANCED', 'MQ Publish', 'MQ 发奖', 'dispatch', '发布发奖指令到消息队列，支持 key、headers 和 traceId', ['outbox_message'], ['mq_result']),
       nodeDef('webhook', 'ADVANCED', 'Webhook', 'Webhook 通知', 'dispatch', '向业务系统推送发奖、失败、参与和风险结果', ['stage_result'], ['webhook_result']),

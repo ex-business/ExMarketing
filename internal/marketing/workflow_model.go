@@ -376,7 +376,21 @@ type WorkflowExecutionTrace struct {
 	ExportedAt     time.Time               `json:"exportedAt,omitempty"`
 	Execution      WorkflowExecution       `json:"execution"`
 	NodeExecutions []WorkflowNodeExecution `json:"nodeExecutions"`
+	NodeSummaries  []WorkflowNodeSummary   `json:"nodeSummaries,omitempty"`
 	RouteTrace     any                     `json:"routeTrace,omitempty"`
+}
+
+type WorkflowNodeSummary struct {
+	NodeID      string                      `json:"nodeId"`
+	NodeType    string                      `json:"nodeType"`
+	NodeTitle   string                      `json:"nodeTitle,omitempty"`
+	Status      WorkflowNodeExecutionStatus `json:"status"`
+	DurationMs  int64                       `json:"durationMs,omitempty"`
+	InputKeys   []string                    `json:"inputKeys,omitempty"`
+	OutputKeys  []string                    `json:"outputKeys,omitempty"`
+	Decision    string                      `json:"decision,omitempty"`
+	ErrorCode   string                      `json:"errorCode,omitempty"`
+	Explanation string                      `json:"explanation,omitempty"`
 }
 
 type WorkflowExecutionCompareSummary struct {

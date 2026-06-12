@@ -450,8 +450,135 @@ func (s *Service) ExportWorkflowExecutionTrace(ctx context.Context, executionID 
 		ExportedAt:     s.now(),
 		Execution:      executions[0],
 		NodeExecutions: nodes,
+		NodeSummaries:  workflowNodeSummaries(nodes),
 		RouteTrace:     workflowTraceRoute(executions[0].Output),
 	}, nil
+}
+
+func workflowNodeSummaries(nodes []marketing.WorkflowNodeExecution) []marketing.WorkflowNodeSummary {
+	out := make([]marketing.WorkflowNodeSummary, 0, len(nodes))
+	for _, node := range nodes {
+		input := workflowPayloadMap(node.Input)
+		output := workflowPayloadMap(node.Output)
+		summary := marketing.WorkflowNodeSummary{
+			NodeID:      node.NodeID,
+			NodeType:    node.NodeType,
+			NodeTitle:   node.NodeTitle,
+			Status:      node.Status,
+			InputKeys:   sortedWorkflowPayloadKeys(input),
+			OutputKeys:  sortedWorkflowPayloadKeys(output),
+			Decision:    workflowNodeDecision(output),
+			ErrorCode:   workflowNodeErrorCode(node, output),
+			Explanation: workflowNodeExplanation(node, input, output),
+		}
+		if node.FinishedAt != nil {
+			summary.DurationMs = node.FinishedAt.Sub(node.StartedAt).Milliseconds()
+		}
+		out = append(out, summary)
+	}
+	return out
+}
+
+func workflowPayloadMap(raw json.RawMessage) map[string]any {
+	if len(raw) == 0 {
+		return nil
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil
+	}
+	return payload
+}
+
+func sortedWorkflowPayloadKeys(payload map[string]any) []string {
+	if len(payload) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(payload))
+	for key := range payload {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func workflowNodeDecision(output map[string]any) string {
+	if len(output) == 0 {
+		return ""
+	}
+	for _, key := range []string{"decision", "route", "status", "skipReason"} {
+		if value := workflowPayloadString(output[key]); value != "" {
+			return value
+		}
+	}
+	for _, key := range []string{"PASS", "BLOCK", "RISK", "IF", "ELSE", "SKIP"} {
+		if workflowTruthy(output[key]) {
+			return key
+		}
+	}
+	return ""
+}
+
+func workflowNodeErrorCode(node marketing.WorkflowNodeExecution, output map[string]any) string {
+	if code := workflowPayloadString(output["errorCode"]); code != "" {
+		return code
+	}
+	if code := workflowPayloadString(output["failureCode"]); code != "" {
+		return code
+	}
+	return workflowErrorCode(node.ErrorMessage)
+}
+
+func workflowPayloadString(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed)
+	case fmt.Stringer:
+		return strings.TrimSpace(typed.String())
+	default:
+		return ""
+	}
+}
+
+func workflowErrorCode(message string) string {
+	message = strings.ToUpper(strings.TrimSpace(message))
+	if message == "" {
+		return ""
+	}
+	fields := strings.FieldsFunc(message, func(r rune) bool {
+		return !(r == '_' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9')
+	})
+	for _, field := range fields {
+		if len(field) >= 3 && strings.Contains(field, "_") {
+			return field
+		}
+	}
+	return "WORKFLOW_NODE_ERROR"
+}
+
+func workflowNodeExplanation(node marketing.WorkflowNodeExecution, input map[string]any, output map[string]any) string {
+	switch node.Status {
+	case marketing.WorkflowNodeFailed:
+		if code := workflowNodeErrorCode(node, output); code != "" {
+			return fmt.Sprintf("%s failed with %s.", node.NodeID, code)
+		}
+		return node.NodeID + " failed."
+	case marketing.WorkflowNodeSkipped:
+		if reason := workflowPayloadString(output["skipReason"]); reason != "" {
+			return fmt.Sprintf("%s skipped: %s.", node.NodeID, reason)
+		}
+		return node.NodeID + " skipped."
+	}
+	decision := workflowNodeDecision(output)
+	if decision != "" {
+		return fmt.Sprintf("%s completed with decision %s.", node.NodeID, decision)
+	}
+	inputKeys := sortedWorkflowPayloadKeys(input)
+	outputKeys := sortedWorkflowPayloadKeys(output)
+	if len(outputKeys) > 0 {
+		return fmt.Sprintf("%s read %d input keys and produced %s.", node.NodeID, len(inputKeys), strings.Join(outputKeys, ", "))
+	}
+	return node.NodeID + " completed."
 }
 
 func (s *Service) runWorkflowDebugWithDefinition(ctx context.Context, activity marketing.Activity, definition json.RawMessage, event marketing.ActivityEvent, cmd marketing.WorkflowDebugRunCommand) (marketing.WorkflowExecutionTrace, error) {

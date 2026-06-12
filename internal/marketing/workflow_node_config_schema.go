@@ -28,6 +28,7 @@ const (
 type WorkflowNodeConfigSchema struct {
 	NodeType    string                         `json:"nodeType"`
 	Version     int                            `json:"version"`
+	Category    string                         `json:"category,omitempty"`
 	Title       string                         `json:"title"`
 	Description string                         `json:"description,omitempty"`
 	Fields      []WorkflowNodeConfigField      `json:"fields"`
@@ -353,9 +354,21 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 	}
 	registry := WorkflowNodeConfigSchemaRegistry{schemas: map[string]WorkflowNodeConfigSchema{}}
 	for _, item := range schemas {
+		item.Category = defaultWorkflowNodeCategory(item.NodeType)
 		registry.schemas[item.NodeType] = item
 	}
 	return registry
+}
+
+func defaultWorkflowNodeCategory(nodeType string) string {
+	switch strings.TrimSpace(nodeType) {
+	case "http-call", "mq-publish", "webhook", "callback":
+		return "ADVANCED"
+	case "retry", "dlq", "audit", "reconcile", "alert":
+		return "OPS"
+	default:
+		return "CORE"
+	}
 }
 
 func (r WorkflowNodeConfigSchemaRegistry) Get(nodeType string) (WorkflowNodeConfigSchema, bool) {
@@ -527,7 +540,13 @@ func defaultWorkflowNodeOutputs(nodeType string) []WorkflowNodeOutputVar {
 	case "condition":
 		return outputVars(outputVar("IF", "IF", "boolean", "条件成立路径。"), outputVar("ELSE", "ELSE", "boolean", "条件不成立路径。"))
 	case "qualify":
-		return outputVars(outputVar("PASS", "PASS", "object", "资格通过结果。"), outputVar("BLOCK", "BLOCK", "object", "资格阻断结果。"), outputVar("RISK", "RISK", "object", "风险路径结果。"))
+		return outputVars(
+			outputVar("stage_result", "Stage Result", "object", "资格校验完整结果。"),
+			outputVar("decision", "Decision", "string", "资格路由决策。"),
+			outputVar("PASS", "PASS", "object", "资格通过结果。"),
+			outputVar("BLOCK", "BLOCK", "object", "资格阻断结果。"),
+			outputVar("RISK", "RISK", "object", "风险路径结果。"),
+		)
 	case "switch":
 		return outputVars(outputVar("PASS", "PASS", "object", "通过分支。"), outputVar("BLOCK", "BLOCK", "object", "阻断分支。"), outputVar("SKIP", "SKIP", "object", "跳过分支。"))
 	case "fact-query":

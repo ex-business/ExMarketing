@@ -322,7 +322,9 @@ func (s *Service) ListWorkflowNodePresets() []marketing.WorkflowNodePreset {
 		nodePreset("reward-fixed-usd", "reward", "固定美元奖励", map[string]any{"calculateType": "FIXED", "amount": 10, "currency": "USD"}, "reward"),
 		nodePreset("limit-once", "limit", "用户一次限制", map[string]any{"scope": "USER", "maxCount": 1, "period": "ACTIVITY"}, "quota"),
 		nodePreset("quota-atomic", "quota", "原子预算扣减", map[string]any{"quotaCode": "DEFAULT_REWARD_BUDGET", "consumeMode": "ATOMIC"}, "quota"),
-		nodePreset("callback-signed", "callback", "签名回调", map[string]any{"provider": "default", "requireSignature": true}, "callback"),
+		nodePreset("participation-snapshot", "participation", "参与快照", map[string]any{"status": "CREATED", "deduplicate": true}, "store"),
+		nodePreset("grant-order-http", "grant-order", "HTTP 发奖单", map[string]any{"provider": "HTTP", "expireSeconds": 3600}, "grant"),
+		nodePreset("outbox-http", "outbox", "HTTP 发件箱", map[string]any{"channel": "HTTP", "maxAttempts": 3}, "dispatch"),
 		nodePreset("audit-full", "audit", "完整审计", map[string]any{"action": "WORKFLOW_NODE", "includePayload": true}, "audit"),
 	}
 }
@@ -516,11 +518,11 @@ func workflowTemplateSlug(value string) string {
 
 func builtinWorkflowDraftTemplates(now time.Time) []marketing.WorkflowDraftTemplate {
 	return []marketing.WorkflowDraftTemplate{
-		builtinWorkflowTemplate("complete-activity-chain", "完整活动链路模板", "完整活动链路", "入口、幂等、标准化、匹配、资格、奖励、限制、预算、回调、审计。", []string{"event-in", "inbox", "normalize", "match", "qualify", "reward", "limit", "quota", "callback", "audit"}, now),
-		builtinWorkflowTemplate("simple-reward-chain", "简化奖励链路模板", "简化奖励链路", "用于快速搭建最短奖励链路。", []string{"event-in", "inbox", "match", "reward", "quota", "callback", "audit"}, now),
+		builtinWorkflowTemplate("complete-activity-chain", "完整活动链路模板", "完整活动链路", "入口、幂等、标准化、匹配、事实查询、资格、奖励、限制、预算、参与、发奖单、发件箱、审计。", []string{"event-in", "inbox", "normalize", "match", "fact-query", "qualify", "reward", "limit", "quota", "participation", "grant-order", "outbox", "audit"}, now),
+		builtinWorkflowTemplate("simple-reward-chain", "简化奖励链路模板", "简化奖励链路", "用于快速搭建最短奖励链路。", []string{"event-in", "inbox", "normalize", "match", "fact-query", "qualify", "reward", "limit", "quota", "participation", "grant-order", "outbox", "audit"}, now),
 		builtinWorkflowTemplate("risk-qualify-chain", "风控和资格校验链路模板", "风控资格", "强调资格、事实查询、风控限制和审计。", []string{"event-in", "inbox", "fact-query", "qualify", "limit", "audit"}, now),
-		builtinWorkflowTemplate("quota-protected-reward-chain", "Quota 保护奖励链路模板", "Quota 保护", "奖励前后加入次数限制和原子预算扣减。", []string{"event-in", "inbox", "match", "qualify", "reward", "limit", "quota", "callback", "audit"}, now),
-		builtinWorkflowTemplate("fact-query-enhanced-chain", "Fact Query 数据增强链路模板", "数据增强", "通过 Fact Query 增强上下文后再匹配和发奖。", []string{"event-in", "inbox", "normalize", "fact-query", "match", "qualify", "reward", "quota", "audit"}, now),
+		builtinWorkflowTemplate("quota-protected-reward-chain", "Quota 保护奖励链路模板", "Quota 保护", "奖励前后加入次数限制和原子预算扣减。", []string{"event-in", "inbox", "normalize", "match", "fact-query", "qualify", "reward", "limit", "quota", "participation", "grant-order", "outbox", "audit"}, now),
+		builtinWorkflowTemplate("fact-query-enhanced-chain", "Fact Query 数据增强链路模板", "数据增强", "通过 Fact Query 增强上下文后再匹配和发奖。", []string{"event-in", "inbox", "normalize", "fact-query", "match", "qualify", "reward", "limit", "quota", "participation", "grant-order", "outbox", "audit"}, now),
 	}
 }
 
@@ -545,7 +547,12 @@ func builtinWorkflowTemplate(id string, name string, category string, descriptio
 func workflowTemplateDefinition(nodeTypes []string) map[string]any {
 	nodes := make([]map[string]any, 0, len(nodeTypes))
 	edges := make([]map[string]any, 0, len(nodeTypes)-1)
+	auditTarget := workflowTemplateFirstNodeID(nodeTypes, "audit")
 	for i, nodeType := range nodeTypes {
+		config := workflowTemplateNodeConfig(nodeType)
+		if mapping := workflowTemplateInputMapping(nodeType, nodeTypes[:i]); len(mapping) > 0 {
+			config["inputMapping"] = mapping
+		}
 		nodes = append(nodes, map[string]any{
 			"id":       nodeType,
 			"type":     nodeType,
@@ -553,11 +560,29 @@ func workflowTemplateDefinition(nodeTypes []string) map[string]any {
 			"title":    workflowTemplateNodeTitle(nodeType),
 			"inputs":   workflowTemplateNodeInputs(nodeType),
 			"outputs":  workflowTemplateNodeOutputs(nodeType),
-			"config":   workflowTemplateNodeConfig(nodeType),
+			"config":   config,
 			"position": map[string]float64{"x": float64(80 + i*300), "y": 360},
 		})
 		if i > 0 {
 			previous := nodeTypes[i-1]
+			if previous == "qualify" {
+				edges = append(edges, workflowTemplateRouteEdge(previous, nodeType, "PASS", false))
+				if auditTarget != "" {
+					edges = append(edges,
+						workflowTemplateRouteEdge(previous, auditTarget, "BLOCK", false),
+						workflowTemplateRouteEdge(previous, auditTarget, "RISK", true),
+					)
+				}
+				continue
+			}
+			if nodeType == "audit" && previous != "qualify" {
+				edges = append(edges, map[string]any{
+					"id":     previous + "-" + nodeType,
+					"source": previous,
+					"target": nodeType,
+				})
+				continue
+			}
 			edges = append(edges, map[string]any{
 				"id":     previous + "-" + nodeType,
 				"source": previous,
@@ -565,11 +590,53 @@ func workflowTemplateDefinition(nodeTypes []string) map[string]any {
 			})
 		}
 	}
+	meta := map[string]any{"activityId": "template", "workspaceId": "template", "folderId": "template"}
+	if workflowTemplateCoreContractEnabled(nodeTypes) {
+		meta["contractVersion"] = "core-node-contract.v1"
+	}
 	return map[string]any{
-		"meta":     map[string]any{"activityId": "template", "workspaceId": "template", "folderId": "template"},
+		"meta":     meta,
 		"viewport": map[string]float64{"x": 24, "y": 36, "zoom": 1},
 		"nodes":    nodes,
 		"edges":    edges,
+	}
+}
+
+func workflowTemplateCoreContractEnabled(nodeTypes []string) bool {
+	has := map[string]bool{}
+	for _, nodeType := range nodeTypes {
+		has[nodeType] = true
+	}
+	for _, required := range []string{"event-in", "inbox", "normalize", "match", "fact-query", "qualify", "reward", "limit", "quota", "participation", "grant-order", "outbox", "audit"} {
+		if !has[required] {
+			return false
+		}
+	}
+	return true
+}
+
+func workflowTemplateFirstNodeID(nodeTypes []string, nodeType string) string {
+	for _, item := range nodeTypes {
+		if item == nodeType {
+			return item
+		}
+	}
+	return ""
+}
+
+func workflowTemplateRouteEdge(source string, target string, routeKey string, defaultRoute bool) map[string]any {
+	return map[string]any{
+		"id":     source + "-" + strings.ToLower(routeKey) + "-" + target,
+		"source": source,
+		"target": target,
+		"label":  routeKey,
+		"route": map[string]any{
+			"type":       routeKey,
+			"key":        routeKey,
+			"label":      routeKey,
+			"expression": "decision == \"" + routeKey + "\"",
+			"default":    defaultRoute,
+		},
 	}
 }
 
@@ -577,12 +644,16 @@ func workflowTemplateNodeKind(nodeType string) string {
 	switch nodeType {
 	case "event-in":
 		return "entry"
-	case "inbox", "audit":
+	case "inbox", "participation", "audit":
 		return "store"
 	case "reward":
 		return "reward"
 	case "limit", "quota":
 		return "quota"
+	case "grant-order":
+		return "grant"
+	case "outbox":
+		return "dispatch"
 	case "fact-query":
 		return "query"
 	default:
@@ -591,18 +662,103 @@ func workflowTemplateNodeKind(nodeType string) string {
 }
 
 func workflowTemplateNodeTitle(nodeType string) string {
-	titles := map[string]string{"event-in": "事件入口", "inbox": "幂等收件箱", "normalize": "事件标准化", "match": "活动匹配", "qualify": "资格校验", "reward": "奖励计算", "limit": "次数限制", "quota": "预算库存扣减", "callback": "结果回调", "audit": "审计记录", "fact-query": "事实查询"}
+	titles := map[string]string{"event-in": "事件入口", "inbox": "幂等收件箱", "normalize": "事件标准化", "match": "活动匹配", "qualify": "资格校验", "reward": "奖励计算", "limit": "次数限制", "quota": "预算库存扣减", "participation": "参与记录", "grant-order": "发奖订单", "outbox": "消息发件箱", "callback": "结果回调", "audit": "审计记录", "fact-query": "事实查询"}
 	return titles[nodeType]
 }
 
 func workflowTemplateNodeInputs(nodeType string) []string {
-	inputs := map[string][]string{"event-in": {"raw_event"}, "inbox": {"raw_event"}, "normalize": {"raw_event"}, "match": {"event_context"}, "qualify": {"matched_activity"}, "reward": {"qualified_context"}, "limit": {"subject"}, "quota": {"reward_items"}, "callback": {"quota_hold"}, "audit": {"stage_result"}, "fact-query": {"subject"}}
+	inputs := map[string][]string{"event-in": {"raw_event"}, "inbox": {"raw_event"}, "normalize": {"raw_event"}, "match": {"event_context"}, "qualify": {"matched_activity"}, "reward": {"qualified_context"}, "limit": {"subject"}, "quota": {"reward_items"}, "participation": {"qualified_context", "quota_hold"}, "grant-order": {"participation_id", "reward_items"}, "outbox": {"grant_order"}, "callback": {"quota_hold"}, "audit": {"stage_result"}, "fact-query": {"subject"}}
 	return inputs[nodeType]
 }
 
 func workflowTemplateNodeOutputs(nodeType string) []string {
-	outputs := map[string][]string{"event-in": {"raw_event"}, "inbox": {"event_context"}, "normalize": {"normalized_event"}, "match": {"matched_activity"}, "qualify": {"stage_result"}, "reward": {"reward_items"}, "limit": {"limit_hold"}, "quota": {"quota_hold"}, "callback": {"callback_result"}, "audit": {"audit_log"}, "fact-query": {"facts"}}
+	outputs := map[string][]string{"event-in": {"raw_event"}, "inbox": {"event_context"}, "normalize": {"normalized_event"}, "match": {"matched_activity"}, "qualify": {"stage_result", "decision", "PASS", "BLOCK", "RISK"}, "reward": {"reward_items"}, "limit": {"limit_hold"}, "quota": {"quota_hold"}, "participation": {"participation_id"}, "grant-order": {"grant_order"}, "outbox": {"HTTP", "MQ", "Webhook", "Failed"}, "callback": {"callback_result"}, "audit": {"audit_log"}, "fact-query": {"facts"}}
 	return outputs[nodeType]
+}
+
+func workflowTemplateInputMapping(nodeType string, upstreamNodeTypes []string) map[string]any {
+	ref := func(sourceNodeID string, outputKey string, path string) map[string]any {
+		item := map[string]any{"sourceNodeId": sourceNodeID, "outputKey": outputKey}
+		if strings.TrimSpace(path) != "" {
+			item["path"] = path
+		}
+		return item
+	}
+	hasUpstream := func(candidate string) bool {
+		for _, nodeType := range upstreamNodeTypes {
+			if nodeType == candidate {
+				return true
+			}
+		}
+		return false
+	}
+	eventContextRef := func(path string) map[string]any {
+		if hasUpstream("normalize") {
+			return ref("normalize", "normalized_event", path)
+		}
+		if hasUpstream("inbox") {
+			return ref("inbox", "event_context", path)
+		}
+		return ref("event-in", "raw_event", path)
+	}
+	switch nodeType {
+	case "inbox":
+		return map[string]any{"raw_event": ref("event-in", "raw_event", "")}
+	case "normalize":
+		return map[string]any{"raw_event": ref("event-in", "raw_event", "")}
+	case "fact-query":
+		return map[string]any{"subject": eventContextRef("$.subject")}
+	case "match":
+		return map[string]any{"event_context": eventContextRef("")}
+	case "qualify":
+		if !hasUpstream("match") {
+			return map[string]any{"event_context": eventContextRef("")}
+		}
+		return map[string]any{
+			"event_context":    eventContextRef(""),
+			"matched_activity": ref("match", "matched_activity", ""),
+		}
+	case "reward":
+		return map[string]any{"qualified_context": ref("qualify", "PASS", "")}
+	case "limit":
+		mapping := map[string]any{"subject": eventContextRef("$.subject")}
+		if hasUpstream("match") {
+			mapping["activity_id"] = ref("match", "matched_activity", "$.activityId")
+		}
+		return mapping
+	case "quota":
+		return map[string]any{
+			"reward_items": ref("reward", "reward_items", ""),
+			"limit_hold":   ref("limit", "limit_hold", ""),
+		}
+	case "participation":
+		return map[string]any{
+			"qualified_context": ref("qualify", "PASS", ""),
+			"quota_hold":        ref("quota", "quota_hold", ""),
+		}
+	case "grant-order":
+		return map[string]any{
+			"participation_id": ref("participation", "participation_id", ""),
+			"reward_items":     ref("reward", "reward_items", ""),
+		}
+	case "outbox":
+		return map[string]any{"grant_order": ref("grant-order", "grant_order", "")}
+	case "audit":
+		if hasUpstream("qualify") {
+			return map[string]any{"stage_result": ref("qualify", "stage_result", "")}
+		}
+		if len(upstreamNodeTypes) == 0 {
+			return nil
+		}
+		source := upstreamNodeTypes[len(upstreamNodeTypes)-1]
+		outputs := workflowTemplateNodeOutputs(source)
+		if len(outputs) == 0 {
+			return nil
+		}
+		return map[string]any{"stage_result": ref(source, outputs[0], "")}
+	default:
+		return nil
+	}
 }
 
 func workflowTemplateNodeConfig(nodeType string) map[string]any {
@@ -665,6 +821,18 @@ func workflowTemplateNodeConfig(nodeType string) map[string]any {
 			"amountField":      "reward_items[0].amount",
 			"failAction":       "BLOCK",
 		},
+		"participation": {
+			"status":      "CREATED",
+			"deduplicate": true,
+		},
+		"grant-order": {
+			"provider":      "HTTP",
+			"expireSeconds": 3600,
+		},
+		"outbox": {
+			"channel":     "HTTP",
+			"maxAttempts": 3,
+		},
 		"callback": {
 			"provider":         "default",
 			"callbackIdPath":   "$.callbackId",
@@ -687,7 +855,7 @@ func workflowTemplateNodeConfig(nodeType string) map[string]any {
 			"subjectPath":     "subject.id",
 			"timeoutSeconds":  3,
 			"cacheTtlSeconds": 60,
-			"failureAction":   "BLOCK",
+			"failureAction":   "USE_EMPTY",
 		},
 		"normalize": {"mapping": map[string]any{}, "defaults": map[string]any{}},
 	}

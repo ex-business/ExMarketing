@@ -231,7 +231,7 @@ func (s WorkflowValidationService) ValidateDefinition(raw json.RawMessage) Workf
 		}
 	}
 	upstreamSourceTarget := s.upstreamSourceTargets(nodeIDs, adjacency)
-	s.validateNodeInputMappings(&result, definition.Nodes, nodeByID, upstreamSourceTarget)
+	s.validateNodeInputMappings(&result, definition.Meta, definition.Nodes, nodeByID, upstreamSourceTarget)
 	islandNodeIDs := map[string]bool{}
 	if canCheckReachability && len(entryNodeIDs) > 0 {
 		for _, nodeID := range nodeIDs {
@@ -286,7 +286,8 @@ func (s WorkflowValidationService) ValidateDefinition(raw json.RawMessage) Workf
 	return result.finalize()
 }
 
-func (s WorkflowValidationService) validateNodeInputMappings(result *WorkflowValidationResult, nodes []WorkflowNode, nodeByID map[string]WorkflowNode, upstreamSourceTarget map[string]bool) {
+func (s WorkflowValidationService) validateNodeInputMappings(result *WorkflowValidationResult, meta map[string]any, nodes []WorkflowNode, nodeByID map[string]WorkflowNode, upstreamSourceTarget map[string]bool) {
+	requireInputMapping := workflowRequiresInputMapping(meta)
 	for nodeIndex, node := range nodes {
 		nodeID := strings.TrimSpace(node.ID)
 		if nodeID == "" {
@@ -316,6 +317,34 @@ func (s WorkflowValidationService) validateNodeInputMappings(result *WorkflowVal
 		inputsByKey := map[string]WorkflowNodeInputVar{}
 		for _, input := range schema.Inputs {
 			inputsByKey[input.Key] = input
+		}
+		if requireInputMapping {
+			for _, input := range schema.Inputs {
+				if !input.Required {
+					continue
+				}
+				if mapping == nil {
+					result.addIssue(
+						WorkflowValidationBlock,
+						"WORKFLOW_NODE_INPUT_MAPPING_REQUIRED",
+						fmt.Sprintf("节点 %q 的必填输入变量 %q 必须显式声明 inputMapping。", nodeID, input.Key),
+						fmt.Sprintf("nodes[%d].config.inputMapping.%s", nodeIndex, input.Key),
+						nodeID,
+						"",
+					)
+					continue
+				}
+				if _, ok := mapping[input.Key]; !ok {
+					result.addIssue(
+						WorkflowValidationBlock,
+						"WORKFLOW_NODE_INPUT_MAPPING_REQUIRED",
+						fmt.Sprintf("节点 %q 的必填输入变量 %q 必须显式声明 inputMapping。", nodeID, input.Key),
+						fmt.Sprintf("nodes[%d].config.inputMapping.%s", nodeIndex, input.Key),
+						nodeID,
+						"",
+					)
+				}
+			}
 		}
 		if mapping == nil {
 			continue
@@ -389,6 +418,17 @@ func (s WorkflowValidationService) validateNodeInputMappings(result *WorkflowVal
 			}
 		}
 	}
+}
+
+func workflowRequiresInputMapping(meta map[string]any) bool {
+	if meta == nil {
+		return false
+	}
+	if required, ok := meta["requireInputMapping"].(bool); ok && required {
+		return true
+	}
+	version, _ := meta["contractVersion"].(string)
+	return strings.EqualFold(strings.TrimSpace(version), "core-node-contract.v1")
 }
 
 func (s WorkflowValidationService) upstreamSourceTargets(nodeIDs []string, adjacency map[string][]string) map[string]bool {

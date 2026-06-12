@@ -144,6 +144,31 @@ func TestDefaultWorkflowNodeConfigSchemasAreSorted(t *testing.T) {
 	}
 }
 
+func TestDefaultWorkflowNodeConfigSchemasClassifyCoreAdvancedAndOpsNodes(t *testing.T) {
+	registry := DefaultWorkflowNodeConfigSchemas()
+	cases := map[string]string{
+		"event-in":  "CORE",
+		"quota":     "CORE",
+		"outbox":    "CORE",
+		"http-call": "ADVANCED",
+		"callback":  "ADVANCED",
+		"retry":     "OPS",
+		"dlq":       "OPS",
+		"audit":     "OPS",
+		"reconcile": "OPS",
+		"alert":     "OPS",
+	}
+	for nodeType, want := range cases {
+		schema, ok := registry.Get(nodeType)
+		if !ok {
+			t.Fatalf("expected schema for %s", nodeType)
+		}
+		if schema.Category != want {
+			t.Fatalf("expected %s category %s, got %s", nodeType, want, schema.Category)
+		}
+	}
+}
+
 func TestDefaultWorkflowNodeConfigSchemasIncludeValidationRules(t *testing.T) {
 	schema, ok := DefaultWorkflowNodeConfigSchemas().Get("http-call")
 	if !ok {

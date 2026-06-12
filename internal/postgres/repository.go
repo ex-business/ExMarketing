@@ -1528,6 +1528,7 @@ func (r *Repository) CreateParticipationGrantOutboxesWithQuota(ctx context.Conte
 		Participation:  cmd.Participation,
 		GrantOrders:    cmd.GrantOrders,
 		OutboxMessages: cmd.OutboxMessages,
+		Reservations:   reservations,
 	}, nil
 }
 

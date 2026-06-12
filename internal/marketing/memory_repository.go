@@ -1461,12 +1461,14 @@ func (r *MemoryRepository) CreateParticipationGrantOutboxesWithQuota(ctx context
 	r.quotas = nextQuotas
 	r.participations = append(r.participations, cmd.Participation)
 	r.grantOrders = append(r.grantOrders, cmd.GrantOrders...)
-	r.quotaReservations = append(r.quotaReservations, quotaReservationsForAtomicCommand(cmd, time.Now().UTC(), r.quotas)...)
+	reservations := quotaReservationsForAtomicCommand(cmd, time.Now().UTC(), r.quotas)
+	r.quotaReservations = append(r.quotaReservations, reservations...)
 	r.outboxMessages = append(r.outboxMessages, cmd.OutboxMessages...)
 	return AtomicGrantResult{
 		Participation:  cmd.Participation,
 		GrantOrders:    cmd.GrantOrders,
 		OutboxMessages: cmd.OutboxMessages,
+		Reservations:   reservations,
 	}, nil
 }
 

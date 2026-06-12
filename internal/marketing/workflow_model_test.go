@@ -365,6 +365,30 @@ func TestValidateWorkflowDefinitionAllowsTransitiveUpstreamInputMapping(t *testi
 	}
 }
 
+func TestValidateWorkflowDefinitionRequiresInputMappingForCoreContract(t *testing.T) {
+	result := ValidateWorkflowDefinition(json.RawMessage(`{
+		"meta": {"activityId": "activity-1", "workspaceId": "workspace-1", "folderId": "folder-1", "contractVersion": "core-node-contract.v1"},
+		"nodes": [
+			{"id": "event-in", "type": "event-in", "kind": "entry"},
+			{"id": "inbox", "type": "inbox", "config": {"inputMapping": {"raw_event": {"sourceNodeId": "event-in", "outputKey": "raw_event"}}}},
+			{"id": "match", "type": "match"}
+		],
+		"edges": [
+			{"id": "event-in-inbox", "source": "event-in", "target": "inbox"},
+			{"id": "inbox-match", "source": "inbox", "target": "match"}
+		]
+	}`))
+	if result.Valid {
+		t.Fatalf("expected core contract workflow to require input mapping")
+	}
+	for _, item := range result.Items {
+		if item.Code == "WORKFLOW_NODE_INPUT_MAPPING_REQUIRED" && item.NodeID == "match" && item.Path == "nodes[2].config.inputMapping.event_context" {
+			return
+		}
+	}
+	t.Fatalf("expected missing match.event_context input mapping issue, got %+v", result.Items)
+}
+
 func TestWorkflowValidationIssuesAreStableExplicitAndLocatable(t *testing.T) {
 	cases := []struct {
 		name string

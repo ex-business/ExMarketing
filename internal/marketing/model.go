@@ -749,6 +749,7 @@ type AtomicGrantResult struct {
 	Participation  Participation
 	GrantOrders    []GrantOrder
 	OutboxMessages []OutboxMessage
+	Reservations   []QuotaReservation
 }
 
 type QuotaExceededError struct {

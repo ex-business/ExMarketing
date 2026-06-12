@@ -149,6 +149,122 @@ func TestWorkflowDraftPublishAndExecutionLogs(t *testing.T) {
 	}
 }
 
+func TestWorkflowQuotaNodeRecordsCommittedReservations(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	now := time.Date(2026, 6, 2, 8, 0, 0, 0, time.UTC)
+	reviewedAt := now
+	activity := marketing.Activity{
+		ID:            "act_workflow_quota_history",
+		TenantID:      "site_001",
+		WorkspaceID:   "workspace-1",
+		FolderID:      "folder-1",
+		Code:          "WORKFLOW_QUOTA_HISTORY",
+		Name:          "Workflow Quota History",
+		Type:          "FIRST_DEPOSIT",
+		Status:        marketing.ActivityActive,
+		TriggerEvents: []string{"DEPOSIT_SUCCESS"},
+		StartTime:     now.Add(-time.Hour),
+		EndTime:       now.Add(24 * time.Hour),
+		Timezone:      "UTC",
+		Priority:      100,
+		Version:       1,
+		Approval: marketing.ApprovalSnapshot{
+			Status:          marketing.ApprovalApproved,
+			ActivityVersion: 1,
+			Approver:        "director",
+			ReviewedAt:      &reviewedAt,
+		},
+		Rules: []marketing.Rule{{
+			ID:      "rule_amount",
+			Code:    "AMOUNT",
+			Phase:   marketing.RulePhaseQualify,
+			Type:    marketing.RuleTypeCondition,
+			Config:  []byte(`{"logic":"AND","conditions":[{"field":"attributes.amount","op":">=","value":"100.00"}]}`),
+			Sort:    1,
+			Enabled: true,
+			Version: 1,
+		}},
+		Rewards: []marketing.Reward{{
+			ID:            "reward_bonus",
+			Code:          "BONUS",
+			Type:          marketing.RewardBonus,
+			CalculateType: marketing.CalculateFixed,
+			Config:        []byte(`{"amount":"10.00","currency":"CNY","targetRef":"https://wallet.example.com/reward"}`),
+			GrantMode:     marketing.GrantAuto,
+			GrantChannel:  marketing.GrantHTTP,
+			Enabled:       true,
+			Version:       1,
+		}},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if _, err := repo.CreateActivity(ctx, activity); err != nil {
+		t.Fatalf("create activity: %v", err)
+	}
+	for _, quota := range []marketing.Quota{
+		{ID: "quota_budget", ActivityID: activity.ID, Type: marketing.QuotaBudget, Scope: marketing.QuotaScopeActivity, ScopeKey: "TOTAL", TotalValue: "100", UsedValue: "0", FrozenValue: "0", Version: 1, CreatedAt: now, UpdatedAt: now},
+		{ID: "quota_user", ActivityID: activity.ID, Type: marketing.QuotaUserLimit, Scope: marketing.QuotaScopeUser, ScopeKey: "u_quota", TotalValue: "1", UsedValue: "0", FrozenValue: "0", Version: 1, CreatedAt: now, UpdatedAt: now},
+		{ID: "quota_daily", ActivityID: activity.ID, Type: marketing.QuotaDailyLimit, Scope: marketing.QuotaScopeUser, ScopeKey: "u_quota:2026-06-02", TotalValue: "1", UsedValue: "0", FrozenValue: "0", Version: 1, CreatedAt: now, UpdatedAt: now},
+		{ID: "quota_stock", ActivityID: activity.ID, Type: marketing.QuotaStock, Scope: marketing.QuotaScopeActivity, ScopeKey: "BONUS", TotalValue: "10", UsedValue: "0", FrozenValue: "0", Version: 1, CreatedAt: now, UpdatedAt: now},
+	} {
+		if _, err := repo.CreateQuota(ctx, quota); err != nil {
+			t.Fatalf("create quota %s: %v", quota.ID, err)
+		}
+	}
+	definitionBytes, _ := json.Marshal(workflowTemplateDefinition([]string{"event-in", "inbox", "normalize", "match", "qualify", "reward", "limit", "quota", "participation", "grant-order", "outbox", "audit"}))
+	if _, err := service.SaveWorkflowDraft(ctx, activity.ID, marketing.SaveWorkflowDraftCommand{Operator: "tester", Definition: definitionBytes}); err != nil {
+		t.Fatalf("save workflow draft: %v", err)
+	}
+	if _, err := service.PublishWorkflowVersion(ctx, activity.ID, marketing.PublishWorkflowCommand{Operator: "tester"}); err != nil {
+		t.Fatalf("publish workflow: %v", err)
+	}
+	if _, err := service.ProcessEvent(ctx, marketing.ActivityEvent{
+		EventID:      "evt_workflow_quota_history",
+		EventType:    "DEPOSIT_SUCCESS",
+		SourceSystem: "payment",
+		TenantID:     "site_001",
+		Subject:      marketing.EventSubject{Type: "USER", ID: "u_quota"},
+		Biz:          marketing.EventBiz{BizType: "DEPOSIT", BizID: "dep_quota"},
+		OccurredAt:   now,
+		Attributes:   map[string]any{"amount": "200.00"},
+	}); err != nil {
+		t.Fatalf("process event: %v", err)
+	}
+	executions, err := service.ListWorkflowExecutions(ctx, marketing.WorkflowExecutionQuery{ActivityID: activity.ID, Limit: 10})
+	if err != nil {
+		t.Fatalf("list executions: %v", err)
+	}
+	if len(executions) != 1 {
+		t.Fatalf("expected one execution, got %+v", executions)
+	}
+	nodes, err := service.ListWorkflowNodeExecutions(ctx, executions[0].ID)
+	if err != nil {
+		t.Fatalf("list node executions: %v", err)
+	}
+	var quotaOutput map[string]any
+	for _, node := range nodes {
+		if node.NodeID == "quota" {
+			if err := json.Unmarshal(node.Output, &quotaOutput); err != nil {
+				t.Fatalf("unmarshal quota output: %v", err)
+			}
+		}
+	}
+	quotaHold, ok := quotaOutput["quota_hold"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected quota_hold output, got %+v", quotaOutput)
+	}
+	committed, ok := quotaHold["committedReservations"].([]any)
+	if !ok || len(committed) != 4 {
+		t.Fatalf("expected four committed reservations, got %+v", quotaHold)
+	}
+	first := committed[0].(map[string]any)
+	if first["id"] == "" || first["reservationStatus"] != string(marketing.QuotaReservationFrozen) {
+		t.Fatalf("expected committed reservation id and status, got %+v", first)
+	}
+}
+
 func TestWorkflowExecutorFollowsRouteRules(t *testing.T) {
 	ctx := context.Background()
 	repo := marketing.NewMemoryRepository()
@@ -465,6 +581,9 @@ func TestCoreWorkflowNodeHandlersProduceStableOutputs(t *testing.T) {
 		{name: "reward", node: marketing.WorkflowNode{ID: "node_reward", Type: "reward"}, handler: rewardWorkflowNodeHandler, outputKey: "reward_items"},
 		{name: "limit", node: marketing.WorkflowNode{ID: "node_limit", Type: "limit", Config: json.RawMessage(`{"scope":"USER","maxCount":2,"period":"DAY"}`)}, handler: limitWorkflowNodeHandler, outputKey: "limit_hold"},
 		{name: "quota", node: marketing.WorkflowNode{ID: "node_quota", Type: "quota", Config: json.RawMessage(`{"quotaCode":"BUDGET","consumeMode":"ATOMIC"}`)}, handler: quotaWorkflowNodeHandler, outputKey: "quota_hold"},
+		{name: "participation", node: marketing.WorkflowNode{ID: "node_participation", Type: "participation"}, handler: participationWorkflowNodeHandler, outputKey: "participation_id"},
+		{name: "grant order", node: marketing.WorkflowNode{ID: "node_grant", Type: "grant-order"}, handler: grantOrderWorkflowNodeHandler, outputKey: "grant_order"},
+		{name: "outbox", node: marketing.WorkflowNode{ID: "node_outbox", Type: "outbox"}, handler: outboxWorkflowNodeHandler, outputKey: "HTTP"},
 		{name: "fact query", node: marketing.WorkflowNode{ID: "node_fact", Type: "fact-query", Config: json.RawMessage(`{"factKeys":["profile.level"]}`)}, handler: factQueryWorkflowNodeHandler, outputKey: "facts"},
 		{name: "switch", node: marketing.WorkflowNode{ID: "node_switch", Type: "switch"}, handler: decisionWorkflowNodeHandler, outputKey: "route"},
 		{name: "code", node: marketing.WorkflowNode{ID: "node_code", Type: "code", Config: json.RawMessage(`{"language":"EXPRESSION","source":"$.subject.id","outputPath":"subject_id"}`)}, handler: codeWorkflowNodeHandler, outputKey: "code_result"},
@@ -484,6 +603,47 @@ func TestCoreWorkflowNodeHandlersProduceStableOutputs(t *testing.T) {
 				t.Fatalf("expected audit fields, got %+v", result.Output)
 			}
 		})
+	}
+}
+
+func TestWorkflowNodeSummariesExplainTraceNodes(t *testing.T) {
+	now := time.Date(2026, 6, 13, 12, 0, 0, 0, time.UTC)
+	finishedAt := now.Add(15 * time.Millisecond)
+	summaries := workflowNodeSummaries([]marketing.WorkflowNodeExecution{
+		{
+			ID:           "node_1",
+			NodeID:       "qualify",
+			NodeType:     "qualify",
+			Status:       marketing.WorkflowNodeSuccess,
+			Input:        json.RawMessage(`{"event_context":{"subject":{"id":"u1"}},"matched_activity":{"activityId":"act_1"}}`),
+			Output:       json.RawMessage(`{"decision":"PASS","PASS":true,"ruleResult":{"decision":"PASS"}}`),
+			StartedAt:    now,
+			FinishedAt:   &finishedAt,
+			CreatedAt:    now,
+			UpdatedAt:    finishedAt,
+			ErrorMessage: "",
+		},
+		{
+			ID:           "node_2",
+			NodeID:       "quota",
+			NodeType:     "quota",
+			Status:       marketing.WorkflowNodeFailed,
+			Output:       json.RawMessage(`{"errorCode":"QUOTA_INSUFFICIENT"}`),
+			ErrorMessage: "quota insufficient",
+			StartedAt:    now,
+			FinishedAt:   &finishedAt,
+			CreatedAt:    now,
+			UpdatedAt:    finishedAt,
+		},
+	})
+	if len(summaries) != 2 {
+		t.Fatalf("expected 2 summaries, got %+v", summaries)
+	}
+	if summaries[0].Decision != "PASS" || summaries[0].DurationMs != 15 || !strings.Contains(summaries[0].Explanation, "decision PASS") {
+		t.Fatalf("unexpected qualify summary: %+v", summaries[0])
+	}
+	if summaries[1].ErrorCode != "QUOTA_INSUFFICIENT" || !strings.Contains(summaries[1].Explanation, "QUOTA_INSUFFICIENT") {
+		t.Fatalf("unexpected quota summary: %+v", summaries[1])
 	}
 }
 
@@ -543,6 +703,217 @@ func TestCoreWorkflowNodeHandlersValidateInputsAndConfig(t *testing.T) {
 				t.Fatalf("errorCode=%q, want %q: %+v", got, tt.code, result.Output)
 			}
 		})
+	}
+}
+
+func TestNormalizeWorkflowNodeHandlerAppliesInputMappingConfig(t *testing.T) {
+	ctx := context.WithValue(context.Background(), workflowNodeExecutionContextKey{}, workflowNodeExecutionContext{
+		ResolvedInput: map[string]any{
+			"raw_event": map[string]any{
+				"eventId": "evt_custom",
+				"attributes": map[string]any{
+					"amount":  "300.50",
+					"channel": "app",
+				},
+			},
+		},
+	})
+	node := marketing.WorkflowNode{
+		ID:   "normalize",
+		Type: "normalize",
+		Config: json.RawMessage(`{
+			"mapping": {
+				"order.amount": "$.attributes.amount",
+				"channel": "$.attributes.channel"
+			},
+			"defaults": {
+				"source": "workflow"
+			}
+		}`),
+	}
+
+	result := normalizeWorkflowNodeHandler(ctx, node, testWorkflowHandlerRuntime(true))
+	if result.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected success, got %+v", result)
+	}
+	normalized := result.Output["normalized_event"].(map[string]any)
+	order := normalized["order"].(map[string]any)
+	if order["amount"] != "300.50" || normalized["channel"] != "app" || normalized["source"] != "workflow" {
+		t.Fatalf("unexpected normalized output: %+v", normalized)
+	}
+}
+
+func TestQualifyWorkflowNodeHandlerEvaluatesActivityRules(t *testing.T) {
+	runtime := testWorkflowHandlerRuntime(true)
+	runtime.Activity.Rules = []marketing.Rule{{
+		Code:    "MIN_AMOUNT",
+		Phase:   marketing.RulePhaseQualify,
+		Type:    marketing.RuleTypeCondition,
+		Enabled: true,
+		Config:  json.RawMessage(`{"logic":"AND","conditions":[{"field":"event.attributes.amount","op":">=","value":"250"}]}`),
+	}}
+	node := marketing.WorkflowNode{ID: "qualify", Type: "qualify"}
+
+	result := decisionWorkflowNodeHandler(context.Background(), node, runtime)
+	if result.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected success, got %+v", result)
+	}
+	if result.Output["decision"] != "BLOCK" || result.Output["PASS"] != false || result.Output["BLOCK"] != true {
+		t.Fatalf("expected rule rejection route, got %+v", result.Output)
+	}
+	ruleResult, ok := result.Output["ruleResult"].(map[string]any)
+	if !ok || ruleResult["failedStage"] != string(marketing.RuleStageQualify) {
+		t.Fatalf("expected structured rule result, got %+v", result.Output["ruleResult"])
+	}
+}
+
+func TestConditionWorkflowNodeHandlerEvaluatesJSONLogic(t *testing.T) {
+	ctx := context.WithValue(context.Background(), workflowNodeExecutionContextKey{}, workflowNodeExecutionContext{
+		ResolvedInput: map[string]any{
+			"fact": map[string]any{"amount": "120.00", "vip": true},
+		},
+	})
+	node := marketing.WorkflowNode{
+		ID:   "condition",
+		Type: "condition",
+		Config: json.RawMessage(`{
+			"expressionLanguage": "JSON_LOGIC",
+			"expression": "{\"and\":[{\">=\":[{\"var\":\"fact.amount\"},100]},{\"==\":[{\"var\":\"fact.vip\"},true]}]}",
+			"errorAction": "BLOCK"
+		}`),
+	}
+	result := decisionWorkflowNodeHandler(ctx, node, testWorkflowHandlerRuntime(false))
+	if result.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected condition success, got %+v", result)
+	}
+	if result.Output["IF"] != true || result.Output["ELSE"] != false || result.Output["decision"] != "PASS" {
+		t.Fatalf("expected JSON logic IF route, got %+v", result.Output)
+	}
+}
+
+func TestRewardWorkflowNodeHandlerCalculatesConfiguredReward(t *testing.T) {
+	runtime := testWorkflowHandlerRuntime(true)
+	runtime.Activity.Rewards = []marketing.Reward{{
+		ID:            "reward_calc",
+		Code:          "BONUS",
+		Type:          marketing.RewardBonus,
+		CalculateType: marketing.CalculateFixed,
+		Config:        json.RawMessage(`{"amount":"12.50","currency":"USD"}`),
+		GrantMode:     marketing.GrantAuto,
+		GrantChannel:  marketing.GrantHTTP,
+		Enabled:       true,
+	}}
+
+	result := rewardWorkflowNodeHandler(context.Background(), marketing.WorkflowNode{ID: "reward", Type: "reward"}, runtime)
+	if result.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected success, got %+v", result)
+	}
+	items := result.Output["reward_items"].([]any)
+	item := items[0].(map[string]any)
+	if item["amount"] != "12.5000" || item["currency"] != "USD" || item["reasonCode"] != "OK" {
+		t.Fatalf("expected calculated reward item, got %+v", item)
+	}
+}
+
+func TestServiceFactQueryWorkflowNodeHandlerHonorsUseEmptyFailureAction(t *testing.T) {
+	service := NewService(marketing.NewMemoryRepository())
+	node := marketing.WorkflowNode{
+		ID:   "fact-query",
+		Type: "fact-query",
+		Config: json.RawMessage(`{
+			"factKeys": ["USER_PROFILE"],
+			"source": "FACT_SERVICE",
+			"failureAction": "USE_EMPTY"
+		}`),
+	}
+
+	result := service.factQueryWorkflowNodeHandler(context.Background(), node, testWorkflowHandlerRuntime(true))
+	if result.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected USE_EMPTY to continue, got %+v", result)
+	}
+	if result.Output["failureAction"] != "USE_EMPTY" || result.Output["errorCode"] == "" {
+		t.Fatalf("expected explicit fact query degradation output, got %+v", result.Output)
+	}
+	facts := result.Output["facts"].(map[string]any)
+	if len(facts) != 0 {
+		t.Fatalf("expected empty facts fallback, got %+v", facts)
+	}
+}
+
+func TestServiceFactQueryWorkflowNodeHandlerAppliesSourceAndSubjectPath(t *testing.T) {
+	service := NewService(marketing.NewMemoryRepository())
+	runtime := testWorkflowHandlerRuntime(true)
+	runtime.Inbox.Event.Attributes["accountId"] = "account_001"
+	node := marketing.WorkflowNode{
+		ID:   "fact-query",
+		Type: "fact-query",
+		Config: json.RawMessage(`{
+			"factKeys": ["USER_PROFILE"],
+			"source": "FACT_SERVICE",
+			"subjectPath": "attributes.accountId",
+			"failureAction": "USE_EMPTY",
+			"timeoutSeconds": 1,
+			"cacheTtlSeconds": 30
+		}`),
+	}
+	result := service.factQueryWorkflowNodeHandler(context.Background(), node, runtime)
+	if result.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected fallback success, got %+v", result)
+	}
+	subject := result.Output["subject"].(map[string]any)
+	if subject["id"] != "account_001" || result.Output["source"] != "FACT_SERVICE" || result.Output["cacheTtlSeconds"] != float64(30) {
+		t.Fatalf("expected subject/source/cache config in output, got %+v", result.Output)
+	}
+
+	unsupported := node
+	unsupported.Config = json.RawMessage(`{"factKeys":["USER_PROFILE"],"source":"WAREHOUSE","failureAction":"USE_EMPTY"}`)
+	result = service.factQueryWorkflowNodeHandler(context.Background(), unsupported, runtime)
+	if result.Status != marketing.WorkflowNodeSuccess || result.Output["errorCode"] != "FACT_QUERY_SOURCE_UNSUPPORTED" {
+		t.Fatalf("expected unsupported source to degrade with errorCode, got %+v", result)
+	}
+}
+
+func TestLimitAndQuotaWorkflowNodeHandlersEmitReservationPlans(t *testing.T) {
+	runtime := testWorkflowHandlerRuntime(true)
+	limit := limitWorkflowNodeHandler(context.Background(), marketing.WorkflowNode{
+		ID:     "limit",
+		Type:   "limit",
+		Config: json.RawMessage(`{"scope":"USER","scopeKeyTemplate":"${subject.id}:${activityId}","period":"ACTIVITY","maxCount":1}`),
+	}, runtime)
+	if limit.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected limit success, got %+v", limit)
+	}
+	limitHold := limit.Output["limit_hold"].(map[string]any)
+	if limitHold["scopeKey"] != "user_001:activity_handler" {
+		t.Fatalf("unexpected limit scope key: %+v", limitHold)
+	}
+	limitReservations := limitHold["reservations"].([]any)
+	limitReservation := limitReservations[0].(map[string]any)
+	if limitReservation["quotaType"] != string(marketing.QuotaUserLimit) || limitReservation["amount"] != "1" {
+		t.Fatalf("unexpected limit reservation: %+v", limitReservation)
+	}
+
+	ctx := context.WithValue(context.Background(), workflowNodeExecutionContextKey{}, workflowNodeExecutionContext{
+		NodeOutputs: map[string]map[string]any{
+			"reward": {"reward_items": []any{map[string]any{"amount": "12.50"}}},
+		},
+	})
+	quota := quotaWorkflowNodeHandler(ctx, marketing.WorkflowNode{
+		ID:     "quota",
+		Type:   "quota",
+		Config: json.RawMessage(`{"quotaType":"BUDGET","scope":"ACTIVITY","scopeKeyTemplate":"${activityId}","amountField":"reward_items[0].amount"}`),
+	}, runtime)
+	if quota.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected quota success, got %+v", quota)
+	}
+	quotaHold := quota.Output["quota_hold"].(map[string]any)
+	if quotaHold["plannedAmount"] != "12.50" || quotaHold["commitAuthority"] != "CreateParticipationGrantOutboxesWithQuota" {
+		t.Fatalf("unexpected quota hold: %+v", quotaHold)
+	}
+	quotaReservations := quotaHold["reservations"].([]any)
+	quotaReservation := quotaReservations[0].(map[string]any)
+	if quotaReservation["quotaType"] != string(marketing.QuotaBudget) || quotaReservation["scopeKey"] != "activity_handler" || quotaReservation["amount"] != "12.50" {
+		t.Fatalf("unexpected quota reservation: %+v", quotaReservation)
 	}
 }
 
@@ -745,6 +1116,15 @@ func testWorkflowHandlerRuntime(qualified bool) workflowRuntime {
 			RewardAmount:    "10.00",
 			GrantStatus:     marketing.GrantPending,
 			GrantChannel:    marketing.GrantHTTP,
+		}},
+		OutboxMessages: []marketing.OutboxMessage{{
+			ID:            "outbox_handler",
+			TenantID:      "site_001",
+			MessageType:   "REWARD_COMMAND",
+			TargetChannel: marketing.GrantHTTP,
+			TargetRef:     "https://reward.example.test",
+			Payload:       json.RawMessage(`{"billNo":"cmd_handler"}`),
+			SendStatus:    marketing.OutboxPending,
 		}},
 		RuleResult: marketing.ActivityRuleResult{
 			ActivityID:   "activity_handler",

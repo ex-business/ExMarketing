@@ -756,7 +756,7 @@ func (s *Service) ProcessEventFrom(ctx context.Context, event marketing.Activity
 			continue
 		}
 
-		participation, rewardOrders, outboxMessages, ruleResult, qualified, err := s.evaluateActivity(ctx, inbox, activity)
+		participation, rewardOrders, outboxMessages, reservations, ruleResult, qualified, err := s.evaluateActivity(ctx, inbox, activity)
 		if err != nil {
 			inbox.ProcessStatus = marketing.InboxFailed
 			inbox.ErrorMessage = err.Error()
@@ -775,6 +775,7 @@ func (s *Service) ProcessEventFrom(ctx context.Context, event marketing.Activity
 			Participation:  participation,
 			GrantOrders:    rewardOrders,
 			OutboxMessages: outboxMessages,
+			Reservations:   reservations,
 			RuleResult:     ruleResult,
 			Qualified:      qualified,
 			Reason:         ruleResult.Reason,
@@ -1391,7 +1392,7 @@ func (s *Service) createRejectedParticipation(ctx context.Context, inbox marketi
 	return created, err
 }
 
-func (s *Service) evaluateActivity(ctx context.Context, inbox marketing.EventInbox, activity marketing.Activity) (marketing.Participation, []marketing.GrantOrder, []marketing.OutboxMessage, marketing.ActivityRuleResult, bool, error) {
+func (s *Service) evaluateActivity(ctx context.Context, inbox marketing.EventInbox, activity marketing.Activity) (marketing.Participation, []marketing.GrantOrder, []marketing.OutboxMessage, []marketing.QuotaReservation, marketing.ActivityRuleResult, bool, error) {
 	now := s.now()
 	participation := marketing.Participation{
 		ID:             marketingID("part"),
@@ -1408,7 +1409,7 @@ func (s *Service) evaluateActivity(ctx context.Context, inbox marketing.EventInb
 
 	pluginSnapshot, state, pluginRejected, pluginRuleResult, err := s.preparePlugin(ctx, activity, inbox.Event)
 	if err != nil {
-		return participation, nil, nil, marketing.ActivityRuleResult{}, false, err
+		return participation, nil, nil, nil, marketing.ActivityRuleResult{}, false, err
 	}
 	if pluginRejected {
 		participation.Status = marketing.ParticipationRejected
@@ -1416,7 +1417,7 @@ func (s *Service) evaluateActivity(ctx context.Context, inbox marketing.EventInb
 		participation.Snapshot = participationSnapshot(activity, inbox, pluginRuleResult, nil, pluginSnapshot)
 		participation.UpdatedAt = now
 		created, err := s.repository.CreateParticipation(ctx, participation)
-		return created, nil, nil, pluginRuleResult, false, err
+		return created, nil, nil, nil, pluginRuleResult, false, err
 	}
 
 	facts, factFailure, _ := s.queryActivityFacts(ctx, inbox.Event, activity)
@@ -1434,7 +1435,7 @@ func (s *Service) evaluateActivity(ctx context.Context, inbox marketing.EventInb
 		participation.Snapshot = participationSnapshot(activity, inbox, ruleResult, nil, pluginSnapshot)
 		participation.UpdatedAt = now
 		created, err := s.repository.CreateParticipation(ctx, participation)
-		return created, nil, nil, ruleResult, false, err
+		return created, nil, nil, nil, ruleResult, false, err
 	}
 
 	var orders []marketing.GrantOrder
@@ -1458,7 +1459,7 @@ func (s *Service) evaluateActivity(ctx context.Context, inbox marketing.EventInb
 		}, configuredReward)
 		if err != nil {
 			s.recordRewardExecution(activity, configuredReward, reward.Result{}, "failed", "calculation_error", s.now().Sub(rewardStartedAt))
-			return participation, orders, messages, ruleResult, true, err
+			return participation, orders, messages, nil, ruleResult, true, err
 		}
 		if rewardResult.Skipped {
 			s.recordRewardExecution(activity, configuredReward, rewardResult, "skipped", rewardResult.ReasonCode, s.now().Sub(rewardStartedAt))
@@ -1517,7 +1518,7 @@ func (s *Service) evaluateActivity(ctx context.Context, inbox marketing.EventInb
 		}
 		amount, err := decimal.Parse(rewardResult.Amount)
 		if err != nil {
-			return participation, orders, messages, ruleResult, true, err
+			return participation, orders, messages, nil, ruleResult, true, err
 		}
 		totalRewardAmount = totalRewardAmount.Add(amount)
 		orders = append(orders, order)
@@ -1537,14 +1538,14 @@ func (s *Service) evaluateActivity(ctx context.Context, inbox marketing.EventInb
 		participation.Status = marketing.ParticipationQualified
 		participation.RejectReason = reward.ReasonZeroRewardSkipped + ": no payable reward"
 		if err := s.appendPluginIntents(ctx, activity, inbox.Event, &participation, pluginSnapshot); err != nil {
-			return participation, orders, messages, ruleResult, true, err
+			return participation, orders, messages, nil, ruleResult, true, err
 		}
 		participation.Snapshot = participationSnapshot(activity, inbox, ruleResult, rewardSummaries, pluginSnapshot)
 		createdParticipation, err := s.repository.CreateParticipation(ctx, participation)
-		return createdParticipation, nil, nil, ruleResult, true, err
+		return createdParticipation, nil, nil, nil, ruleResult, true, err
 	}
 	if err := s.appendPluginIntents(ctx, activity, inbox.Event, &participation, pluginSnapshot); err != nil {
-		return participation, orders, messages, ruleResult, true, err
+		return participation, orders, messages, nil, ruleResult, true, err
 	}
 	participation.Snapshot = participationSnapshot(activity, inbox, ruleResult, rewardSummaries, pluginSnapshot)
 	quotaAttempts := quotaReserveAttempts(activity, inbox.Event, totalRewardAmount.String(), stockReservations)
@@ -1579,10 +1580,10 @@ func (s *Service) evaluateActivity(ctx context.Context, inbox marketing.EventInb
 			}
 			_ = s.audit(ctx, activity.TenantID, "engine", "QUOTA_EXCEEDED", "QUOTA", inbox.ID, auditSnapshot(nil, nil, payload))
 		}
-		return participation, orders, messages, ruleResult, true, err
+		return participation, orders, messages, nil, ruleResult, true, err
 	}
 	s.recordQuotaAttempts(activity, quotaAttempts, true, nil)
-	return atomicResult.Participation, atomicResult.GrantOrders, atomicResult.OutboxMessages, ruleResult, true, nil
+	return atomicResult.Participation, atomicResult.GrantOrders, atomicResult.OutboxMessages, atomicResult.Reservations, ruleResult, true, nil
 }
 
 func (s *Service) recordRuleExecution(activity marketing.Activity, event marketing.ActivityEvent, result marketing.ActivityRuleResult, elapsed time.Duration) {

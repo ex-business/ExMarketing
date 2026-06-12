@@ -27,13 +27,13 @@ export function ContextMenu({
     <div className="context-menu" style={{ left: menu.x, top: menu.y }} onClick={(event) => event.stopPropagation()}>
       {menu.type === 'pane' ? (
         <>
-          <button onClick={onOpenPicker}>Add Node</button>
-          <button onClick={() => onAddNote(menu.flowX, menu.flowY)}>Add Note</button>
-          <button onClick={onPreview}>Preview</button>
-          <button className="disabled" disabled><span>Paste Here</span><kbd>⌘ V</kbd></button>
+          <button onClick={onOpenPicker}>添加节点</button>
+          <button onClick={() => onAddNote(menu.flowX, menu.flowY)}>添加备注</button>
+          <button onClick={onPreview}>预览</button>
+          <button className="disabled" disabled><span>粘贴到这里</span><kbd>⌘ V</kbd></button>
           <div className="context-divider" />
-          <button onClick={onExport}>Export DSL</button>
-          <button onClick={onImport}>Import App</button>
+          <button onClick={onExport}>导出 DSL</button>
+          <button onClick={onImport}>导入应用</button>
         </>
       ) : null}
       {menu.type === 'node' ? (

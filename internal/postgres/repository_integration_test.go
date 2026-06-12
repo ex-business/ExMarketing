@@ -321,6 +321,80 @@ func TestPostgresWorkspaceSearchLargeDatasetPerformance(t *testing.T) {
 	t.Logf("large workspace search total=%d returned=%d elapsed=%s", result.Total, len(result.Items), elapsed)
 }
 
+func TestPostgresWorkspaceSearchTeamWorkspaceRequiresMembership(t *testing.T) {
+	ctx, repo := openPostgresIntegrationRepository(t)
+	prefix := fmt.Sprintf("pg_search_visibility_%d", time.Now().UnixNano())
+	cleanupPostgresWorkspaceTest(t, repo, prefix)
+	t.Cleanup(func() { cleanupPostgresWorkspaceTest(t, repo, prefix) })
+
+	now := time.Now().UTC()
+	teamWorkspace := marketing.Workspace{
+		ID:          prefix + "_team",
+		TenantID:    "site_001",
+		Name:        "Visibility Probe Team Workspace",
+		Slug:        prefix + "-team",
+		Visibility:  marketing.WorkspaceTeam,
+		DefaultRole: marketing.WorkspaceRoleViewer,
+		OwnerID:     prefix + "_owner",
+		Status:      marketing.WorkspaceActive,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	publicWorkspace := teamWorkspace
+	publicWorkspace.ID = prefix + "_public"
+	publicWorkspace.Name = "Visibility Probe Public Workspace"
+	publicWorkspace.Slug = prefix + "-public"
+	publicWorkspace.Visibility = marketing.WorkspacePublic
+	if _, err := repo.CreateWorkspace(ctx, teamWorkspace); err != nil {
+		t.Fatalf("create team workspace: %v", err)
+	}
+	if _, err := repo.CreateWorkspace(ctx, publicWorkspace); err != nil {
+		t.Fatalf("create public workspace: %v", err)
+	}
+
+	strangerResult, err := repo.SearchWorkspaceHome(ctx, marketing.WorkspaceHomeSearchQuery{
+		Keyword: "Visibility Probe",
+		Type:    "workspace",
+		ActorID: prefix + "_stranger",
+		Limit:   10,
+	})
+	if err != nil {
+		t.Fatalf("search as stranger: %v", err)
+	}
+	if containsWorkspaceSearchResult(strangerResult.Items, teamWorkspace.ID) {
+		t.Fatalf("stranger should not see TEAM workspace, got %+v", strangerResult.Items)
+	}
+	if !containsWorkspaceSearchResult(strangerResult.Items, publicWorkspace.ID) {
+		t.Fatalf("stranger should see PUBLIC workspace, got %+v", strangerResult.Items)
+	}
+
+	memberID := prefix + "_member"
+	if _, err := repo.CreateWorkspaceMember(ctx, marketing.WorkspaceMember{
+		ID:          memberID,
+		WorkspaceID: teamWorkspace.ID,
+		UserID:      prefix + "_member_user",
+		Email:       prefix + "_member@example.com",
+		Role:        marketing.WorkspaceRoleViewer,
+		Status:      marketing.WorkspaceMemberActive,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}); err != nil {
+		t.Fatalf("create workspace member: %v", err)
+	}
+	memberResult, err := repo.SearchWorkspaceHome(ctx, marketing.WorkspaceHomeSearchQuery{
+		Keyword: "Visibility Probe",
+		Type:    "workspace",
+		ActorID: prefix + "_member_user",
+		Limit:   10,
+	})
+	if err != nil {
+		t.Fatalf("search as member: %v", err)
+	}
+	if !containsWorkspaceSearchResult(memberResult.Items, teamWorkspace.ID) {
+		t.Fatalf("member should see TEAM workspace, got %+v", memberResult.Items)
+	}
+}
+
 func TestPostgresWorkspaceBatchRollsBackWhenOneWorkflowUnauthorized(t *testing.T) {
 	ctx, repo := openPostgresIntegrationRepository(t)
 	prefix := fmt.Sprintf("pg_batch_acl_%d", time.Now().UnixNano())
@@ -1675,6 +1749,15 @@ func assertPostgresBatchFailure(t *testing.T, result marketing.WorkspaceBatchRes
 		}
 	}
 	t.Fatalf("expected batch failure id=%s containing %q, got %+v", id, contains, result.Items)
+}
+
+func containsWorkspaceSearchResult(items []marketing.WorkspaceHomeSearchResult, id string) bool {
+	for _, item := range items {
+		if item.ID == id {
+			return true
+		}
+	}
+	return false
 }
 
 func assertPostgresActivityVisibility(t *testing.T, repo *Repository, activityID string, want marketing.WorkspaceVisibility) {

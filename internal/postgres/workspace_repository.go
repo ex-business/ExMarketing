@@ -143,7 +143,7 @@ func (r *Repository) SearchWorkspaceHome(ctx context.Context, query marketing.Wo
 			       CASE
 			         WHEN $6 = '' THEN TRUE
 			         WHEN w.owner_id = $6 THEN TRUE
-			         WHEN w.visibility IN ('TEAM', 'PUBLIC') THEN TRUE
+			         WHEN w.visibility = 'PUBLIC' THEN TRUE
 			         WHEN EXISTS (SELECT 1 FROM actor_members am WHERE am.workspace_id = w.id) THEN TRUE
 			         ELSE FALSE
 			       END AS allowed,
@@ -152,7 +152,6 @@ func (r *Repository) SearchWorkspaceHome(ctx context.Context, query marketing.Wo
 			         WHEN w.owner_id = $6 THEN 'workspace owner'
 			         WHEN EXISTS (SELECT 1 FROM actor_members am WHERE am.workspace_id = w.id) THEN 'workspace member'
 			         WHEN w.visibility = 'PUBLIC' THEN 'workspace visibility PUBLIC'
-			         WHEN w.visibility = 'TEAM' THEN 'workspace visibility TEAM'
 			         ELSE 'not allowed'
 			       END AS permission_reason
 			FROM (
@@ -311,8 +310,6 @@ func workspaceSearchPermissionSources(itemType string, reason string, visibility
 		return []string{"Workspace 成员", "成员可见"}
 	case "workspace visibility PUBLIC":
 		return []string{"Workspace Public", "公开可见"}
-	case "workspace visibility TEAM":
-		return []string{"Workspace Team", "团队可见"}
 	case "workflow visibility PUBLIC":
 		return []string{"Workflow Public", "公开可见"}
 	case "workspace member via workflow TEAM visibility":

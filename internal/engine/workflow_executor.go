@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	exdecimal "github.com/ex-stack/ExMarketing/internal/decimal"
 	"github.com/ex-stack/ExMarketing/internal/marketing"
 	rewardcalc "github.com/ex-stack/ExMarketing/internal/reward"
 	"github.com/ex-stack/ExMarketing/internal/rule"
@@ -1861,48 +1862,11 @@ func factQueryWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNo
 	if canceled := workflowHandlerContextCanceled(ctx, node, runtime); canceled.Status != "" {
 		return canceled
 	}
-	config, failed, ok := workflowRequireNodeConfig(node)
-	if !ok {
-		failed.Output["audit"] = workflowHandlerAudit(node, runtime)
-		return failed
-	}
-	source := strings.ToUpper(firstWorkflowString(workflowConfigString(config, "source"), "FACT_SERVICE"))
-	if source != "FACT_SERVICE" && source != "HTTP_PROVIDER" {
-		return workflowFactQueryFailure(node, runtime, config, "", "FACT_QUERY_SOURCE_UNSUPPORTED", "fact-query source "+source+" is not supported by workflow executor", map[string]any{}, nil)
-	}
-	refs := workflowConfigStringList(config, "factKeys")
-	if len(refs) == 0 {
-		for factCode, fields := range marketing.ExtractFactReferences(runtime.Activity.Rules) {
-			if len(fields) == 0 {
-				refs = append(refs, factCode)
-				continue
-			}
-			for field := range fields {
-				refs = append(refs, factCode+"."+field)
-			}
-		}
-	}
-	if len(refs) == 0 {
-		return nodeSkipped("FACT_QUERY_NO_KEYS: no fact references", map[string]any{
-			"errorCode": "FACT_QUERY_NO_KEYS",
-			"factCount": 0,
-			"facts":     map[string]any{},
-			"audit":     workflowHandlerAudit(node, runtime),
-		})
-	}
-	facts := map[string]any{}
-	for _, ref := range refs {
-		facts[ref] = map[string]any{
-			"key":       ref,
-			"available": false,
-			"source":    "runtime-placeholder",
-		}
-	}
-	return nodeSuccess(map[string]any{
-		"factCount": len(refs),
-		"factKeys":  refs,
-		"facts":     facts,
-		"audit":     workflowHandlerAudit(node, runtime),
+	return nodeFailed("FACT_QUERY_SERVICE_REQUIRED: fact-query requires Service.factQueryWorkflowNodeHandler", map[string]any{
+		"errorCode":       "FACT_QUERY_SERVICE_REQUIRED",
+		"executionMode":   "SERVICE_HANDLER_REQUIRED",
+		"executionIntent": "real fact provider query",
+		"audit":           workflowHandlerAudit(node, runtime),
 	})
 }
 
@@ -2215,11 +2179,61 @@ func rewardWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode,
 	})
 }
 
-func decimalWorkflowNodeHandler(_ context.Context, _ marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
+func decimalWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
 	if !runtime.Qualified {
-		return nodeSkipped("activity not qualified", nil)
+		return nodeSkipped("DECIMAL_NOT_QUALIFIED: activity not qualified", map[string]any{
+			"errorCode": "DECIMAL_NOT_QUALIFIED",
+			"audit":     workflowHandlerAudit(node, runtime),
+		})
 	}
-	return nodeSuccess(map[string]any{"mode": "Decimal(18, 8)"})
+	raw, ok := workflowResolvedInput(ctx, "amount_expr")
+	source := "input.amount_expr"
+	if !ok {
+		if value, ok := workflowUpstreamOutput(ctx, "decimal_amount"); ok {
+			raw = value
+			source = "upstream.decimal_amount"
+			ok = true
+		}
+	}
+	if !ok {
+		if value, ok := workflowUpstreamOutput(ctx, "amount"); ok {
+			raw = value
+			source = "upstream.amount"
+			ok = true
+		}
+	}
+	if !ok {
+		config, _, hasConfig := workflowRequireNodeConfig(node)
+		if hasConfig {
+			if value := firstWorkflowString(workflowConfigString(config, "amountExpr"), workflowConfigString(config, "amount")); value != "" {
+				raw = value
+				source = "config.amountExpr"
+				ok = true
+			}
+		}
+	}
+	if !ok {
+		return nodeFailed("DECIMAL_INPUT_REQUIRED: amount_expr is required", map[string]any{
+			"errorCode": "DECIMAL_INPUT_REQUIRED",
+			"audit":     workflowHandlerAudit(node, runtime),
+		})
+	}
+	value, err := exdecimal.Parse(workflowOutputString(raw))
+	if err != nil {
+		return nodeFailed("DECIMAL_PARSE_FAILED: amount_expr is invalid", map[string]any{
+			"errorCode": "DECIMAL_PARSE_FAILED",
+			"source":    source,
+			"rawValue":  workflowOutputString(raw),
+			"audit":     workflowHandlerAudit(node, runtime),
+		})
+	}
+	return nodeSuccess(map[string]any{
+		"decimal_amount": value.String(),
+		"rawValue":       workflowOutputString(raw),
+		"source":         source,
+		"precision":      "Decimal(18, 8)",
+		"audit":          workflowHandlerAudit(node, runtime),
+	})
 }
 
 func limitWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
@@ -2414,19 +2428,33 @@ func outboxWorkflowNodeHandler(_ context.Context, node marketing.WorkflowNode, r
 	return nodeSuccess(output)
 }
 
-func retryWorkflowNodeHandler(_ context.Context, _ marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
+func retryWorkflowNodeHandler(_ context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
 	if len(runtime.OutboxMessages) == 0 {
-		return nodeSkipped("no dispatch retry required", nil)
+		return nodeSkipped("no dispatch retry required", map[string]any{
+			"executionMode":      "EXPLAIN_ONLY",
+			"executionAuthority": "OutboxWorker",
+			"audit":              workflowHandlerAudit(node, runtime),
+		})
 	}
-	return nodeSuccess(map[string]any{"retryPolicy": "outbox exponential backoff"})
+	return nodeSuccess(map[string]any{
+		"retryPolicy":        "outbox exponential backoff",
+		"executionMode":      "EXPLAIN_ONLY",
+		"executionAuthority": "OutboxWorker",
+		"messageCount":       len(runtime.OutboxMessages),
+		"audit":              workflowHandlerAudit(node, runtime),
+	})
 }
 
-func dlqWorkflowNodeHandler(_ context.Context, _ marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
-	return nodeSkipped("no exhausted retry in current execution", nil)
+func dlqWorkflowNodeHandler(_ context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
+	return nodeSkipped("no exhausted retry in current execution", map[string]any{
+		"executionMode":      "EXPLAIN_ONLY",
+		"executionAuthority": "OutboxWorker/Admin DLQ API",
+		"audit":              workflowHandlerAudit(node, runtime),
+	})
 }
 
 func dispatchWorkflowNodeHandler(channel string) workflowNodeHandler {
-	return func(_ context.Context, _ marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
+	return func(_ context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
 		count := 0
 		for _, message := range runtime.OutboxMessages {
 			if strings.EqualFold(string(message.TargetChannel), channel) {
@@ -2434,9 +2462,21 @@ func dispatchWorkflowNodeHandler(channel string) workflowNodeHandler {
 			}
 		}
 		if count == 0 {
-			return nodeSkipped("no "+channel+" dispatch", map[string]any{"channel": channel})
+			return nodeSkipped("no "+channel+" dispatch", map[string]any{
+				"channel":            channel,
+				"executionMode":      "EXPLAIN_ONLY",
+				"executionAuthority": "OutboxWorker",
+				"audit":              workflowHandlerAudit(node, runtime),
+			})
 		}
-		return nodeSuccess(map[string]any{"channel": channel, "messageCount": count})
+		return nodeSuccess(map[string]any{
+			"channel":            channel,
+			"messageCount":       count,
+			"executionMode":      "EXPLAIN_ONLY",
+			"executionAuthority": "OutboxWorker",
+			"explanation":        "Workflow node explains dispatch intent; transport delivery is performed by OutboxWorker.",
+			"audit":              workflowHandlerAudit(node, runtime),
+		})
 	}
 }
 
@@ -2456,31 +2496,54 @@ func callbackWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNod
 		})
 	}
 	result := map[string]any{
-		"awaitingCallback": true,
-		"grantOrderCount":  len(runtime.GrantOrders),
-		"provider":         workflowConfigString(config, "provider"),
-		"requireSignature": config["requireSignature"],
+		"awaitingCallback":  true,
+		"grantOrderCount":   len(runtime.GrantOrders),
+		"provider":          workflowConfigString(config, "provider"),
+		"requireSignature":  config["requireSignature"],
+		"executionMode":     "EXTERNAL_ENDPOINT",
+		"terminalAuthority": "RewardCallback/Reconciliation",
 	}
 	return nodeSuccess(map[string]any{
-		"callback_result":  result,
-		"awaitingCallback": true,
-		"grantOrderCount":  len(runtime.GrantOrders),
-		"audit":            workflowHandlerAudit(node, runtime),
+		"callback_result":   result,
+		"awaitingCallback":  true,
+		"grantOrderCount":   len(runtime.GrantOrders),
+		"executionMode":     "EXTERNAL_ENDPOINT",
+		"terminalAuthority": "RewardCallback/Reconciliation",
+		"audit":             workflowHandlerAudit(node, runtime),
 	})
 }
 
-func reconcileWorkflowNodeHandler(_ context.Context, _ marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
+func reconcileWorkflowNodeHandler(_ context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
 	if len(runtime.GrantOrders) == 0 {
-		return nodeSkipped("no grant order to reconcile", nil)
+		return nodeSkipped("no grant order to reconcile", map[string]any{
+			"executionMode":      "EXPLAIN_ONLY",
+			"executionAuthority": "Reconciliation/Admin API",
+			"audit":              workflowHandlerAudit(node, runtime),
+		})
 	}
-	return nodeSuccess(map[string]any{"reconciliationTracked": true})
+	return nodeSuccess(map[string]any{
+		"reconciliationTracked": true,
+		"executionMode":         "EXPLAIN_ONLY",
+		"executionAuthority":    "Reconciliation/Admin API",
+		"grantOrderCount":       len(runtime.GrantOrders),
+		"audit":                 workflowHandlerAudit(node, runtime),
+	})
 }
 
-func alertWorkflowNodeHandler(_ context.Context, _ marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
+func alertWorkflowNodeHandler(_ context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
 	if runtime.Qualified {
-		return nodeSkipped("no alert condition", nil)
+		return nodeSkipped("no alert condition", map[string]any{
+			"executionMode":      "EXPLAIN_ONLY",
+			"executionAuthority": "Metrics/Alertmanager",
+			"audit":              workflowHandlerAudit(node, runtime),
+		})
 	}
-	return nodeSuccess(map[string]any{"reason": runtime.RuleResult.Reason})
+	return nodeSuccess(map[string]any{
+		"reason":             runtime.RuleResult.Reason,
+		"executionMode":      "EXPLAIN_ONLY",
+		"executionAuthority": "Metrics/Alertmanager",
+		"audit":              workflowHandlerAudit(node, runtime),
+	})
 }
 
 func genericWorkflowNodeHandler(_ context.Context, node marketing.WorkflowNode, _ workflowRuntime) workflowNodeResult {

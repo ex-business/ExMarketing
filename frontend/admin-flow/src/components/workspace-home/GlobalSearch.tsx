@@ -1,5 +1,6 @@
 import { Search } from 'lucide-react';
 import type { ReactNode } from 'react';
+import { TaBadge, TaInput, TaMenu, TaMenuItem } from './TailAdminPrimitives';
 
 export type GlobalSearchResult = {
   id: string;
@@ -53,51 +54,50 @@ function renderHighlighted(value: string, html?: string) {
   return nodes.length ? nodes : value;
 }
 
+function resultTypeLabel(type: GlobalSearchResult['type']): string {
+  if (type === 'workflow') return '流程';
+  if (type === 'folder') return '文件夹';
+  if (type === 'member') return '成员';
+  return '工作区';
+}
+
 export function GlobalSearch({ value, workflowCount, folderCount, memberCount, results = [], onChange, onResultSelect }: GlobalSearchProps) {
   const keyword = value.trim();
   return (
     <div className="exm-global-search-wrap">
       <label className="exm-global-search">
         <Search size={16} strokeWidth={2.1} />
-        <input
+        <TaInput
           value={value}
-          placeholder="搜索 workflow、folder、member"
+          placeholder="搜索流程、文件夹、成员"
           onChange={(event) => onChange(event.target.value)}
         />
-        <span>{workflowCount} W</span>
-        <span>{folderCount} F</span>
-        <span>{memberCount} M</span>
+        <TaBadge>{workflowCount} 流程</TaBadge>
+        <TaBadge>{folderCount} 文件夹</TaBadge>
+        <TaBadge>{memberCount} 成员</TaBadge>
         <kbd>⌘ K</kbd>
       </label>
       {keyword && results.length ? (
-        <div className="exm-global-search-results">
+        <TaMenu className="exm-global-search-results">
           {results.map((result) => (
-            <button key={`${result.type}-${result.id}`} type="button" onMouseDown={(event) => {
+            <TaMenuItem key={`${result.type}-${result.id}`} onMouseDown={(event) => {
               event.preventDefault();
               onResultSelect?.(result);
             }}>
-              <strong>{result.type}</strong>
+              <strong>{resultTypeLabel(result.type)}</strong>
               <span className="exm-search-result-body">
                 <b>{renderHighlighted(result.title, result.highlights?.title)}</b>
                 <em>{renderHighlighted(result.subtitle, result.highlights?.subtitle)}</em>
-                {(result.permissionSources?.length || result.permissionReason) ? (
-                  <small>
-                    <i>{result.permission || 'VIEW'}</i>
-                    {(result.permissionSources?.length ? result.permissionSources : [result.permissionReason]).filter(Boolean).map((source) => (
-                      <i key={source}>{source}</i>
-                    ))}
-                  </small>
-                ) : null}
               </span>
-            </button>
+            </TaMenuItem>
           ))}
-        </div>
+        </TaMenu>
       ) : null}
       {keyword && !results.length ? (
         <div className="exm-global-search-results exm-global-search-empty">
           <b>没有找到匹配结果</b>
-          <span>可以尝试更短关键词，或切换到 Workflow / Folder / Member 维度搜索。</span>
-          <span>也可以新建名为 “{keyword}” 的 Workflow 或 Folder。</span>
+          <span>可以尝试更短关键词，或切换到流程、文件夹、成员维度搜索。</span>
+          <span>也可以新建名为 “{keyword}” 的流程或文件夹。</span>
         </div>
       ) : null}
     </div>

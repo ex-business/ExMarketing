@@ -2,6 +2,8 @@
 
 本文档用于把 ExMarketing 工作台首页按参考图完善为可用的 Workflow / Folder 管理界面。
 
+本地 demo 数据不会自动写入。需要显式访问 `/admin-flow/?seedDemo=1`，或在前端构建环境设置 `VITE_EXMARKETING_SEED_DEMO=true`，才会在空 workspace 时创建 demo 工作台。
+
 参考目标：
 
 - 整体布局按参考图 1、2、3：顶部栏 + 左侧导航 + 中间内容区 + 右侧详情面板。

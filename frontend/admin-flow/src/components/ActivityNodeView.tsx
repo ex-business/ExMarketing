@@ -51,7 +51,9 @@ export function ActivityNodeView({ id, data, selected }: NodeProps<ActivityNode>
   const outputs = data.outputs.length > 0 ? data.outputs : ['output'];
   const branchRows = ['condition', 'qualify', 'switch'].includes(data.id) ? branchRowsFor(data) : [];
   const isBranchNode = branchRows.length > 0;
-  const handleTop = (index: number) => (isBranchNode ? `${56 + index * 31}px` : `${70 + index * 21}px`);
+  const outputItems = isBranchNode ? branchRows.map((item) => item.output) : outputs;
+  const branchOutputLabel = (index: number) => branchRows[index]?.output ?? (index === 0 ? 'IF' : index === outputs.length - 1 ? 'ELSE' : 'ELIF');
+  const handleTop = (index: number) => (isBranchNode ? `${82 + index * 28}px` : `${70 + index * 21}px`);
   const inputTop = () => (isBranchNode ? '50%' : '50%');
 
   return (
@@ -115,15 +117,28 @@ export function ActivityNodeView({ id, data, selected }: NodeProps<ActivityNode>
       </div>
       {isBranchNode ? (
         <>
+          <div className="field-section branch-input-section node-selectable nodrag">
+            <b>INPUT VARIABLE</b>
+            <div className="variable-row">
+              <span className="variable-source">↳</span>
+              <code>{mainVariableFor(data)}</code>
+              <em>{outputs[0] ?? 'output'}</em>
+            </div>
+          </div>
           <div className="branch-list node-selectable nodrag">
             {branchRows.map((item, index) => (
               <div key={`${item.output}-${index}`} className="branch-row">
-                <div className="branch-row-head">
-                  <span>{item.caseLabel}</span>
+                <div className="branch-case-main">
+                  <div className="branch-row-head">
+                    <span>{item.caseLabel}</span>
+                  </div>
+                  <div className="branch-expression">
+                    <span>x</span>
+                    <code>{item.expression}</code>
+                  </div>
                 </div>
-                <div className="branch-expression">
-                  <span>x</span>
-                  <code>{item.expression}</code>
+                <div className="branch-output-name" aria-hidden="true">
+                  {item.output}
                 </div>
               </div>
             ))}
@@ -165,13 +180,13 @@ export function ActivityNodeView({ id, data, selected }: NodeProps<ActivityNode>
         <span>拖拽连接节点</span>
       </div>
       <div className={cx('output-handles', isBranchNode && 'branch-output-handles')} aria-hidden="true">
-        {outputs.slice(0, 4).map((item, index) => (
+        {outputItems.slice(0, 4).map((item, index) => (
           <span key={item} className="output-handle-label" style={{ top: handleTop(index) }}>
-            {isBranchNode ? (index === 0 ? 'IF' : index === outputs.length - 1 ? 'ELSE' : 'ELIF') : item}
+            {isBranchNode ? branchOutputLabel(index) : item}
           </span>
         ))}
       </div>
-      {outputs.slice(0, 4).map((item, index) => (
+      {outputItems.slice(0, 4).map((item, index) => (
         <div key={item}>
           <Handle
             id={`output-${index}`}
@@ -190,7 +205,11 @@ export function ActivityNodeView({ id, data, selected }: NodeProps<ActivityNode>
               });
             }}
           />
-          <span className={cx('output-handle-visual', isBranchNode && 'branch-output-handle-visual')} style={{ top: handleTop(index) }} aria-hidden="true" />
+          <span
+            className={cx('output-handle-visual', isBranchNode && 'branch-output-handle-visual', isBranchNode && `route-${branchOutputLabel(index).toLowerCase()}`)}
+            style={{ top: handleTop(index) }}
+            aria-hidden="true"
+          />
           {isBranchNode ? (
             <span className="output-handle-tooltip" style={{ top: handleTop(index) }}>
               <b>Click to add</b>

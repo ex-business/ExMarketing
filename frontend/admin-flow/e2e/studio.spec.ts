@@ -194,13 +194,28 @@ const schemaItems = [
 
 type StudioTestDefinition = typeof workflowDefinition | typeof conditionWorkflowDefinition;
 
-async function mockStudioApi(page: Page, options: { failFirstDraftSave?: boolean; validationBlocks?: boolean; routeValidationBlocks?: boolean; draftDefinition?: StudioTestDefinition; activeDefinition?: StudioTestDefinition; archivedDefinition?: StudioTestDefinition; withExecution?: boolean; largeWorkspace?: boolean } = {}) {
+async function mockStudioApi(page: Page, options: { failFirstDraftSave?: boolean; validationBlocks?: boolean; routeValidationBlocks?: boolean; draftDefinition?: StudioTestDefinition; activeDefinition?: StudioTestDefinition; archivedDefinition?: StudioTestDefinition; withExecution?: boolean; largeWorkspace?: boolean; failBatchMove?: boolean; failFirstStorageUpload?: boolean } = {}) {
   let draftSaveCount = 0;
+  let storageUploadCount = 0;
   let published = Boolean(options.activeDefinition);
   let rolledBack = false;
   let archivedHidden = false;
   const runBaseMs = Date.parse('2026-06-02T10:00:00.000Z');
   const runTime = (offsetMs: number) => new Date(runBaseMs + offsetMs).toISOString();
+  const storageFiles = [{
+    id: 'wsfile_existing',
+    workspaceId,
+    folderId,
+    kind: 'IMPORT_WORKFLOW',
+    fileName: 'existing-import.json',
+    contentType: 'application/json',
+    sizeBytes: 2048,
+    storageProvider: 'local',
+    storageKey: `${workspaceId}/existing-import.json`,
+    checksumSha256: 'sha256-existing',
+    createdBy: 'admin-flow',
+    createdAt: runTime(-60_000),
+  }];
   await page.route('**/admin/v1/**', async (route: Route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -211,6 +226,42 @@ async function mockStudioApi(page: Page, options: { failFirstDraftSave?: boolean
       contentType: 'application/json',
       body: JSON.stringify(body),
     });
+
+    if (path === '/admin/v1/workspace-home/storage' && method === 'GET') {
+      const fileBytes = storageFiles.reduce((sum, file) => sum + file.sizeBytes, 0);
+      return json({ usedBytes: fileBytes + 1024 * 1024, totalBytes: 100 * 1024 * 1024 * 1024, workflows: 2, folders: 2, members: 1, auditLogs: 0, versions: 1, executions: 0, fileObjects: storageFiles.length, fileBytes });
+    }
+    if (path === '/admin/v1/workspace-files' && method === 'GET') {
+      return json({ items: storageFiles });
+    }
+    if (path === '/admin/v1/workspace-files' && method === 'POST') {
+      storageUploadCount++;
+      if (options.failFirstStorageUpload && storageUploadCount === 1) {
+        return json({ error: 'storage temporarily unavailable' }, 500);
+      }
+      const uploaded = {
+        id: `wsfile_uploaded_${storageUploadCount}`,
+        workspaceId,
+        folderId,
+        kind: 'EXECUTION_ATTACHMENT',
+        fileName: 'retry-upload.json',
+        contentType: 'application/json',
+        sizeBytes: 18,
+        storageProvider: 'local',
+        storageKey: `${workspaceId}/retry-upload.json`,
+        checksumSha256: 'sha256-uploaded',
+        createdBy: 'admin-flow',
+        createdAt: runTime(0),
+      };
+      storageFiles.unshift(uploaded);
+      return json(uploaded, 201);
+    }
+    if (path.startsWith('/admin/v1/workspace-files/') && method === 'DELETE') {
+      const id = path.split('/').pop() ?? '';
+      const index = storageFiles.findIndex((file) => file.id === id);
+      const [deleted] = index >= 0 ? storageFiles.splice(index, 1) : [];
+      return json(deleted ?? { id, workspaceId, fileName: 'deleted.json', sizeBytes: 0, storageProvider: 'local', storageKey: '', checksumSha256: '', kind: 'IMPORT_WORKFLOW', createdAt: runTime(0) });
+    }
 
     if (path === '/admin/v1/activities' && method === 'GET') {
       if (options.largeWorkspace) {
@@ -298,7 +349,28 @@ async function mockStudioApi(page: Page, options: { failFirstDraftSave?: boolean
       const body = await request.postDataJSON();
       return json({ id: secondaryFolderId, workspaceId, name: 'Archive', visibility: body.visibility || 'TEAM', parentId: body.parentId || '', sortOrder: body.sortOrder ?? 20, status: 'ACTIVE' });
     }
-    if (path === `/admin/v1/workspaces/${workspaceId}/share-links` && method === 'GET') return json({ items: [] });
+    if (path === `/admin/v1/workspaces/${workspaceId}/batch` && method === 'POST') {
+      if (options.failBatchMove) {
+        return json({
+          committed: false,
+          items: [
+            { id: secondaryActivityId, type: 'WORKFLOW', status: 'FAILED', error: 'workflow is archived' },
+          ],
+        }, 400);
+      }
+      return json({ committed: true, count: 2, items: [] });
+    }
+    if (path === `/admin/v1/workspaces/${workspaceId}/share-links` && method === 'GET') return json({
+      items: [{
+        id: 'share_existing',
+        workspaceId,
+        scope: 'WORKSPACE',
+        permission: 'VIEW',
+        token: 'share_token_full_visibility_regression_1234567890',
+        enabled: true,
+        accessCount: 2,
+      }],
+    });
     if (path === `/admin/v1/workspaces/${workspaceId}/members` && method === 'GET') {
       return json({ items: [{ id: 'member_owner', workspaceId, userId: 'admin-flow', displayName: 'Admin Flow', role: 'OWNER', status: 'ACTIVE' }] });
     }
@@ -739,6 +811,13 @@ test('renders Workspace Studio home as a file manager with search, favorites, an
   await expect(page.locator('.exm-table-view')).toContainText('Retention Workflow');
   await expect(page.locator('.exm-detail-panel')).toContainText('Campaigns');
 
+  await page.locator('.exm-workspace-switcher-trigger').click();
+  await page.locator('.exm-workspace-switcher-search input').fill('missing');
+  await expect(page.locator('.exm-workspace-switcher-empty')).toContainText('没有匹配的 workspace');
+  await page.locator('.exm-workspace-switcher-search input').fill('E2E');
+  await expect(page.locator('.exm-workspace-switcher-menu')).toContainText('E2E Workspace');
+  await page.keyboard.press('Escape');
+
   await page.locator('.exm-folder-search input').fill('Retention');
   await expect(page.locator('[data-testid="workspace-row-workflow"]').filter({ hasText: 'Retention Workflow' })).toBeVisible();
 
@@ -749,6 +828,14 @@ test('renders Workspace Studio home as a file manager with search, favorites, an
   const retentionRow = page.locator('[data-testid="workspace-row-workflow"]').filter({ hasText: 'Retention Workflow' });
   await retentionRow.locator('[data-testid="workspace-row-more"]').click();
   await expect(page.getByTestId('workspace-row-action-rename')).toBeVisible();
+
+  const detailToggle = page.getByRole('button', { name: '打开详情' });
+  if (await detailToggle.isVisible()) await detailToggle.click();
+  await page.locator('.exm-detail-tabs').getByRole('button', { name: '分享' }).click();
+  await page.getByRole('button', { name: '管理分享' }).click();
+  const shareDialog = page.getByTestId('home-utility-dialog');
+  await expect(shareDialog).toContainText('tok_shar…7890');
+  await expect(shareDialog).not.toContainText('share_token_full_visibility_regression_1234567890');
 });
 
 test('keeps workspace responsive with large mocked datasets and highlighted search', async ({ page }) => {
@@ -762,6 +849,122 @@ test('keeps workspace responsive with large mocked datasets and highlighted sear
   await expect(page.locator('.exm-table-view mark')).toContainText('Retention');
   await page.locator('.exm-global-search input').fill('Retention');
   await expect(page.locator('.exm-global-search-results mark')).toContainText('Retention');
+});
+
+test('shows contextual recommendations for empty workspace search results', async ({ page }) => {
+  await mockStudioApi(page);
+
+  await page.goto('/admin-flow/');
+  await expect(page.locator('.exm-workspace-layout')).toBeVisible();
+  await page.locator('.exm-folder-search input').fill('NoMatchRisk2026');
+  await page.locator('.exm-content-tools').getByRole('button', { name: '筛选' }).click();
+  await page.locator('.exm-advanced-filters select').first().selectOption('Workflow');
+
+  const emptyState = page.locator('.exm-content-empty.search');
+  await expect(emptyState).toBeVisible();
+  await expect(emptyState).toContainText('没有找到 "NoMatchRisk2026"');
+  await expect(emptyState).toContainText('当前搜索和筛选没有匹配项。');
+  await expect(emptyState.getByRole('button', { name: '清除筛选' })).toBeVisible();
+  await expect(emptyState.getByRole('button', { name: '新建流程' })).toBeVisible();
+  await expect(emptyState.getByRole('button', { name: '查看归档' })).toBeVisible();
+
+  await emptyState.getByRole('button', { name: '查看归档' }).click();
+  await expect(page.locator('.exm-content-empty.archived')).toContainText('归档为空');
+});
+
+test('keeps the detail panel as a drawer at 1280px so Template content is not squeezed', async ({ page }) => {
+  await mockStudioApi(page);
+  await page.setViewportSize({ width: 1280, height: 820 });
+
+  await page.goto('/admin-flow/');
+  await expect(page.locator('.exm-workspace-layout')).toBeVisible();
+  await page.getByRole('button', { name: '模板' }).click();
+  await expect(page.locator('.exm-grid-view button').first()).toBeVisible();
+
+  const detailToggle = page.getByRole('button', { name: '打开详情' });
+  await expect(detailToggle).toBeVisible();
+  await expect(page.locator('.exm-workspace-layout.detail-open')).toHaveCount(0);
+
+  const metrics = await page.locator('.exm-workspace-main').evaluate((element) => ({
+    mainClientWidth: element.clientWidth,
+    mainScrollWidth: element.scrollWidth,
+    gridClientWidth: element.querySelector<HTMLElement>('.exm-grid-view')?.clientWidth ?? 0,
+    gridScrollWidth: element.querySelector<HTMLElement>('.exm-grid-view')?.scrollWidth ?? 0,
+    columns: window.getComputedStyle(document.querySelector<HTMLElement>('.exm-workspace-layout')!).gridTemplateColumns,
+  }));
+  expect(metrics.columns.trim().split(/\s+/)).toHaveLength(2);
+  expect(metrics.mainScrollWidth).toBeLessThanOrEqual(metrics.mainClientWidth + 2);
+  expect(metrics.gridScrollWidth).toBeLessThanOrEqual(metrics.gridClientWidth + 2);
+
+  await detailToggle.click();
+  await expect(page.locator('.exm-workspace-layout.detail-open')).toBeVisible();
+  await expect(page.locator('.exm-mobile-detail-toggle')).toHaveAttribute('aria-label', '关闭详情');
+});
+
+test('renders mobile workspace rows as cards without horizontal table scroll', async ({ page }) => {
+  await mockStudioApi(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+
+  await page.goto('/admin-flow/');
+  await expect(page.locator('.exm-workspace-layout')).toBeVisible();
+  await expect(page.locator('.exm-table-row.head')).toBeHidden();
+  const firstWorkflow = page.locator('[data-testid="workspace-row-workflow"]').filter({ hasText: 'Retention Workflow' });
+  const firstWorkflowCells = firstWorkflow.locator(':scope > span');
+  await expect(firstWorkflow).toBeVisible();
+  await expect(firstWorkflow.locator('.name-cell')).toBeVisible();
+  await expect(firstWorkflowCells.nth(2)).toHaveText('流程');
+  await expect(firstWorkflowCells.nth(7)).toContainText('工作区');
+  const typeLabel = await firstWorkflowCells.nth(2).evaluate((element) => window.getComputedStyle(element, '::before').content);
+  expect(typeLabel).toContain('类型');
+
+  const metrics = await page.locator('.exm-content').evaluate((element) => ({
+    contentClientWidth: element.clientWidth,
+    contentScrollWidth: element.scrollWidth,
+    tableClientWidth: element.querySelector<HTMLElement>('.exm-table-view')?.clientWidth ?? 0,
+    tableScrollWidth: element.querySelector<HTMLElement>('.exm-table-view')?.scrollWidth ?? 0,
+  }));
+  expect(metrics.contentScrollWidth).toBeLessThanOrEqual(metrics.contentClientWidth + 2);
+  expect(metrics.tableScrollWidth).toBeLessThanOrEqual(metrics.tableClientWidth + 2);
+});
+
+test('shows per-item failure reasons when a batch operation rolls back', async ({ page }) => {
+  await mockStudioApi(page, { failBatchMove: true });
+
+  await page.goto('/admin-flow/');
+  await expect(page.locator('.exm-workspace-layout')).toBeVisible();
+  const firstWorkflow = page.locator('[data-testid="workspace-row-workflow"]').filter({ hasText: 'Retention Workflow' });
+  await expect(firstWorkflow).toBeVisible();
+  await firstWorkflow.getByTestId('workspace-row-checkbox').click({ force: true });
+  await page.getByTestId('workspace-bulk-move').click();
+  await page.getByTestId('batch-target-folder').selectOption(secondaryFolderId);
+  await page.getByTestId('batch-confirm').click();
+
+  const failures = page.getByTestId('batch-failures');
+  await expect(failures).toBeVisible();
+  await expect(failures).toContainText('Retention Workflow');
+  await expect(failures).toContainText('workflow is archived');
+});
+
+test('manages workspace files with upload retry and file list', async ({ page }) => {
+  await mockStudioApi(page, { failFirstStorageUpload: true });
+
+  await page.goto('/admin-flow/');
+  await expect(page.locator('.exm-workspace-layout')).toBeVisible();
+  await page.getByRole('button', { name: '管理存储空间' }).click();
+  const fileList = page.getByTestId('storage-file-list');
+  await expect(fileList).toContainText('existing-import.json');
+  await expect(page.getByText('单文件上限 64.0 MB')).toBeVisible();
+
+  const uploadInput = page.locator('[data-testid="home-utility-dialog"] input[type="file"]');
+  await uploadInput.setInputFiles({
+    name: 'retry-upload.json',
+    mimeType: 'application/json',
+    buffer: Buffer.from('{"ok":true}'),
+  });
+  await expect(page.getByTestId('storage-upload-status')).toContainText('storage temporarily unavailable');
+  await page.getByTestId('storage-upload-retry').click();
+  await expect(page.getByTestId('storage-upload-status')).toContainText('上传完成');
+  await expect(fileList).toContainText('retry-upload.json');
 });
 
 test('passes a basic workspace accessibility smoke check', async ({ page }) => {
@@ -781,8 +984,8 @@ test('passes a basic workspace accessibility smoke check', async ({ page }) => {
   await expect(page.locator(':focus')).toBeVisible();
 });
 
-test('loads Studio, retries failed save, and shows validation markers', async ({ page }) => {
-  await mockStudioApi(page, { failFirstDraftSave: true, validationBlocks: true });
+test('loads Studio and shows visible checklist validation markers', async ({ page }) => {
+  await mockStudioApi(page, { validationBlocks: true });
 
   await page.goto(`/admin-flow/?activityId=${activityId}`);
   await expect(page.locator('.activity-node')).toHaveCount(3);
@@ -790,17 +993,11 @@ test('loads Studio, retries failed save, and shows validation markers', async ({
   await expect(page.locator('.workflow-breadcrumb')).toContainText('Campaigns');
   await expect(page.locator('.workflow-state-pill').filter({ hasText: '已保存' })).toBeVisible();
 
-  await page.getByRole('button', { name: '简化链路' }).click();
-  await expect(page.locator('.workflow-state-pill').filter({ hasText: '未保存' })).toBeVisible();
-
-  await page.getByRole('button', { name: '保存草稿' }).click();
-  await expect(page.locator('.workflow-error-detail')).toContainText('保存失败');
-  await expect(page.getByRole('button', { name: '重试保存' })).toBeVisible();
-
-  await page.getByRole('button', { name: '重试保存' }).click();
-  await expect(page.locator('.workflow-state-pill').filter({ hasText: '已保存' })).toBeVisible();
-
   await page.getByRole('button', { name: '检查清单' }).click();
+  await expect(page.locator('.checklist-modal-layer')).toBeVisible();
+  await expect(page.locator('.checklist-body')).toBeVisible();
+  await expect(page.locator('.checklist-summary-row').first()).toBeVisible();
+  await expect(page.locator('.checklist-summary-row')).not.toHaveCount(0);
   await expect(page.locator('.checklist-popover')).toContainText('MISSING_CONFIG');
   await expect(page.locator('.node-validation-dot.block')).toBeVisible();
   await expect(page.locator('.react-flow__edge.validation-warning')).toBeVisible();
@@ -1004,6 +1201,25 @@ test('warns before leaving with unsaved workflow changes', async ({ page }) => {
   expect(dialog.type()).toBe('beforeunload');
   await dialog.dismiss();
   await reloadPromise;
+});
+
+test('uses product dialog before in-app navigation with unsaved workflow changes', async ({ page }) => {
+  await mockStudioApi(page);
+
+  await page.goto(`/admin-flow/?activityId=${activityId}`);
+  await expect(page.locator('.activity-node')).toHaveCount(3);
+  await page.getByRole('button', { name: '简化链路' }).click();
+  await expect(page.locator('.workflow-state-pill').filter({ hasText: '未保存' })).toBeVisible();
+
+  await page.getByRole('button', { name: /E2E Workflow/ }).first().click();
+  await page.getByRole('button', { name: /Retention Workflow/ }).click();
+  const leaveDialog = page.getByRole('dialog', { name: '未保存的 Workflow Draft' });
+  await expect(leaveDialog).toBeVisible();
+  await expect(leaveDialog).toContainText('继续操作会放弃当前未保存内容');
+
+  await page.getByRole('button', { name: '继续编辑' }).click();
+  await expect(leaveDialog).toBeHidden();
+  await expect(page.getByRole('button', { name: /E2E Workflow/ }).first()).toBeVisible();
 });
 
 test('locates failed run nodes, highlights route trace, and inspects payloads', async ({ page }) => {

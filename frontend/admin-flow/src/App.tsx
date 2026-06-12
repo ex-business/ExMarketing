@@ -21,7 +21,7 @@ import { StudioChrome } from './components/StudioChrome';
 import { WorkspaceContent, WorkspaceDetailPanel, WorkspaceHomeLayout, WorkspaceSidebar, WorkspaceTopBar } from './components/workspace-home';
 import type { GlobalSearchResult, WorkspaceDetailTarget, WorkspaceItemAction, WorkspaceSortMode } from './components/workspace-home';
 import { baseEdges, baseNodes, simpleTemplate } from './data/initialFlow';
-import { getDef, nodeCatalog } from './data/nodeCatalog';
+import { catalogFromSchemas, getDef } from './data/nodeCatalog';
 import type {
   ActivityEdge,
   ActivityNode,
@@ -43,6 +43,7 @@ import type {
   WorkflowExecutionTrace,
   WorkflowNodeConfigSchema,
   WorkflowNodeExecution,
+  WorkflowNodeSummary,
   WorkflowValidationIssue,
   WorkflowValidationResult,
   WorkflowVersion,
@@ -106,6 +107,35 @@ type WorkspaceShareLinkSummary = {
   token?: string;
   createdBy?: string;
   createdAt?: string;
+};
+
+type WorkspaceBatchResult = {
+  committed?: boolean;
+  count?: number;
+  items?: Array<{
+    id: string;
+    type: string;
+    status: string;
+    error?: string;
+  }>;
+};
+
+type WorkspaceFileObjectSummary = {
+  id: string;
+  workspaceId: string;
+  folderId?: string;
+  activityId?: string;
+  workflowVersionId?: string;
+  executionId?: string;
+  kind: string;
+  fileName: string;
+  contentType?: string;
+  sizeBytes: number;
+  storageProvider: string;
+  storageKey: string;
+  checksumSha256: string;
+  createdBy?: string;
+  createdAt: string;
 };
 
 type WorkspaceMemberSummary = {
@@ -272,6 +302,10 @@ type ActivitySettingsInput = {
   folderId: string;
 };
 
+type UnsavedDraftNavigation =
+  | { kind: 'activity'; activityId: string }
+  | { kind: 'workspace'; workspaceId: string; folderId: string };
+
 type EdgeRouteVisual = {
   className: string;
   color: string;
@@ -285,12 +319,35 @@ const WORKSPACE_ROLE_RANK: Record<WorkspaceRole, number> = {
   OWNER: 4,
 };
 
+const WORKSPACE_FILE_UPLOAD_MAX_BYTES = 64 * 1024 * 1024;
+
 function studioActorId(): string {
   return window.localStorage.getItem('exmarketing.studio.actorId') || 'admin-flow';
 }
 
+function shouldSeedDemoWorkspace(): boolean {
+  const params = new URLSearchParams(window.location.search);
+  const queryValue = params.get('seedDemo');
+  if (queryValue != null) {
+    return ['1', 'true', 'yes'].includes(queryValue.trim().toLowerCase());
+  }
+  return String(import.meta.env.VITE_EXMARKETING_SEED_DEMO ?? '').trim().toLowerCase() === 'true';
+}
+
 function workspaceRoleAllows(role: WorkspaceRole, required: WorkspaceRole): boolean {
   return WORKSPACE_ROLE_RANK[role] >= WORKSPACE_ROLE_RANK[required];
+}
+
+function formatBytes(value: number): string {
+  if (!Number.isFinite(value) || value <= 0) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let size = value;
+  let unitIndex = 0;
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024;
+    unitIndex += 1;
+  }
+  return `${size.toFixed(unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
 }
 
 function replaceUrlParams(patch: Record<string, string | number | undefined | null>) {
@@ -332,6 +389,7 @@ type RunHistoryState = {
   nextOffset: number;
   selectedExecutionId: string;
   nodeExecutions: WorkflowNodeExecution[];
+  nodeSummaries: WorkflowNodeSummary[];
   selectedNodeExecutionId: string;
   replayStep: number;
   compareExecutionId: string;
@@ -504,13 +562,14 @@ function workflowExecutionModeLabel(execution?: WorkflowExecution): 'DEBUG_DRAFT
   return 'PRODUCTION';
 }
 
-function traceToRunState(trace: WorkflowExecutionTrace): Pick<RunHistoryState, 'executions' | 'selectedExecutionId' | 'nodeExecutions' | 'selectedNodeExecutionId'> {
+function traceToRunState(trace: WorkflowExecutionTrace): Pick<RunHistoryState, 'executions' | 'selectedExecutionId' | 'nodeExecutions' | 'nodeSummaries' | 'selectedNodeExecutionId'> {
   const failed = trace.nodeExecutions.find((item) => item.status === 'FAILED');
   const selectedNode = failed ?? trace.nodeExecutions[0];
   return {
     executions: [trace.execution],
     selectedExecutionId: trace.execution.id,
     nodeExecutions: trace.nodeExecutions,
+    nodeSummaries: trace.nodeSummaries ?? [],
     selectedNodeExecutionId: selectedNode?.id ?? '',
   };
 }
@@ -1589,7 +1648,6 @@ function RunHistoryPanel({
   state,
   workflowVersions,
   onClose,
-  onRefresh,
   onVersionChange,
   onSelectExecution,
   onCompareExecution,
@@ -1602,7 +1660,6 @@ function RunHistoryPanel({
   state: RunHistoryState;
   workflowVersions: WorkflowVersion[];
   onClose: () => void;
-  onRefresh: () => void;
   onVersionChange: (versionId: string) => void;
   onSelectExecution: (executionId: string) => void;
   onCompareExecution: (executionId: string) => void;
@@ -1619,6 +1676,8 @@ function RunHistoryPanel({
   const selectedExecution = state.executions.find((item) => item.id === state.selectedExecutionId);
   const compareExecution = state.executions.find((item) => item.id === state.compareExecutionId);
   const selectedNode = state.nodeExecutions.find((item) => item.id === state.selectedNodeExecutionId) ?? state.nodeExecutions[0];
+  const summaryByNodeId = new Map(state.nodeSummaries.map((item) => [item.nodeId, item]));
+  const selectedNodeSummary = selectedNode ? summaryByNodeId.get(selectedNode.nodeId) : undefined;
   const trace = workflowRouteTrace(selectedExecution);
   const selectedDuration = elapsedMs(selectedNode?.startedAt, selectedNode?.finishedAt);
   const selectedAttempts = workflowAttemptCount(selectedNode?.output);
@@ -1671,7 +1730,6 @@ function RunHistoryPanel({
             <option key={version.id} value={version.id}>workflow v{version.version} · {version.status}</option>
           ))}
         </select>
-        <button onClick={onRefresh} disabled={state.loading}>{state.loading ? '加载中' : '刷新'}</button>
       </div>
       <div className="run-compare-selector">
         <span>对比</span>
@@ -1716,7 +1774,7 @@ function RunHistoryPanel({
                 <i />
                 <b>{nodeExecution.nodeTitle || nodeExecution.nodeId}</b>
                 <span>{nodeExecution.status}</span>
-                <em>{duration === undefined ? '运行中' : `${duration}ms`}{attempts && attempts > 1 ? ` · retry ${attempts - 1}` : ''}</em>
+                <em>{summaryByNodeId.get(nodeExecution.nodeId)?.decision || (duration === undefined ? '运行中' : `${duration}ms`)}{attempts && attempts > 1 ? ` · retry ${attempts - 1}` : ''}</em>
               </button>
             );
           }) : <div className="run-empty">选择 execution 后显示节点日志</div>}
@@ -1770,9 +1828,26 @@ function RunHistoryPanel({
               <div className="run-detail-summary node">
                 <span>{selectedNode.status}</span>
                 <b>{selectedNode.nodeTitle || selectedNode.nodeId}</b>
-                <em>{selectedNode.errorMessage || `耗时 ${selectedDuration ?? 0}ms · retry ${Math.max((selectedAttempts ?? 1) - 1, 0)}`}</em>
-                {selectedNode.errorMessage ? <i>{nodeError.category} · {nodeError.code}</i> : null}
+                <em>{selectedNodeSummary?.explanation || selectedNode.errorMessage || `耗时 ${selectedDuration ?? 0}ms · retry ${Math.max((selectedAttempts ?? 1) - 1, 0)}`}</em>
+                {selectedNodeSummary?.decision ? <i>decision · {selectedNodeSummary.decision}</i> : null}
+                {selectedNodeSummary?.errorCode || selectedNode.errorMessage ? <i>{nodeError.category} · {selectedNodeSummary?.errorCode || nodeError.code}</i> : null}
               </div>
+              {selectedNodeSummary ? (
+                <div className="run-node-explain">
+                  <div>
+                    <span>输入</span>
+                    <b>{selectedNodeSummary.inputKeys?.join(', ') || '-'}</b>
+                  </div>
+                  <div>
+                    <span>输出</span>
+                    <b>{selectedNodeSummary.outputKeys?.join(', ') || '-'}</b>
+                  </div>
+                  <div>
+                    <span>耗时</span>
+                    <b>{compactDuration(selectedNodeSummary.durationMs)}</b>
+                  </div>
+                </div>
+              ) : null}
               <div className="run-payload-tabs">
                 <PayloadViewer
                   title="Input Payload"
@@ -2155,6 +2230,32 @@ function runHistoryErrorMessage(error: unknown, fallback: string): string {
   return `${fallback}：${(error as Error).message}`;
 }
 
+function workflowValidationFailureResult(message: string, code = 'WORKFLOW_VALIDATION_FAILED'): WorkflowValidationResult {
+  return {
+    valid: false,
+    items: [{
+      severity: 'BLOCK',
+      code,
+      message,
+      path: 'workflow.validation',
+    }],
+    summary: { blockCount: 1, warningCount: 0 },
+  };
+}
+
+function normalizeWorkflowValidationResult(result: WorkflowValidationResult | null | undefined): WorkflowValidationResult | null {
+  if (!result || typeof result !== 'object') return null;
+  const items = Array.isArray(result.items) ? result.items : [];
+  const blockCount = Number.isFinite(result.summary?.blockCount) ? result.summary.blockCount : items.filter((item) => item.severity === 'BLOCK').length;
+  const warningCount = Number.isFinite(result.summary?.warningCount) ? result.summary.warningCount : items.filter((item) => item.severity === 'WARNING').length;
+  return {
+    ...result,
+    valid: Boolean(result.valid) && blockCount === 0,
+    items,
+    summary: { blockCount, warningCount },
+  };
+}
+
 async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
     ...init,
@@ -2181,22 +2282,33 @@ async function uploadWorkspaceFile(input: {
   activityId?: string;
   kind: string;
   file: File;
-}): Promise<void> {
-  const form = new FormData();
-  form.set('workspaceId', input.workspaceId);
-  if (input.folderId) form.set('folderId', input.folderId);
-  if (input.activityId) form.set('activityId', input.activityId);
-  form.set('kind', input.kind);
-  form.set('file', input.file);
-  const response = await fetch('/admin/v1/workspace-files', {
-    method: 'POST',
-    headers: { 'X-Actor-Id': studioActorId() },
-    body: form,
+  onProgress?: (percent: number) => void;
+}): Promise<WorkspaceFileObjectSummary> {
+  return new Promise((resolve, reject) => {
+    const form = new FormData();
+    form.set('workspaceId', input.workspaceId);
+    if (input.folderId) form.set('folderId', input.folderId);
+    if (input.activityId) form.set('activityId', input.activityId);
+    form.set('kind', input.kind);
+    form.set('file', input.file);
+    const request = new XMLHttpRequest();
+    request.open('POST', '/admin/v1/workspace-files');
+    request.setRequestHeader('X-Actor-Id', studioActorId());
+    request.upload.onprogress = (event) => {
+      if (event.lengthComputable) input.onProgress?.(Math.min(99, Math.round((event.loaded / event.total) * 100)));
+    };
+    request.onerror = () => reject(new Error('上传失败，请检查网络后重试'));
+    request.onload = () => {
+      const body = JSON.parse(request.responseText || '{}');
+      if (request.status < 200 || request.status >= 300) {
+        reject(new APIError(body.error ?? body.message ?? `${request.status} ${request.statusText}`, request.status, request.statusText));
+        return;
+      }
+      input.onProgress?.(100);
+      resolve(body as WorkspaceFileObjectSummary);
+    };
+    request.send(form);
   });
-  if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
-    throw new APIError(body.error ?? body.message ?? `${response.status} ${response.statusText}`, response.status, response.statusText);
-  }
 }
 
 function StudioActivityStart({
@@ -2307,6 +2419,9 @@ function StudioActivityStart({
   const opsToastTimersRef = useRef<number[]>([]);
   const [serverSearchResults, setServerSearchResults] = useState<WorkspaceHomeSearchResult[]>([]);
   const [storageSummary, setStorageSummary] = useState<WorkspaceHomeStorageSummary | null>(null);
+  const [workspaceFiles, setWorkspaceFiles] = useState<WorkspaceFileObjectSummary[]>([]);
+  const [workspaceFilesLoading, setWorkspaceFilesLoading] = useState(false);
+  const [workspaceFileUpload, setWorkspaceFileUpload] = useState<{ file?: File; progress: number; status: 'idle' | 'uploading' | 'failed' | 'done'; error: string }>({ progress: 0, status: 'idle', error: '' });
   const [selectedDetail, setSelectedDetail] = useState<{ id: string; type: 'Folder' | 'Workflow'; name: string; visibility: string; status?: string; version?: string; owner?: string } | null>(null);
   const [detailVisibilityOverride, setDetailVisibilityOverride] = useState<WorkspaceDetailTarget['visibility'] | ''>('');
   const [detailAction, setDetailAction] = useState<'rename' | 'move' | 'archive' | ''>('');
@@ -2320,6 +2435,7 @@ function StudioActivityStart({
   const [batchActionVisibility, setBatchActionVisibility] = useState<WorkspaceDetailTarget['visibility']>('Workspace');
   const [batchActionBusy, setBatchActionBusy] = useState(false);
   const [batchActionError, setBatchActionError] = useState('');
+  const [batchActionFailures, setBatchActionFailures] = useState<WorkspaceBatchResult['items']>([]);
   const [homeUtilityDialog, setHomeUtilityDialog] = useState<'settings' | 'storage' | 'members' | 'share' | 'audit' | ''>('');
   const [workspaceSettingsDraft, setWorkspaceSettingsDraft] = useState({
     name: '',
@@ -2333,6 +2449,7 @@ function StudioActivityStart({
   });
   const demoSeedStartedRef = useRef(false);
   const importWorkflowInputRef = useRef<HTMLInputElement | null>(null);
+  const storageFileInputRef = useRef<HTMLInputElement | null>(null);
   const foldersByWorkspace = useMemo(() => {
     const next: Record<string, WorkspaceFolderSummary[]> = {};
     folders
@@ -2345,8 +2462,7 @@ function StudioActivityStart({
   }, [folders]);
   const activeWorkspaces = useMemo(() => workspaces.filter((workspace) => workspace.status !== 'DELETED'), [workspaces]);
   useEffect(() => {
-    const isLocalDemo = ['localhost', '127.0.0.1'].includes(window.location.hostname);
-    if (!isLocalDemo || !workspaceDataReady || demoSeedStartedRef.current || activeWorkspaces.length) return;
+    if (!shouldSeedDemoWorkspace() || !workspaceDataReady || demoSeedStartedRef.current || activeWorkspaces.length) return;
     demoSeedStartedRef.current = true;
     void (async () => {
       try {
@@ -2464,6 +2580,13 @@ function StudioActivityStart({
   const shareUrlForLink = (link?: WorkspaceShareLinkSummary) => {
     const token = link?.token || link?.id;
     return token ? `${window.location.origin}/share/${token}` : '';
+  };
+  const shareLinkDisplayId = (link: WorkspaceShareLinkSummary) => {
+    const value = link.token || link.id;
+    if (!value) return 'share link';
+    const prefix = link.token ? 'tok' : 'id';
+    if (value.length <= 10) return `${prefix}_${value}`;
+    return `${prefix}_${value.slice(0, 4)}…${value.slice(-4)}`;
   };
   const shareLinkForTarget = (target: { id: string; type: 'Workspace' | 'Folder' | 'Workflow' }) => selectedShareLinks.find((link) => {
     if (!link.enabled) return false;
@@ -2849,8 +2972,64 @@ function StudioActivityStart({
   const openWorkspaceSettings = () => {
     setHomeUtilityDialog('settings');
   };
+  const refreshWorkspaceFiles = async (workspaceId = selectedWorkspace?.id ?? '') => {
+    if (!workspaceId) return;
+    setWorkspaceFilesLoading(true);
+    try {
+      const body = await fetchJSON<{ items: WorkspaceFileObjectSummary[] }>(`/admin/v1/workspace-files?workspaceId=${encodeURIComponent(workspaceId)}&limit=50`);
+      setWorkspaceFiles(body.items ?? []);
+    } catch (error) {
+      setOpsMessage((error as Error).message);
+    } finally {
+      setWorkspaceFilesLoading(false);
+    }
+  };
+  const uploadStorageFile = async (file: File | null | undefined) => {
+    if (!file) return;
+    if (!selectedWorkspace?.id) {
+      setOpsMessage('先选择 workspace 后再上传文件。');
+      return;
+    }
+    if (file.size > WORKSPACE_FILE_UPLOAD_MAX_BYTES) {
+      setWorkspaceFileUpload({ file, progress: 0, status: 'failed', error: `文件超过 ${formatBytes(WORKSPACE_FILE_UPLOAD_MAX_BYTES)} 限制` });
+      return;
+    }
+    const targetFolderId = selectedFolder?.id || selectedWorkspaceFolders[0]?.id || '';
+    setWorkspaceFileUpload({ file, progress: 0, status: 'uploading', error: '' });
+    try {
+      await uploadWorkspaceFile({
+        workspaceId: selectedWorkspace.id,
+        folderId: targetFolderId,
+        kind: 'EXECUTION_ATTACHMENT',
+        file,
+        onProgress: (progress) => setWorkspaceFileUpload((state) => ({ ...state, progress })),
+      });
+      setWorkspaceFileUpload({ file, progress: 100, status: 'done', error: '' });
+      await Promise.all([
+        refreshWorkspaceFiles(selectedWorkspace.id),
+        fetchJSON<WorkspaceHomeStorageSummary>('/admin/v1/workspace-home/storage').then(setStorageSummary),
+      ]);
+      setOpsMessage(`文件已上传：${file.name}`);
+    } catch (error) {
+      setWorkspaceFileUpload({ file, progress: 0, status: 'failed', error: (error as Error).message });
+    } finally {
+      if (storageFileInputRef.current) storageFileInputRef.current.value = '';
+    }
+  };
+  const deleteStorageFile = async (file: WorkspaceFileObjectSummary) => {
+    if (!selectedWorkspace?.id) return;
+    try {
+      await fetchJSON<WorkspaceFileObjectSummary>(`/admin/v1/workspace-files/${file.id}?workspaceId=${encodeURIComponent(selectedWorkspace.id)}`, { method: 'DELETE' });
+      setWorkspaceFiles((items) => items.filter((item) => item.id !== file.id));
+      await fetchJSON<WorkspaceHomeStorageSummary>('/admin/v1/workspace-home/storage').then(setStorageSummary);
+      setOpsMessage(`文件已删除：${file.fileName}`);
+    } catch (error) {
+      setOpsMessage(`删除文件失败：${(error as Error).message}`);
+    }
+  };
   const openStorageManager = () => {
     setHomeUtilityDialog('storage');
+    if (selectedWorkspace?.id) void refreshWorkspaceFiles(selectedWorkspace.id);
   };
   const normalizeDetailVisibility = (value?: string): WorkspaceDetailTarget['visibility'] => {
     const normalized = (value || '').toLowerCase();
@@ -2868,7 +3047,7 @@ function StudioActivityStart({
         workflowCount: selectedDetail.type === 'Folder' ? workflowCountByFolder[selectedDetail.id] ?? 0 : 1,
         folderCount: selectedDetail.type === 'Folder' ? selectedWorkspaceFolders.filter((folder) => (folder.parentId ?? '') === selectedDetail.id).length : 0,
         memberCount: selectedMembers.filter((member) => member.status !== 'REMOVED').length,
-        updatedLabel: 'updated 2h ago',
+        updatedLabel: '2 小时前更新',
         owner: selectedDetail.owner,
         version: selectedDetail.type === 'Workflow' ? selectedDetail.version : undefined,
         status: selectedDetail.type === 'Workflow' ? selectedDetail.status : undefined,
@@ -2882,7 +3061,7 @@ function StudioActivityStart({
       workflowCount: selectedFolder ? workflowCountByFolder[selectedFolder.id] ?? selectedWorkflows.length : selectedWorkflows.length,
       folderCount: selectedChildFolders.length,
       memberCount: selectedMembers.filter((member) => member.status !== 'REMOVED').length,
-      updatedLabel: workflowStatus.includes('失败') || workflowStatus.includes('不可用') ? workflowStatus : 'updated 2h ago',
+      updatedLabel: workflowStatus.includes('失败') || workflowStatus.includes('不可用') ? workflowStatus : '2 小时前更新',
     };
   }, [detailVisibilityOverride, selectedChildFolders.length, selectedDetail, selectedFolder, selectedMembers, selectedWorkspace, selectedWorkflows.length, selectedWorkspaceFolders, workflowCountByFolder, workflowStatus]);
   const detailActivityGrants = detailTarget.type === 'Workflow' ? activityGrantsByActivity[detailTarget.id] ?? [] : [];
@@ -3029,6 +3208,27 @@ function StudioActivityStart({
     setBatchActionFolderId(selectedFolder?.id || selectedWorkspaceFolders[0]?.id || '');
     setBatchActionVisibility('Workspace');
     setBatchActionError('');
+    setBatchActionFailures([]);
+  };
+  const runWorkspaceBatch = async (workspaceId: string, body: Record<string, unknown>) => {
+    const response = await fetch(`/admin/v1/workspaces/${workspaceId}/batch`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'X-Actor-Id': studioActorId(),
+      },
+      body: JSON.stringify(body),
+    });
+    const payload = await response.json().catch(() => ({})) as WorkspaceBatchResult & { error?: string; message?: string };
+    if (!response.ok) {
+      const failures = payload.items?.filter((item) => item.status === 'FAILED' || item.error) ?? [];
+      if (failures.length) {
+        setBatchActionFailures(failures);
+        throw new Error(payload.error || payload.message || `${failures.length} 项处理失败`);
+      }
+      throw new APIError(payload.error ?? payload.message ?? `${response.status} ${response.statusText}`, response.status, response.statusText);
+    }
+    return payload;
   };
   const submitBatchAction = async () => {
     if (!selectedWorkspace) {
@@ -3037,21 +3237,16 @@ function StudioActivityStart({
     }
     setBatchActionBusy(true);
     setBatchActionError('');
+    setBatchActionFailures([]);
     try {
       if (batchAction === 'move') {
         if (!batchActionFolderId) throw new Error('请选择目标 folder');
-        await fetchJSON<{ count: number }>(`/admin/v1/workspaces/${selectedWorkspace.id}/batch`, {
-          method: 'POST',
-          body: JSON.stringify({ action: 'MOVE', folderId: batchActionFolderId, items: batchActionItems.map((item) => ({ id: item.id, type: item.type })) }),
-        });
+        await runWorkspaceBatch(selectedWorkspace.id, { action: 'MOVE', folderId: batchActionFolderId, items: batchActionItems.map((item) => ({ id: item.id, type: item.type })) });
         setOpsMessage(`已移动 ${batchActionItems.length} 项`);
       }
       if (batchAction === 'permission') {
         const visibility = batchActionVisibility === 'Workspace' ? 'TEAM' : batchActionVisibility.toUpperCase();
-        await fetchJSON<{ count: number }>(`/admin/v1/workspaces/${selectedWorkspace.id}/batch`, {
-          method: 'POST',
-          body: JSON.stringify({ action: 'PERMISSION', visibility, items: batchActionItems.map((item) => ({ id: item.id, type: item.type })) }),
-        });
+        await runWorkspaceBatch(selectedWorkspace.id, { action: 'PERMISSION', visibility, items: batchActionItems.map((item) => ({ id: item.id, type: item.type })) });
         setOpsMessage(`已更新 ${batchActionItems.length} 项权限`);
       }
       await onRefreshWorkspaceOps(selectedWorkspace.id);
@@ -3281,7 +3476,7 @@ function StudioActivityStart({
               workspaceName={selectedWorkspace?.name ?? 'hello'}
               folderName={selectedFolder?.name ?? '风控活动'}
               folderVisibility={selectedFolder?.visibility ?? selectedWorkspace?.visibility ?? 'Private'}
-              folderUpdatedLabel={workflowStatus.includes('失败') || workflowStatus.includes('不可用') ? workflowStatus : 'updated 2h ago'}
+              folderUpdatedLabel={workflowStatus.includes('失败') || workflowStatus.includes('不可用') ? workflowStatus : '2 小时前更新'}
               folders={selectedChildFolders}
               workflows={selectedWorkflows}
               templates={templates}
@@ -3472,10 +3667,10 @@ function StudioActivityStart({
       ) : null}
       {homeUtilityDialog ? (
         <div className="studio-create-dialog-backdrop">
-          <section className="studio-create-dialog" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
+          <section className="studio-create-dialog" role="dialog" aria-modal="true" aria-labelledby="home-utility-dialog-title" data-testid="home-utility-dialog" onClick={(event) => event.stopPropagation()}>
             <div className="studio-create-dialog-head">
               <div>
-                <b>{homeUtilityDialog === 'settings' ? 'Workspace 设置' : homeUtilityDialog === 'storage' ? '存储空间' : homeUtilityDialog === 'members' ? '成员管理' : homeUtilityDialog === 'share' ? '分享管理' : '审计记录'}</b>
+                <b id="home-utility-dialog-title">{homeUtilityDialog === 'settings' ? 'Workspace 设置' : homeUtilityDialog === 'storage' ? '存储空间' : homeUtilityDialog === 'members' ? '成员管理' : homeUtilityDialog === 'share' ? '分享管理' : '审计记录'}</b>
                 <span>{selectedWorkspace?.name ?? 'hello'}</span>
               </div>
               <button onClick={() => setHomeUtilityDialog('')}>×</button>
@@ -3564,13 +3759,54 @@ function StudioActivityStart({
               <div className="studio-create-grid">
                 <div className="studio-confirm-copy">
                   <b>{storageUsedGb.toFixed(2)} GB / {storageTotalGb.toFixed(0)} GB</b>
-                  <span>{storageSummary ? `${storageSummary.workflows} workflows · ${storageSummary.folders} folders · ${storageSummary.members} members · ${storageSummary.auditLogs} audit logs · ${storageSummary.versions ?? 0} versions · ${storageSummary.executions ?? 0} runs` : '后端存储统计不可用，正在显示默认容量。'}</span>
+                  <span>{storageSummary ? `${storageSummary.workflows} workflows · ${storageSummary.folders} folders · ${storageSummary.members} members · ${storageSummary.auditLogs} audit logs · ${storageSummary.versions ?? 0} versions · ${storageSummary.executions ?? 0} runs · ${storageSummary.fileObjects ?? 0} files` : '后端存储统计不可用，正在显示默认容量。'}</span>
+                </div>
+                <div className="studio-file-manager">
+                  <div className="studio-file-manager-head">
+                    <span>
+                      <b>文件对象</b>
+                      <em>单文件上限 {formatBytes(WORKSPACE_FILE_UPLOAD_MAX_BYTES)}，支持导入文件、附件、执行日志附件。</em>
+                    </span>
+                    <button type="button" data-testid="storage-upload-trigger" disabled={!selectedWorkspace || workspaceFileUpload.status === 'uploading'} onClick={() => storageFileInputRef.current?.click()}>上传文件</button>
+                  </div>
+                  <input
+                    ref={storageFileInputRef}
+                    className="workflow-import-input"
+                    type="file"
+                    onChange={(event) => {
+                      void uploadStorageFile(event.target.files?.[0]);
+                    }}
+                  />
+                  {workspaceFileUpload.status !== 'idle' ? (
+                    <div className={`studio-file-upload ${workspaceFileUpload.status}`} data-testid="storage-upload-status">
+                      <span>
+                        <b>{workspaceFileUpload.file?.name ?? '文件上传'}</b>
+                        <em>{workspaceFileUpload.file ? formatBytes(workspaceFileUpload.file.size) : ''}</em>
+                      </span>
+                      <div className="studio-file-upload-track"><i style={{ width: `${workspaceFileUpload.status === 'failed' ? 100 : workspaceFileUpload.progress}%` }} /></div>
+                      <strong>{workspaceFileUpload.status === 'uploading' ? `${workspaceFileUpload.progress}%` : workspaceFileUpload.status === 'done' ? '上传完成' : workspaceFileUpload.error}</strong>
+                      {workspaceFileUpload.status === 'failed' && workspaceFileUpload.file ? (
+                        <button type="button" data-testid="storage-upload-retry" onClick={() => void uploadStorageFile(workspaceFileUpload.file)}>重试</button>
+                      ) : null}
+                    </div>
+                  ) : null}
+                  <div className="studio-file-list" data-testid="storage-file-list">
+                    {workspaceFilesLoading ? <span className="studio-file-empty">文件列表加载中...</span> : workspaceFiles.length ? workspaceFiles.map((file) => (
+                      <span key={file.id}>
+                        <i>{file.kind}</i>
+                        <strong>{file.fileName}</strong>
+                        <em>{formatBytes(file.sizeBytes)} · {file.storageProvider} · {new Date(file.createdAt).toLocaleString()}</em>
+                        <button type="button" disabled={!canManageMembers} title={!canManageMembers ? '当前角色不能删除文件' : '删除文件'} onClick={() => void deleteStorageFile(file)}>删除</button>
+                      </span>
+                    )) : <span className="studio-file-empty">暂无文件对象。</span>}
+                  </div>
                 </div>
                 <button onClick={() => {
                   fetchJSON<WorkspaceHomeStorageSummary>('/admin/v1/workspace-home/storage')
                     .then(setStorageSummary)
                     .catch((error) => setOpsMessage((error as Error).message));
-                }}>刷新存储统计</button>
+                  if (selectedWorkspace?.id) void refreshWorkspaceFiles(selectedWorkspace.id);
+                }}>刷新存储统计 / 文件列表</button>
                 <button onClick={() => {
                   setArchivedActivityIds(new Set());
                   saveStudioStringSet('exmarketing.studio.archivedActivities', new Set());
@@ -3579,38 +3815,66 @@ function StudioActivityStart({
                 }}>清理本地归档标记</button>
               </div>
             ) : homeUtilityDialog === 'members' ? (
-              <div className="studio-create-grid">
-                <label>
-                  <span>User ID</span>
-                  <input value={memberUserId} onChange={(event) => setMemberUserId(event.target.value)} placeholder="user_123" />
-                </label>
-                <label>
-                  <span>Email</span>
-                  <input value={memberEmail} onChange={(event) => setMemberEmail(event.target.value)} placeholder="member@example.com" />
-                </label>
-                <label>
-                  <span>Role</span>
-                  <select value={memberRole} onChange={(event) => setMemberRole(event.target.value as WorkspaceRole)}>
-                    <option value="EDITOR">Editor</option>
-                    <option value="ADMIN">Admin</option>
-                    <option value="VIEWER">Viewer</option>
-                  </select>
-                </label>
-                <button disabled={!canManageMembers} onClick={() => void submitMember()}>添加成员</button>
-                <div className="studio-confirm-copy">
-                  {selectedMembers.filter((member) => member.status !== 'REMOVED').map((member) => (
-                    <span key={member.id}>
-                      {(member.displayName || member.userId || member.email || member.id)} · {member.role}
-                      <select value={member.role} disabled={!canManageMembers} onChange={(event) => selectedWorkspace && void onUpdateMemberRole(selectedWorkspace.id, member.id, event.target.value as WorkspaceRole)}>
-                        <option value="OWNER">Owner</option>
-                        <option value="ADMIN">Admin</option>
+              <div className="studio-member-manager">
+                {canManageMembers ? (
+                  <section className="studio-member-invite">
+                    <div>
+                      <b>邀请成员</b>
+                      <span>添加 User ID 或 Email，并分配 workspace 角色。</span>
+                    </div>
+                    <label>
+                      <span>User ID</span>
+                      <input value={memberUserId} onChange={(event) => setMemberUserId(event.target.value)} placeholder="user_123" />
+                    </label>
+                    <label>
+                      <span>Email</span>
+                      <input value={memberEmail} onChange={(event) => setMemberEmail(event.target.value)} placeholder="member@example.com" />
+                    </label>
+                    <label>
+                      <span>Role</span>
+                      <select value={memberRole} onChange={(event) => setMemberRole(event.target.value as WorkspaceRole)}>
                         <option value="EDITOR">Editor</option>
+                        <option value="ADMIN">Admin</option>
                         <option value="VIEWER">Viewer</option>
                       </select>
-                      <button disabled={!canManageMembers} onClick={() => selectedWorkspace && void onRemoveMember(selectedWorkspace.id, member.id)}>移除</button>
-                    </span>
-                  ))}
-                </div>
+                    </label>
+                    <button onClick={() => void submitMember()}>添加成员</button>
+                  </section>
+                ) : (
+                  <p className="studio-member-readonly-note">当前角色只能查看成员，邀请和角色调整由 Owner 管理。</p>
+                )}
+                <section className={canManageMembers ? 'studio-member-list' : 'studio-member-list readonly'}>
+                  <header>
+                    <b>{canManageMembers ? '当前成员' : '只读成员列表'}</b>
+                    <span>{selectedMembers.filter((member) => member.status !== 'REMOVED').length} 位成员</span>
+                  </header>
+                  {selectedMembers.filter((member) => member.status !== 'REMOVED').map((member) => {
+                    const memberName = member.displayName || member.userId || member.email || member.id;
+                    const memberMeta = member.email && member.email !== memberName ? member.email : (member.userId && member.userId !== memberName ? member.userId : member.status);
+                    return (
+                      <div key={member.id} className="studio-member-row">
+                        <i>{memberName.slice(0, 1).toUpperCase()}</i>
+                        <div>
+                          <b>{memberName}</b>
+                          <span>{memberMeta}</span>
+                        </div>
+                        {canManageMembers ? (
+                          <>
+                            <select value={member.role} disabled={member.role === 'OWNER'} onChange={(event) => selectedWorkspace && void onUpdateMemberRole(selectedWorkspace.id, member.id, event.target.value as WorkspaceRole)}>
+                              <option value="OWNER">Owner</option>
+                              <option value="ADMIN">Admin</option>
+                              <option value="EDITOR">Editor</option>
+                              <option value="VIEWER">Viewer</option>
+                            </select>
+                            <button disabled={member.role === 'OWNER'} onClick={() => selectedWorkspace && void onRemoveMember(selectedWorkspace.id, member.id)}>移除</button>
+                          </>
+                        ) : (
+                          <span className="studio-member-role-pill">{member.role}</span>
+                        )}
+                      </div>
+                    );
+                  })}
+                </section>
               </div>
             ) : homeUtilityDialog === 'share' ? (
               <div className="studio-create-grid">
@@ -3629,7 +3893,7 @@ function StudioActivityStart({
                 <div className="studio-confirm-copy">
                   {selectedShareLinks.map((link) => (
                     <span key={link.id}>
-                      {link.scope} · {link.permission || 'VIEW'} · {link.enabled ? 'Enabled' : `Disabled${link.disabledReason ? `:${link.disabledReason}` : ''}`} · used {link.accessCount ?? 0}{link.maxAccessCount ? `/${link.maxAccessCount}` : ''} · {link.token || link.id}
+                      {link.scope} · {link.permission || 'VIEW'} · {link.enabled ? 'Enabled' : `Disabled${link.disabledReason ? `:${link.disabledReason}` : ''}`} · used {link.accessCount ?? 0}{link.maxAccessCount ? `/${link.maxAccessCount}` : ''} · {shareLinkDisplayId(link)}
                       <button onClick={() => void navigator.clipboard?.writeText(shareUrlForLink(link))}>复制</button>
                       <button disabled={!canManageMembers || !link.enabled} onClick={() => selectedWorkspace && void onDisableShareLink(selectedWorkspace.id, link.id)}>停用</button>
                     </span>
@@ -3692,6 +3956,21 @@ function StudioActivityStart({
                   </select>
                 </label>
               ) : null}
+              {batchActionFailures?.length ? (
+                <div className="studio-batch-failures" data-testid="batch-failures">
+                  <b>失败明细</b>
+                  {batchActionFailures.map((failure) => {
+                    const source = batchActionItems.find((item) => item.id === failure.id && item.type.toUpperCase() === failure.type.toUpperCase());
+                    return (
+                      <span key={`${failure.type}-${failure.id}`}>
+                        <i>{source?.type ?? failure.type}</i>
+                        <strong>{source?.name ?? failure.id}</strong>
+                        <em>{failure.error || '处理失败'}</em>
+                      </span>
+                    );
+                  })}
+                </div>
+              ) : null}
               <div className="studio-dialog-actions">
                 <button className="dialog-secondary" type="button" onClick={() => setBatchAction('')}>取消</button>
                 <button className="dialog-primary" data-testid="batch-confirm" type="button" onClick={submitBatchAction} disabled={batchActionBusy}>{batchActionBusy ? '处理中...' : '确认'}</button>
@@ -3706,8 +3985,8 @@ function StudioActivityStart({
           <section className="studio-create-dialog" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
             <div className="studio-create-dialog-head">
               <div>
-                <b>新建 Workspace</b>
-                <span>用于组织 folder 和 workflow。</span>
+                <b>新建工作区</b>
+                <span>用于组织文件夹和流程。</span>
               </div>
               <button onClick={() => setShowWorkspaceDialog(false)}>×</button>
             </div>
@@ -3720,7 +3999,7 @@ function StudioActivityStart({
                 <span>Tenant</span>
                 <input value={workspaceTenant} placeholder="site_001" onChange={(event) => setWorkspaceTenant(event.target.value)} />
               </label>
-              <button onClick={submitWorkspace} disabled={creatingWorkspace}>{creatingWorkspace ? '创建中...' : '创建 Workspace'}</button>
+              <button onClick={submitWorkspace} disabled={creatingWorkspace}>{creatingWorkspace ? '创建中...' : '创建工作区'}</button>
             </div>
             {workspaceError ? <p>{workspaceError}</p> : null}
           </section>
@@ -3731,8 +4010,8 @@ function StudioActivityStart({
           <section className="studio-create-dialog" role="dialog" aria-modal="true" onClick={(event) => event.stopPropagation()}>
             <div className="studio-create-dialog-head">
               <div>
-                <b>新建 Folder</b>
-                <span>{selectedWorkspace ? `创建到 ${selectedWorkspace.name}` : '先选择 workspace。'}</span>
+                <b>新建文件夹</b>
+                <span>{selectedWorkspace ? `创建到 ${selectedWorkspace.name}` : '先选择工作区。'}</span>
               </div>
               <button onClick={() => setShowFolderDialog(false)}>×</button>
             </div>
@@ -3741,7 +4020,7 @@ function StudioActivityStart({
                 <span>名称</span>
                 <input data-testid="folder-name-input" value={folderName} placeholder="增长活动" onChange={(event) => setFolderName(event.target.value)} />
               </label>
-              <button data-testid="folder-create-confirm" onClick={submitFolder} disabled={creatingFolder || !selectedWorkspace || !canManageFolders}>{creatingFolder ? '创建中...' : '创建 Folder'}</button>
+              <button data-testid="folder-create-confirm" onClick={submitFolder} disabled={creatingFolder || !selectedWorkspace || !canManageFolders}>{creatingFolder ? '创建中...' : '创建文件夹'}</button>
             </div>
             {folderError ? <p>{folderError}</p> : null}
           </section>
@@ -3760,18 +4039,18 @@ function StudioActivityStart({
             <div className="studio-create-grid">
               <label>
                 <span>名称</span>
-                <input data-testid="workflow-name-input" value={createName} placeholder="618 拉新活动" onChange={(event) => setCreateName(event.target.value)} />
+                <input data-testid="workflow-name-input" value={createName} placeholder="增长活动" onChange={(event) => setCreateName(event.target.value)} />
               </label>
               <label>
-                <span>Code</span>
+                <span>流程编码</span>
                 <input data-testid="workflow-code-input" value={createCode} placeholder={suggestedCode} onChange={(event) => setCreateCode(event.target.value)} />
               </label>
               <label>
-                <span>Tenant</span>
+                <span>租户</span>
                 <input value={createTenant} placeholder="site_001" onChange={(event) => setCreateTenant(event.target.value)} />
               </label>
               <label>
-                <span>Workspace</span>
+                <span>工作区</span>
                 <select value={createWorkspaceId} onChange={(event) => {
                   const nextWorkspace = event.target.value;
                   setCreateWorkspaceId(nextWorkspace);
@@ -3786,7 +4065,7 @@ function StudioActivityStart({
                 </select>
               </label>
               <label>
-                <span>Folder</span>
+                <span>文件夹</span>
                 <select value={createFolderId} onChange={(event) => setCreateFolderId(event.target.value)}>
                   <option value="">选择文件夹</option>
                   {workspaceFolders.map((folder) => (
@@ -3825,7 +4104,7 @@ export function App() {
   const [showPalette, setShowPalette] = useState(false);
   const [interactionMode, setInteractionMode] = useState<'pointer' | 'hand'>('pointer');
   const [zoomPercent, setZoomPercent] = useState(100);
-  const [showMiniMap, setShowMiniMap] = useState(true);
+  const [showMiniMap, setShowMiniMap] = useState(false);
   const [showChecklist, setShowChecklist] = useState(false);
   const [validatingWorkflow, setValidatingWorkflow] = useState(false);
   const [workflowValidation, setWorkflowValidation] = useState<WorkflowValidationResult | null>(null);
@@ -3860,6 +4139,7 @@ export function App() {
   const [lastSavedAt, setLastSavedAt] = useState('');
   const [publishState, setPublishState] = useState<PublishState>('idle');
   const [publishError, setPublishError] = useState('');
+  const [unsavedDraftNavigation, setUnsavedDraftNavigation] = useState<UnsavedDraftNavigation | null>(null);
   const draftRevisionRef = useRef(0);
   const savedDraftRevisionRef = useRef(0);
   const initialRunQueryRef = useRef((() => {
@@ -3884,6 +4164,7 @@ export function App() {
     nextOffset: 0,
     selectedExecutionId: '',
     nodeExecutions: [],
+    nodeSummaries: [],
     selectedNodeExecutionId: '',
     replayStep: initialRunQueryRef.current.replayStep,
     compareExecutionId: initialRunQueryRef.current.compareExecutionId,
@@ -4073,7 +4354,8 @@ export function App() {
       .then((draft) => {
         if (cancelled || !draft.definition) return;
         const next = hydrateWorkflowDefinition(draft.definition);
-        setNodes(next.nodes);
+        const shouldUseTemplateLayout = /资格校验|风控/.test(activity?.activityName ?? '') && next.nodes.some((node) => node.type === 'activity' && node.data.id === 'qualify');
+        setNodes(shouldUseTemplateLayout ? layoutFlowNodes(next.nodes) : next.nodes);
         setEdges(next.edges);
         setWorkflowStatus('已加载草稿');
         setDraftDirty(false);
@@ -4137,10 +4419,11 @@ export function App() {
     void refreshWorkflowVersions(activityId);
   }, [activityId, refreshWorkflowVersions]);
 
+  const schemaCatalog = useMemo(() => catalogFromSchemas(nodeConfigSchemas), [nodeConfigSchemas]);
   const filteredCatalog = useMemo(() => {
     const keyword = nodeSearch.trim().toLowerCase();
-    if (!keyword) return nodeCatalog;
-    return nodeCatalog
+    if (!keyword) return schemaCatalog;
+    return schemaCatalog
       .map((group) => ({
         ...group,
         items: group.items.filter((item) => (
@@ -4150,11 +4433,30 @@ export function App() {
         )),
       }))
       .filter((group) => group.items.length > 0);
-  }, [nodeSearch]);
+  }, [nodeSearch, schemaCatalog]);
 
   const closeFloatingUi = useCallback(() => {
     setContextMenu(null);
     setNodePicker(null);
+  }, []);
+
+  const clearCanvasSelection = useCallback(() => {
+    closeFloatingUi();
+    setSelectedNodeIds([]);
+    setSelectedEdgeIds([]);
+    setNodes((items) => items.map((node) => (node.selected ? { ...node, selected: false } : node)));
+    setEdges((items) => items.map((edgeItem) => (edgeItem.selected ? { ...edgeItem, selected: false } : edgeItem)));
+  }, [closeFloatingUi, setEdges, setNodes]);
+
+  const prepareGlobalPanelOpen = useCallback(() => {
+    clearCanvasSelection();
+    setDebugPanel((state) => (state.open ? { ...state, open: false } : state));
+  }, [clearCanvasSelection]);
+
+  const closeGlobalPanelsForNodeInspect = useCallback(() => {
+    setShowChecklist(false);
+    setRunHistory((state) => (state.open ? { ...state, open: false } : state));
+    setDebugPanel((state) => (state.open ? { ...state, open: false } : state));
   }, []);
 
   const invalidateWorkflowValidation = useCallback(() => {
@@ -4503,7 +4805,8 @@ export function App() {
     const warningEdgeIds = new Set<string>();
     const nodeIssues = new Map<string, WorkflowValidationIssue[]>();
     const edgeIssues = new Map<string, WorkflowValidationIssue[]>();
-    workflowValidation?.items.forEach((item) => {
+    const validationItems = Array.isArray(workflowValidation?.items) ? workflowValidation.items : [];
+    validationItems.forEach((item) => {
       const nodeSet = item.severity === 'BLOCK' ? blockNodeIds : warningNodeIds;
       const edgeSet = item.severity === 'BLOCK' ? blockEdgeIds : warningEdgeIds;
       if (item.nodeId) {
@@ -4663,6 +4966,14 @@ export function App() {
     const zoom = reactFlowInstance?.getZoom() ?? 1;
     setZoomPercent(Math.round(zoom * 100));
   }, [reactFlowInstance]);
+
+  const handleFlowInit = useCallback((instance: ReactFlowInstance<FlowNode, ActivityEdge>) => {
+    setReactFlowInstance(instance);
+    window.setTimeout(() => {
+      instance.fitView({ padding: 0.18, duration: 0 });
+      setZoomPercent(Math.round(instance.getZoom() * 100));
+    }, 120);
+  }, []);
 
   const zoomTo = useCallback((zoom: number) => {
     reactFlowInstance?.setViewport({ x: 24, y: 36, zoom }, { duration: 180 });
@@ -4838,15 +5149,25 @@ export function App() {
       return null;
     }
     setShowChecklist(true);
-    setValidatingWorkflow(true);
+      setValidatingWorkflow(true);
     try {
       const draftSaved = await saveDraft({ silent: true });
       if (!draftSaved) {
-        return null;
+        const failed = workflowValidationFailureResult('保存草稿失败，无法执行发布检查。请确认当前账号有编辑权限。', 'WORKFLOW_DRAFT_SAVE_FAILED');
+        setWorkflowValidation(failed);
+        setWorkflowStatus('检查失败：保存草稿失败');
+        return failed;
       }
-      const result = await fetchJSON<WorkflowValidationResult>(`/admin/v1/activities/${activityId}/workflow/draft/validate`, {
+      const response = await fetchJSON<WorkflowValidationResult | null>(`/admin/v1/activities/${activityId}/workflow/draft/validate`, {
         method: 'POST',
       });
+      const result = normalizeWorkflowValidationResult(response);
+      if (!result) {
+        const failed = workflowValidationFailureResult('检查接口没有返回 validation 结果。', 'WORKFLOW_VALIDATION_EMPTY');
+        setWorkflowValidation(failed);
+        setWorkflowStatus('检查失败：接口返回为空');
+        return failed;
+      }
       setWorkflowValidation(result);
       if (result.valid) {
         setWorkflowStatus('发布检查通过');
@@ -4855,8 +5176,13 @@ export function App() {
       }
       return result;
     } catch (error) {
-      setWorkflowStatus(`检查失败：${(error as Error).message}`);
-      return null;
+      const message = isAPIError(error) && error.status === 403
+        ? '无权执行发布检查。请确认当前账号拥有该 workspace / workflow 的编辑或发布权限。'
+        : `检查接口失败：${(error as Error).message}`;
+      const failed = workflowValidationFailureResult(message, isAPIError(error) ? `WORKFLOW_VALIDATION_HTTP_${error.status}` : 'WORKFLOW_VALIDATION_REQUEST_FAILED');
+      setWorkflowValidation(failed);
+      setWorkflowStatus(`检查失败：${message}`);
+      return failed;
     } finally {
       setValidatingWorkflow(false);
     }
@@ -4971,8 +5297,9 @@ export function App() {
     }
   }, [activityId, activeWorkspaceRole, canPublishActiveWorkflow, refreshWorkflowVersions]);
 
-  const changeActivity = useCallback((nextActivityId: string) => {
-    if ((draftDirty || draftSaveState === 'dirty' || draftSaveState === 'saving' || draftSaveState === 'failed') && !window.confirm('当前 workflow draft 还有未保存的改动，确定切换吗？')) return;
+  const draftHasUnsavedChanges = draftDirty || draftSaveState === 'dirty' || draftSaveState === 'saving' || draftSaveState === 'failed';
+
+  const executeActivityNavigation = useCallback((nextActivityId: string) => {
     setActivityId(nextActivityId);
     setHomeWorkspaceId('');
     setHomeFolderId('');
@@ -4981,13 +5308,12 @@ export function App() {
     setWorkflowValidation(null);
     setContextMenu(null);
     setNodePicker(null);
-    setRunHistory((state) => ({ ...state, open: false, selectedExecutionId: '', nodeExecutions: [], selectedNodeExecutionId: '', replayStep: 0, compareExecutionId: '', compareNodeExecutions: [], compareResult: undefined, compareLoading: false }));
+    setRunHistory((state) => ({ ...state, open: false, selectedExecutionId: '', nodeExecutions: [], nodeSummaries: [], selectedNodeExecutionId: '', replayStep: 0, compareExecutionId: '', compareNodeExecutions: [], compareResult: undefined, compareLoading: false }));
     replaceUrlParams({ activityId: nextActivityId, executionId: undefined, replayStep: undefined, compareExecutionId: undefined });
     setWorkflowStatus('切换活动中...');
-  }, [draftDirty, draftSaveState]);
+  }, []);
 
-  const navigateWorkspaceHome = useCallback((workspaceId: string, folderId = '') => {
-    if ((draftDirty || draftSaveState === 'dirty' || draftSaveState === 'saving' || draftSaveState === 'failed') && !window.confirm('当前 workflow draft 还有未保存的改动，确定离开画布吗？')) return;
+  const executeWorkspaceNavigation = useCallback((workspaceId: string, folderId = '') => {
     setHomeWorkspaceId(workspaceId);
     setHomeFolderId(folderId);
     setActivityId('');
@@ -4997,7 +5323,34 @@ export function App() {
     setNodePicker(null);
     window.history.replaceState(null, '', window.location.pathname);
     setWorkflowStatus(folderId ? '已返回 folder 视图' : '已返回 workspace 视图');
-  }, [draftDirty, draftSaveState]);
+  }, []);
+
+  const changeActivity = useCallback((nextActivityId: string) => {
+    if (draftHasUnsavedChanges) {
+      setUnsavedDraftNavigation({ kind: 'activity', activityId: nextActivityId });
+      return;
+    }
+    executeActivityNavigation(nextActivityId);
+  }, [draftHasUnsavedChanges, executeActivityNavigation]);
+
+  const navigateWorkspaceHome = useCallback((workspaceId: string, folderId = '') => {
+    if (draftHasUnsavedChanges) {
+      setUnsavedDraftNavigation({ kind: 'workspace', workspaceId, folderId });
+      return;
+    }
+    executeWorkspaceNavigation(workspaceId, folderId);
+  }, [draftHasUnsavedChanges, executeWorkspaceNavigation]);
+
+  const confirmUnsavedDraftNavigation = useCallback(() => {
+    if (!unsavedDraftNavigation) return;
+    const navigation = unsavedDraftNavigation;
+    setUnsavedDraftNavigation(null);
+    if (navigation.kind === 'activity') {
+      executeActivityNavigation(navigation.activityId);
+      return;
+    }
+    executeWorkspaceNavigation(navigation.workspaceId, navigation.folderId);
+  }, [executeActivityNavigation, executeWorkspaceNavigation, unsavedDraftNavigation]);
 
   const createStudioWorkspace = useCallback(async (input: CreateStudioWorkspaceInput) => {
     const slug = normalizeActivityCode(input.name).toLowerCase().replace(/_/g, '-');
@@ -5315,32 +5668,29 @@ export function App() {
 
   const loadExecutionNodes = useCallback(async (execution: WorkflowExecution | undefined) => {
     if (!execution) {
-      setRunHistory((state) => ({ ...state, selectedExecutionId: '', nodeExecutions: [], selectedNodeExecutionId: '', replayStep: 0, compareExecutionId: '', compareNodeExecutions: [], compareResult: undefined, compareLoading: false }));
+      setRunHistory((state) => ({ ...state, selectedExecutionId: '', nodeExecutions: [], nodeSummaries: [], selectedNodeExecutionId: '', replayStep: 0, compareExecutionId: '', compareNodeExecutions: [], compareResult: undefined, compareLoading: false }));
       replaceUrlParams({ executionId: undefined, replayStep: undefined, compareExecutionId: undefined });
       applyRunOverlay(undefined, []);
       return;
     }
-    const nodesBody = await fetchJSON<{ items: WorkflowNodeExecution[] }>(`/admin/v1/workflow/executions/${execution.id}/nodes?payload=summary`);
+    const trace = await fetchJSON<WorkflowExecutionTrace>(`/admin/v1/workflow/executions/${execution.id}/trace`);
     replaceUrlParams({ executionId: execution.id });
-    const selectedSummary = nodesBody.items.find((item) => item.status === 'FAILED') ?? nodesBody.items[0];
-    const selectedDetail = selectedSummary
-      ? await fetchJSON<WorkflowNodeExecution>(`/admin/v1/workflow/executions/${execution.id}/nodes/${selectedSummary.id}`)
-      : undefined;
-    const mergedNodes = selectedDetail ? nodesBody.items.map((item) => (item.id === selectedDetail.id ? selectedDetail : item)) : nodesBody.items;
+    const mergedNodes = trace.nodeExecutions;
     const failed = mergedNodes.find((item) => item.status === 'FAILED');
     setRunHistory((state) => ({
       ...state,
-      selectedExecutionId: execution.id,
+      selectedExecutionId: trace.execution.id,
       nodeExecutions: mergedNodes,
+      nodeSummaries: trace.nodeSummaries ?? [],
       selectedNodeExecutionId: (failed ?? mergedNodes[0])?.id ?? '',
-      compareExecutionId: state.compareExecutionId === execution.id ? '' : state.compareExecutionId,
-      compareNodeExecutions: state.compareExecutionId === execution.id ? [] : state.compareNodeExecutions,
-      compareResult: state.compareExecutionId === execution.id ? undefined : state.compareResult,
+      compareExecutionId: state.compareExecutionId === trace.execution.id ? '' : state.compareExecutionId,
+      compareNodeExecutions: state.compareExecutionId === trace.execution.id ? [] : state.compareNodeExecutions,
+      compareResult: state.compareExecutionId === trace.execution.id ? undefined : state.compareResult,
     }));
-    if (new URLSearchParams(window.location.search).get('compareExecutionId') === execution.id) {
+    if (new URLSearchParams(window.location.search).get('compareExecutionId') === trace.execution.id) {
       replaceUrlParams({ compareExecutionId: undefined });
     }
-    applyRunOverlay(execution, mergedNodes);
+    applyRunOverlay(trace.execution, mergedNodes);
     if (failed) {
       setSelectedNodeIds([failed.nodeId]);
       setSelectedEdgeIds([]);
@@ -5371,6 +5721,7 @@ export function App() {
         nextOffset: executions.nextOffset ?? Math.max(0, pageOffset) + executions.items.length,
         selectedExecutionId: selected?.id ?? '',
         nodeExecutions: selected ? state.nodeExecutions : [],
+        nodeSummaries: selected ? state.nodeSummaries : [],
         selectedNodeExecutionId: selected ? state.selectedNodeExecutionId : '',
         replayStep: selected && (selected.id === state.selectedExecutionId || selected.id === initialRunQueryRef.current.executionId) ? state.replayStep : 0,
       }));
@@ -5390,6 +5741,7 @@ export function App() {
   }, [activityId, applyRunOverlay, loadExecutionNodes]);
 
   const refreshRunStatus = useCallback(async () => {
+    setShowChecklist(false);
     await loadRunHistory(runHistory.versionId, runHistory.selectedExecutionId, runHistory.pageOffset);
   }, [loadRunHistory, runHistory.pageOffset, runHistory.selectedExecutionId, runHistory.versionId]);
 
@@ -5534,6 +5886,7 @@ export function App() {
       executions: [trace.execution, ...state.executions.filter((item) => item.id !== trace.execution.id)],
       selectedExecutionId: next.selectedExecutionId,
       nodeExecutions: next.nodeExecutions,
+      nodeSummaries: next.nodeSummaries,
       selectedNodeExecutionId: next.selectedNodeExecutionId,
       replayStep: 0,
       compareExecutionId: '',
@@ -5818,8 +6171,8 @@ export function App() {
   }, []);
 
   return (
-    <div className="flow-shell">
-      <NodePalette open={activityId ? showPalette : false} selectedTemplate={selectedTemplate} onAddNode={addCatalogNode} onDefault={resetDefault} onSimple={loadSimpleTemplate} />
+    <div className={cx('flow-shell', activityId && selectedCount > 0 && !runHistory.open && !showChecklist && !debugPanel.open && 'property-panel-visible')}>
+      <NodePalette open={activityId ? showPalette : false} catalog={schemaCatalog} selectedTemplate={selectedTemplate} onAddNode={addCatalogNode} onDefault={resetDefault} onSimple={loadSimpleTemplate} />
       <main className={cx('studio', !activityId && 'studio-home')}>
         <StudioChrome
           homeMode={!activityId}
@@ -5892,6 +6245,8 @@ export function App() {
           onPreview={() => setLastAdded('Preview')}
           onDebugRun={() => {
             const activity = activities.find((item) => item.id === activityId);
+            setShowChecklist(false);
+            setRunHistory((state) => (state.open ? { ...state, open: false } : state));
             setDebugPanel((state) => ({
               ...state,
               open: true,
@@ -5900,11 +6255,16 @@ export function App() {
             }));
           }}
           onRunHistory={refreshRunStatus}
+          runHistoryOpen={runHistory.open}
+          onCloseRunHistory={() => setRunHistory((state) => ({ ...state, open: false }))}
+          onGlobalPanelOpen={prepareGlobalPanelOpen}
           onToggleChecklist={() => {
             if (showChecklist) {
               setShowChecklist(false);
               return;
             }
+            setRunHistory((state) => ({ ...state, open: false }));
+            setShowChecklist(true);
             void validateCurrentDraft();
           }}
           onValidationIssueFocus={focusValidationIssue}
@@ -5921,19 +6281,18 @@ export function App() {
               nodes={visibleNodes}
               edges={visibleEdges}
               nodeTypes={nodeTypes}
-              onInit={setReactFlowInstance}
+              onInit={handleFlowInit}
               onMoveEnd={syncZoom}
               onNodesChange={handleNodesChange}
               onEdgesChange={handleEdgesChange}
               onConnect={canEditActiveWorkflow ? onConnect : undefined}
               onPaneClick={() => {
-                closeFloatingUi();
-                setSelectedNodeIds([]);
-                setSelectedEdgeIds([]);
+                clearCanvasSelection();
               }}
               onPaneContextMenu={canEditActiveWorkflow ? openPaneMenu : undefined}
               onNodeClick={(event, node) => {
                 closeFloatingUi();
+                closeGlobalPanelsForNodeInspect();
                 if (event.shiftKey || event.metaKey || event.ctrlKey) {
                   setSelectedNodeIds((items) => (items.includes(node.id) ? items.filter((item) => item !== node.id) : items.concat(node.id)));
                 } else {
@@ -6073,7 +6432,6 @@ export function App() {
           setRunHistory((state) => ({ ...state, open: false }));
           replaceUrlParams({ executionId: undefined, replayStep: undefined, compareExecutionId: undefined });
         }}
-        onRefresh={refreshRunStatus}
         onVersionChange={(versionId) => {
           void loadRunHistory(versionId);
         }}
@@ -6158,7 +6516,30 @@ export function App() {
           />
         );
       })() : null}
-      {activityId ? <PropertyPanel nodes={nodes} edges={edges} selectedNodeIds={selectedNodeIds} selectedEdgeIds={selectedEdgeIds} nodeConfigSchemas={nodeConfigSchemas} onNodeConfigChange={updateNodeConfig} onEdgeRouteChange={updateEdgeRoute} onLocateNode={(nodeId) => focusNodeById(nodeId, '已定位变量来源')} onDeleteNodes={deleteNodes} onDeleteEdges={deleteEdges} /> : null}
+      {unsavedDraftNavigation ? (
+        <div className="studio-create-dialog-backdrop" data-testid="unsaved-draft-dialog" onClick={() => setUnsavedDraftNavigation(null)}>
+          <section className="studio-create-dialog" role="dialog" aria-modal="true" aria-labelledby="unsaved-draft-title" onClick={(event) => event.stopPropagation()}>
+            <div className="studio-create-dialog-head">
+              <div>
+                <b id="unsaved-draft-title">未保存的 Workflow Draft</b>
+                <span>{unsavedDraftNavigation.kind === 'activity' ? '切换 workflow 前需要确认。' : '离开画布前需要确认。'}</span>
+              </div>
+              <button type="button" aria-label="关闭未保存提示" onClick={() => setUnsavedDraftNavigation(null)}>×</button>
+            </div>
+            <div className="studio-create-grid">
+              <div className="studio-confirm-copy">
+                <b>当前 draft 还有未保存的改动</b>
+                <span>{draftSaveState === 'saving' ? '草稿正在保存中，继续操作可能丢失最新修改。' : draftSaveState === 'failed' ? '上次保存失败，继续操作会放弃未保存内容。' : '继续操作会放弃当前未保存内容。'}</span>
+              </div>
+              <div className="studio-dialog-actions">
+                <button className="dialog-secondary" type="button" onClick={() => setUnsavedDraftNavigation(null)}>继续编辑</button>
+                <button className="dialog-danger" data-testid="unsaved-draft-confirm" type="button" onClick={confirmUnsavedDraftNavigation}>放弃并继续</button>
+              </div>
+            </div>
+          </section>
+        </div>
+      ) : null}
+      {activityId && selectedCount > 0 && !runHistory.open && !showChecklist && !debugPanel.open ? <PropertyPanel nodes={nodes} edges={edges} selectedNodeIds={selectedNodeIds} selectedEdgeIds={selectedEdgeIds} nodeConfigSchemas={nodeConfigSchemas} onNodeConfigChange={updateNodeConfig} onEdgeRouteChange={updateEdgeRoute} onLocateNode={(nodeId) => focusNodeById(nodeId, '已定位变量来源')} onDeleteNodes={deleteNodes} onDeleteEdges={deleteEdges} /> : null}
     </div>
   );
 }

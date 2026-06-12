@@ -15,6 +15,7 @@ import {
   Workflow,
   X,
 } from 'lucide-react';
+import { TaButton, TaIconButton, TaInput, TaSelect, TaTab, TaTabs } from './TailAdminPrimitives';
 
 export type WorkspaceDetailTarget = {
   id: string;
@@ -108,6 +109,26 @@ function auditTime(value: string): string {
   return `${Math.floor(diff / day)} 天前`;
 }
 
+function targetTypeLabel(value: WorkspaceDetailTarget['type']): string {
+  if (value === 'Folder') return '文件夹';
+  if (value === 'Workspace') return '工作区';
+  return '流程';
+}
+
+function visibilityLabel(value: WorkspaceDetailTarget['visibility']): string {
+  if (value === 'Public') return '公开';
+  if (value === 'Workspace') return '工作区';
+  return '私有';
+}
+
+function statusLabel(value: string): string {
+  const normalized = value.toUpperCase();
+  if (normalized === 'ACTIVE' || normalized === 'PUBLISHED') return '已启用';
+  if (normalized === 'DRAFT') return '草稿';
+  if (normalized === 'ARCHIVED') return '已归档';
+  return value;
+}
+
 export function WorkspaceDetailPanel({
   target,
   members,
@@ -140,7 +161,7 @@ export function WorkspaceDetailPanel({
   const recentAudits = audits.slice(0, 3);
   const TargetIcon = target.type === 'Workflow' ? Workflow : Folder;
   const canEditTarget = target.type === 'Folder' ? capabilities.canManageFolders : capabilities.canEditWorkspace;
-  const disabledReason = `${capabilities.reason}，不能修改 ${target.type}。`;
+  const disabledReason = `${capabilities.reason}，不能修改${targetTypeLabel(target.type)}。`;
   const grantMembers = useMemo(() => members.filter((member) => member.status !== 'REMOVED'), [members]);
   const principalLabel = (grant: WorkspaceActivityGrant): string => {
     if (grant.principalType === 'ROLE') return grant.principalId;
@@ -176,9 +197,9 @@ export function WorkspaceDetailPanel({
             <h2><i className="exm-skeleton exm-detail-icon-skeleton" /><b className="exm-skeleton exm-detail-title-skeleton" /></h2>
             <p className="exm-skeleton exm-detail-meta-skeleton" />
           </div>
-          <button type="button" disabled aria-label="收藏"><Star size={17} /></button>
-          <button type="button" disabled aria-label="更多"><MoreHorizontal size={17} /></button>
-          <button type="button" disabled aria-label="关闭详情"><X size={17} /></button>
+          <TaIconButton disabled aria-label="收藏"><Star size={17} /></TaIconButton>
+          <TaIconButton disabled aria-label="更多"><MoreHorizontal size={17} /></TaIconButton>
+          <TaIconButton disabled aria-label="关闭详情"><X size={17} /></TaIconButton>
         </header>
         <nav className="exm-detail-tabs skeleton-tabs">
           {Array.from({ length: 4 }).map((_, index) => <span key={index} className="exm-skeleton" />)}
@@ -214,21 +235,21 @@ export function WorkspaceDetailPanel({
     <section className="exm-detail-panel">
       <header className="exm-detail-head">
         <div>
-          <span>{target.type}</span>
+          <span>{targetTypeLabel(target.type)}</span>
           <h2><TargetIcon size={21} fill={target.type === 'Folder' ? 'currentColor' : 'none'} />{target.name}</h2>
-          <p>{target.status ? `${target.status} · ` : ''}{target.version ? `${target.version} · ` : ''}{target.updatedLabel ?? 'updated 2h ago'}</p>
+          <p>{target.status ? `${statusLabel(target.status)} · ` : ''}{target.version ? `${target.version} · ` : ''}{target.updatedLabel ?? '2 小时前更新'}</p>
         </div>
-        <button type="button" aria-label="收藏"><Star size={17} /></button>
-        <button type="button" aria-label="更多"><MoreHorizontal size={17} /></button>
-        <button type="button" aria-label="关闭详情" onClick={onClose}><X size={17} /></button>
+        <TaIconButton aria-label="收藏"><Star size={17} /></TaIconButton>
+        <TaIconButton aria-label="更多"><MoreHorizontal size={17} /></TaIconButton>
+        <TaIconButton aria-label="关闭详情" onClick={onClose}><X size={17} /></TaIconButton>
       </header>
 
-      <nav className="exm-detail-tabs">
-        <button className={tab === 'overview' ? 'active' : ''} type="button" onClick={() => setTab('overview')}>概览</button>
-        <button data-testid="detail-tab-permission" className={tab === 'permission' ? 'active' : ''} type="button" onClick={() => setTab('permission')}>权限</button>
-        <button className={tab === 'share' ? 'active' : ''} type="button" onClick={() => setTab('share')}>分享</button>
-        <button className={tab === 'audit' ? 'active' : ''} type="button" onClick={() => setTab('audit')}>审计</button>
-      </nav>
+      <TaTabs className="exm-detail-tabs">
+        <TaTab active={tab === 'overview'} onClick={() => setTab('overview')}>概览</TaTab>
+        <TaTab data-testid="detail-tab-permission" active={tab === 'permission'} onClick={() => setTab('permission')}>权限</TaTab>
+        <TaTab active={tab === 'share'} onClick={() => setTab('share')}>分享</TaTab>
+        <TaTab active={tab === 'audit'} onClick={() => setTab('audit')}>审计</TaTab>
+      </TaTabs>
 
       <div className="exm-detail-body">
         {errorMessage ? (
@@ -237,27 +258,27 @@ export function WorkspaceDetailPanel({
             <p>{errorMessage}</p>
           </section>
         ) : null}
-        {!canEditTarget ? (
+        {tab === 'permission' && !canEditTarget ? (
           <section className="exm-detail-section exm-detail-permission">
             <h3>当前权限</h3>
             <p><b>{capabilities.role}</b> · {capabilities.reason}</p>
           </section>
         ) : null}
-        {(tab === 'overview' || tab === 'permission') ? (
+        {tab === 'permission' ? (
           <section className="exm-detail-section">
             <h3>可见性</h3>
             <div className="exm-visibility-switch">
               {(['Private', 'Workspace', 'Public'] as const).map((visibility) => (
-                <button
+                <TaButton
                   key={visibility}
                   className={target.visibility === visibility ? 'active' : ''}
-                  type="button"
+                  size="sm"
                   disabled={!canEditTarget}
-                  title={!canEditTarget ? disabledReason : visibility}
+                  title={!canEditTarget ? disabledReason : visibilityLabel(visibility)}
                   onClick={() => onVisibilityChange(visibility)}
                 >
-                  <Lock size={14} />{visibility}
-                </button>
+                  <Lock size={14} />{visibilityLabel(visibility)}
+                </TaButton>
               ))}
             </div>
           </section>
@@ -266,44 +287,44 @@ export function WorkspaceDetailPanel({
         {tab === 'permission' && target.type === 'Workflow' ? (
           <section className="exm-detail-section exm-acl-section">
             <div className="exm-detail-section-head">
-              <h3>Workflow 单独授权</h3>
+              <h3>流程单独授权</h3>
               <span>{activityGrants.length} 条</span>
             </div>
             <div className="exm-acl-form">
-              <select data-testid="acl-principal-type" value={grantPrincipalType} onChange={(event) => {
+              <TaSelect data-testid="acl-principal-type" value={grantPrincipalType} onChange={(event) => {
                 const nextType = event.target.value as WorkspaceActivityGrant['principalType'];
                 setGrantPrincipalType(nextType);
                 setGrantPrincipalId('');
               }}>
-                <option value="MEMBER">Member</option>
-                <option value="USER">User</option>
-                <option value="ROLE">Role</option>
-              </select>
+                <option value="MEMBER">成员</option>
+                <option value="USER">用户</option>
+                <option value="ROLE">角色</option>
+              </TaSelect>
               {grantPrincipalType === 'ROLE' ? (
-                <select data-testid="acl-principal-id" value={grantPrincipalId} onChange={(event) => setGrantPrincipalId(event.target.value)}>
+                <TaSelect data-testid="acl-principal-id" value={grantPrincipalId} onChange={(event) => setGrantPrincipalId(event.target.value)}>
                   <option value="">选择角色</option>
                   <option value="ADMIN">ADMIN</option>
                   <option value="EDITOR">EDITOR</option>
                   <option value="VIEWER">VIEWER</option>
                   <option value="GUEST">GUEST</option>
-                </select>
+                </TaSelect>
               ) : grantPrincipalType === 'MEMBER' ? (
-                <select data-testid="acl-principal-id" value={grantPrincipalId} onChange={(event) => setGrantPrincipalId(event.target.value)}>
+                <TaSelect data-testid="acl-principal-id" value={grantPrincipalId} onChange={(event) => setGrantPrincipalId(event.target.value)}>
                   <option value="">选择成员</option>
                   {grantMembers.map((member) => (
                     <option key={member.id} value={member.id}>{member.displayName || member.email || member.userId || member.id}</option>
                   ))}
-                </select>
+                </TaSelect>
               ) : (
-                <input data-testid="acl-principal-id" value={grantPrincipalId} onChange={(event) => setGrantPrincipalId(event.target.value)} placeholder="输入 userId" />
+                <TaInput data-testid="acl-principal-id" value={grantPrincipalId} onChange={(event) => setGrantPrincipalId(event.target.value)} placeholder="输入 userId" />
               )}
-              <select data-testid="acl-role" value={grantRole} onChange={(event) => setGrantRole(event.target.value as WorkspaceActivityGrant['role'])}>
+              <TaSelect data-testid="acl-role" value={grantRole} onChange={(event) => setGrantRole(event.target.value as WorkspaceActivityGrant['role'])}>
                 <option value="ADMIN">ADMIN</option>
                 <option value="EDITOR">EDITOR</option>
                 <option value="VIEWER">VIEWER</option>
                 <option value="GUEST">GUEST</option>
-              </select>
-              <button data-testid="acl-add" type="button" disabled={grantBusy || !capabilities.canManageMembers} title={!capabilities.canManageMembers ? `${capabilities.reason}，不能添加单独授权。` : '添加授权'} onClick={() => void submitGrant()}><Plus size={14} />添加</button>
+              </TaSelect>
+            <TaButton tone="primary" data-testid="acl-add" disabled={grantBusy || !capabilities.canManageMembers} title={!capabilities.canManageMembers ? `${capabilities.reason}，不能添加单独授权。` : '添加授权'} onClick={() => void submitGrant()}><Plus size={14} />添加</TaButton>
             </div>
             {grantError ? <p className="exm-acl-error">{grantError}</p> : null}
             <div className="exm-acl-list">
@@ -314,48 +335,46 @@ export function WorkspaceDetailPanel({
                     <span>{grant.principalType} · {grant.principalId}</span>
                   </div>
                   <b>{grant.role}</b>
-                  <button data-testid="acl-delete" type="button" aria-label="删除授权" disabled={!capabilities.canManageMembers} title={!capabilities.canManageMembers ? `${capabilities.reason}，不能删除授权。` : '删除授权'} onClick={() => void onDeleteActivityGrant(grant.id)}><Trash2 size={14} /></button>
+                  <TaIconButton data-testid="acl-delete" aria-label="删除授权" disabled={!capabilities.canManageMembers} title={!capabilities.canManageMembers ? `${capabilities.reason}，不能删除授权。` : '删除授权'} onClick={() => void onDeleteActivityGrant(grant.id)}><Trash2 size={14} /></TaIconButton>
                 </div>
-              )) : <p className="exm-detail-empty">暂无单独授权，当前仅使用可见性和 workspace 成员权限。</p>}
+              )) : <p className="exm-detail-empty">暂无单独授权，当前仅使用可见性和工作区成员权限。</p>}
             </div>
           </section>
         ) : null}
 
         {tab === 'permission' && target.type !== 'Workflow' ? (
           <section className="exm-detail-section">
-            <p className="exm-detail-empty">单独 ACL 只作用于 Workflow。Folder 和 Workspace 使用可见性、成员角色和分享权限控制。</p>
+            <p className="exm-detail-empty">单独 ACL 只作用于流程。文件夹和工作区使用可见性、成员角色和分享权限控制。</p>
           </section>
         ) : null}
 
         {tab === 'overview' ? (
           <section className="exm-detail-stats">
-            <div><span>Workflows</span><b>{target.workflowCount}</b></div>
-            <div><span>Folders</span><b>{target.folderCount}</b></div>
-            <div><span>Members</span><b>{target.memberCount}</b></div>
+            <div><span>流程</span><b>{target.workflowCount}</b></div>
+            <div><span>文件夹</span><b>{target.folderCount}</b></div>
+            <div><span>成员</span><b>{target.memberCount}</b></div>
           </section>
         ) : null}
 
-        {tab === 'overview' && dataSources.length ? (
-          <section className="exm-detail-section exm-data-source-section">
-            <div className="exm-detail-section-head">
-              <h3>数据真实性</h3>
+        {tab === 'overview' ? (
+          <section className="exm-detail-section exm-detail-summary">
+            <h3>摘要</h3>
+            <div>
+              <span>可见性</span>
+              <b>{visibilityLabel(target.visibility)}</b>
             </div>
-            <div className="exm-data-source-list">
-              {dataSources.map((source) => (
-                <div key={source.label}>
-                  <span>{source.label}</span>
-                  <b className={source.tone ?? 'info'}>{source.value}</b>
-                </div>
-              ))}
+            <div>
+              <span>权限</span>
+              <b>{capabilities.role}</b>
             </div>
           </section>
         ) : null}
 
-        {(tab === 'overview' || tab === 'permission') ? (
+        {tab === 'permission' ? (
           <section className="exm-detail-section">
             <div className="exm-detail-section-head">
               <h3>成员</h3>
-              <button type="button" disabled={!capabilities.canManageMembers} title={!capabilities.canManageMembers ? `${capabilities.reason}，不能管理成员。` : '管理成员'} onClick={onManageMembers}>管理成员</button>
+              <TaButton size="sm" disabled={!capabilities.canManageMembers} title={!capabilities.canManageMembers ? `${capabilities.reason}，不能管理成员。` : '管理成员'} onClick={onManageMembers}>管理成员</TaButton>
             </div>
             <div className="exm-member-row">
               <div className="exm-member-avatars">
@@ -368,25 +387,25 @@ export function WorkspaceDetailPanel({
           </section>
         ) : null}
 
-        {(tab === 'overview' || tab === 'share') ? (
+        {tab === 'share' ? (
           <section className="exm-detail-section">
             <div className="exm-detail-section-head">
               <h3>分享链接</h3>
-              <button type="button" disabled={!capabilities.canManageMembers} title={!capabilities.canManageMembers ? `${capabilities.reason}，不能管理分享。` : '管理分享'} onClick={onManageShare}>管理分享</button>
+              <TaButton size="sm" disabled={!capabilities.canManageMembers} title={!capabilities.canManageMembers ? `${capabilities.reason}，不能管理分享。` : '管理分享'} onClick={onManageShare}>管理分享</TaButton>
             </div>
             <label className="exm-share-input">
               <Link size={15} />
-              <input value={shareUrl} readOnly />
-              <button type="button" aria-label="复制分享链接" onClick={onCopyShare}><Copy size={15} /></button>
+              <TaInput value={shareUrl} readOnly />
+              <TaIconButton aria-label="复制分享链接" onClick={onCopyShare}><Copy size={15} /></TaIconButton>
             </label>
           </section>
         ) : null}
 
-        {(tab === 'overview' || tab === 'audit') ? (
+        {tab === 'audit' ? (
           <section className="exm-detail-section">
             <div className="exm-detail-section-head">
               <h3>最近审计</h3>
-              <button type="button" onClick={onViewAllAudit}>查看全部</button>
+              <TaButton size="sm" onClick={onViewAllAudit}>查看全部</TaButton>
             </div>
             <div className="exm-audit-list">
               {recentAudits.length ? recentAudits.map((audit) => (
@@ -399,13 +418,35 @@ export function WorkspaceDetailPanel({
             </div>
           </section>
         ) : null}
+
+        {tab === 'audit' && dataSources.length ? (
+          <section className="exm-detail-section exm-data-source-section">
+            <div className="exm-detail-section-head">
+              <h3>数据来源</h3>
+            </div>
+            <div className="exm-data-source-list">
+              {dataSources.map((source) => (
+                <div key={source.label}>
+                  <span>{source.label}</span>
+                  <b className={source.tone ?? 'info'}>{source.value}</b>
+                </div>
+              ))}
+            </div>
+          </section>
+        ) : null}
       </div>
 
-      <footer className="exm-detail-actions">
-        <button type="button" disabled={!canEditTarget} title={!canEditTarget ? disabledReason : '重命名'} onClick={onRename}><Pencil size={15} />重命名</button>
-        <button type="button" disabled={!canEditTarget || target.type === 'Workspace'} title={target.type === 'Workspace' ? 'Workspace 不支持移动' : !canEditTarget ? disabledReason : '移动'} onClick={onMove}><Move size={15} />移动</button>
-        <button className="danger" type="button" disabled={!canEditTarget} title={!canEditTarget ? disabledReason : '归档'} onClick={onArchive}><Archive size={15} />归档</button>
-      </footer>
+      {canEditTarget ? (
+        <footer className="exm-detail-actions">
+          <TaButton title="重命名" onClick={onRename}><Pencil size={15} />重命名</TaButton>
+          <TaButton disabled={target.type === 'Workspace'} title={target.type === 'Workspace' ? '工作区不支持移动' : '移动'} onClick={onMove}><Move size={15} />移动</TaButton>
+          <TaButton className="danger" tone="danger" title="归档" onClick={onArchive}><Archive size={15} />归档</TaButton>
+        </footer>
+      ) : (
+        <footer className="exm-detail-actions readonly">
+          <span title={disabledReason}>{capabilities.role} · 只读浏览</span>
+        </footer>
+      )}
     </section>
   );
 }

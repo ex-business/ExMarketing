@@ -1,6 +1,7 @@
 import { ChevronDown, Download, Plus, Settings } from 'lucide-react';
 import { BrandMark } from './BrandMark';
 import { GlobalSearch } from './GlobalSearch';
+import { TaButton } from './TailAdminPrimitives';
 import type { GlobalSearchResult } from './GlobalSearch';
 
 type WorkspaceTopBarProps = {
@@ -82,23 +83,23 @@ export function WorkspaceTopBar({
         />
       )}
       <div className="exm-topbar-actions">
-        <button className="exm-primary-action" type="button" onClick={onNewWorkflow}>
+        <TaButton className="exm-primary-action" tone="primary" onClick={onNewWorkflow}>
           <Plus size={16} strokeWidth={2.3} />
           <span>新建</span>
           <ChevronDown size={14} strokeWidth={2.3} />
-        </button>
-        <button type="button" onClick={onImport}>
+        </TaButton>
+        <TaButton onClick={onImport}>
           <Download size={15} strokeWidth={2.2} />
           <span>导入</span>
-        </button>
-        <button type="button" onClick={onSettings}>
+        </TaButton>
+        <TaButton onClick={onSettings}>
           <Settings size={15} strokeWidth={2.2} />
           <span>设置</span>
-        </button>
-        <button className="exm-user-menu" type="button" aria-label="用户菜单">
+        </TaButton>
+        <TaButton className="exm-user-menu" tone="ghost" aria-label="用户菜单">
           <span>{actorInitial.slice(0, 1).toUpperCase()}</span>
           <ChevronDown size={14} strokeWidth={2.2} />
-        </button>
+        </TaButton>
       </div>
     </header>
   );

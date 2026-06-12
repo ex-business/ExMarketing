@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { WorkflowDefinition, WorkflowDiffDetail, WorkflowDiffItem, WorkflowDiffSummary, WorkflowValidationIssue, WorkflowValidationResult, WorkflowVersion } from '../types';
 import { BrandMark } from './workspace-home';
 
@@ -169,6 +169,9 @@ type Props = {
   onSaveDraft: () => void;
   onPreview: () => void;
   onRunHistory: () => void;
+  runHistoryOpen: boolean;
+  onCloseRunHistory: () => void;
+  onGlobalPanelOpen: () => void;
   onDebugRun: () => void;
   onToggleChecklist: () => void;
   onValidationIssueFocus: (item: WorkflowValidationIssue) => void;
@@ -179,8 +182,9 @@ type Props = {
 };
 
 function buildChecklistItems(validation: WorkflowValidationResult): ChecklistItem[] {
+  const validationItems = workflowValidationItems(validation);
   return CHECKLIST_DEFINITIONS.map((definition) => {
-    const related = validation.items.filter(definition.match);
+    const related = validationItems.filter(definition.match);
     const hasBlock = related.some((item) => item.severity === 'BLOCK');
     const hasWarning = related.some((item) => item.severity === 'WARNING');
     return {
@@ -189,6 +193,10 @@ function buildChecklistItems(validation: WorkflowValidationResult): ChecklistIte
       count: related.length,
     };
   });
+}
+
+function workflowValidationItems(validation: WorkflowValidationResult | null): WorkflowValidationIssue[] {
+  return Array.isArray(validation?.items) ? validation.items : [];
 }
 
 function statusIcon(status: ChecklistStatus): string {
@@ -214,7 +222,7 @@ function VersionCard({ version, active, onRollback, onArchive }: { version: Work
     <div className={`version-card ${active ? 'active' : ''} status-${version.status.toLowerCase()}`}>
       <i>{active ? 'ACTIVE' : version.status}</i>
       <span>
-        <b>workflow v{version.version}</b>
+        <b>流程 v{version.version}</b>
         <em>{new Date(version.publishedAt).toLocaleString()} · {version.publishedBy || 'system'}</em>
         {version.releaseNote ? <small>{version.releaseNote}</small> : null}
         {version.action ? <small>{version.action}{version.sourceVersionId ? ` · from ${version.sourceVersionId.slice(0, 10)}` : ''}</small> : null}
@@ -308,7 +316,7 @@ function PublishConfirmModal({
       <section className="publish-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="publish-confirm-title">
         <header>
           <span>
-            <b id="publish-confirm-title">发布 Workflow</b>
+            <b id="publish-confirm-title">发布流程</b>
             <em>{activeVersion ? `当前线上 v${activeVersion.version}，本次将发布 v${targetVersion}` : '当前没有线上版本，本次将发布 v1'}</em>
           </span>
           <button type="button" onClick={onClose}>x</button>
@@ -361,7 +369,7 @@ function RollbackConfirmModal({
       <section className="publish-confirm-modal rollback-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="rollback-confirm-title">
         <header>
           <span>
-            <b id="rollback-confirm-title">回滚 Workflow</b>
+            <b id="rollback-confirm-title">回滚流程</b>
             <em>{activeVersion ? `从当前 active v${activeVersion.version} 回滚到 v${targetVersion.version}` : `恢复 v${targetVersion.version}`}</em>
           </span>
           <button type="button" onClick={onClose}>x</button>
@@ -411,8 +419,8 @@ function ArchiveConfirmModal({
       <section className="publish-confirm-modal archive-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="archive-confirm-title">
         <header>
           <span>
-            <b id="archive-confirm-title">归档 Workflow Version</b>
-            <em>即将归档 workflow v{version.version}</em>
+            <b id="archive-confirm-title">归档流程版本</b>
+            <em>即将归档流程 v{version.version}</em>
           </span>
           <button type="button" onClick={onClose}>x</button>
         </header>
@@ -578,6 +586,9 @@ export function StudioChrome({
   onSaveDraft,
   onPreview,
   onRunHistory,
+  runHistoryOpen,
+  onCloseRunHistory,
+  onGlobalPanelOpen,
   onDebugRun,
   onToggleChecklist,
   onValidationIssueFocus,
@@ -600,11 +611,15 @@ export function StudioChrome({
   const [showTestActivities, setShowTestActivities] = useState(false);
   const [pickerWorkspaceId, setPickerWorkspaceId] = useState('');
   const [pickerFolderId, setPickerFolderId] = useState('');
+  const [activityPickerPage, setActivityPickerPage] = useState(0);
   const zoomOptions = [200, 100, 75, 50, 25];
   const chooseZoom = (value: number) => {
     onZoomTo(value / 100);
     setShowZoomMenu(false);
   };
+  useEffect(() => {
+    if (selectedNodeCount > 0) setShowVersionPanel(false);
+  }, [selectedNodeCount]);
   const activeActivity = activities.find((item) => item.id === activityId);
   const activeVersion = workflowVersions.find((item) => item.status === 'ACTIVE');
   const compareLeft = workflowVersions.find((item) => item.id === (compareLeftId || workflowVersions[0]?.id));
@@ -674,9 +689,21 @@ export function StudioChrome({
         const workspace = activeWorkspaces.find((item) => item.id === placement?.workspaceId);
         const folder = folderOptions.find((item) => item.id === placement?.folderId);
         return `${activity.activityName} ${activity.activityCode} ${activity.tenantId} ${workspace?.name ?? ''} ${folder?.name ?? ''}`.toLowerCase().includes(keyword);
-      })
-      .slice(0, 24);
+      });
   }, [activities, activitySearch, activeWorkspaces, folderOptions, placements, selectedPickerFolderId, selectedPickerWorkspaceId, showTestActivities]);
+  const activityPickerPageSize = 10;
+  const activityPickerPageCount = Math.max(1, Math.ceil(activityOptions.length / activityPickerPageSize));
+  const activityPickerSafePage = Math.min(activityPickerPage, activityPickerPageCount - 1);
+  const pagedActivityOptions = activityOptions.slice(
+    activityPickerSafePage * activityPickerPageSize,
+    activityPickerSafePage * activityPickerPageSize + activityPickerPageSize,
+  );
+  useEffect(() => {
+    setActivityPickerPage(0);
+  }, [activitySearch, selectedPickerFolderId, selectedPickerWorkspaceId, showTestActivities]);
+  useEffect(() => {
+    if (activityPickerPage !== activityPickerSafePage) setActivityPickerPage(activityPickerSafePage);
+  }, [activityPickerPage, activityPickerSafePage]);
   const hiddenTestCount = activities.filter(isTestActivity).length;
   const saveBadgeText = draftSaveState === 'saving'
     ? '保存中'
@@ -736,10 +763,18 @@ export function StudioChrome({
           {!homeMode && showActivityPicker ? (
             <div className="activity-picker-popover">
               <div className="activity-picker-head">
-                <b>切换 Workflow</b>
-                <a href="/admin/">创建活动</a>
+                <div>
+                  <b>切换流程</b>
+                  <span>选择工作区、文件夹或流程</span>
+                </div>
+                <div className="activity-picker-head-actions">
+                  <a href="/admin/">创建活动</a>
+                  <button type="button" aria-label="关闭流程切换" onClick={() => setShowActivityPicker(false)}>×</button>
+                </div>
               </div>
-              <input value={activitySearch} placeholder="搜索 workspace、folder 或 workflow" onChange={(event) => setActivitySearch(event.target.value)} />
+              <div className="activity-picker-search">
+                <input value={activitySearch} placeholder="搜索工作区、文件夹或流程" onChange={(event) => setActivitySearch(event.target.value)} />
+              </div>
               <div className="activity-picker-workspace-view">
                 <aside className="activity-picker-tree">
                   {activeWorkspaces.length ? activeWorkspaces.map((workspace) => {
@@ -775,23 +810,28 @@ export function StudioChrome({
                                 </span>
                                 <strong>{folderWorkflowCount[folder.id] ?? 0}</strong>
                               </button>
-                            )) : <div className="activity-picker-empty compact">暂无 folder</div>}
+                            )) : <div className="activity-picker-empty compact">暂无文件夹</div>}
                           </div>
                         ) : null}
                       </div>
                     );
-                  }) : <div className="activity-picker-empty">暂无 workspace</div>}
+                  }) : <div className="activity-picker-empty">暂无工作区</div>}
                 </aside>
                 <section className="activity-picker-workflow-pane">
                   <header>
                     <span>
-                      <b>{selectedPickerFolder?.name ?? selectedPickerWorkspace?.name ?? 'Workflow'}</b>
-                      <em>{selectedPickerWorkspace?.name ?? '选择 workspace'}</em>
+                      <b>{selectedPickerFolder?.name ?? selectedPickerWorkspace?.name ?? '流程'}</b>
+                      <em>{selectedPickerWorkspace?.name ?? '选择工作区'}</em>
                     </span>
                     <strong>{activityOptions.length}</strong>
                   </header>
+                  <div className="activity-picker-workflow-columns">
+                    <span>流程</span>
+                    <span>编码</span>
+                    <span>版本</span>
+                  </div>
                   <div className="activity-picker-workflow-list">
-                    {activityOptions.length ? activityOptions.map((activity) => (
+                    {pagedActivityOptions.length ? pagedActivityOptions.map((activity) => (
                     <button
                       key={activity.id}
                       className={activity.id === activityId ? 'active' : ''}
@@ -803,20 +843,33 @@ export function StudioChrome({
                       <i>◇</i>
                       <span>
                         <b>{activity.activityName || activity.activityCode}</b>
-                        <em>{activity.activityCode}</em>
+                        <em>{activity.tenantId}</em>
                       </span>
+                      <code>{activity.activityCode}</code>
                       <strong>{activity.status || 'UNKNOWN'} · v{activity.version ?? '-'}</strong>
                     </button>
-                    )) : <div className="activity-picker-empty">没有匹配 workflow。</div>}
+                    )) : <div className="activity-picker-empty">没有匹配流程。</div>}
                   </div>
+                  <footer className="activity-picker-workflow-pager">
+                    <span>
+                      显示 {activityOptions.length ? `${activityPickerSafePage * activityPickerPageSize + 1}-${Math.min(activityOptions.length, (activityPickerSafePage + 1) * activityPickerPageSize)}` : '0'}
+                      <b>共 {activityOptions.length}</b>
+                    </span>
+                    <div className="activity-picker-page-buttons">
+                      <button type="button" aria-label="上一页" title="上一页" disabled={activityPickerSafePage === 0} onClick={() => setActivityPickerPage((page) => Math.max(0, page - 1))}>‹</button>
+                      <button type="button" aria-label="下一页" title="下一页" disabled={activityPickerSafePage >= activityPickerPageCount - 1} onClick={() => setActivityPickerPage((page) => Math.min(activityPickerPageCount - 1, page + 1))}>›</button>
+                    </div>
+                  </footer>
                 </section>
               </div>
-              {hiddenTestCount > 0 ? (
-                <label className="activity-picker-toggle">
-                  <input type="checkbox" checked={showTestActivities} onChange={(event) => setShowTestActivities(event.target.checked)} />
-                  <span>显示 {hiddenTestCount} 个测试活动</span>
-                </label>
-              ) : null}
+              <footer className="activity-picker-footer">
+                {hiddenTestCount > 0 ? (
+                  <label className="activity-picker-toggle">
+                    <input type="checkbox" checked={showTestActivities} onChange={(event) => setShowTestActivities(event.target.checked)} />
+                    <span>显示 {hiddenTestCount} 个测试活动</span>
+                  </label>
+                ) : <span />}
+              </footer>
             </div>
           ) : null}
         </div>
@@ -834,18 +887,24 @@ export function StudioChrome({
       {homeMode ? null : (
         <>
       <div className="dify-top-status">
-        <div className="workflow-breadcrumb" title={workflowStatus}>
-          {activeWorkspace ? <button onClick={() => onWorkspaceNavigate(activeWorkspace.id)}>{activeWorkspace.name}</button> : <span>Workspace</span>}
-          <i>/</i>
-          {activeWorkspace && activeFolder ? <button onClick={() => onWorkspaceNavigate(activeWorkspace.id, activeFolder.id)}>{activeFolder.name}</button> : <span>Folder</span>}
-          <i>/</i>
-          <button onClick={() => setShowActivityPicker((value) => !value)}>{activeActivity ? activeActivity.activityName || activeActivity.activityCode : 'Workflow'}</button>
+        <div className="workflow-title-row">
+          <button className="workflow-title-button" type="button" onClick={() => setShowActivityPicker((value) => !value)}>
+            {activeActivity ? activeActivity.activityName || activeActivity.activityCode : '流程'}
+          </button>
+          <button className="workflow-edit-button" type="button" onClick={onActivitySettings} title="编辑活动信息">✎</button>
         </div>
         <div className="workflow-state-line">
+          <span className="workflow-state-pill neutral" title={workflowVersionLabel}>{activeVersion ? `DRAFT · v${activeVersion.version + 1}` : 'DRAFT · v1'}</span>
           <span className={`workflow-state-pill ${saveBadgeClass}`} title={draftSaveError || workflowStatus}>{saveBadgeText}</span>
           <span className={`workflow-state-pill ${publishBadgeClass}`} title={publishError || workflowVersionLabel}>{publishBadgeText}</span>
-          <span className="workflow-state-pill neutral" title={workflowVersionLabel}>{activeVersion ? `v${activeVersion.version}` : 'DRAFT'}</span>
           <span className="workflow-state-pill neutral">{workspaceRole}</span>
+        </div>
+        <div className="workflow-breadcrumb" title={workflowStatus}>
+          {activeWorkspace ? <button onClick={() => onWorkspaceNavigate(activeWorkspace.id)}>{activeWorkspace.name}</button> : <span>工作区</span>}
+          <i>/</i>
+          {activeWorkspace && activeFolder ? <button onClick={() => onWorkspaceNavigate(activeWorkspace.id, activeFolder.id)}>{activeFolder.name}</button> : <span>文件夹</span>}
+          <i>/</i>
+          <button onClick={() => setShowActivityPicker((value) => !value)}>{activeActivity ? activeActivity.activityName || activeActivity.activityCode : '流程'}</button>
         </div>
         {(draftSaveError || publishError) ? (
           <div className="workflow-error-detail">
@@ -860,10 +919,57 @@ export function StudioChrome({
         <button disabled={!canEditWorkflow} onClick={onTemplates}>模板</button>
         <button disabled={!canEditWorkflow} onClick={onAutoLayout}>自动排齐</button>
         <button disabled={!canEditWorkflow || draftSaveState === 'saving'} title="Cmd/Ctrl+S" onClick={onSaveDraft}>{draftSaveState === 'saving' ? '保存中' : '保存草稿'}</button>
-        <button className="debug-action" disabled={!canEditWorkflow} onClick={onDebugRun}>调试</button>
-        <button onClick={onRunHistory}>运行历史</button>
-        <button className="version-action" onClick={() => setShowVersionPanel((value) => !value)}>版本</button>
-        <button className="checklist-action" onClick={onToggleChecklist}>检查清单 <span>{checklistBadge}</span></button>
+        <button
+          className="debug-action"
+          disabled={!canEditWorkflow}
+          onClick={() => {
+            onGlobalPanelOpen();
+            setShowVersionPanel(false);
+            if (showChecklist) onToggleChecklist();
+            if (runHistoryOpen) onCloseRunHistory();
+            onDebugRun();
+          }}
+        >
+          调试
+        </button>
+        <button
+          onClick={() => {
+            onGlobalPanelOpen();
+            setShowVersionPanel(false);
+            if (showChecklist) onToggleChecklist();
+            onRunHistory();
+            window.setTimeout(onFitView, 80);
+          }}
+        >
+          运行历史
+        </button>
+        <button
+          className="version-action"
+          onClick={() => {
+            onGlobalPanelOpen();
+            if (showChecklist) onToggleChecklist();
+            if (runHistoryOpen) onCloseRunHistory();
+            setShowVersionPanel((value) => {
+              const next = !value;
+              if (next) window.setTimeout(onFitView, 80);
+              return next;
+            });
+          }}
+        >
+          版本
+        </button>
+        <button
+          className="checklist-action"
+          onClick={() => {
+            onGlobalPanelOpen();
+            setShowVersionPanel(false);
+            if (runHistoryOpen) onCloseRunHistory();
+            onToggleChecklist();
+            window.setTimeout(onFitView, 120);
+          }}
+        >
+          检查清单 <span>{checklistBadge}</span>
+        </button>
         <button className="preview-action" onClick={onPreview}>▷ 预览</button>
         <button className="publish-action" disabled={!canPublishWorkflow || publishState === 'publishing'} title={!canPublishWorkflow ? '当前角色不能发布' : '打开发布确认'} onClick={() => setShowPublishConfirm(true)}>{publishState === 'publishing' ? '发布中' : '发布'}</button>
       </div>
@@ -909,8 +1015,11 @@ export function StudioChrome({
       {showVersionPanel ? (
         <div className="version-popover">
           <div className="version-head">
-            <b>版本管理</b>
-            <span>{activeVersion ? `ACTIVE · v${activeVersion.version}` : '未发布'}</span>
+            <div>
+              <b>版本管理</b>
+              <em>{activeVersion ? `ACTIVE · v${activeVersion.version}` : '未发布'}</em>
+            </div>
+            <button type="button" aria-label="关闭版本管理" onClick={() => setShowVersionPanel(false)}>×</button>
           </div>
           <section className="version-section">
             <h3>Draft vs Active</h3>
@@ -1017,11 +1126,17 @@ export function StudioChrome({
         ) : null}
       </div>
       {showChecklist ? (
+        <div className="checklist-modal-layer">
         <div className="checklist-popover">
           <div className="checklist-head">
-            <b>发布检查清单</b>
+            <div>
+              <b>发布检查清单</b>
+              <em>来自后端 workflow validation 的实时结果</em>
+            </div>
             <span>{checklistStatus}</span>
+            <button type="button" aria-label="关闭检查清单" onClick={onToggleChecklist}>×</button>
           </div>
+          <div className="checklist-body">
           {validatingWorkflow ? (
             <div className="checklist-empty">正在保存当前画布并执行校验...</div>
           ) : workflowValidation ? (
@@ -1038,7 +1153,7 @@ export function StudioChrome({
                   </div>
                 ))}
               </div>
-              {workflowValidation.items.length > 0 ? workflowValidation.items.map((item) => (
+              {workflowValidationItems(workflowValidation).length > 0 ? workflowValidationItems(workflowValidation).map((item) => (
                 <ValidationIssueRow
                   key={`${item.code}-${item.nodeId ?? ''}-${item.edgeId ?? ''}-${item.path ?? ''}`}
                   item={item}
@@ -1068,6 +1183,8 @@ export function StudioChrome({
               <div className="checklist-empty">点击检查清单后，会保存当前画布并展示后端真实校验结果。</div>
             </>
           )}
+          </div>
+        </div>
         </div>
       ) : null}
       <header className="studio-head">

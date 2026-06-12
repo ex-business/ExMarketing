@@ -152,6 +152,19 @@ function InputMappingEditor({
   const inputs = schema?.inputs?.length
     ? schema.inputs
     : node.data.inputs.map((input): NonNullable<WorkflowNodeConfigSchema['inputs']>[number] => ({ key: input, label: input, type: undefined, required: false, description: undefined }));
+  const autoMappingCandidates = inputs.filter((input) => !mapping[input.key] && options.some((option) => option.output === input.key || option.output.toLowerCase() === input.key.toLowerCase()));
+  const applyAutoMapping = () => {
+    const next = { ...mapping };
+    inputs.forEach((input) => {
+      if (next[input.key]) return;
+      const selected = options.find((option) => option.output === input.key)
+        ?? options.find((option) => option.output.toLowerCase() === input.key.toLowerCase());
+      if (selected) {
+        next[input.key] = { sourceNodeId: selected.nodeId, outputKey: selected.output };
+      }
+    });
+    onNodeConfigChange(node.id, 'inputMapping', next);
+  };
   const updateMapping = (inputName: string, selectedValue: string) => {
     const next = { ...mapping };
     if (!selectedValue) {
@@ -187,14 +200,20 @@ function InputMappingEditor({
         <p className="property-empty">先连接上游节点，再从上游输出中选择输入来源。</p>
       ) : (
         <div className="input-map-grid">
+          <div className="input-map-actions">
+            <span>{autoMappingCandidates.length ? `可自动匹配 ${autoMappingCandidates.length} 个输入` : '没有可自动匹配的未映射输入'}</span>
+            <button type="button" disabled={autoMappingCandidates.length === 0} onClick={applyAutoMapping}>自动映射</button>
+          </div>
           {inputs.map((input) => {
             const selected = mapping[input.key];
             const selectedValue = selected ? `${selected.sourceNodeId}::${selected.outputKey}` : '';
             const selectedOption = selectedOptionFor(input.key);
             const invalidReference = Boolean(selected && !selectedOption);
+            const missingRequired = Boolean(input.required && !selected);
+            const invalidPath = Boolean(selected?.path && !selected.path.trim().startsWith('$'));
             const sourceNode = selected ? sourceNodeFor(selected.sourceNodeId) : undefined;
             return (
-              <div key={input.key} className={cx('input-map-row', invalidReference && 'invalid')}>
+              <div key={input.key} className={cx('input-map-row', (invalidReference || missingRequired || invalidPath) && 'invalid')}>
                 <div className="input-map-name">
                   <span>
                     <b>{input.label || input.key}</b>
@@ -204,17 +223,25 @@ function InputMappingEditor({
                     <strong>{selectedOption.nodeTitle} / {selectedOption.output}</strong>
                   ) : selected ? (
                     <strong>引用已失效</strong>
+                  ) : missingRequired ? (
+                    <strong>必填未映射</strong>
                   ) : (
                     <strong>未选择</strong>
                   )}
                 </div>
+                {input.description ? <small>{input.description}</small> : null}
+                {missingRequired ? (
+                  <p className="input-map-invalid">
+                    必填输入 {input.key} 还没有绑定上游输出。
+                  </p>
+                ) : null}
                 {invalidReference ? (
                   <p className="input-map-invalid">
                     上游输出 {selected.sourceNodeId} / {selected.outputKey} 不可用，请重新选择。
                   </p>
                 ) : null}
                 {selected ? (
-                  <div className={cx('input-map-reference', invalidReference && 'invalid')}>
+                  <div className={cx('input-map-reference', (invalidReference || invalidPath) && 'invalid')}>
                     <div>
                       <span>来源节点</span>
                       <b>{selectedOption?.nodeTitle ?? sourceNode?.data.title ?? selected.sourceNodeId}</b>
@@ -267,6 +294,7 @@ function InputMappingEditor({
                     <label>
                       <span>Path</span>
                       <input
+                        className={cx(invalidPath && 'invalid')}
                         value={selected.path ?? ''}
                         placeholder="$ 或 $.user.id"
                         onChange={(event) => updatePath(input.key, event.target.value)}
@@ -277,7 +305,11 @@ function InputMappingEditor({
                     </button>
                   </div>
                 ) : null}
-                {input.description ? <small>{input.description}</small> : null}
+                {invalidPath ? (
+                  <p className="input-map-invalid">
+                    Path 必须以 $ 开头，例如 $ 或 $.user.id。
+                  </p>
+                ) : null}
               </div>
             );
           })}

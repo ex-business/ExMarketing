@@ -11,7 +11,9 @@
     "build:admin-flow": "vite build --config frontend/admin-flow/vite.config.ts",
     "dev:admin-flow": "vite --config frontend/admin-flow/vite.config.ts --host 127.0.0.1",
     "e2e:admin-flow": "playwright test --config frontend/admin-flow/playwright.config.ts",
+    "e2e:admin-flow:ci": "node frontend/admin-flow/e2e/run-ci.mjs",
     "e2e:admin-flow:cleanup": "node frontend/admin-flow/e2e/cleanup-fixtures.mjs",
+    "clean:admin-flow-artifacts": "node frontend/admin-flow/e2e/cleanup-artifacts.mjs",
     "typecheck:admin-flow": "tsc -p frontend/admin-flow/tsconfig.json"
   },
   "repository": {

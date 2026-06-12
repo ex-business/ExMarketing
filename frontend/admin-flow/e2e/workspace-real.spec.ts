@@ -281,7 +281,8 @@ test.describe('real PostgreSQL workspace workflow operations', () => {
     await page.reload({ waitUntil: 'networkidle' });
     await page.getByLabel('切换工作区').selectOption(workspace.id);
     await openFolder(page, target.name);
-    await page.locator('.exm-content-tools select').nth(1).selectOption('ARCHIVED');
+    await page.locator('.exm-content-tools').getByRole('button', { name: '筛选' }).click();
+    await page.locator('.exm-advanced-filters select').nth(1).selectOption('ARCHIVED');
     await expect(page.locator('[data-testid="workspace-row-workflow"]').filter({ hasText: workflowName }).first()).toBeVisible({ timeout: 15_000 });
   });
 

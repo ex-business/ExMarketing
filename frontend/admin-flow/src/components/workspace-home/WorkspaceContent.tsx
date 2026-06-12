@@ -19,6 +19,21 @@ import {
   UserRoundCog,
   Workflow,
 } from 'lucide-react';
+import {
+  TaButton,
+  TaCheckbox,
+  TaEmptyState,
+  TaIconButton,
+  TaInput,
+  TaMenu,
+  TaMenuItem,
+  TaPagination,
+  TaSelect,
+  TaTab,
+  TaTable,
+  TaTableRow,
+  TaTabs,
+} from './TailAdminPrimitives';
 
 export type WorkspaceContentFolder = {
   id: string;
@@ -112,6 +127,18 @@ type ContentItem = {
   folderCount?: number;
 };
 
+type EmptyStateAction = {
+  label: string;
+  tone?: 'primary' | 'secondary';
+};
+
+type EmptyState = {
+  kind: string;
+  title: string;
+  description: string;
+  actions: EmptyStateAction[];
+};
+
 const OWNER_NAMES = ['Alice', 'Bob', 'Carol', 'David', 'Eve', 'Frank', 'Grace', 'Henry'];
 
 const MENU_ACTIONS: Array<{ action: WorkspaceItemAction; label: string; icon: typeof Pencil; danger?: boolean }> = [
@@ -146,6 +173,25 @@ function visibilityClass(value: string): string {
   if (normalized.includes('public')) return 'public';
   if (normalized.includes('team') || normalized.includes('workspace')) return 'workspace';
   return 'private';
+}
+
+function typeLabel(value: ItemType): string {
+  return value === 'Folder' ? '文件夹' : '流程';
+}
+
+function statusLabel(value: string): string {
+  const normalized = value.toUpperCase();
+  if (normalized === 'ACTIVE' || normalized === 'PUBLISHED') return '已启用';
+  if (normalized === 'DRAFT') return '草稿';
+  if (normalized === 'ARCHIVED') return '已归档';
+  return value;
+}
+
+function visibilityLabel(value: string): string {
+  const normalized = value.toLowerCase();
+  if (normalized.includes('public')) return '公开';
+  if (normalized.includes('team') || normalized.includes('workspace')) return '工作区';
+  return '私有';
 }
 
 function renderKeyword(value: string, keyword: string): ReactNode {
@@ -308,25 +354,31 @@ export function WorkspaceContent({
   const checkedItems = useMemo(() => items.filter((item) => checkedItemIds.has(item.id)), [checkedItemIds, items]);
   const allPageChecked = pageItems.length > 0 && pageItems.every((item) => checkedItemIds.has(item.id));
   const isEmptyPage = !isLoading && ((tab === 'template' && pageTemplates.length === 0) || (tab !== 'template' && pageItems.length === 0));
-  const emptyState = useMemo(() => {
+  const emptyState = useMemo<EmptyState>(() => {
     const hasSearch = searchValue.trim().length > 0;
     const hasAdvancedFilter = typeFilter !== 'ALL' || statusFilter !== 'ALL' || visibilityFilter !== 'ALL' || ownerFilter !== 'ALL';
+    const searchTerm = searchValue.trim();
     if (hasSearch) {
       return {
         kind: 'search',
-        title: '没有搜索结果',
-        description: `没有找到包含 "${searchValue.trim()}" 的 workflow、folder 或 template。`,
-        primary: '清空搜索',
-        secondary: '新建 Workflow',
+        title: `没有找到 "${searchTerm}"`,
+        description: hasAdvancedFilter ? '当前搜索和筛选没有匹配项。' : '换个关键词，或直接创建新的流程。',
+        actions: [
+          { label: hasAdvancedFilter ? '清除筛选' : '清空搜索', tone: 'primary' },
+          { label: '新建流程', tone: 'secondary' },
+          { label: '查看归档', tone: 'secondary' },
+        ],
       };
     }
     if (visibilityFilter === 'Private') {
       return {
         kind: 'permission',
-        title: '没有可见的 Private 内容',
+        title: '没有可见的私有内容',
         description: '当前筛选下没有你可见的私有项目，可以切换可见性筛选或联系管理员授权。',
-        primary: '重置筛选',
-        secondary: '管理权限',
+        actions: [
+          { label: '重置筛选', tone: 'primary' },
+          { label: '管理权限', tone: 'secondary' },
+        ],
       };
     }
     if (statusFilter === 'ARCHIVED' || tab === 'all' && hasAdvancedFilter && archivedWorkflowIds.size === 0) {
@@ -334,17 +386,21 @@ export function WorkspaceContent({
         kind: 'archived',
         title: '归档为空',
         description: '当前 workspace 下还没有归档的 workflow。归档后的项目会在这里集中查看。',
-        primary: '查看全部',
-        secondary: '新建 Workflow',
+        actions: [
+          { label: '查看全部', tone: 'primary' },
+          { label: '新建流程', tone: 'secondary' },
+        ],
       };
     }
     if (tab === 'template') {
       return {
         kind: 'template',
         title: '暂无模板',
-        description: '还没有可用模板。你可以先创建 workflow，再保存为模板复用。',
-        primary: '新建 Workflow',
-        secondary: '查看全部',
+        description: '还没有可用模板。你可以先创建流程，再保存为模板复用。',
+        actions: [
+          { label: '新建流程', tone: 'primary' },
+          { label: '查看全部', tone: 'secondary' },
+        ],
       };
     }
     if (hasAdvancedFilter) {
@@ -352,16 +408,20 @@ export function WorkspaceContent({
         kind: 'filter',
         title: '没有符合筛选的内容',
         description: '当前筛选组合没有匹配项目，重置筛选后可以查看完整目录。',
-        primary: '重置筛选',
-        secondary: '新建 Workflow',
+        actions: [
+          { label: '重置筛选', tone: 'primary' },
+          { label: '新建流程', tone: 'secondary' },
+        ],
       };
     }
     return {
       kind: 'folder',
       title: '当前 folder 为空',
-      description: '从新建 Folder、Workflow 或导入 Workflow 开始组织活动。',
-      primary: '新建 Workflow',
-      secondary: '新建 Folder',
+      description: '从新建文件夹、新建流程或导入流程开始组织活动。',
+      actions: [
+        { label: '新建流程', tone: 'primary' },
+        { label: '新建文件夹', tone: 'secondary' },
+      ],
     };
   }, [archivedWorkflowIds.size, ownerFilter, searchValue, statusFilter, tab, typeFilter, visibilityFilter]);
 
@@ -406,11 +466,11 @@ export function WorkspaceContent({
   };
 
   const renderStatus = (item: ContentItem) => (
-    <span className={`exm-status-pill ${item.status.toLowerCase()}`}>{item.status}</span>
+    <span className={`exm-status-pill ${item.status.toLowerCase()}`}>{statusLabel(item.status)}</span>
   );
 
   const renderVisibility = (item: ContentItem) => (
-    <span className={`exm-visibility-pill ${visibilityClass(item.visibility)}`}>{item.visibility}</span>
+    <span className={`exm-visibility-pill ${visibilityClass(item.visibility)}`}>{visibilityLabel(item.visibility)}</span>
   );
 
   const canRunAction = (action: WorkspaceItemAction, item?: ContentItem): boolean => {
@@ -425,20 +485,28 @@ export function WorkspaceContent({
   const disabledReason = (action: string): string => `${capabilities.reason}，不能执行${action}。`;
 
   const renderItemMenu = (item: ContentItem) => (
-    <div className="exm-item-menu exm-menu-scope" onClick={(event) => event.stopPropagation()}>
+    <TaMenu className="exm-item-menu exm-menu-scope" onClick={(event) => event.stopPropagation()}>
       {MENU_ACTIONS.map(({ action, label, icon: Icon, danger }) => (
-        <button key={action} className={danger ? 'danger' : ''} type="button" data-testid={`workspace-row-action-${action}`} disabled={!canRunAction(action, item)} title={!canRunAction(action, item) ? disabledReason(label) : label} onClick={() => {
+        <TaMenuItem key={action} danger={danger} data-testid={`workspace-row-action-${action}`} disabled={!canRunAction(action, item)} title={!canRunAction(action, item) ? disabledReason(label) : label} onClick={() => {
           setOpenMenuItemId('');
           onItemAction(action, actionPayload(item));
         }}>
           <Icon size={14} />{label}
-        </button>
+        </TaMenuItem>
       ))}
-    </div>
+    </TaMenu>
   );
 
   const resetFilters = () => {
     onSearchChange('');
+    setTypeFilter('ALL');
+    onStatusFilterChange('ALL');
+    setVisibilityFilter('ALL');
+    setOwnerFilter('ALL');
+    setPage(1);
+  };
+
+  const clearAdvancedFilters = () => {
     setTypeFilter('ALL');
     onStatusFilterChange('ALL');
     setVisibilityFilter('ALL');
@@ -452,12 +520,26 @@ export function WorkspaceContent({
       setPage(1);
       return;
     }
+    if (action === '清除筛选') {
+      clearAdvancedFilters();
+      return;
+    }
+    if (action === '查看归档') {
+      onSearchChange('');
+      setTab('all');
+      setTypeFilter('ALL');
+      onStatusFilterChange('ARCHIVED');
+      setVisibilityFilter('ALL');
+      setOwnerFilter('ALL');
+      setPage(1);
+      return;
+    }
     if (action === '重置筛选' || action === '查看全部') {
       resetFilters();
       setTab('all');
       return;
     }
-    if (action === '新建 Folder') {
+    if (action === '新建文件夹') {
       onCreateFolder();
       return;
     }
@@ -474,119 +556,96 @@ export function WorkspaceContent({
         <div className="exm-error-banner" role="alert">
           <b>数据同步异常</b>
           <span>{errorMessage}</span>
-          {onRetryLoad ? <button type="button" onClick={onRetryLoad}>重试</button> : null}
+          {onRetryLoad ? <TaButton size="sm" onClick={onRetryLoad}>重试</TaButton> : null}
         </div>
       ) : null}
-      {!capabilities.canEditWorkspace ? (
-        <div className="exm-permission-banner">
-          <b>{capabilities.role}</b>
-          <span>{capabilities.reason}。当前仍可浏览有权限的内容。</span>
-        </div>
-      ) : null}
-      <header className="exm-folder-head">
+      <header className="exm-folder-head ta-card">
         <div className="exm-folder-title">
           <span className="exm-folder-icon"><Folder size={24} fill="currentColor" /></span>
           <div>
             <h1>{folderName}</h1>
-            <p>{workflows.length} workflows · {folders.length} folders · {folderVisibility} · {folderUpdatedLabel}</p>
+            <p>
+              <span>{workflows.length} 个流程 · {folders.length} 个文件夹 · {visibilityLabel(folderVisibility)} · {folderUpdatedLabel}</span>
+              {!capabilities.canEditWorkspace ? (
+                <span className="exm-permission-inline" title={`${capabilities.reason}。当前仍可浏览有权限的内容。`}>
+                  {capabilities.role} · 只读浏览
+                </span>
+              ) : null}
+            </p>
           </div>
-          <button className="icon" type="button" aria-label="收藏"><Star size={18} /></button>
+          <TaIconButton className="icon" aria-label="收藏"><Star size={18} /></TaIconButton>
           <div className="exm-current-menu-wrap exm-menu-scope">
-            <button className="icon" type="button" aria-label="更多" onClick={() => setShowCurrentMenu((value) => !value)}><MoreHorizontal size={18} /></button>
+            <TaIconButton className="icon" aria-label="更多" onClick={() => setShowCurrentMenu((value) => !value)}><MoreHorizontal size={18} /></TaIconButton>
             {showCurrentMenu ? (
-              <div className="exm-item-menu current exm-menu-scope">
+              <TaMenu className="exm-item-menu current exm-menu-scope">
                 {MENU_ACTIONS.map(({ action, label, icon: Icon, danger }) => (
-                  <button key={action} className={danger ? 'danger' : ''} type="button" disabled={!canRunAction(action)} title={!canRunAction(action) ? disabledReason(label) : label} onClick={() => {
+                  <TaMenuItem key={action} danger={danger} disabled={!canRunAction(action)} title={!canRunAction(action) ? disabledReason(label) : label} onClick={() => {
                     setShowCurrentMenu(false);
                     onCurrentAction(action);
                   }}>
                     <Icon size={14} />{label}
-                  </button>
+                  </TaMenuItem>
                 ))}
-              </div>
+              </TaMenu>
             ) : null}
           </div>
         </div>
         <div className="exm-folder-actions">
-          <button type="button" data-testid="workspace-new-folder" disabled={!capabilities.canManageFolders} title={!capabilities.canManageFolders ? disabledReason('新建 Folder') : '新建 Folder'} onClick={onCreateFolder}>新建 Folder</button>
-          <button type="button" disabled={!capabilities.canEditWorkspace} title={!capabilities.canEditWorkspace ? disabledReason('导入 Workflow') : '导入 Workflow'} onClick={onImportWorkflow}>导入 Workflow</button>
-          <button className="primary" type="button" data-testid="workspace-new-workflow" disabled={!capabilities.canEditWorkspace} title={!capabilities.canEditWorkspace ? disabledReason('新建 Workflow') : '新建 Workflow'} onClick={onCreateWorkflow}>新建 Workflow</button>
+          {!capabilities.canEditWorkspace ? <span className="exm-action-note">{capabilities.role} 只能查看内容</span> : null}
+          <TaButton data-testid="workspace-new-folder" disabled={!capabilities.canManageFolders} title={!capabilities.canManageFolders ? disabledReason('新建文件夹') : '新建文件夹'} onClick={onCreateFolder}>新建文件夹</TaButton>
+          <TaButton disabled={!capabilities.canEditWorkspace} title={!capabilities.canEditWorkspace ? disabledReason('导入流程') : '导入流程'} onClick={onImportWorkflow}>导入流程</TaButton>
+          <TaButton className="primary" tone="primary" data-testid="workspace-new-workflow" disabled={!capabilities.canEditWorkspace} title={!capabilities.canEditWorkspace ? disabledReason('新建流程') : '新建流程'} onClick={onCreateWorkflow}>新建流程</TaButton>
         </div>
       </header>
 
       <nav className="exm-content-breadcrumb">
-        <button type="button">{workspaceName}</button>
-        <span>/</span>
-        <button type="button">{folderName}</button>
+        <div className="exm-breadcrumb-path">
+          <TaButton tone="ghost" size="sm">{workspaceName}</TaButton>
+          <span>/</span>
+          <TaButton tone="ghost" size="sm">{folderName}</TaButton>
+        </div>
+        <div className="exm-breadcrumb-actions">
+          {!capabilities.canEditWorkspace ? <span className="exm-action-note">{capabilities.role} 只能查看内容</span> : null}
+          <TaButton size="sm" data-testid="workspace-new-folder" disabled={!capabilities.canManageFolders} title={!capabilities.canManageFolders ? disabledReason('新建文件夹') : '新建文件夹'} onClick={onCreateFolder}>新建文件夹</TaButton>
+          <TaButton size="sm" disabled={!capabilities.canEditWorkspace} title={!capabilities.canEditWorkspace ? disabledReason('导入流程') : '导入流程'} onClick={onImportWorkflow}>导入流程</TaButton>
+          <TaButton size="sm" tone="primary" data-testid="workspace-new-workflow" disabled={!capabilities.canEditWorkspace} title={!capabilities.canEditWorkspace ? disabledReason('新建流程') : '新建流程'} onClick={onCreateWorkflow}>新建流程</TaButton>
+        </div>
       </nav>
 
-      <div className="exm-content-tabs">
+      <TaTabs className="exm-content-tabs">
         {([
           ['all', '全部'],
-          ['workflow', 'Workflow'],
-          ['folder', 'Folder'],
-          ['template', 'Template'],
+          ['workflow', '流程'],
+          ['folder', '文件夹'],
+          ['template', '模板'],
         ] as Array<[TabMode, string]>).map(([value, label]) => (
-          <button key={value} className={tab === value ? 'active' : ''} type="button" onClick={() => {
+          <TaTab key={value} active={tab === value} onClick={() => {
             setTab(value);
             setPage(1);
-          }}>{label}</button>
+          }}>{label}</TaTab>
         ))}
-      </div>
+      </TaTabs>
 
-      <div className="exm-content-tools">
+      <div className="exm-content-tools ta-card">
         <label className="exm-folder-search">
           <Search size={15} />
-          <input value={searchValue} placeholder="搜索当前文件夹" onChange={(event) => {
+          <TaInput value={searchValue} placeholder="搜索当前文件夹" onChange={(event) => {
             onSearchChange(event.target.value);
             setPage(1);
           }} />
         </label>
-        <select value={typeFilter} onChange={(event) => {
-          setTypeFilter(event.target.value as typeof typeFilter);
-          setPage(1);
-        }}>
-          <option value="ALL">全部类型</option>
-          <option value="Workflow">Workflow</option>
-          <option value="Folder">Folder</option>
-        </select>
-        <select value={statusFilter} onChange={(event) => {
-          onStatusFilterChange(event.target.value as typeof statusFilter);
-          setPage(1);
-        }}>
-          <option value="ALL">全部状态</option>
-          <option value="ACTIVE">Active</option>
-          <option value="DRAFT">Draft</option>
-          <option value="ARCHIVED">Archived</option>
-        </select>
-        <select value={visibilityFilter} onChange={(event) => {
-          setVisibilityFilter(event.target.value as typeof visibilityFilter);
-          setPage(1);
-        }}>
-          <option value="ALL">全部权限</option>
-          <option value="Private">Private</option>
-          <option value="Workspace">Workspace</option>
-          <option value="Public">Public</option>
-        </select>
-        <select value={ownerFilter} onChange={(event) => {
-          setOwnerFilter(event.target.value);
-          setPage(1);
-        }}>
-          <option value="ALL">全部 Owner</option>
-          {ownerOptions.map((owner) => <option key={owner} value={owner}>{owner}</option>)}
-        </select>
-        <select value={sortMode} onChange={(event) => onSortChange(event.target.value as typeof sortMode)}>
+        <TaSelect value={sortMode} onChange={(event) => onSortChange(event.target.value as typeof sortMode)}>
           <option value="recent">更新时间</option>
           <option value="name">名称</option>
-          <option value="owner">Owner</option>
-          <option value="code">Code</option>
+          <option value="owner">负责人</option>
+          <option value="code">编码</option>
           <option value="version">版本</option>
-        </select>
-        <button className={showAdvancedFilters ? 'active' : ''} type="button" onClick={() => setShowAdvancedFilters((value) => !value)}><SlidersHorizontal size={15} />筛选</button>
+        </TaSelect>
+        <TaButton className={showAdvancedFilters ? 'active' : ''} onClick={() => setShowAdvancedFilters((value) => !value)}><SlidersHorizontal size={15} />筛选</TaButton>
         <div className="exm-view-toggle">
-          <button className={viewMode === 'list' ? 'active' : ''} type="button" onClick={() => setViewMode('list')}><List size={15} />列表</button>
-          <button className={viewMode === 'grid' ? 'active' : ''} type="button" onClick={() => setViewMode('grid')}><Grid3X3 size={15} />网格</button>
-          <button className={viewMode === 'compact' ? 'active' : ''} type="button" onClick={() => setViewMode('compact')}><Rows3 size={15} />紧凑</button>
+          <TaButton className={viewMode === 'list' ? 'active' : ''} onClick={() => setViewMode('list')}><List size={15} />列表</TaButton>
+          <TaButton className={viewMode === 'grid' ? 'active' : ''} onClick={() => setViewMode('grid')}><Grid3X3 size={15} />网格</TaButton>
+          <TaButton className={viewMode === 'compact' ? 'active' : ''} onClick={() => setViewMode('compact')}><Rows3 size={15} />紧凑</TaButton>
         </div>
       </div>
 
@@ -594,85 +653,85 @@ export function WorkspaceContent({
         <div className="exm-advanced-filters">
           <label>
             <span>类型</span>
-            <select value={typeFilter} onChange={(event) => {
+            <TaSelect value={typeFilter} onChange={(event) => {
               setTypeFilter(event.target.value as typeof typeFilter);
               setPage(1);
             }}>
               <option value="ALL">全部类型</option>
-              <option value="Workflow">Workflow</option>
-              <option value="Folder">Folder</option>
-            </select>
+              <option value="Workflow">流程</option>
+              <option value="Folder">文件夹</option>
+            </TaSelect>
           </label>
           <label>
             <span>状态</span>
-            <select value={statusFilter} onChange={(event) => {
+            <TaSelect value={statusFilter} onChange={(event) => {
               onStatusFilterChange(event.target.value as typeof statusFilter);
               setPage(1);
             }}>
               <option value="ALL">全部状态</option>
-              <option value="ACTIVE">Active</option>
-              <option value="DRAFT">Draft</option>
-              <option value="ARCHIVED">Archived</option>
-            </select>
+              <option value="ACTIVE">已启用</option>
+              <option value="DRAFT">草稿</option>
+              <option value="ARCHIVED">已归档</option>
+            </TaSelect>
           </label>
           <label>
             <span>可见性</span>
-            <select value={visibilityFilter} onChange={(event) => {
+            <TaSelect value={visibilityFilter} onChange={(event) => {
               setVisibilityFilter(event.target.value as typeof visibilityFilter);
               setPage(1);
             }}>
               <option value="ALL">全部权限</option>
-              <option value="Private">Private</option>
-              <option value="Workspace">Workspace</option>
-              <option value="Public">Public</option>
-            </select>
+              <option value="Private">私有</option>
+              <option value="Workspace">工作区</option>
+              <option value="Public">公开</option>
+            </TaSelect>
           </label>
           <label>
-            <span>Owner</span>
-            <select value={ownerFilter} onChange={(event) => {
+            <span>负责人</span>
+            <TaSelect value={ownerFilter} onChange={(event) => {
               setOwnerFilter(event.target.value);
               setPage(1);
             }}>
-              <option value="ALL">全部 Owner</option>
+              <option value="ALL">全部负责人</option>
               {ownerOptions.map((owner) => <option key={owner} value={owner}>{owner}</option>)}
-            </select>
+            </TaSelect>
           </label>
-          <button type="button" onClick={() => {
+          <TaButton size="sm" onClick={() => {
             setTypeFilter('ALL');
             onStatusFilterChange('ALL');
             setVisibilityFilter('ALL');
             setOwnerFilter('ALL');
             setPage(1);
-          }}>重置筛选</button>
+          }}>重置筛选</TaButton>
         </div>
       ) : null}
 
       {checkedItems.length ? (
         <div className="exm-bulk-bar">
           <span>已选择 {checkedItems.length} 项</span>
-          <button type="button" data-testid="workspace-bulk-archive" disabled={!capabilities.canEditWorkspace} title={!capabilities.canEditWorkspace ? disabledReason('批量归档') : '批量归档'} onClick={() => onBulkArchive(checkedItems.map(actionPayload))}>批量归档</button>
-          <button type="button" data-testid="workspace-bulk-move" disabled={!capabilities.canEditWorkspace} title={!capabilities.canEditWorkspace ? disabledReason('批量移动') : '批量移动'} onClick={() => onBulkAction('move', checkedItems.map(actionPayload))}>批量移动</button>
-          <button type="button" data-testid="workspace-bulk-permission" disabled={!capabilities.canManageMembers} title={!capabilities.canManageMembers ? disabledReason('批量权限') : '批量权限'} onClick={() => onBulkAction('permission', checkedItems.map(actionPayload))}>批量权限</button>
-          <button type="button" onClick={() => onBulkAction('copyLink', checkedItems.map(actionPayload))}>批量复制链接</button>
-          <button type="button" onClick={() => setCheckedItemIds(new Set())}>清除选择</button>
+          <TaButton size="sm" data-testid="workspace-bulk-archive" disabled={!capabilities.canEditWorkspace} title={!capabilities.canEditWorkspace ? disabledReason('批量归档') : '批量归档'} onClick={() => onBulkArchive(checkedItems.map(actionPayload))}>批量归档</TaButton>
+          <TaButton size="sm" data-testid="workspace-bulk-move" disabled={!capabilities.canEditWorkspace} title={!capabilities.canEditWorkspace ? disabledReason('批量移动') : '批量移动'} onClick={() => onBulkAction('move', checkedItems.map(actionPayload))}>批量移动</TaButton>
+          <TaButton size="sm" data-testid="workspace-bulk-permission" disabled={!capabilities.canManageMembers} title={!capabilities.canManageMembers ? disabledReason('批量权限') : '批量权限'} onClick={() => onBulkAction('permission', checkedItems.map(actionPayload))}>批量权限</TaButton>
+          <TaButton size="sm" onClick={() => onBulkAction('copyLink', checkedItems.map(actionPayload))}>批量复制链接</TaButton>
+          <TaButton tone="ghost" size="sm" onClick={() => setCheckedItemIds(new Set())}>清除选择</TaButton>
         </div>
       ) : null}
 
       {isLoading ? (
-        <div className="exm-table-view loading" aria-label="工作台加载中">
-          <div className="exm-table-row head">
+        <TaTable className="exm-table-view loading" aria-label="工作台加载中">
+          <TaTableRow header className="exm-table-row">
             <span />
-            <span>Name</span>
-            <span>Type</span>
-            <span>Status</span>
-            <span>Version</span>
-            <span>Updated</span>
-            <span>Owner</span>
-            <span>Visibility</span>
+            <span>名称</span>
+            <span>类型</span>
+            <span>状态</span>
+            <span>版本</span>
+            <span>更新</span>
+            <span>负责人</span>
+            <span>可见性</span>
             <span>操作</span>
-          </div>
+          </TaTableRow>
           {Array.from({ length: 8 }).map((_, index) => (
-            <div key={index} className="exm-table-row skeleton-row">
+            <TaTableRow key={index} className="exm-table-row skeleton-row">
               <span><i className="exm-skeleton" /></span>
               <span className="name-cell"><i className="exm-skeleton icon-skeleton" /><b className="exm-skeleton" /></span>
               <span><i className="exm-skeleton" /></span>
@@ -682,28 +741,29 @@ export function WorkspaceContent({
               <span><i className="exm-skeleton" /></span>
               <span><i className="exm-skeleton" /></span>
               <span><i className="exm-skeleton" /></span>
-            </div>
+            </TaTableRow>
           ))}
-        </div>
+        </TaTable>
       ) : isEmptyPage ? (
-        <div className={`exm-content-empty ${emptyState.kind}`}>
+        <TaEmptyState className={`exm-content-empty ${emptyState.kind}`}>
           <b>{emptyState.title}</b>
           <span>{emptyState.description}</span>
           <div>
-            <button type="button" onClick={() => runEmptyAction(emptyState.primary)}>{emptyState.primary}</button>
-            <button className="secondary" type="button" onClick={() => runEmptyAction(emptyState.secondary)}>{emptyState.secondary}</button>
+            {emptyState.actions.map((action, index) => (
+              <TaButton key={action.label} tone={index === 0 && action.tone !== 'secondary' ? 'primary' : 'outline'} className={index === 0 && action.tone !== 'secondary' ? '' : 'secondary'} onClick={() => runEmptyAction(action.label)}>{action.label}</TaButton>
+            ))}
           </div>
-        </div>
+        </TaEmptyState>
       ) : tab === 'template' ? (
-        <div className="exm-grid-view">
+        <div className="exm-grid-view exm-template-grid">
           {pageTemplates.map((template) => (
-            <button key={template.id} type="button" onClick={() => onTemplateOpen(template.id)}>
+            <TaButton key={template.id} className="exm-template-card" onClick={() => onTemplateOpen(template.id)}>
               <MoreHorizontal className="more" size={16} />
-              <span className="workflow icon"><Workflow size={28} /></span>
+              <span className="template icon"><Workflow size={28} /></span>
               <b>{template.name}</b>
-              <em>Template · {template.category || '团队模板'} · v{template.version ?? 1}</em>
-              <footer><span>{formatDateLabel(template.updatedAt)}</span><strong>T</strong>Template</footer>
-            </button>
+              <em>{template.category || '团队模板'} · v{template.version ?? 1}</em>
+              <footer className="template-footer"><span>{formatDateLabel(template.updatedAt)}</span></footer>
+            </TaButton>
           ))}
         </div>
       ) : viewMode === 'grid' ? (
@@ -712,10 +772,9 @@ export function WorkspaceContent({
             <div key={item.id} className={selectedItemId === item.id ? 'exm-grid-card selected' : 'exm-grid-card'} role="button" tabIndex={0} onClick={() => selectAndOpen(item)} onKeyDown={(event) => {
               if (event.key === 'Enter' || event.key === ' ') selectAndOpen(item);
             }}>
-              <input
+              <TaCheckbox
                 className="grid-check"
                 checked={checkedItemIds.has(item.id)}
-                type="checkbox"
                 onClick={(event) => event.stopPropagation()}
                 onChange={() => toggleChecked(item.id)}
               />
@@ -729,31 +788,31 @@ export function WorkspaceContent({
               ) : null}
               <span className={item.type === 'Folder' ? 'folder icon' : 'workflow icon'}>{item.type === 'Folder' ? <Folder size={28} fill="currentColor" /> : <Workflow size={28} />}</span>
               <b>{renderKeyword(item.name, searchValue)}</b>
-              <em>{item.type}{item.type === 'Workflow' ? ` · ${item.status} · ${item.version}` : ` · ${item.folderCount ?? 0} workflows`}</em>
+              <em>{typeLabel(item.type)}{item.type === 'Workflow' ? ` · ${statusLabel(item.status)} · ${item.version}` : ` · ${item.folderCount ?? 0} 个流程`}</em>
               <footer><span>{item.updated}</span><strong>{item.owner.slice(0, 1)}</strong>{item.owner}</footer>
             </div>
           ))}
         </div>
       ) : (
-        <div className={viewMode === 'compact' ? 'exm-table-view compact' : 'exm-table-view'}>
-          <div className="exm-table-row head">
-            <span><input checked={allPageChecked} type="checkbox" onChange={togglePageChecked} /></span>
-            <span>Name</span>
-            <span>Type</span>
-            <span>Status</span>
-            <span>Version</span>
-            <span>Updated</span>
-            <span>Owner</span>
-            <span>Visibility</span>
+        <TaTable className={viewMode === 'compact' ? 'exm-table-view compact' : 'exm-table-view'}>
+          <TaTableRow header className="exm-table-row">
+            <span><TaCheckbox checked={allPageChecked} onChange={togglePageChecked} /></span>
+            <span>名称</span>
+            <span>类型</span>
+            <span>状态</span>
+            <span>版本</span>
+            <span>更新</span>
+            <span>负责人</span>
+            <span>可见性</span>
             <span>操作</span>
-          </div>
+          </TaTableRow>
           {pageItems.map((item) => (
-            <div key={item.id} className={selectedItemId === item.id ? 'exm-table-row selected' : 'exm-table-row'} data-testid={`workspace-row-${item.type.toLowerCase()}`} data-item-id={item.id} data-item-name={item.name} role="button" tabIndex={0} onClick={() => selectAndOpen(item)} onKeyDown={(event) => {
+            <TaTableRow key={item.id} selected={selectedItemId === item.id} className="exm-table-row" data-testid={`workspace-row-${item.type.toLowerCase()}`} data-item-id={item.id} data-item-name={item.name} role="button" tabIndex={0} onClick={() => selectAndOpen(item)} onKeyDown={(event) => {
               if (event.key === 'Enter' || event.key === ' ') selectAndOpen(item);
             }}>
-              <span><input data-testid="workspace-row-checkbox" checked={checkedItemIds.has(item.id)} type="checkbox" onClick={(event) => event.stopPropagation()} onChange={() => toggleChecked(item.id)} /></span>
+              <span><TaCheckbox data-testid="workspace-row-checkbox" checked={checkedItemIds.has(item.id)} onClick={(event) => event.stopPropagation()} onChange={() => toggleChecked(item.id)} /></span>
               <span className="name-cell">{item.type === 'Folder' ? <Folder size={17} fill="currentColor" /> : <Workflow size={17} />}<b>{renderKeyword(item.name, searchValue)}</b></span>
-              <span>{item.type}</span>
+              <span>{typeLabel(item.type)}</span>
               <span>{item.type === 'Workflow' ? renderStatus(item) : '-'}</span>
               <span>{item.version}</span>
               <span>{item.updated}</span>
@@ -771,28 +830,28 @@ export function WorkspaceContent({
                   renderItemMenu(item)
                 ) : null}
               </span>
-            </div>
+            </TaTableRow>
           ))}
-        </div>
+        </TaTable>
       )}
 
       {totalCount > 0 ? (
-        <footer className="exm-pagination">
+        <TaPagination className="exm-pagination">
           <span>共 {totalCount} 项</span>
           <div>
-            <button type="button" aria-label="上一页" disabled={safePage <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))}><ChevronLeft size={15} /></button>
+            <TaIconButton aria-label="上一页" disabled={safePage <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))}><ChevronLeft size={15} /></TaIconButton>
             <strong>{safePage}</strong>
-            <button type="button" aria-label="下一页" disabled={safePage >= pageCount} onClick={() => setPage((value) => Math.min(pageCount, value + 1))}><ChevronRight size={15} /></button>
+            <TaIconButton aria-label="下一页" disabled={safePage >= pageCount} onClick={() => setPage((value) => Math.min(pageCount, value + 1))}><ChevronRight size={15} /></TaIconButton>
           </div>
-          <select value={pageSize} onChange={(event) => {
+          <TaSelect value={pageSize} onChange={(event) => {
             setPageSize(Number(event.target.value));
             setPage(1);
           }}>
             <option value={10}>10 / 页</option>
             <option value={20}>20 / 页</option>
             <option value={50}>50 / 页</option>
-          </select>
-        </footer>
+          </TaSelect>
+        </TaPagination>
       ) : null}
     </section>
   );

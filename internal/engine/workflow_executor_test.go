@@ -4,10 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/ex-stack/ExMarketing/internal/fact"
 	"github.com/ex-stack/ExMarketing/internal/marketing"
 )
 
@@ -566,11 +570,14 @@ func TestCancelWorkflowExecutionMarksRunningExecutionCanceled(t *testing.T) {
 func TestCoreWorkflowNodeHandlersProduceStableOutputs(t *testing.T) {
 	ctx := context.Background()
 	runtime := testWorkflowHandlerRuntime(true)
+	service := NewService(marketing.NewMemoryRepository())
+	decimalCtx := context.WithValue(ctx, workflowNodeExecutionContextKey{}, workflowNodeExecutionContext{ResolvedInput: map[string]any{"amount_expr": "12.345"}})
 	cases := []struct {
 		name      string
 		node      marketing.WorkflowNode
 		handler   workflowNodeHandler
 		outputKey string
+		ctx       context.Context
 	}{
 		{name: "event in", node: marketing.WorkflowNode{ID: "node_event", Type: "event-in"}, handler: entryWorkflowNodeHandler, outputKey: "raw_event"},
 		{name: "inbox", node: marketing.WorkflowNode{ID: "node_inbox", Type: "inbox"}, handler: inboxWorkflowNodeHandler, outputKey: "event_context"},
@@ -584,15 +591,20 @@ func TestCoreWorkflowNodeHandlersProduceStableOutputs(t *testing.T) {
 		{name: "participation", node: marketing.WorkflowNode{ID: "node_participation", Type: "participation"}, handler: participationWorkflowNodeHandler, outputKey: "participation_id"},
 		{name: "grant order", node: marketing.WorkflowNode{ID: "node_grant", Type: "grant-order"}, handler: grantOrderWorkflowNodeHandler, outputKey: "grant_order"},
 		{name: "outbox", node: marketing.WorkflowNode{ID: "node_outbox", Type: "outbox"}, handler: outboxWorkflowNodeHandler, outputKey: "HTTP"},
-		{name: "fact query", node: marketing.WorkflowNode{ID: "node_fact", Type: "fact-query", Config: json.RawMessage(`{"factKeys":["profile.level"]}`)}, handler: factQueryWorkflowNodeHandler, outputKey: "facts"},
+		{name: "fact query", node: marketing.WorkflowNode{ID: "node_fact", Type: "fact-query", Config: json.RawMessage(`{"factKeys":["profile.level"],"failureAction":"USE_EMPTY"}`)}, handler: service.factQueryWorkflowNodeHandler, outputKey: "facts"},
 		{name: "switch", node: marketing.WorkflowNode{ID: "node_switch", Type: "switch"}, handler: decisionWorkflowNodeHandler, outputKey: "route"},
 		{name: "code", node: marketing.WorkflowNode{ID: "node_code", Type: "code", Config: json.RawMessage(`{"language":"EXPRESSION","source":"$.subject.id","outputPath":"subject_id"}`)}, handler: codeWorkflowNodeHandler, outputKey: "code_result"},
+		{name: "decimal", node: marketing.WorkflowNode{ID: "node_decimal", Type: "decimal"}, handler: decimalWorkflowNodeHandler, outputKey: "decimal_amount", ctx: decimalCtx},
 		{name: "callback", node: marketing.WorkflowNode{ID: "node_callback", Type: "callback", Config: json.RawMessage(`{"provider":"wallet","requireSignature":true}`)}, handler: callbackWorkflowNodeHandler, outputKey: "callback_result"},
 		{name: "audit", node: marketing.WorkflowNode{ID: "node_audit", Type: "audit", Config: json.RawMessage(`{"action":"WORKFLOW_AUDIT","includePayload":true}`)}, handler: auditWorkflowNodeHandler, outputKey: "audit_log"},
 	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
-			result := tt.handler(ctx, tt.node, runtime)
+			runCtx := ctx
+			if tt.ctx != nil {
+				runCtx = tt.ctx
+			}
+			result := tt.handler(runCtx, tt.node, runtime)
 			if result.Status != marketing.WorkflowNodeSuccess {
 				t.Fatalf("expected success, got %+v", result)
 			}
@@ -603,6 +615,49 @@ func TestCoreWorkflowNodeHandlersProduceStableOutputs(t *testing.T) {
 				t.Fatalf("expected audit fields, got %+v", result.Output)
 			}
 		})
+	}
+}
+
+func TestStandaloneFactQueryWorkflowNodeHandlerFailsInsteadOfPlaceholder(t *testing.T) {
+	result := factQueryWorkflowNodeHandler(context.Background(), marketing.WorkflowNode{
+		ID:     "fact-query",
+		Type:   "fact-query",
+		Config: json.RawMessage(`{"factKeys":["USER_PROFILE"]}`),
+	}, testWorkflowHandlerRuntime(true))
+	if result.Status != marketing.WorkflowNodeFailed || result.Output["errorCode"] != "FACT_QUERY_SERVICE_REQUIRED" {
+		t.Fatalf("expected service-required failure, got %+v", result)
+	}
+}
+
+func TestAdvancedAndOpsWorkflowNodeHandlersDeclareExecutionAuthority(t *testing.T) {
+	runtime := testWorkflowHandlerRuntime(true)
+	cases := []struct {
+		name    string
+		node    marketing.WorkflowNode
+		handler workflowNodeHandler
+		want    string
+	}{
+		{name: "retry", node: marketing.WorkflowNode{ID: "retry", Type: "retry"}, handler: retryWorkflowNodeHandler, want: "OutboxWorker"},
+		{name: "dlq", node: marketing.WorkflowNode{ID: "dlq", Type: "dlq"}, handler: dlqWorkflowNodeHandler, want: "OutboxWorker/Admin DLQ API"},
+		{name: "http-call", node: marketing.WorkflowNode{ID: "http-call", Type: "http-call"}, handler: dispatchWorkflowNodeHandler("HTTP"), want: "OutboxWorker"},
+		{name: "reconcile", node: marketing.WorkflowNode{ID: "reconcile", Type: "reconcile"}, handler: reconcileWorkflowNodeHandler, want: "Reconciliation/Admin API"},
+		{name: "alert", node: marketing.WorkflowNode{ID: "alert", Type: "alert"}, handler: alertWorkflowNodeHandler, want: "Metrics/Alertmanager"},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			result := tt.handler(context.Background(), tt.node, runtime)
+			if result.Output["executionAuthority"] != tt.want {
+				t.Fatalf("expected executionAuthority=%s, got %+v", tt.want, result.Output)
+			}
+			if result.Output["executionMode"] != "EXPLAIN_ONLY" {
+				t.Fatalf("expected EXPLAIN_ONLY execution mode, got %+v", result.Output)
+			}
+		})
+	}
+
+	callback := callbackWorkflowNodeHandler(context.Background(), marketing.WorkflowNode{ID: "callback", Type: "callback", Config: json.RawMessage(`{"provider":"wallet","requireSignature":true}`)}, runtime)
+	if callback.Output["executionMode"] != "EXTERNAL_ENDPOINT" || callback.Output["terminalAuthority"] != "RewardCallback/Reconciliation" {
+		t.Fatalf("expected callback external endpoint authority, got %+v", callback.Output)
 	}
 }
 
@@ -870,6 +925,86 @@ func TestServiceFactQueryWorkflowNodeHandlerAppliesSourceAndSubjectPath(t *testi
 	result = service.factQueryWorkflowNodeHandler(context.Background(), unsupported, runtime)
 	if result.Status != marketing.WorkflowNodeSuccess || result.Output["errorCode"] != "FACT_QUERY_SOURCE_UNSUPPORTED" {
 		t.Fatalf("expected unsupported source to degrade with errorCode, got %+v", result)
+	}
+}
+
+func TestServiceFactQueryWorkflowNodeHandlerQueriesProviderAndReportsCache(t *testing.T) {
+	t.Setenv("EX_MARKETING_FACT_ALLOWLIST", "example.com")
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	base := time.Date(2026, 6, 12, 10, 0, 0, 0, time.UTC)
+	if _, err := repo.SaveFactProvider(ctx, marketing.FactProvider{
+		TenantID:        "site_001",
+		FactCode:        "USER_PROFILE",
+		ProviderType:    "HTTP",
+		Endpoint:        "https://example.com/profile",
+		Method:          "POST",
+		Mapping:         map[string]marketing.FactMapping{"vipLevel": {Source: "$.data.vipLevel", Type: "string"}},
+		CacheTTLSeconds: 300,
+		Enabled:         true,
+		TimeoutMS:       5000,
+		UpdatedAt:       base,
+	}); err != nil {
+		t.Fatalf("seed provider: %v", err)
+	}
+
+	var calls int32
+	service := NewService(repo)
+	service.factClient = fact.NewClientWithHTTPClient(&http.Client{Transport: engineRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		atomic.AddInt32(&calls, 1)
+		body, err := io.ReadAll(req.Body)
+		if err != nil {
+			t.Fatalf("read provider request: %v", err)
+		}
+		if strings.Contains(string(body), "traceId") || !strings.Contains(string(body), "DEPOSIT_SUCCESS") {
+			t.Fatalf("provider request should use standard context without traceId, got %s", string(body))
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Body:       io.NopCloser(strings.NewReader(`{"data":{"vipLevel":"VIP3"}}`)),
+			Header:     http.Header{},
+		}, nil
+	})})
+	node := marketing.WorkflowNode{
+		ID:   "fact-query",
+		Type: "fact-query",
+		Config: json.RawMessage(`{
+			"factKeys": ["USER_PROFILE"],
+			"source": "FACT_SERVICE",
+			"failureAction": "FAIL",
+			"timeoutSeconds": 1,
+			"cacheTtlSeconds": 300
+		}`),
+	}
+	runtime := testWorkflowHandlerRuntime(true)
+	runtime.Inbox.Event.EventType = "DEPOSIT_SUCCESS"
+	runtime.Inbox.Event.OccurredAt = base
+
+	first := service.factQueryWorkflowNodeHandler(ctx, node, runtime)
+	if first.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected provider query success, got %+v", first)
+	}
+	facts := first.Output["facts"].(map[string]any)
+	profile := facts["USER_PROFILE"].(map[string]any)
+	if profile["vipLevel"] != "VIP3" {
+		t.Fatalf("expected mapped provider facts, got %+v", first.Output)
+	}
+	firstResponses := first.Output["responses"].([]any)
+	if firstResponses[0].(map[string]any)["cached"] != false {
+		t.Fatalf("expected first provider response to miss cache, got %+v", firstResponses)
+	}
+
+	second := service.factQueryWorkflowNodeHandler(ctx, node, runtime)
+	if second.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected cached provider query success, got %+v", second)
+	}
+	secondResponses := second.Output["responses"].([]any)
+	if secondResponses[0].(map[string]any)["cached"] != true {
+		t.Fatalf("expected second provider response to hit cache, got %+v", secondResponses)
+	}
+	if atomic.LoadInt32(&calls) != 1 {
+		t.Fatalf("provider calls=%d, want 1", calls)
 	}
 }
 

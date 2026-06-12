@@ -26,6 +26,7 @@ export type ActivityNodeData = {
   id: string;
   code: string;
   title: string;
+  category?: 'CORE' | 'ADVANCED' | 'OPS' | string;
   kind: NodeKind;
   desc: string;
   inputs: string[];
@@ -205,7 +206,7 @@ export type WorkflowValidationIssue = {
 
 export type WorkflowValidationResult = {
   valid: boolean;
-  items: WorkflowValidationIssue[];
+  items: WorkflowValidationIssue[] | null;
   summary: {
     blockCount: number;
     warningCount: number;
@@ -247,6 +248,7 @@ export type WorkflowNodeConfigPreview = {
 export type WorkflowNodeConfigSchema = {
   nodeType: string;
   version: number;
+  category?: 'CORE' | 'ADVANCED' | 'OPS' | string;
   title: string;
   description?: string;
   fields: WorkflowNodeConfigField[];
@@ -285,11 +287,25 @@ export type WorkflowNodeExecution = {
   finishedAt?: string;
 };
 
+export type WorkflowNodeSummary = {
+  nodeId: string;
+  nodeType: string;
+  nodeTitle?: string;
+  status: 'RUNNING' | 'SUCCESS' | 'FAILED' | 'SKIPPED';
+  durationMs?: number;
+  inputKeys?: string[];
+  outputKeys?: string[];
+  decision?: string;
+  errorCode?: string;
+  explanation?: string;
+};
+
 export type WorkflowExecutionTrace = {
   schemaVersion?: string;
   exportedAt?: string;
   execution: WorkflowExecution;
   nodeExecutions: WorkflowNodeExecution[];
+  nodeSummaries?: WorkflowNodeSummary[];
   routeTrace?: unknown;
 };
 

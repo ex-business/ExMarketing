@@ -1,23 +1,23 @@
 import { useMemo, useState } from 'react';
-import type { ActivityNodeData } from '../types';
-import { nodeCatalog } from '../data/nodeCatalog';
+import type { ActivityNodeData, CatalogGroup } from '../types';
 import { cx } from '../utils/flow';
 import { NodeKindIcon } from './NodeKindIcon';
 
 type Props = {
   open: boolean;
+  catalog: CatalogGroup[];
   onAddNode: (def: ActivityNodeData) => void;
   selectedTemplate: 'default' | 'simple';
   onDefault: () => void;
   onSimple: () => void;
 };
 
-export function NodePalette({ open, onAddNode }: Props) {
+export function NodePalette({ open, catalog, onAddNode }: Props) {
   const [search, setSearch] = useState('');
   const filteredCatalog = useMemo(() => {
     const keyword = search.trim().toLowerCase();
-    if (!keyword) return nodeCatalog;
-    return nodeCatalog
+    if (!keyword) return catalog;
+    return catalog
       .map((group) => ({
         ...group,
         items: group.items.filter((item) => (
@@ -27,7 +27,7 @@ export function NodePalette({ open, onAddNode }: Props) {
         )),
       }))
       .filter((group) => group.items.length > 0);
-  }, [search]);
+  }, [catalog, search]);
 
   return (
     <aside className={cx('flow-sidebar', open && 'open')}>

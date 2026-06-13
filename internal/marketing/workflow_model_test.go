@@ -730,6 +730,36 @@ func TestValidateWorkflowDefinitionAllowsDifferentOutputHandles(t *testing.T) {
 	}
 }
 
+func TestValidateWorkflowDefinitionWarnsOnMultipleIncomingEdges(t *testing.T) {
+	result := ValidateWorkflowDefinition(json.RawMessage(`{
+		"meta": {"activityId": "activity-1", "workspaceId": "workspace-1", "folderId": "folder-1"},
+		"nodes": [
+			{"id": "event-in", "type": "event-in", "kind": "entry"},
+			{"id": "reward", "type": "reward", "kind": "reward"},
+			{"id": "limit", "type": "limit", "kind": "quota"},
+			{"id": "audit", "type": "audit", "kind": "audit"}
+		],
+		"edges": [
+			{"id": "event-reward", "source": "event-in", "target": "reward"},
+			{"id": "reward-audit", "source": "reward", "target": "audit"},
+			{"id": "event-limit", "source": "event-in", "sourceHandle": "limit", "target": "limit"},
+			{"id": "limit-audit", "source": "limit", "target": "audit"}
+		]
+	}`))
+	if !result.Valid {
+		t.Fatalf("expected workflow validation warning to remain valid, got %+v", result)
+	}
+	if result.Summary.WarningCount != 1 {
+		t.Fatalf("expected one join warning, got %+v", result.Summary)
+	}
+	if len(result.Items) != 1 ||
+		result.Items[0].Severity != WorkflowValidationWarning ||
+		result.Items[0].Code != "WORKFLOW_JOIN_OR_SEMANTICS" ||
+		result.Items[0].NodeID != "audit" {
+		t.Fatalf("expected OR fan-in warning for audit, got %+v", result.Items)
+	}
+}
+
 func TestValidateWorkflowDefinitionValidatesBranchRouteCoverage(t *testing.T) {
 	result := ValidateWorkflowDefinition(json.RawMessage(`{
 		"meta": {"activityId": "activity-1", "workspaceId": "workspace-1", "folderId": "folder-1"},
@@ -799,7 +829,13 @@ func TestValidateWorkflowDefinitionRejectsUnsupportedCycle(t *testing.T) {
 	if result.Summary.BlockCount != 1 {
 		t.Fatalf("expected one blocking issue, got %+v", result.Summary)
 	}
-	if len(result.Items) != 1 || result.Items[0].Code != "WORKFLOW_UNSUPPORTED_CYCLE" {
+	var hasCycleBlock bool
+	for _, item := range result.Items {
+		if item.Severity == WorkflowValidationBlock && item.Code == "WORKFLOW_UNSUPPORTED_CYCLE" {
+			hasCycleBlock = true
+		}
+	}
+	if !hasCycleBlock {
 		t.Fatalf("expected unsupported cycle issue, got %+v", result.Items)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -277,6 +278,8 @@ func (s *Service) CompareWorkflowDraftTemplateVersions(ctx context.Context, temp
 	}
 	leftNodes := workflowTemplateNodeIDSet(leftDef.Nodes)
 	rightNodes := workflowTemplateNodeIDSet(rightDef.Nodes)
+	leftNodeByID := workflowTemplateNodeByID(leftDef.Nodes)
+	rightNodeByID := workflowTemplateNodeByID(rightDef.Nodes)
 	var added []string
 	var removed []string
 	common := 0
@@ -292,6 +295,8 @@ func (s *Service) CompareWorkflowDraftTemplateVersions(ctx context.Context, temp
 			removed = append(removed, id)
 		}
 	}
+	nodeChanges := workflowTemplateNodeDiffs(leftNodeByID, rightNodeByID)
+	edgeChanges := workflowTemplateEdgeDiffs(workflowTemplateEdgeByID(leftDef.Edges), workflowTemplateEdgeByID(rightDef.Edges))
 	return marketing.WorkflowDraftTemplateCompareResult{
 		LeftVersionID:  left.VersionID,
 		RightVersionID: right.VersionID,
@@ -302,6 +307,8 @@ func (s *Service) CompareWorkflowDraftTemplateVersions(ctx context.Context, temp
 		AddedNodes:     added,
 		RemovedNodes:   removed,
 		CommonNodes:    common,
+		NodeChanges:    nodeChanges,
+		EdgeChanges:    edgeChanges,
 		ChangedMeta: map[string]any{
 			"name":       []string{left.Name, right.Name},
 			"category":   []string{left.Category, right.Category},
@@ -424,6 +431,133 @@ func workflowTemplateNodeIDSet(nodes []marketing.WorkflowNode) map[string]struct
 		if id != "" {
 			out[id] = struct{}{}
 		}
+	}
+	return out
+}
+
+func workflowTemplateNodeByID(nodes []marketing.WorkflowNode) map[string]marketing.WorkflowNode {
+	out := make(map[string]marketing.WorkflowNode, len(nodes))
+	for _, node := range nodes {
+		id := strings.TrimSpace(node.ID)
+		if id != "" {
+			out[id] = node
+		}
+	}
+	return out
+}
+
+func workflowTemplateEdgeByID(edges []marketing.WorkflowEdge) map[string]marketing.WorkflowEdge {
+	out := make(map[string]marketing.WorkflowEdge, len(edges))
+	for _, edge := range edges {
+		id := strings.TrimSpace(edge.ID)
+		if id != "" {
+			out[id] = edge
+		}
+	}
+	return out
+}
+
+func workflowTemplateNodeDiffs(left map[string]marketing.WorkflowNode, right map[string]marketing.WorkflowNode) []marketing.WorkflowTemplateNodeDiff {
+	ids := make([]string, 0, len(left))
+	for id := range left {
+		if _, ok := right[id]; ok {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	out := []marketing.WorkflowTemplateNodeDiff{}
+	for _, id := range ids {
+		changes := workflowJSONValueDiff(workflowTemplateComparableNode(right[id]), workflowTemplateComparableNode(left[id]), true, true, "$")
+		if len(changes) == 0 {
+			continue
+		}
+		node := right[id]
+		label := strings.TrimSpace(node.Title)
+		if label == "" {
+			label = id
+		}
+		out = append(out, marketing.WorkflowTemplateNodeDiff{
+			NodeID:  id,
+			Label:   label,
+			Type:    node.Type,
+			Kind:    node.Kind,
+			Changes: changes,
+		})
+	}
+	return out
+}
+
+func workflowTemplateComparableNode(node marketing.WorkflowNode) map[string]any {
+	return map[string]any{
+		"type":    node.Type,
+		"kind":    node.Kind,
+		"code":    node.Code,
+		"title":   node.Title,
+		"inputs":  node.Inputs,
+		"outputs": node.Outputs,
+		"config":  workflowTemplateConfigValue(node.Config),
+	}
+}
+
+func workflowTemplateConfigValue(raw json.RawMessage) any {
+	if len(raw) == 0 || strings.TrimSpace(string(raw)) == "null" {
+		return nil
+	}
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return string(raw)
+	}
+	return value
+}
+
+func workflowTemplateEdgeDiffs(left map[string]marketing.WorkflowEdge, right map[string]marketing.WorkflowEdge) []marketing.WorkflowTemplateEdgeDiff {
+	ids := make([]string, 0, len(left))
+	for id := range left {
+		if _, ok := right[id]; ok {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	out := []marketing.WorkflowTemplateEdgeDiff{}
+	for _, id := range ids {
+		changes := workflowJSONValueDiff(workflowTemplateComparableEdge(right[id]), workflowTemplateComparableEdge(left[id]), true, true, "$")
+		if len(changes) == 0 {
+			continue
+		}
+		edge := right[id]
+		out = append(out, marketing.WorkflowTemplateEdgeDiff{
+			EdgeID:  id,
+			Source:  edge.Source,
+			Target:  edge.Target,
+			Label:   edge.Label,
+			Changes: changes,
+		})
+	}
+	return out
+}
+
+func workflowTemplateComparableEdge(edge marketing.WorkflowEdge) map[string]any {
+	return map[string]any{
+		"source":       edge.Source,
+		"target":       edge.Target,
+		"sourceHandle": edge.SourceHandle,
+		"targetHandle": edge.TargetHandle,
+		"label":        edge.Label,
+		"route":        workflowTemplateJSONValue(edge.Route),
+	}
+}
+
+func workflowTemplateJSONValue(value any) any {
+	if value == nil {
+		return nil
+	}
+	raw, err := json.Marshal(value)
+	if err != nil {
+		return value
+	}
+	var out any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return value
 	}
 	return out
 }

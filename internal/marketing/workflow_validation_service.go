@@ -105,6 +105,7 @@ func (s WorkflowValidationService) ValidateDefinition(raw json.RawMessage) Workf
 	outgoingEdgeByOutput := map[string]string{}
 	outgoingRoutesByNode := map[string]map[string]string{}
 	defaultRouteByNode := map[string]string{}
+	incomingEdgesByTarget := map[string][]string{}
 	for index, edge := range definition.Edges {
 		edgeID := strings.TrimSpace(edge.ID)
 		source := strings.TrimSpace(edge.Source)
@@ -191,6 +192,7 @@ func (s WorkflowValidationService) ValidateDefinition(raw json.RawMessage) Workf
 				adjacency[source] = append(adjacency[source], target)
 				hasOutgoingEdge[source] = true
 				hasIncomingEdge[target] = true
+				incomingEdgesByTarget[target] = append(incomingEdgesByTarget[target], edgeID)
 				routeOutputKey := workflowEdgeRouteOutputKey(edge, nodeByID[source])
 				if routeOutputKey != "" {
 					if outgoingRoutesByNode[source] == nil {
@@ -229,6 +231,19 @@ func (s WorkflowValidationService) ValidateDefinition(raw json.RawMessage) Workf
 				}
 			}
 		}
+	}
+	for target, edgeIDs := range incomingEdgesByTarget {
+		if len(edgeIDs) <= 1 {
+			continue
+		}
+		result.addIssue(
+			WorkflowValidationWarning,
+			"WORKFLOW_JOIN_OR_SEMANTICS",
+			fmt.Sprintf("节点 %q 有多个入口连线，当前执行器按 OR fan-in 语义处理：任一上游路由命中即会执行目标节点，不会等待所有上游。", target),
+			"edges",
+			target,
+			strings.Join(edgeIDs, ","),
+		)
 	}
 	upstreamSourceTarget := s.upstreamSourceTargets(nodeIDs, adjacency)
 	s.validateNodeInputMappings(&result, definition.Meta, definition.Nodes, nodeByID, upstreamSourceTarget)

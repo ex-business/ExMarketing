@@ -546,6 +546,9 @@ func executeWorkflowNodeWithPolicy(ctx context.Context, node marketing.WorkflowN
 		last.Output["retryBackoffMs"] = policy.RetryBackoff.Milliseconds()
 		last.Output["concurrencyGroup"] = policy.ConcurrencyGroup
 		last.Output["concurrencyLimit"] = policy.ConcurrencyLimit
+		last.Output["concurrencyMode"] = "SERIAL_PER_EXECUTION"
+		last.Output["concurrencyEnforced"] = false
+		last.Output["concurrencyNote"] = "concurrencyGroup/concurrencyLimit are advisory metadata; cross-execution throttling is not enforced by the workflow executor"
 		if last.Status != marketing.WorkflowNodeFailed || attempts > policy.MaxRetries {
 			return last
 		}

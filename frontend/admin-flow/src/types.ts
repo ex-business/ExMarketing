@@ -323,12 +323,36 @@ export type WorkflowExecutionPayloadNodeDiff = {
   output: WorkflowExecutionJSONDiff[];
 };
 
+export type WorkflowExecutionNodeStatusDiff = {
+  nodeId: string;
+  label: string;
+  currentStatus?: WorkflowNodeExecution['status'];
+  baselineStatus?: WorkflowNodeExecution['status'];
+  currentError?: string;
+  baselineError?: string;
+  currentErrorCode?: string;
+  baselineErrorCode?: string;
+  currentAttempt?: number;
+  baselineAttempt?: number;
+  currentDurationMs?: number;
+  baselineDurationMs?: number;
+};
+
+export type WorkflowExecutionSideEffectDiff = {
+  kind: string;
+  changes: WorkflowExecutionJSONDiff[];
+  current?: unknown;
+  baseline?: unknown;
+};
+
 export type WorkflowExecutionCompareResult = {
   current: Pick<WorkflowExecution, 'id' | 'status' | 'eventId' | 'workflowVersion' | 'errorMessage' | 'startedAt' | 'finishedAt'>;
   baseline: Pick<WorkflowExecution, 'id' | 'status' | 'eventId' | 'workflowVersion' | 'errorMessage' | 'startedAt' | 'finishedAt'>;
   currentPath: string[];
   baselinePath: string[];
   pathChanged: boolean;
+  nodeStatusChanges?: WorkflowExecutionNodeStatusDiff[];
+  sideEffectChanges?: WorkflowExecutionSideEffectDiff[];
   currentFailures: string[];
   baselineFailures: string[];
   currentDurationMs: number;

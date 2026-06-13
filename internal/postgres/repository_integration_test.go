@@ -648,6 +648,64 @@ func TestPostgresParticipationAndGrantIdempotencyUniqueConstraints(t *testing.T)
 	assertPostgresCount(t, repo, `SELECT COUNT(*) FROM marketing_grant_order WHERE idempotency_key = $1`, prefix+"_grant_idem", 1)
 }
 
+func TestPostgresReconciliationIncludesParticipationWithoutGrantOrder(t *testing.T) {
+	databaseURL := os.Getenv("EX_MARKETING_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("EX_MARKETING_DATABASE_URL is not set")
+	}
+	ctx := context.Background()
+	repo, err := NewRepository(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("connect postgres: %v", err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+
+	prefix := "pg_part_only_reconcile"
+	cleanupPostgresAtomicTest(t, repo, prefix)
+	t.Cleanup(func() { cleanupPostgresAtomicTest(t, repo, prefix) })
+
+	now := time.Now().UTC()
+	activityID := prefix + "_act"
+	inbox := marketing.EventInbox{
+		ID:             prefix + "_part_inbox",
+		IdempotencyKey: prefix + "_inbox_idem",
+		ProcessStatus:  marketing.InboxProcessed,
+		Event: marketing.ActivityEvent{
+			TenantID:     "site_001",
+			EventID:      prefix + "_event",
+			EventType:    "CHECKIN_SUCCESS",
+			SourceSystem: "app",
+			Subject:      marketing.EventSubject{Type: "USER", ID: "user_1"},
+			Biz:          marketing.EventBiz{BizType: "CHECKIN", BizID: prefix + "_day"},
+			OccurredAt:   now,
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if _, _, err := repo.CreateInbox(ctx, inbox); err != nil {
+		t.Fatalf("create inbox: %v", err)
+	}
+	participation := testPostgresParticipation(prefix+"_part", activityID, prefix+"_part_idem", now)
+	participation.EventInboxID = inbox.ID
+	participation.Subject = inbox.Event.Subject
+	participation.Biz = inbox.Event.Biz
+	if _, err := repo.CreateParticipation(ctx, participation); err != nil {
+		t.Fatalf("create participation: %v", err)
+	}
+	items, err := repo.ListRewardReconciliation(ctx, marketing.RewardReconciliationQuery{
+		TenantID:   "site_001",
+		ActivityID: activityID,
+		EventID:    inbox.Event.EventID,
+		Limit:      10,
+	})
+	if err != nil {
+		t.Fatalf("list reconciliation: %v", err)
+	}
+	if len(items) != 1 || items[0].ParticipationID != participation.ID || items[0].Participation == nil || items[0].GrantOrderID != "" {
+		t.Fatalf("expected participation-only reconciliation item, got %+v", items)
+	}
+}
+
 func TestPostgresCloseOutboxDLQOnlyClosesOutbox(t *testing.T) {
 	ctx, repo := openPostgresIntegrationRepository(t)
 	prefix := "pg_dlq_close"

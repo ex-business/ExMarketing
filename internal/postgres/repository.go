@@ -1445,7 +1445,64 @@ func (r *Repository) ListRewardReconciliation(ctx context.Context, query marketi
 		}
 		items = append(items, item)
 	}
-	return items, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(items) >= query.Limit || query.CommandID != "" || query.GrantOrderID != "" || query.OutboxID != "" {
+		return items, nil
+	}
+	participationRows, err := r.db.QueryContext(ctx, `
+		SELECT p.id, p.tenant_id, p.activity_id, p.event_inbox_id, p.subject_type, p.subject_id,
+		       p.biz_type, p.biz_id, p.status, COALESCE(p.reject_reason, ''), p.snapshot_json,
+		       p.idempotency_key, p.created_at, p.updated_at,
+		       ei.id, ei.payload_json, ei.idempotency_key, ei.process_status, COALESCE(ei.error_message, ''), ei.created_at, ei.updated_at
+		FROM marketing_participation p
+		JOIN marketing_event_inbox ei ON ei.id = p.event_inbox_id
+		WHERE p.tenant_id = $1
+		  AND ($2 = '' OR p.activity_id = $2)
+		  AND ($3 = '' OR p.subject_type = $3)
+		  AND ($4 = '' OR p.subject_id = $4)
+		  AND ($5 = '' OR ei.event_id = $5)
+		  AND ($6 = '' OR ei.idempotency_key = $6)
+		  AND ($7 = '' OR p.id = $7)
+		  AND NOT EXISTS (
+		    SELECT 1 FROM marketing_grant_order go
+		    WHERE go.participation_id = p.id
+		  )
+		ORDER BY p.updated_at DESC
+		LIMIT $8
+	`, query.TenantID, query.ActivityID, query.SubjectType, query.SubjectID, query.EventID, query.IdempotencyKey, query.ParticipationID, query.Limit-len(items))
+	if err != nil {
+		return nil, err
+	}
+	defer participationRows.Close()
+	for participationRows.Next() {
+		var item marketing.RewardReconciliationItem
+		var participation marketing.Participation
+		var inbox marketing.EventInbox
+		var eventPayload []byte
+		if err := participationRows.Scan(&participation.ID, &participation.TenantID, &participation.ActivityID, &participation.EventInboxID,
+			&participation.Subject.Type, &participation.Subject.ID, &participation.Biz.BizType, &participation.Biz.BizID,
+			&participation.Status, &participation.RejectReason, &participation.Snapshot, &participation.IdempotencyKey,
+			&participation.CreatedAt, &participation.UpdatedAt,
+			&inbox.ID, &eventPayload, &inbox.IdempotencyKey, &inbox.ProcessStatus, &inbox.ErrorMessage, &inbox.CreatedAt, &inbox.UpdatedAt); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(eventPayload, &inbox.Event); err != nil {
+			return nil, err
+		}
+		item.TenantID = participation.TenantID
+		item.ActivityID = participation.ActivityID
+		item.ParticipationID = participation.ID
+		item.Subject = participation.Subject
+		item.ParticipationStatus = participation.Status
+		item.ServerUpdatedAt = participation.UpdatedAt
+		item.EventInbox = &inbox
+		item.Participation = &participation
+		item.Reservations = []marketing.QuotaReservation{}
+		items = append(items, item)
+	}
+	return items, participationRows.Err()
 }
 
 func (r *Repository) CreateParticipationGrantOutboxesWithQuota(ctx context.Context, cmd marketing.AtomicGrantCommand) (marketing.AtomicGrantResult, error) {

@@ -431,18 +431,19 @@ func TestCompareWorkflowExecutionsReturnsCompactDiff(t *testing.T) {
 	currentNodeFinished := now.Add(120 * time.Millisecond)
 	baselineNodeFinished := now.Add(90 * time.Millisecond)
 	if _, err := repo.CreateWorkflowNodeExecution(ctx, marketing.WorkflowNodeExecution{
-		ID:          "node_current_inbox",
-		TenantID:    "site_001",
-		ExecutionID: current.ID,
-		NodeID:      "inbox",
-		NodeTitle:   "幂等收件箱",
-		Status:      marketing.WorkflowNodeFailed,
-		Input:       json.RawMessage(`{"raw_event":{"userId":"user_1"}}`),
-		Output:      json.RawMessage(`{"errorCode":"INBOX_WRITE_FAILED"}`),
-		StartedAt:   now,
-		FinishedAt:  &currentNodeFinished,
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		ID:           "node_current_inbox",
+		TenantID:     "site_001",
+		ExecutionID:  current.ID,
+		NodeID:       "inbox",
+		NodeTitle:    "幂等收件箱",
+		Status:       marketing.WorkflowNodeFailed,
+		Input:        json.RawMessage(`{"raw_event":{"userId":"user_1"}}`),
+		Output:       json.RawMessage(`{"errorCode":"INBOX_WRITE_FAILED","attempt":2}`),
+		ErrorMessage: "inbox write failed",
+		StartedAt:    now,
+		FinishedAt:   &currentNodeFinished,
+		CreatedAt:    now,
+		UpdatedAt:    now,
 	}); err != nil {
 		t.Fatalf("create current node: %v", err)
 	}
@@ -454,13 +455,116 @@ func TestCompareWorkflowExecutionsReturnsCompactDiff(t *testing.T) {
 		NodeTitle:   "幂等收件箱",
 		Status:      marketing.WorkflowNodeSuccess,
 		Input:       json.RawMessage(`{"raw_event":{"userId":"user_0"}}`),
-		Output:      json.RawMessage(`{"event_context":{"accepted":true}}`),
+		Output:      json.RawMessage(`{"event_context":{"accepted":true},"attempt":1}`),
 		StartedAt:   now,
 		FinishedAt:  &baselineNodeFinished,
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}); err != nil {
 		t.Fatalf("create baseline node: %v", err)
+	}
+	currentInbox := marketing.EventInbox{
+		ID:             "inbox_current",
+		IdempotencyKey: "idem_current",
+		ProcessStatus:  marketing.InboxProcessed,
+		Event: marketing.ActivityEvent{
+			TenantID:   "site_001",
+			EventID:    current.EventID,
+			EventType:  "CHECKIN_SUCCESS",
+			Subject:    marketing.EventSubject{Type: "USER", ID: "user_1"},
+			Biz:        marketing.EventBiz{BizType: "CHECKIN", BizID: "day_1"},
+			OccurredAt: now,
+		},
+		CreatedAt: now,
+		UpdatedAt: now,
+	}
+	if _, _, err := repo.CreateInbox(ctx, currentInbox); err != nil {
+		t.Fatalf("create current inbox: %v", err)
+	}
+	baselineInbox := currentInbox
+	baselineInbox.ID = "inbox_baseline"
+	baselineInbox.IdempotencyKey = "idem_baseline"
+	baselineInbox.Event.EventID = baseline.EventID
+	baselineInbox.Event.Subject.ID = "user_0"
+	if _, _, err := repo.CreateInbox(ctx, baselineInbox); err != nil {
+		t.Fatalf("create baseline inbox: %v", err)
+	}
+	currentParticipation := marketing.Participation{
+		ID:             "part_current",
+		TenantID:       "site_001",
+		ActivityID:     "act_compare",
+		EventInboxID:   currentInbox.ID,
+		Subject:        currentInbox.Event.Subject,
+		Biz:            currentInbox.Event.Biz,
+		Status:         marketing.ParticipationRewardable,
+		IdempotencyKey: "part_idem_current",
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	baselineParticipation := currentParticipation
+	baselineParticipation.ID = "part_baseline"
+	baselineParticipation.EventInboxID = baselineInbox.ID
+	baselineParticipation.Subject = baselineInbox.Event.Subject
+	baselineParticipation.IdempotencyKey = "part_idem_baseline"
+	if _, err := repo.CreateParticipationGrantOutboxesWithQuota(ctx, marketing.AtomicGrantCommand{
+		Participation: currentParticipation,
+		GrantOrders: []marketing.GrantOrder{{
+			ID:              "grant_current",
+			TenantID:        "site_001",
+			ActivityID:      "act_compare",
+			ParticipationID: currentParticipation.ID,
+			Subject:         currentParticipation.Subject,
+			RewardType:      marketing.RewardBonus,
+			RewardAmount:    "2.0000",
+			BillNo:          "cmd_current",
+			GrantStatus:     marketing.GrantPending,
+			GrantChannel:    marketing.GrantHTTP,
+			IdempotencyKey:  "grant_idem_current",
+			CreatedAt:       now,
+			UpdatedAt:       now,
+		}},
+		OutboxMessages: []marketing.OutboxMessage{{
+			ID:            "outbox_current",
+			TenantID:      "site_001",
+			MessageType:   "REWARD_GRANT",
+			TargetChannel: marketing.GrantHTTP,
+			TargetRef:     "cmd_current",
+			SendStatus:    marketing.OutboxPending,
+			CreatedAt:     now,
+			UpdatedAt:     now,
+		}},
+	}); err != nil {
+		t.Fatalf("create current side effects: %v", err)
+	}
+	if _, err := repo.CreateParticipationGrantOutboxesWithQuota(ctx, marketing.AtomicGrantCommand{
+		Participation: baselineParticipation,
+		GrantOrders: []marketing.GrantOrder{{
+			ID:              "grant_baseline",
+			TenantID:        "site_001",
+			ActivityID:      "act_compare",
+			ParticipationID: baselineParticipation.ID,
+			Subject:         baselineParticipation.Subject,
+			RewardType:      marketing.RewardBonus,
+			RewardAmount:    "1.0000",
+			BillNo:          "cmd_baseline",
+			GrantStatus:     marketing.GrantSuccess,
+			GrantChannel:    marketing.GrantHTTP,
+			IdempotencyKey:  "grant_idem_baseline",
+			CreatedAt:       now,
+			UpdatedAt:       now,
+		}},
+		OutboxMessages: []marketing.OutboxMessage{{
+			ID:            "outbox_baseline",
+			TenantID:      "site_001",
+			MessageType:   "REWARD_GRANT",
+			TargetChannel: marketing.GrantHTTP,
+			TargetRef:     "cmd_baseline",
+			SendStatus:    marketing.OutboxSent,
+			CreatedAt:     now,
+			UpdatedAt:     now,
+		}},
+	}); err != nil {
+		t.Fatalf("create baseline side effects: %v", err)
 	}
 	compare, err := service.CompareWorkflowExecutions(ctx, current.ID, baseline.ID)
 	if err != nil {
@@ -478,6 +582,24 @@ func TestCompareWorkflowExecutionsReturnsCompactDiff(t *testing.T) {
 	if len(compare.PayloadChanges) != 1 || len(compare.PayloadChanges[0].Input) == 0 || compare.PayloadChanges[0].Input[0].Path != "$.raw_event.userId" {
 		t.Fatalf("expected payload diff, got %+v", compare.PayloadChanges)
 	}
+	if len(compare.NodeStatusChanges) != 1 || compare.NodeStatusChanges[0].CurrentStatus != marketing.WorkflowNodeFailed || compare.NodeStatusChanges[0].BaselineStatus != marketing.WorkflowNodeSuccess || compare.NodeStatusChanges[0].CurrentAttempt != 2 {
+		t.Fatalf("expected node status diff with retry attempt, got %+v", compare.NodeStatusChanges)
+	}
+	if len(compare.SideEffectChanges) == 0 {
+		t.Fatalf("expected side effect changes, got %+v", compare.SideEffectChanges)
+	}
+	var grantChanged bool
+	for _, change := range compare.SideEffectChanges {
+		if change.Kind == "grantOrders" {
+			grantChanged = true
+			if len(change.Changes) == 0 {
+				t.Fatalf("expected grant side effect JSON changes: %+v", change)
+			}
+		}
+	}
+	if !grantChanged {
+		t.Fatalf("expected grant side effect diff, got %+v", compare.SideEffectChanges)
+	}
 	limited, err := service.CompareWorkflowExecutionsWithOptions(ctx, current.ID, baseline.ID, marketing.WorkflowExecutionCompareOptions{
 		MaxPayloadChangeNodes: 1,
 		MaxJSONDiffRows:       1,
@@ -490,6 +612,52 @@ func TestCompareWorkflowExecutionsReturnsCompactDiff(t *testing.T) {
 	}
 	if len(limited.PayloadChanges) != 1 || len(limited.PayloadChanges[0].Input) > 1 || len(limited.PayloadChanges[0].Output) > 1 {
 		t.Fatalf("expected compact payload diff, got %+v", limited.PayloadChanges)
+	}
+}
+
+func TestCompareWorkflowExecutionsMarksSharedSideEffectScope(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	now := time.Date(2026, 6, 6, 10, 0, 0, 0, time.UTC)
+	for _, execution := range []marketing.WorkflowExecution{
+		{
+			ID:                "exec_same_event_current",
+			TenantID:          "site_001",
+			ActivityID:        "act_same_event_compare",
+			WorkflowVersionID: "version_1",
+			WorkflowVersion:   1,
+			EventID:           "evt_same_event",
+			Status:            marketing.WorkflowExecutionSuccess,
+			Input:             json.RawMessage(`{"idempotencyKey":"idem_same_event"}`),
+			StartedAt:         now,
+			CreatedAt:         now,
+			UpdatedAt:         now,
+		},
+		{
+			ID:                "exec_same_event_baseline",
+			TenantID:          "site_001",
+			ActivityID:        "act_same_event_compare",
+			WorkflowVersionID: "version_1",
+			WorkflowVersion:   1,
+			EventID:           "evt_same_event",
+			Status:            marketing.WorkflowExecutionSuccess,
+			Input:             json.RawMessage(`{"idempotencyKey":"idem_same_event"}`),
+			StartedAt:         now,
+			CreatedAt:         now,
+			UpdatedAt:         now,
+		},
+	} {
+		if _, err := repo.CreateWorkflowExecution(ctx, execution); err != nil {
+			t.Fatalf("create execution %s: %v", execution.ID, err)
+		}
+	}
+	compare, err := service.CompareWorkflowExecutions(ctx, "exec_same_event_current", "exec_same_event_baseline")
+	if err != nil {
+		t.Fatalf("compare executions: %v", err)
+	}
+	if len(compare.SideEffectChanges) == 0 || compare.SideEffectChanges[0].Kind != "scope" {
+		t.Fatalf("expected shared side effect scope warning, got %+v", compare.SideEffectChanges)
 	}
 }
 
@@ -1532,6 +1700,9 @@ func TestWorkflowNodePolicyIncludesRetryAndConcurrencyStrategy(t *testing.T) {
 	if result.Output["concurrencyGroup"] != "reward-writes" || int(result.Output["concurrencyLimit"].(int)) != 3 {
 		t.Fatalf("expected concurrency policy in output, got %+v", result.Output)
 	}
+	if result.Output["concurrencyMode"] != "SERIAL_PER_EXECUTION" || result.Output["concurrencyEnforced"] != false {
+		t.Fatalf("expected explicit advisory concurrency semantics, got %+v", result.Output)
+	}
 	if result.Output["retryBackoffMs"].(int64) <= 0 {
 		t.Fatalf("expected retry backoff in output, got %+v", result.Output)
 	}
@@ -1660,5 +1831,204 @@ func TestResumeWorkflowExecutionCreatesResumeTrace(t *testing.T) {
 	}
 	if !strings.Contains(string(trace.Execution.Input), `"mode":"RESUME"`) || !strings.Contains(string(trace.Execution.Input), `"sourceExecutionId":"`+source.ID+`"`) {
 		t.Fatalf("expected resume metadata in input, got %s", string(trace.Execution.Input))
+	}
+}
+
+func TestResumeWorkflowExecutionHydratesCommittedRewardRuntime(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	now := time.Date(2026, 6, 6, 12, 0, 0, 0, time.UTC)
+	activity := marketing.Activity{
+		ID:            "act_resume_reward",
+		TenantID:      "site_001",
+		WorkspaceID:   "workspace-1",
+		FolderID:      "folder-1",
+		Code:          "RESUME_REWARD",
+		Name:          "Resume Reward",
+		Type:          "STUDIO_WORKFLOW",
+		Status:        marketing.ActivityActive,
+		TriggerEvents: []string{"CHECKIN_SUCCESS"},
+		StartTime:     now.Add(-time.Hour),
+		EndTime:       now.Add(time.Hour),
+		Timezone:      "UTC",
+		Priority:      1,
+		Version:       1,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	if _, err := repo.CreateActivity(ctx, activity); err != nil {
+		t.Fatalf("create activity: %v", err)
+	}
+	definition := json.RawMessage(`{
+		"meta": {"activityId": "act_resume_reward", "workspaceId": "workspace-1", "folderId": "folder-1"},
+		"nodes": [
+			{"id":"event-in","type":"event-in","kind":"entry","outputs":["raw_event"]},
+			{"id":"grant-order","type":"grant-order","outputs":["grant_order"]},
+			{"id":"outbox","type":"outbox","outputs":["HTTP"]},
+			{"id":"audit","type":"audit"}
+		],
+		"edges": [
+			{"id":"event-grant","source":"event-in","target":"grant-order"},
+			{"id":"grant-outbox","source":"grant-order","target":"outbox"},
+			{"id":"outbox-audit","source":"outbox","target":"audit"}
+		]
+	}`)
+	version, err := repo.CreateWorkflowVersion(ctx, marketing.WorkflowVersion{
+		ID:          "wfver_resume_reward",
+		TenantID:    activity.TenantID,
+		ActivityID:  activity.ID,
+		Version:     1,
+		Status:      marketing.WorkflowVersionActive,
+		Definition:  definition,
+		PublishedAt: now,
+		PublishedBy: "tester",
+		CreatedAt:   now,
+	})
+	if err != nil {
+		t.Fatalf("create workflow version: %v", err)
+	}
+	event := marketing.ActivityEvent{
+		EventID:      "evt_resume_reward",
+		EventType:    "CHECKIN_SUCCESS",
+		SourceSystem: "app",
+		TenantID:     activity.TenantID,
+		Subject:      marketing.EventSubject{Type: "USER", ID: "u_resume_reward"},
+		Biz:          marketing.EventBiz{BizType: "CHECKIN", BizID: "2026-06-06:u_resume_reward"},
+		OccurredAt:   now,
+		Attributes:   map[string]any{"streakDays": 1},
+	}
+	inbox, _, err := repo.CreateInbox(ctx, marketing.EventInbox{
+		ID:             "inbox_resume_reward",
+		Event:          event,
+		IdempotencyKey: event.IdempotencyKey(),
+		ProcessStatus:  marketing.InboxProcessed,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	})
+	if err != nil {
+		t.Fatalf("create inbox: %v", err)
+	}
+	participation := marketing.Participation{
+		ID:             "part_resume_reward",
+		TenantID:       activity.TenantID,
+		ActivityID:     activity.ID,
+		EventInboxID:   inbox.ID,
+		Subject:        event.Subject,
+		Biz:            event.Biz,
+		Status:         marketing.ParticipationQualified,
+		IdempotencyKey: inbox.IdempotencyKey + ":" + activity.ID,
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}
+	order := marketing.GrantOrder{
+		ID:              "grant_resume_reward",
+		TenantID:        activity.TenantID,
+		ActivityID:      activity.ID,
+		ParticipationID: participation.ID,
+		Subject:         event.Subject,
+		RewardType:      marketing.RewardBonus,
+		RewardAmount:    "1.00",
+		RewardPayload:   json.RawMessage(`{"rewardCode":"DAILY_CHECKIN_BONUS","currency":"USD"}`),
+		BillNo:          "cmd_resume_reward",
+		GrantStatus:     marketing.GrantPending,
+		GrantChannel:    marketing.GrantHTTP,
+		IdempotencyKey:  participation.IdempotencyKey + ":DAILY_CHECKIN_BONUS",
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	}
+	outbox := marketing.OutboxMessage{
+		ID:            "outbox_resume_reward",
+		TenantID:      activity.TenantID,
+		MessageType:   "REWARD_COMMAND",
+		TargetChannel: marketing.GrantHTTP,
+		TargetRef:     "https://wallet.example.com/reward",
+		Payload:       json.RawMessage(`{"commandId":"cmd_resume_reward","participationId":"part_resume_reward"}`),
+		SendStatus:    marketing.OutboxPending,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	if _, err := repo.CreateParticipationGrantOutboxesWithQuota(ctx, marketing.AtomicGrantCommand{
+		Participation:  participation,
+		BudgetAmount:   "1.00",
+		GrantOrders:    []marketing.GrantOrder{order},
+		OutboxMessages: []marketing.OutboxMessage{outbox},
+	}); err != nil {
+		t.Fatalf("create committed reward runtime: %v", err)
+	}
+	finishedAt := now.Add(100 * time.Millisecond)
+	source, err := repo.CreateWorkflowExecution(ctx, marketing.WorkflowExecution{
+		ID:                "wfexec_resume_reward_source",
+		TenantID:          activity.TenantID,
+		ActivityID:        activity.ID,
+		WorkflowVersionID: version.ID,
+		WorkflowVersion:   version.Version,
+		EventInboxID:      inbox.ID,
+		EventID:           event.EventID,
+		Status:            marketing.WorkflowExecutionFailed,
+		Input: marshalWorkflowPayload(map[string]any{
+			"event":          event,
+			"idempotencyKey": workflowExecutionIdempotencyKey(activity.ID, version.ID, inbox.IdempotencyKey),
+		}),
+		ErrorMessage: "grant-order failed",
+		StartedAt:    now,
+		FinishedAt:   &finishedAt,
+		CreatedAt:    now,
+		UpdatedAt:    finishedAt,
+	})
+	if err != nil {
+		t.Fatalf("create source execution: %v", err)
+	}
+	if _, err := repo.CreateWorkflowNodeExecution(ctx, marketing.WorkflowNodeExecution{
+		ID:          "node_resume_reward_event",
+		TenantID:    activity.TenantID,
+		ExecutionID: source.ID,
+		NodeID:      "event-in",
+		NodeType:    "event-in",
+		Status:      marketing.WorkflowNodeSuccess,
+		Output:      json.RawMessage(`{"raw_event":{"eventId":"evt_resume_reward"}}`),
+		StartedAt:   now,
+		FinishedAt:  &finishedAt,
+		CreatedAt:   now,
+		UpdatedAt:   finishedAt,
+	}); err != nil {
+		t.Fatalf("create event node execution: %v", err)
+	}
+	if _, err := repo.CreateWorkflowNodeExecution(ctx, marketing.WorkflowNodeExecution{
+		ID:           "node_resume_reward_grant",
+		TenantID:     activity.TenantID,
+		ExecutionID:  source.ID,
+		NodeID:       "grant-order",
+		NodeType:     "grant-order",
+		Status:       marketing.WorkflowNodeFailed,
+		ErrorMessage: "temporary grant-order failure",
+		StartedAt:    now.Add(10 * time.Millisecond),
+		FinishedAt:   &finishedAt,
+		CreatedAt:    now,
+		UpdatedAt:    finishedAt,
+	}); err != nil {
+		t.Fatalf("create failed grant node execution: %v", err)
+	}
+
+	trace, err := service.ResumeWorkflowExecution(ctx, source.ID, marketing.ResumeWorkflowExecutionCommand{Operator: "ops", Reason: "retry committed reward tail"})
+	if err != nil {
+		t.Fatalf("resume execution: %v", err)
+	}
+	if trace.Execution.Status != marketing.WorkflowExecutionSuccess {
+		t.Fatalf("expected successful resume, got %+v", trace.Execution)
+	}
+	statusByNode := map[string]marketing.WorkflowNodeExecutionStatus{}
+	outputByNode := map[string]map[string]any{}
+	for _, node := range trace.NodeExecutions {
+		statusByNode[node.NodeID] = node.Status
+		payload := map[string]any{}
+		_ = json.Unmarshal(node.Output, &payload)
+		outputByNode[node.NodeID] = payload
+	}
+	if statusByNode["grant-order"] != marketing.WorkflowNodeSuccess || statusByNode["outbox"] != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected grant-order and outbox to resume with hydrated runtime, statuses=%+v outputs=%+v", statusByNode, outputByNode)
+	}
+	if outputByNode["grant-order"]["grantOrderCount"] != float64(1) || outputByNode["outbox"]["outboxCount"] != float64(1) {
+		t.Fatalf("expected hydrated grant/outbox counts, outputs=%+v", outputByNode)
 	}
 }

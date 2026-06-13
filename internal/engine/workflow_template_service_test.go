@@ -57,6 +57,82 @@ func assertTemplateRoute(t *testing.T, edges []marketing.WorkflowEdge, source st
 	t.Fatalf("expected %s route from %s", routeKey, source)
 }
 
+func TestCompareWorkflowDraftTemplateVersionsReturnsNodeAndEdgeConfigDiff(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	now := time.Date(2026, 6, 13, 9, 0, 0, 0, time.UTC)
+	leftDefinition := json.RawMessage(`{
+		"nodes":[
+			{"id":"event","type":"event-in","title":"Event","config":{"eventTypes":["CHECKIN_SUCCESS"]}},
+			{"id":"reward","type":"reward","title":"Reward","config":{"amount":1,"currency":"USD"}}
+		],
+		"edges":[
+			{"id":"edge_event_reward","source":"event","target":"reward","route":{"type":"PASS","key":"PASS"}}
+		]
+	}`)
+	rightDefinition := json.RawMessage(`{
+		"nodes":[
+			{"id":"event","type":"event-in","title":"Event","config":{"eventTypes":["CHECKIN_SUCCESS"]}},
+			{"id":"reward","type":"reward","title":"Reward","config":{"amount":2,"currency":"USD","rewardCode":"DAILY_CHECKIN"}}
+		],
+		"edges":[
+			{"id":"edge_event_reward","source":"event","target":"reward","route":{"type":"IF","key":"QUALIFIED","expression":"runtime.qualified == true"}}
+		]
+	}`)
+	if _, err := repo.CreateWorkflowDraftTemplate(ctx, marketing.WorkflowDraftTemplate{
+		ID:         "tpl_compare",
+		VersionID:  "tpl_compare_v1",
+		Version:    1,
+		Name:       "Compare Template",
+		Source:     marketing.WorkflowDraftTemplateSaved,
+		Status:     marketing.WorkflowDraftTemplateActive,
+		Definition: leftDefinition,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}); err != nil {
+		t.Fatalf("create left template: %v", err)
+	}
+	if _, err := repo.CreateWorkflowDraftTemplate(ctx, marketing.WorkflowDraftTemplate{
+		ID:         "tpl_compare",
+		VersionID:  "tpl_compare_v2",
+		Version:    2,
+		Name:       "Compare Template",
+		Source:     marketing.WorkflowDraftTemplateSaved,
+		Status:     marketing.WorkflowDraftTemplateActive,
+		Definition: rightDefinition,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}); err != nil {
+		t.Fatalf("create right template: %v", err)
+	}
+	compare, err := service.CompareWorkflowDraftTemplateVersions(ctx, "tpl_compare", "tpl_compare_v1", "tpl_compare_v2")
+	if err != nil {
+		t.Fatalf("compare template versions: %v", err)
+	}
+	if len(compare.NodeChanges) != 1 || compare.NodeChanges[0].NodeID != "reward" {
+		t.Fatalf("expected reward node config diff, got %+v", compare.NodeChanges)
+	}
+	if !workflowDiffContainsPath(compare.NodeChanges[0].Changes, "$.config.amount") || !workflowDiffContainsPath(compare.NodeChanges[0].Changes, "$.config.rewardCode") {
+		t.Fatalf("expected amount and rewardCode config diff, got %+v", compare.NodeChanges[0].Changes)
+	}
+	if len(compare.EdgeChanges) != 1 || compare.EdgeChanges[0].EdgeID != "edge_event_reward" {
+		t.Fatalf("expected edge route diff, got %+v", compare.EdgeChanges)
+	}
+	if !workflowDiffContainsPath(compare.EdgeChanges[0].Changes, "$.route.Type") && !workflowDiffContainsPath(compare.EdgeChanges[0].Changes, "$.route.type") {
+		t.Fatalf("expected route type diff, got %+v", compare.EdgeChanges[0].Changes)
+	}
+}
+
+func workflowDiffContainsPath(rows []marketing.WorkflowExecutionJSONDiff, path string) bool {
+	for _, row := range rows {
+		if row.Path == path {
+			return true
+		}
+	}
+	return false
+}
+
 func TestApplyBuiltinRewardTemplatePublishesAndRunsEndToEnd(t *testing.T) {
 	ctx := context.Background()
 	repo := marketing.NewMemoryRepository()

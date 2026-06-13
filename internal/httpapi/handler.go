@@ -1214,7 +1214,7 @@ func (h *Handler) copyWorkflowDraftTemplate(w http.ResponseWriter, r *http.Reque
 func (h *Handler) compareWorkflowDraftTemplateVersions(w http.ResponseWriter, r *http.Request) {
 	leftVersionID := strings.TrimSpace(r.URL.Query().Get("leftVersionId"))
 	rightVersionID := strings.TrimSpace(r.URL.Query().Get("rightVersionId"))
-	item, err := h.engine.GetWorkflowDraftTemplate(r.Context(), r.PathValue("templateId"), firstNonEmpty(leftVersionID, rightVersionID), 0)
+	left, right, err := h.workflowDraftTemplateCompareVersions(r, r.PathValue("templateId"), leftVersionID, rightVersionID)
 	if err != nil {
 		if errors.Is(err, marketing.ErrNotFound) {
 			writeError(w, http.StatusNotFound, err.Error())
@@ -1223,7 +1223,10 @@ func (h *Handler) compareWorkflowDraftTemplateVersions(w http.ResponseWriter, r 
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if !h.requireWorkflowDraftTemplatePermission(w, r, item, workspacePermissionView) {
+	if !h.requireWorkflowDraftTemplatePermission(w, r, left, workspacePermissionView) {
+		return
+	}
+	if right.VersionID != left.VersionID && !h.requireWorkflowDraftTemplatePermission(w, r, right, workspacePermissionView) {
 		return
 	}
 	result, err := h.engine.CompareWorkflowDraftTemplateVersions(r.Context(), r.PathValue("templateId"), leftVersionID, rightVersionID)
@@ -1232,6 +1235,33 @@ func (h *Handler) compareWorkflowDraftTemplateVersions(w http.ResponseWriter, r 
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+func (h *Handler) workflowDraftTemplateCompareVersions(r *http.Request, templateID string, leftVersionID string, rightVersionID string) (marketing.WorkflowDraftTemplate, marketing.WorkflowDraftTemplate, error) {
+	versions, err := h.engine.ListWorkflowDraftTemplateVersions(r.Context(), templateID)
+	if err != nil {
+		return marketing.WorkflowDraftTemplate{}, marketing.WorkflowDraftTemplate{}, err
+	}
+	if len(versions) == 0 {
+		return marketing.WorkflowDraftTemplate{}, marketing.WorkflowDraftTemplate{}, marketing.ErrNotFound
+	}
+	left := versions[len(versions)-1]
+	right := versions[0]
+	for _, item := range versions {
+		if leftVersionID != "" && item.VersionID == leftVersionID {
+			left = item
+		}
+		if rightVersionID != "" && item.VersionID == rightVersionID {
+			right = item
+		}
+	}
+	if leftVersionID != "" && left.VersionID != leftVersionID {
+		return marketing.WorkflowDraftTemplate{}, marketing.WorkflowDraftTemplate{}, marketing.ErrNotFound
+	}
+	if rightVersionID != "" && right.VersionID != rightVersionID {
+		return marketing.WorkflowDraftTemplate{}, marketing.WorkflowDraftTemplate{}, marketing.ErrNotFound
+	}
+	return left, right, nil
 }
 
 func (h *Handler) listWorkflowDraftTemplateVersions(w http.ResponseWriter, r *http.Request) {

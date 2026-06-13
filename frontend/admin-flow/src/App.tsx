@@ -247,6 +247,8 @@ type WorkflowDraftTemplateCompareResult = {
   addedNodes: string[];
   removedNodes: string[];
   commonNodes: number;
+  nodeChanges?: Array<{ nodeId: string; label?: string; type?: string; kind?: string; changes: WorkflowExecutionJSONDiff[] }>;
+  edgeChanges?: Array<{ edgeId: string; source?: string; target?: string; label?: string; changes: WorkflowExecutionJSONDiff[] }>;
   changedMeta?: Record<string, unknown>;
 };
 
@@ -479,6 +481,18 @@ function jsonValueLabel(value: unknown): string {
   if (typeof value === 'string') return JSON.stringify(value);
   if (value === null || typeof value === 'number' || typeof value === 'boolean') return String(value);
   return jsonPreview(value).replace(/\s+/g, ' ').slice(0, 180);
+}
+
+function sideEffectKindLabel(kind: string): string {
+  const labels: Record<string, string> = {
+    participation: '参与记录',
+    grantOrders: '发奖订单',
+    outboxMessages: 'Outbox',
+    quotaReservations: '额度预留',
+    rule: '规则结果',
+    scope: '副作用范围',
+  };
+  return labels[kind] ?? kind;
 }
 
 function jsonPathChild(path: string, key: string | number): string {
@@ -1251,6 +1265,8 @@ function WorkflowTemplatePanel({
                       <span>Nodes {compareResult.nodeDelta >= 0 ? '+' : ''}{compareResult.nodeDelta} · Edges {compareResult.edgeDelta >= 0 ? '+' : ''}{compareResult.edgeDelta} · Common {compareResult.commonNodes}</span>
                       <em>Added: {(compareResult.addedNodes ?? []).join(', ') || '-'}</em>
                       <em>Removed: {(compareResult.removedNodes ?? []).join(', ') || '-'}</em>
+                      <em>Changed nodes: {(compareResult.nodeChanges ?? []).map((item) => item.label || item.nodeId).slice(0, 4).join(', ') || '-'}</em>
+                      <em>Changed edges: {(compareResult.edgeChanges ?? []).map((item) => item.label || item.edgeId).slice(0, 4).join(', ') || '-'}</em>
                     </div>
                   ) : null}
                 </div>
@@ -1578,6 +1594,8 @@ function RunExecutionCompare({
   const baselineDuration = compareResult?.baselineDurationMs ?? nodeExecutionTotalMs(baselineNodes);
   const durationDelta = compareResult?.durationDeltaMs ?? currentDuration - baselineDuration;
   const payloadChanges = compareResult?.payloadChanges ?? payloadChangeDetails(currentNodes, baselineNodes);
+  const nodeStatusChanges = compareResult?.nodeStatusChanges ?? [];
+  const sideEffectChanges = compareResult?.sideEffectChanges ?? [];
   return (
     <section className="run-compare-panel">
       <div className="run-compare-head">
@@ -1605,7 +1623,64 @@ function RunExecutionCompare({
           <span>{payloadChanges.length ? `${payloadChanges.length} 个节点变化` : '一致'}</span>
           <em>{payloadChanges.slice(0, 3).map((item) => item.label).join(', ') || 'input/output 未变化'}</em>
         </div>
+        <div className={cx(nodeStatusChanges.length > 0 && 'changed')}>
+          <b>节点状态</b>
+          <span>{nodeStatusChanges.length ? `${nodeStatusChanges.length} 个节点变化` : '一致'}</span>
+          <em>{nodeStatusChanges.slice(0, 3).map((item) => item.label).join(', ') || 'status/error/retry 未变化'}</em>
+        </div>
+        <div className={cx(sideEffectChanges.length > 0 && 'changed')}>
+          <b>业务副作用</b>
+          <span>{sideEffectChanges.length ? `${sideEffectChanges.length} 类变化` : '一致'}</span>
+          <em>{sideEffectChanges.slice(0, 3).map((item) => sideEffectKindLabel(item.kind)).join(', ') || 'participation/grant/outbox 未变化'}</em>
+        </div>
       </div>
+      {nodeStatusChanges.length ? (
+        <div className="run-compare-payload-diff">
+          <h4>Node Status Diff</h4>
+          {nodeStatusChanges.slice(0, 12).map((item) => (
+            <section key={item.nodeId} className="expanded">
+              <button type="button">
+                <span>{item.label}</span>
+                <em>{item.baselineStatus || '-'} → {item.currentStatus || '-'}</em>
+              </button>
+              <div className="run-json-diff-rows">
+                <div className="changed">
+                  <b>Status</b>
+                  <code>{item.nodeId}</code>
+                  <span>{item.baselineAttempt !== item.currentAttempt ? `attempt ${item.baselineAttempt || 0} → ${item.currentAttempt || 0}` : 'changed'}</span>
+                  <em>current: {item.currentErrorCode || item.currentError || compactDuration(item.currentDurationMs ?? 0)}</em>
+                  <em>baseline: {item.baselineErrorCode || item.baselineError || compactDuration(item.baselineDurationMs ?? 0)}</em>
+                </div>
+              </div>
+            </section>
+          ))}
+        </div>
+      ) : null}
+      {sideEffectChanges.length ? (
+        <div className="run-compare-payload-diff">
+          <h4>Side Effect Diff</h4>
+          {sideEffectChanges.map((item) => (
+            <section key={item.kind} className="expanded">
+              <button type="button">
+                <span>{sideEffectKindLabel(item.kind)}</span>
+                <em>{item.changes.length} changes</em>
+              </button>
+              <div className="run-json-diff-rows">
+                {item.changes.slice(0, 12).map((row, index) => (
+                  <div key={`${item.kind}-${row.path}-${index}`} className={row.type}>
+                    <b>{row.type}</b>
+                    <code>{row.path}</code>
+                    <span>{item.kind}</span>
+                    <em>current: {jsonValueLabel(row.current)}</em>
+                    <em>baseline: {jsonValueLabel(row.baseline)}</em>
+                  </div>
+                ))}
+                {item.changes.length > 12 ? <p>仅显示前 12 条差异</p> : null}
+              </div>
+            </section>
+          ))}
+        </div>
+      ) : null}
       {payloadChanges.length ? (
         <div className="run-compare-payload-diff">
           <h4>Payload Diff</h4>

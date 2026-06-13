@@ -352,10 +352,11 @@ func (s *Service) ResumeWorkflowExecution(ctx context.Context, executionID strin
 	if err != nil {
 		return marketing.WorkflowExecutionTrace{}, err
 	}
-	resumed, err := s.executeWorkflowDefinition(ctx, workflowRuntime{
-		Inbox:    marketing.EventInbox{ID: execution.EventInboxID, Event: event, IdempotencyKey: workflowExecutionInputString(execution.Input, "idempotencyKey")},
-		Activity: activity,
-	}, workflowExecutionOptions{
+	resumeRuntime, err := s.workflowResumeRuntime(ctx, execution, activity, event)
+	if err != nil {
+		return marketing.WorkflowExecutionTrace{}, err
+	}
+	resumed, err := s.executeWorkflowDefinition(ctx, resumeRuntime, workflowExecutionOptions{
 		WorkflowVersionID:  version.ID,
 		WorkflowVersion:    version.Version,
 		Definition:         version.Definition,
@@ -374,6 +375,163 @@ func (s *Service) ResumeWorkflowExecution(ctx context.Context, executionID strin
 		"reason":            strings.TrimSpace(cmd.Reason),
 	}))
 	return s.ExportWorkflowExecutionTrace(ctx, resumed.ID)
+}
+
+func (s *Service) workflowResumeRuntime(ctx context.Context, execution marketing.WorkflowExecution, activity marketing.Activity, event marketing.ActivityEvent) (workflowRuntime, error) {
+	runtime := workflowRuntime{
+		Inbox: marketing.EventInbox{
+			ID:             execution.EventInboxID,
+			Event:          event,
+			IdempotencyKey: workflowExecutionInputString(execution.Input, "idempotencyKey"),
+		},
+		Activity: activity,
+		RuleResult: marketing.ActivityRuleResult{
+			ActivityID:      activity.ID,
+			ActivityCode:    activity.Code,
+			ActivityVersion: activity.Version,
+			Decision:        marketing.RuleDecisionRejected,
+			ReasonCode:      "RESUME_CONTEXT_REHYDRATED",
+			Reason:          "resume context was reconstructed from persisted execution state",
+		},
+		Reason: "resume context was reconstructed from persisted execution state",
+	}
+	items, err := s.workflowResumeReconciliationItems(ctx, activity, event, runtime.Inbox.IdempotencyKey)
+	if err != nil {
+		return workflowRuntime{}, err
+	}
+	for _, item := range items {
+		if item.EventInbox != nil && runtime.Inbox.ID == "" {
+			runtime.Inbox = *item.EventInbox
+		}
+		if runtime.Participation.ID == "" {
+			if item.Participation != nil {
+				runtime.Participation = *item.Participation
+			} else if item.ParticipationID != "" {
+				runtime.Participation = marketing.Participation{
+					ID:         item.ParticipationID,
+					TenantID:   item.TenantID,
+					ActivityID: item.ActivityID,
+					Subject:    item.Subject,
+					Status:     item.ParticipationStatus,
+				}
+			}
+		}
+		if item.GrantOrder != nil {
+			runtime.GrantOrders = append(runtime.GrantOrders, *item.GrantOrder)
+		} else if item.GrantOrderID != "" {
+			runtime.GrantOrders = append(runtime.GrantOrders, marketing.GrantOrder{
+				ID:              item.GrantOrderID,
+				TenantID:        item.TenantID,
+				ActivityID:      item.ActivityID,
+				ParticipationID: item.ParticipationID,
+				Subject:         item.Subject,
+				RewardType:      item.RewardType,
+				RewardAmount:    item.RewardAmount,
+				BillNo:          item.CommandID,
+				GrantStatus:     item.GrantStatus,
+				ExternalGrantID: item.ExternalGrantID,
+				FinishedAt:      item.FinishedAt,
+				UpdatedAt:       item.ServerUpdatedAt,
+			})
+		}
+		runtime.OutboxMessages = append(runtime.OutboxMessages, item.OutboxMessages...)
+		runtime.Reservations = append(runtime.Reservations, item.Reservations...)
+	}
+	runtime.GrantOrders = dedupeWorkflowGrantOrders(runtime.GrantOrders)
+	runtime.OutboxMessages = dedupeWorkflowOutboxMessages(runtime.OutboxMessages)
+	runtime.Reservations = dedupeWorkflowQuotaReservations(runtime.Reservations)
+	if runtime.Participation.ID != "" {
+		switch runtime.Participation.Status {
+		case marketing.ParticipationQualified, marketing.ParticipationRewardable, marketing.ParticipationGranted:
+			runtime.Qualified = true
+			runtime.RuleResult.Decision = marketing.RuleDecisionPassed
+			runtime.RuleResult.CanReward = true
+			runtime.RuleResult.CanReserveQuota = true
+			runtime.RuleResult.ReasonCode = "RESUME_CONTEXT_REHYDRATED"
+			runtime.RuleResult.Reason = "persisted participation is qualified"
+			runtime.Reason = runtime.RuleResult.Reason
+		default:
+			runtime.RuleResult.ReasonCode = firstWorkflowString(runtime.Participation.RejectReason, "RESUME_CONTEXT_REHYDRATED")
+			runtime.RuleResult.Reason = firstWorkflowString(runtime.Participation.RejectReason, "persisted participation is not qualified")
+			runtime.Reason = runtime.RuleResult.Reason
+		}
+	}
+	return runtime, nil
+}
+
+func (s *Service) workflowResumeReconciliationItems(ctx context.Context, activity marketing.Activity, event marketing.ActivityEvent, executionIdempotencyKey string) ([]marketing.RewardReconciliationItem, error) {
+	items, err := s.repository.ListRewardReconciliation(ctx, marketing.RewardReconciliationQuery{
+		TenantID:   activity.TenantID,
+		ActivityID: activity.ID,
+		EventID:    event.EventID,
+		Limit:      50,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(items) > 0 || strings.TrimSpace(executionIdempotencyKey) == "" {
+		return items, nil
+	}
+	return s.repository.ListRewardReconciliation(ctx, marketing.RewardReconciliationQuery{
+		TenantID:       activity.TenantID,
+		ActivityID:     activity.ID,
+		IdempotencyKey: executionIdempotencyKey,
+		Limit:          50,
+	})
+}
+
+func dedupeWorkflowGrantOrders(items []marketing.GrantOrder) []marketing.GrantOrder {
+	seen := map[string]struct{}{}
+	out := make([]marketing.GrantOrder, 0, len(items))
+	for _, item := range items {
+		key := firstWorkflowString(item.ID, firstWorkflowString(item.BillNo, item.IdempotencyKey))
+		if key == "" {
+			out = append(out, item)
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, item)
+	}
+	return out
+}
+
+func dedupeWorkflowOutboxMessages(items []marketing.OutboxMessage) []marketing.OutboxMessage {
+	seen := map[string]struct{}{}
+	out := make([]marketing.OutboxMessage, 0, len(items))
+	for _, item := range items {
+		key := item.ID
+		if key == "" {
+			out = append(out, item)
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, item)
+	}
+	return out
+}
+
+func dedupeWorkflowQuotaReservations(items []marketing.QuotaReservation) []marketing.QuotaReservation {
+	seen := map[string]struct{}{}
+	out := make([]marketing.QuotaReservation, 0, len(items))
+	for _, item := range items {
+		key := firstWorkflowString(item.ID, strings.Join([]string{item.GrantOrderID, item.CommandID, string(item.Type), string(item.Scope), item.ScopeKey, item.Amount}, "\x00"))
+		if key == "" {
+			out = append(out, item)
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, item)
+	}
+	return out
 }
 
 func (s *Service) RunWorkflowDebug(ctx context.Context, activityID string, cmd marketing.WorkflowDebugRunCommand) (marketing.WorkflowExecutionTrace, error) {
@@ -792,12 +950,19 @@ func (s *Service) CompareWorkflowExecutionsWithOptions(ctx context.Context, exec
 	currentDuration := workflowNodeExecutionsDurationMs(currentNodes)
 	baselineDuration := workflowNodeExecutionsDurationMs(baselineNodes)
 	payloadChanges, truncated := workflowNodeExecutionPayloadDiff(currentNodes, baselineNodes, options)
+	nodeStatusChanges := workflowNodeExecutionStatusDiff(currentNodes, baselineNodes)
+	sideEffectChanges, err := s.workflowExecutionSideEffectDiff(ctx, current, baseline)
+	if err != nil {
+		return marketing.WorkflowExecutionCompare{}, err
+	}
 	return marketing.WorkflowExecutionCompare{
 		Current:            workflowExecutionCompareSummary(current),
 		Baseline:           workflowExecutionCompareSummary(baseline),
 		CurrentPath:        currentPath,
 		BaselinePath:       baselinePath,
 		PathChanged:        !reflect.DeepEqual(currentPath, baselinePath),
+		NodeStatusChanges:  nodeStatusChanges,
+		SideEffectChanges:  sideEffectChanges,
 		CurrentFailures:    workflowNodeExecutionFailures(currentNodes),
 		BaselineFailures:   workflowNodeExecutionFailures(baselineNodes),
 		CurrentDurationMs:  currentDuration,
@@ -877,35 +1042,388 @@ func workflowNodeExecutionsDurationMs(nodes []marketing.WorkflowNodeExecution) i
 }
 
 func workflowNodeExecutionPayloadDiff(current []marketing.WorkflowNodeExecution, baseline []marketing.WorkflowNodeExecution, options marketing.WorkflowExecutionCompareOptions) ([]marketing.WorkflowExecutionPayloadNodeDiff, bool) {
-	baselineByNode := map[string]marketing.WorkflowNodeExecution{}
-	for _, node := range baseline {
-		baselineByNode[node.NodeID] = node
-	}
+	currentByNode := workflowNodeExecutionByNodeID(current)
+	baselineByNode := workflowNodeExecutionByNodeID(baseline)
+	nodeIDs := workflowNodeExecutionUnionIDs(current, baseline)
 	out := []marketing.WorkflowExecutionPayloadNodeDiff{}
 	truncated := false
-	for _, node := range current {
-		base := baselineByNode[node.NodeID]
+	for _, nodeID := range nodeIDs {
+		node := currentByNode[nodeID]
+		base := baselineByNode[nodeID]
 		inputDiff := workflowJSONDiff(node.Input, base.Input, "$")
 		outputDiff := workflowJSONDiff(node.Output, base.Output, "$")
 		if len(inputDiff) == 0 && len(outputDiff) == 0 {
 			continue
-		}
-		label := strings.TrimSpace(node.NodeTitle)
-		if label == "" {
-			label = node.NodeID
 		}
 		if len(out) >= options.MaxPayloadChangeNodes {
 			truncated = true
 			break
 		}
 		out = append(out, marketing.WorkflowExecutionPayloadNodeDiff{
-			NodeID: node.NodeID,
-			Label:  label,
+			NodeID: nodeID,
+			Label:  workflowNodeExecutionLabel(node, base, nodeID),
 			Input:  limitWorkflowJSONDiff(inputDiff, options.MaxJSONDiffRows),
 			Output: limitWorkflowJSONDiff(outputDiff, options.MaxJSONDiffRows),
 		})
 	}
 	return out, truncated
+}
+
+func workflowNodeExecutionStatusDiff(current []marketing.WorkflowNodeExecution, baseline []marketing.WorkflowNodeExecution) []marketing.WorkflowExecutionNodeStatusDiff {
+	currentByNode := workflowNodeExecutionByNodeID(current)
+	baselineByNode := workflowNodeExecutionByNodeID(baseline)
+	nodeIDs := workflowNodeExecutionUnionIDs(current, baseline)
+	out := []marketing.WorkflowExecutionNodeStatusDiff{}
+	for _, nodeID := range nodeIDs {
+		currentNode := currentByNode[nodeID]
+		baselineNode := baselineByNode[nodeID]
+		currentErrorCode := workflowNodeExecutionOutputString(currentNode.Output, "errorCode")
+		baselineErrorCode := workflowNodeExecutionOutputString(baselineNode.Output, "errorCode")
+		currentAttempt := workflowNodeExecutionOutputInt(currentNode.Output, "attempt")
+		baselineAttempt := workflowNodeExecutionOutputInt(baselineNode.Output, "attempt")
+		currentDuration := workflowNodeExecutionDurationMs(currentNode)
+		baselineDuration := workflowNodeExecutionDurationMs(baselineNode)
+		if currentNode.Status == baselineNode.Status &&
+			strings.TrimSpace(currentNode.ErrorMessage) == strings.TrimSpace(baselineNode.ErrorMessage) &&
+			currentErrorCode == baselineErrorCode &&
+			currentAttempt == baselineAttempt &&
+			currentDuration == baselineDuration {
+			continue
+		}
+		out = append(out, marketing.WorkflowExecutionNodeStatusDiff{
+			NodeID:             nodeID,
+			Label:              workflowNodeExecutionLabel(currentNode, baselineNode, nodeID),
+			CurrentStatus:      currentNode.Status,
+			BaselineStatus:     baselineNode.Status,
+			CurrentError:       strings.TrimSpace(currentNode.ErrorMessage),
+			BaselineError:      strings.TrimSpace(baselineNode.ErrorMessage),
+			CurrentErrorCode:   currentErrorCode,
+			BaselineErrorCode:  baselineErrorCode,
+			CurrentAttempt:     currentAttempt,
+			BaselineAttempt:    baselineAttempt,
+			CurrentDurationMs:  currentDuration,
+			BaselineDurationMs: baselineDuration,
+		})
+	}
+	return out
+}
+
+func workflowNodeExecutionByNodeID(nodes []marketing.WorkflowNodeExecution) map[string]marketing.WorkflowNodeExecution {
+	out := map[string]marketing.WorkflowNodeExecution{}
+	for _, node := range nodes {
+		nodeID := strings.TrimSpace(node.NodeID)
+		if nodeID != "" {
+			out[nodeID] = node
+		}
+	}
+	return out
+}
+
+func workflowNodeExecutionUnionIDs(current []marketing.WorkflowNodeExecution, baseline []marketing.WorkflowNodeExecution) []string {
+	seen := map[string]struct{}{}
+	out := []string{}
+	for _, nodes := range [][]marketing.WorkflowNodeExecution{current, baseline} {
+		for _, node := range nodes {
+			nodeID := strings.TrimSpace(node.NodeID)
+			if nodeID == "" {
+				continue
+			}
+			if _, ok := seen[nodeID]; ok {
+				continue
+			}
+			seen[nodeID] = struct{}{}
+			out = append(out, nodeID)
+		}
+	}
+	return out
+}
+
+func workflowNodeExecutionLabel(current marketing.WorkflowNodeExecution, baseline marketing.WorkflowNodeExecution, fallback string) string {
+	for _, value := range []string{current.NodeTitle, baseline.NodeTitle, fallback} {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			return value
+		}
+	}
+	return fallback
+}
+
+func workflowNodeExecutionDurationMs(node marketing.WorkflowNodeExecution) int64 {
+	if node.FinishedAt == nil || node.FinishedAt.Before(node.StartedAt) || node.StartedAt.IsZero() {
+		return 0
+	}
+	return node.FinishedAt.Sub(node.StartedAt).Milliseconds()
+}
+
+func workflowNodeExecutionOutputString(raw json.RawMessage, key string) string {
+	output := map[string]any{}
+	if len(raw) == 0 || json.Unmarshal(raw, &output) != nil {
+		return ""
+	}
+	value, ok := output[key]
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprint(value))
+}
+
+func workflowNodeExecutionOutputInt(raw json.RawMessage, key string) int {
+	output := map[string]any{}
+	if len(raw) == 0 || json.Unmarshal(raw, &output) != nil {
+		return 0
+	}
+	switch value := output[key].(type) {
+	case float64:
+		return int(value)
+	case int:
+		return value
+	case string:
+		parsed, _ := strconv.Atoi(strings.TrimSpace(value))
+		return parsed
+	default:
+		return 0
+	}
+}
+
+func (s *Service) workflowExecutionSideEffectDiff(ctx context.Context, current marketing.WorkflowExecution, baseline marketing.WorkflowExecution) ([]marketing.WorkflowExecutionSideEffectDiff, error) {
+	currentSummary, err := s.workflowExecutionSideEffectSummary(ctx, current)
+	if err != nil {
+		return nil, err
+	}
+	baselineSummary, err := s.workflowExecutionSideEffectSummary(ctx, baseline)
+	if err != nil {
+		return nil, err
+	}
+	kinds := []string{"participation", "grantOrders", "outboxMessages", "quotaReservations", "rule"}
+	out := []marketing.WorkflowExecutionSideEffectDiff{}
+	if workflowExecutionSideEffectScopeShared(current, baseline) {
+		scope := map[string]any{
+			"scope":      "EVENT_LEVEL",
+			"comparable": false,
+			"reason":     "business side effects are persisted by tenant/activity/event or idempotency key, not by workflow execution id",
+			"eventId":    current.EventID,
+			"activityId": current.ActivityID,
+			"currentId":  current.ID,
+			"baselineId": baseline.ID,
+		}
+		out = append(out, marketing.WorkflowExecutionSideEffectDiff{
+			Kind: "scope",
+			Changes: []marketing.WorkflowExecutionJSONDiff{{
+				Path:     "$.scope",
+				Type:     "changed",
+				Current:  scope,
+				Baseline: scope,
+			}},
+			Current:  scope,
+			Baseline: scope,
+		})
+	}
+	for _, kind := range kinds {
+		currentValue := currentSummary[kind]
+		baselineValue := baselineSummary[kind]
+		changes := workflowJSONValueDiff(currentValue, baselineValue, true, true, "$")
+		if len(changes) == 0 {
+			continue
+		}
+		out = append(out, marketing.WorkflowExecutionSideEffectDiff{
+			Kind:     kind,
+			Changes:  changes,
+			Current:  currentValue,
+			Baseline: baselineValue,
+		})
+	}
+	return out, nil
+}
+
+func workflowExecutionSideEffectScopeShared(current marketing.WorkflowExecution, baseline marketing.WorkflowExecution) bool {
+	if strings.TrimSpace(current.ID) == "" || current.ID == baseline.ID {
+		return false
+	}
+	if current.TenantID != baseline.TenantID || current.ActivityID != baseline.ActivityID {
+		return false
+	}
+	currentEventID := strings.TrimSpace(current.EventID)
+	baselineEventID := strings.TrimSpace(baseline.EventID)
+	if currentEventID != "" && currentEventID == baselineEventID {
+		return true
+	}
+	currentIdempotencyKey := workflowExecutionInputString(current.Input, "idempotencyKey")
+	baselineIdempotencyKey := workflowExecutionInputString(baseline.Input, "idempotencyKey")
+	return currentIdempotencyKey != "" && currentIdempotencyKey == baselineIdempotencyKey
+}
+
+func (s *Service) workflowExecutionSideEffectSummary(ctx context.Context, execution marketing.WorkflowExecution) (map[string]any, error) {
+	items, err := s.workflowExecutionReconciliationItems(ctx, execution)
+	if err != nil {
+		return nil, err
+	}
+	participation := map[string]any{"created": false}
+	grantOrders := []map[string]any{}
+	outboxes := []map[string]any{}
+	reservations := []map[string]any{}
+	rule := map[string]any{"decision": "", "reason": ""}
+	seenGrant := map[string]struct{}{}
+	seenOutbox := map[string]struct{}{}
+	seenReservation := map[string]struct{}{}
+	for _, item := range items {
+		if item.Participation != nil {
+			participation = workflowParticipationSideEffect(*item.Participation)
+		} else if item.ParticipationID != "" && participation["created"] != true {
+			participation = map[string]any{
+				"created":     true,
+				"status":      item.ParticipationStatus,
+				"subjectType": item.Subject.Type,
+				"subjectId":   item.Subject.ID,
+			}
+		}
+		if item.Participation != nil && item.Participation.RejectReason != "" {
+			rule["decision"] = "REJECTED"
+			rule["reason"] = item.Participation.RejectReason
+		} else if item.ParticipationStatus != "" {
+			rule["decision"] = workflowSideEffectDecision(item.ParticipationStatus)
+		}
+		if item.GrantOrder != nil {
+			if appendWorkflowSideEffectUnique(seenGrant, item.GrantOrder.ID) {
+				grantOrders = append(grantOrders, workflowGrantOrderSideEffect(*item.GrantOrder))
+			}
+		} else if item.GrantOrderID != "" && appendWorkflowSideEffectUnique(seenGrant, item.GrantOrderID) {
+			grantOrders = append(grantOrders, map[string]any{
+				"rewardType":  item.RewardType,
+				"amount":      item.RewardAmount,
+				"status":      item.GrantStatus,
+				"subjectType": item.Subject.Type,
+				"subjectId":   item.Subject.ID,
+			})
+		}
+		for _, message := range item.OutboxMessages {
+			if appendWorkflowSideEffectUnique(seenOutbox, message.ID) {
+				outboxes = append(outboxes, workflowOutboxSideEffect(message))
+			}
+		}
+		for _, reservation := range item.Reservations {
+			key := firstWorkflowString(reservation.ID, strings.Join([]string{reservation.GrantOrderID, reservation.CommandID, string(reservation.Type), string(reservation.Scope), reservation.ScopeKey, reservation.Amount}, "\x00"))
+			if appendWorkflowSideEffectUnique(seenReservation, key) {
+				reservations = append(reservations, workflowReservationSideEffect(reservation))
+			}
+		}
+	}
+	sort.SliceStable(grantOrders, func(i, j int) bool {
+		return fmt.Sprint(grantOrders[i]) < fmt.Sprint(grantOrders[j])
+	})
+	sort.SliceStable(outboxes, func(i, j int) bool { return fmt.Sprint(outboxes[i]) < fmt.Sprint(outboxes[j]) })
+	sort.SliceStable(reservations, func(i, j int) bool {
+		return fmt.Sprint(reservations[i]) < fmt.Sprint(reservations[j])
+	})
+	return map[string]any{
+		"participation": participation,
+		"grantOrders": map[string]any{
+			"count": len(grantOrders),
+			"items": grantOrders,
+		},
+		"outboxMessages": map[string]any{
+			"count": len(outboxes),
+			"items": outboxes,
+		},
+		"quotaReservations": map[string]any{
+			"count": len(reservations),
+			"items": reservations,
+		},
+		"rule": rule,
+	}, nil
+}
+
+func (s *Service) workflowExecutionReconciliationItems(ctx context.Context, execution marketing.WorkflowExecution) ([]marketing.RewardReconciliationItem, error) {
+	query := marketing.RewardReconciliationQuery{
+		TenantID:   execution.TenantID,
+		ActivityID: execution.ActivityID,
+		EventID:    execution.EventID,
+		Limit:      50,
+	}
+	items, err := s.repository.ListRewardReconciliation(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	if len(items) > 0 || strings.TrimSpace(execution.EventID) != "" {
+		return items, nil
+	}
+	idempotencyKey := workflowExecutionInputString(execution.Input, "idempotencyKey")
+	if strings.TrimSpace(idempotencyKey) == "" {
+		return items, nil
+	}
+	return s.repository.ListRewardReconciliation(ctx, marketing.RewardReconciliationQuery{
+		TenantID:       execution.TenantID,
+		ActivityID:     execution.ActivityID,
+		IdempotencyKey: idempotencyKey,
+		Limit:          50,
+	})
+}
+
+func workflowParticipationSideEffect(participation marketing.Participation) map[string]any {
+	return map[string]any{
+		"created":      participation.ID != "",
+		"status":       participation.Status,
+		"rejectReason": participation.RejectReason,
+		"subjectType":  participation.Subject.Type,
+		"subjectId":    participation.Subject.ID,
+		"bizType":      participation.Biz.BizType,
+		"bizId":        participation.Biz.BizID,
+	}
+}
+
+func workflowGrantOrderSideEffect(order marketing.GrantOrder) map[string]any {
+	return map[string]any{
+		"rewardType":   order.RewardType,
+		"amount":       order.RewardAmount,
+		"status":       order.GrantStatus,
+		"channel":      order.GrantChannel,
+		"retryCount":   order.RetryCount,
+		"errorMessage": order.ErrorMessage,
+		"subjectType":  order.Subject.Type,
+		"subjectId":    order.Subject.ID,
+	}
+}
+
+func workflowOutboxSideEffect(message marketing.OutboxMessage) map[string]any {
+	return map[string]any{
+		"messageType":   message.MessageType,
+		"targetChannel": message.TargetChannel,
+		"status":        message.SendStatus,
+		"retryCount":    message.RetryCount,
+		"errorMessage":  message.ErrorMessage,
+	}
+}
+
+func workflowReservationSideEffect(reservation marketing.QuotaReservation) map[string]any {
+	return map[string]any{
+		"quotaType": reservation.Type,
+		"scope":     reservation.Scope,
+		"scopeKey":  reservation.ScopeKey,
+		"amount":    reservation.Amount,
+		"status":    reservation.Status,
+	}
+}
+
+func workflowSideEffectDecision(status marketing.ParticipationStatus) string {
+	switch status {
+	case marketing.ParticipationQualified, marketing.ParticipationRewardable, marketing.ParticipationGranted:
+		return "PASSED"
+	case marketing.ParticipationRejected, marketing.ParticipationFailed:
+		return "REJECTED"
+	default:
+		return string(status)
+	}
+}
+
+func appendWorkflowSideEffectUnique(seen map[string]struct{}, key string) bool {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return true
+	}
+	if _, ok := seen[key]; ok {
+		return false
+	}
+	seen[key] = struct{}{}
+	return true
 }
 
 func limitWorkflowJSONDiff(rows []marketing.WorkflowExecutionJSONDiff, limit int) []marketing.WorkflowExecutionJSONDiff {

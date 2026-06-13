@@ -275,16 +275,34 @@ type CopyWorkflowDraftTemplateCommand struct {
 }
 
 type WorkflowDraftTemplateCompareResult struct {
-	LeftVersionID  string         `json:"leftVersionId"`
-	RightVersionID string         `json:"rightVersionId"`
-	LeftVersion    int            `json:"leftVersion"`
-	RightVersion   int            `json:"rightVersion"`
-	NodeDelta      int            `json:"nodeDelta"`
-	EdgeDelta      int            `json:"edgeDelta"`
-	AddedNodes     []string       `json:"addedNodes"`
-	RemovedNodes   []string       `json:"removedNodes"`
-	CommonNodes    int            `json:"commonNodes"`
-	ChangedMeta    map[string]any `json:"changedMeta,omitempty"`
+	LeftVersionID  string                     `json:"leftVersionId"`
+	RightVersionID string                     `json:"rightVersionId"`
+	LeftVersion    int                        `json:"leftVersion"`
+	RightVersion   int                        `json:"rightVersion"`
+	NodeDelta      int                        `json:"nodeDelta"`
+	EdgeDelta      int                        `json:"edgeDelta"`
+	AddedNodes     []string                   `json:"addedNodes"`
+	RemovedNodes   []string                   `json:"removedNodes"`
+	CommonNodes    int                        `json:"commonNodes"`
+	NodeChanges    []WorkflowTemplateNodeDiff `json:"nodeChanges,omitempty"`
+	EdgeChanges    []WorkflowTemplateEdgeDiff `json:"edgeChanges,omitempty"`
+	ChangedMeta    map[string]any             `json:"changedMeta,omitempty"`
+}
+
+type WorkflowTemplateNodeDiff struct {
+	NodeID  string                      `json:"nodeId"`
+	Label   string                      `json:"label,omitempty"`
+	Type    string                      `json:"type,omitempty"`
+	Kind    string                      `json:"kind,omitempty"`
+	Changes []WorkflowExecutionJSONDiff `json:"changes"`
+}
+
+type WorkflowTemplateEdgeDiff struct {
+	EdgeID  string                      `json:"edgeId"`
+	Source  string                      `json:"source,omitempty"`
+	Target  string                      `json:"target,omitempty"`
+	Label   string                      `json:"label,omitempty"`
+	Changes []WorkflowExecutionJSONDiff `json:"changes"`
 }
 
 type WorkflowNodePreset struct {
@@ -409,6 +427,8 @@ type WorkflowExecutionCompare struct {
 	CurrentPath        []string                           `json:"currentPath"`
 	BaselinePath       []string                           `json:"baselinePath"`
 	PathChanged        bool                               `json:"pathChanged"`
+	NodeStatusChanges  []WorkflowExecutionNodeStatusDiff  `json:"nodeStatusChanges,omitempty"`
+	SideEffectChanges  []WorkflowExecutionSideEffectDiff  `json:"sideEffectChanges,omitempty"`
 	CurrentFailures    []string                           `json:"currentFailures"`
 	BaselineFailures   []string                           `json:"baselineFailures"`
 	CurrentDurationMs  int64                              `json:"currentDurationMs"`
@@ -425,6 +445,28 @@ type WorkflowExecutionPayloadNodeDiff struct {
 	Label  string                      `json:"label"`
 	Input  []WorkflowExecutionJSONDiff `json:"input"`
 	Output []WorkflowExecutionJSONDiff `json:"output"`
+}
+
+type WorkflowExecutionNodeStatusDiff struct {
+	NodeID             string                      `json:"nodeId"`
+	Label              string                      `json:"label"`
+	CurrentStatus      WorkflowNodeExecutionStatus `json:"currentStatus,omitempty"`
+	BaselineStatus     WorkflowNodeExecutionStatus `json:"baselineStatus,omitempty"`
+	CurrentError       string                      `json:"currentError,omitempty"`
+	BaselineError      string                      `json:"baselineError,omitempty"`
+	CurrentErrorCode   string                      `json:"currentErrorCode,omitempty"`
+	BaselineErrorCode  string                      `json:"baselineErrorCode,omitempty"`
+	CurrentAttempt     int                         `json:"currentAttempt,omitempty"`
+	BaselineAttempt    int                         `json:"baselineAttempt,omitempty"`
+	CurrentDurationMs  int64                       `json:"currentDurationMs,omitempty"`
+	BaselineDurationMs int64                       `json:"baselineDurationMs,omitempty"`
+}
+
+type WorkflowExecutionSideEffectDiff struct {
+	Kind     string                      `json:"kind"`
+	Changes  []WorkflowExecutionJSONDiff `json:"changes"`
+	Current  any                         `json:"current,omitempty"`
+	Baseline any                         `json:"baseline,omitempty"`
 }
 
 type WorkflowExecutionCompareOptions struct {

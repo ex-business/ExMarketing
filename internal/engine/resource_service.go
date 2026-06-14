@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -158,6 +160,9 @@ func (s *Service) TestResource(ctx context.Context, tenantID string, code string
 	} else if resource.Status != marketing.ResourceActive {
 		status = marketing.ResourceAuditFailed
 		errorCode = "RESOURCE_DISABLED"
+	} else if code := resourceAdapterConfigError(resource); code != "" {
+		status = marketing.ResourceAuditFailed
+		errorCode = code
 	}
 	if err == nil {
 		err = s.repository.CreateResourceAuditLog(ctx, marketing.ResourceAuditLog{
@@ -180,6 +185,69 @@ func (s *Service) TestResource(ctx context.Context, tenantID string, code string
 		return nil, err
 	}
 	return map[string]any{"ok": status == marketing.ResourceAuditSuccess, "resource": resource, "errorCode": errorCode}, nil
+}
+
+func resourceAdapterConfigError(resource marketing.Resource) string {
+	config := resource.ConfigMap()
+	switch resource.Type {
+	case marketing.ResourceDatabaseTable:
+		if firstNonEmpty(resourceConfigString(config, "physicalTable"), resourceConfigString(config, "table"), resourceConfigString(config, "tableNamespace")) == "" {
+			return "RESOURCE_TABLE_CONFIG_INVALID"
+		}
+		if len(resourceConfigStringList(config, "primaryKey")) == 0 {
+			return "RESOURCE_TABLE_PRIMARY_KEY_REQUIRED"
+		}
+	case marketing.ResourceHTTPProvider:
+		if firstNonEmpty(resourceConfigString(config, "endpoint"), resourceConfigString(config, "providerEndpoint")) == "" {
+			return "RESOURCE_HTTP_ENDPOINT_REQUIRED"
+		}
+		method := strings.ToUpper(firstNonEmpty(resourceConfigString(config, "method"), resourceConfigString(config, "httpMethod"), "POST"))
+		if method != http.MethodGet && method != http.MethodPost && method != http.MethodPut {
+			return "RESOURCE_HTTP_METHOD_UNSUPPORTED"
+		}
+	}
+	return ""
+}
+
+func resourceConfigString(config map[string]any, key string) string {
+	if config == nil {
+		return ""
+	}
+	value, ok := config[key]
+	if !ok || value == nil {
+		return ""
+	}
+	return strings.TrimSpace(fmt.Sprint(value))
+}
+
+func resourceConfigStringList(config map[string]any, key string) []string {
+	value, ok := config[key]
+	if !ok || value == nil {
+		return nil
+	}
+	switch typed := value.(type) {
+	case []string:
+		return typed
+	case []any:
+		out := make([]string, 0, len(typed))
+		for _, item := range typed {
+			if text := strings.TrimSpace(fmt.Sprint(item)); text != "" {
+				out = append(out, text)
+			}
+		}
+		return out
+	case string:
+		parts := strings.FieldsFunc(typed, func(r rune) bool { return r == ',' || r == '\n' || r == '\t' })
+		out := make([]string, 0, len(parts))
+		for _, part := range parts {
+			if text := strings.TrimSpace(part); text != "" {
+				out = append(out, text)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
 }
 
 func builtInResources(tenantID string) []marketing.Resource {
@@ -262,10 +330,10 @@ func resourceScopeAllows(resource marketing.Resource, req marketing.ResourceAcce
 
 func defaultResourceCapabilities(resourceType marketing.ResourceType) []marketing.ResourceOperation {
 	switch resourceType {
-	case marketing.ResourceMemory, marketing.ResourceWorkflowContext, marketing.ResourceDatabaseKV:
+	case marketing.ResourceMemory, marketing.ResourceWorkflowContext, marketing.ResourceDatabaseKV, marketing.ResourceDatabaseTable:
 		return []marketing.ResourceOperation{marketing.ResourceRead, marketing.ResourceWrite, marketing.ResourceUpsert, marketing.ResourceAppend, marketing.ResourceDelete, marketing.ResourceCAS}
 	case marketing.ResourceHTTPProvider:
-		return []marketing.ResourceOperation{marketing.ResourceRead, marketing.ResourceCall, marketing.ResourceTestConnection}
+		return []marketing.ResourceOperation{marketing.ResourceRead, marketing.ResourceWrite, marketing.ResourceUpsert, marketing.ResourceDelete, marketing.ResourceCall, marketing.ResourceTestConnection}
 	default:
 		return []marketing.ResourceOperation{marketing.ResourceRead}
 	}

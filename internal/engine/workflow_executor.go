@@ -2991,6 +2991,8 @@ func (s *Service) stateStoreWorkflowNodeHandler(ctx context.Context, node market
 		result = workflowMemoryStateStore(ctx, node, runtime, config, operation, namespace, storageKey, valueType)
 	case "DATABASE":
 		result = s.workflowDatabaseStateStore(ctx, node, runtime, config, operation, namespace, storageKey, valueType)
+	case "DATABASE_TABLE", "TABLE":
+		result = s.workflowDatabaseTableStateStore(ctx, node, runtime, config, operation, namespace, storageKey, valueType)
 	case "HTTP", "REST", "EXTERNAL":
 		result = s.workflowHTTPStateStore(ctx, node, runtime, config, operation, namespace, storageKey, valueType)
 	case "REDIS", "CUSTOM", "PLUGIN", "GRPC":
@@ -3051,13 +3053,40 @@ func (s *Service) workflowStateStoreResourceConfig(ctx context.Context, node mar
 		}
 		return resource, true, nodeFailed(code+": resource access denied", map[string]any{"errorCode": code, "resourceRef": resourceRef, "resourceType": resource.Type, "audit": workflowHandlerAudit(node, runtime)})
 	}
-	for key, value := range resource.ConfigMap() {
+	if code := resourceAdapterConfigError(resource); code != "" {
+		return resource, true, nodeFailed(code+": resource adapter config is invalid", map[string]any{"errorCode": code, "resourceRef": resourceRef, "resourceType": resource.Type, "audit": workflowHandlerAudit(node, runtime)})
+	}
+	resourceConfig := resource.ConfigMap()
+	for key, value := range resourceConfig {
 		if _, exists := config[key]; !exists {
 			config[key] = value
 		}
 	}
+	workflowNormalizeProviderResourceConfig(node, resource, resourceConfig, config)
 	config["storageType"] = workflowStorageTypeForResource(resource)
 	return resource, true, workflowNodeResult{}
+}
+
+func workflowNormalizeProviderResourceConfig(node marketing.WorkflowNode, resource marketing.Resource, resourceConfig map[string]any, config map[string]any) {
+	if resource.Type != marketing.ResourceHTTPProvider {
+		return
+	}
+	if endpoint := firstWorkflowString(workflowConfigString(resourceConfig, "endpoint"), workflowConfigString(config, "endpoint")); endpoint != "" && !workflowExplicitConfigHasKey(node, "providerEndpoint") {
+		config["providerEndpoint"] = endpoint
+	}
+	if method := firstWorkflowString(workflowConfigString(resourceConfig, "method"), firstWorkflowString(workflowConfigString(resourceConfig, "httpMethod"), workflowConfigString(config, "method"))); method != "" && !workflowExplicitConfigHasKey(node, "httpMethod") {
+		config["httpMethod"] = method
+	}
+	if !workflowExplicitConfigHasKey(node, "requestHeaders") {
+		if headers, ok := resourceConfig["headers"]; ok {
+			config["requestHeaders"] = headers
+		} else if headers, ok := config["headers"]; ok {
+			config["requestHeaders"] = headers
+		}
+	}
+	if timeoutSeconds := workflowConfigNumber(resourceConfig, "timeoutSeconds"); timeoutSeconds > 0 && !workflowExplicitConfigHasKey(node, "timeoutSeconds") {
+		config["timeoutSeconds"] = timeoutSeconds
+	}
 }
 
 func workflowExplicitConfigString(node marketing.WorkflowNode, key string) string {
@@ -3071,12 +3100,26 @@ func workflowExplicitConfigString(node marketing.WorkflowNode, key string) strin
 	return workflowConfigString(config, key)
 }
 
+func workflowExplicitConfigHasKey(node marketing.WorkflowNode, key string) bool {
+	if len(node.Config) == 0 {
+		return false
+	}
+	var config map[string]any
+	if err := json.Unmarshal(node.Config, &config); err != nil || config == nil {
+		return false
+	}
+	value, exists := config[key]
+	return exists && !workflowConfigValueEmpty(value)
+}
+
 func workflowStorageTypeForResource(resource marketing.Resource) string {
 	switch resource.Type {
 	case marketing.ResourceMemory, marketing.ResourceWorkflowContext:
 		return "MEMORY"
-	case marketing.ResourceDatabaseKV, marketing.ResourceDatabaseTable:
+	case marketing.ResourceDatabaseKV:
 		return "DATABASE"
+	case marketing.ResourceDatabaseTable:
+		return "DATABASE_TABLE"
 	case marketing.ResourceHTTPProvider:
 		return "HTTP"
 	case marketing.ResourceRedisKV, marketing.ResourceRedisHash, marketing.ResourceRedisCounter, marketing.ResourceRedisLock:
@@ -3303,6 +3346,147 @@ func (s *Service) workflowDatabaseStateStore(ctx context.Context, node marketing
 	default:
 		return nodeFailed("STATE_STORE_OPERATION_UNSUPPORTED: operation is not supported", map[string]any{"errorCode": "STATE_STORE_OPERATION_UNSUPPORTED", "operation": operation, "audit": workflowHandlerAudit(node, runtime)})
 	}
+}
+
+func (s *Service) workflowDatabaseTableStateStore(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime, config map[string]any, operation string, namespace string, storageKey string, valueType string) workflowNodeResult {
+	tableNamespace := workflowDatabaseTableNamespace(config, namespace)
+	primaryKey := workflowConfigStringList(config, "primaryKey")
+	if len(primaryKey) == 0 {
+		primaryKey = []string{"tenantId", "activityId", "subjectId"}
+	}
+	switch operation {
+	case "READ":
+		key := marketing.StorageStateKey{TenantID: runtime.Activity.TenantID, Namespace: tableNamespace, StorageKey: storageKey}
+		state, err := s.repository.GetStorageState(ctx, key)
+		if err != nil {
+			if errors.Is(err, marketing.ErrNotFound) {
+				return workflowStateStoreMissing(node, runtime, config, "DATABASE_TABLE", tableNamespace, storageKey, "TABLE")
+			}
+			return nodeFailed("STATE_STORE_TABLE_READ_FAILED: "+err.Error(), map[string]any{"errorCode": "STATE_STORE_TABLE_READ_FAILED", "error": err.Error(), "audit": workflowHandlerAudit(node, runtime)})
+		}
+		output := workflowStorageStateOutput(node, runtime, "DATABASE_TABLE", operation, state, true)
+		output["table"] = workflowConfigString(config, "physicalTable")
+		output["primaryKey"] = primaryKey
+		return nodeSuccess(output)
+	case "DELETE":
+		err := s.repository.DeleteStorageState(ctx, marketing.StorageStateKey{TenantID: runtime.Activity.TenantID, Namespace: tableNamespace, StorageKey: storageKey})
+		if err != nil && !errors.Is(err, marketing.ErrNotFound) {
+			return nodeFailed("STATE_STORE_TABLE_DELETE_FAILED: "+err.Error(), map[string]any{"errorCode": "STATE_STORE_TABLE_DELETE_FAILED", "error": err.Error(), "audit": workflowHandlerAudit(node, runtime)})
+		}
+		output := workflowStateStoreOutput(node, runtime, "DATABASE_TABLE", operation, tableNamespace, storageKey, "TABLE", nil, 0, false)
+		output["table"] = workflowConfigString(config, "physicalTable")
+		output["primaryKey"] = primaryKey
+		return nodeSuccess(output)
+	case "DEFINE", "WRITE", "UPSERT", "APPEND":
+		rows := workflowDatabaseTableRows(workflowStateStoreValue(ctx, config, runtime, "TABLE"), runtime)
+		if len(rows) == 0 {
+			return nodeFailed("STATE_STORE_TABLE_ROW_REQUIRED: table row is required", map[string]any{"errorCode": "STATE_STORE_TABLE_ROW_REQUIRED", "audit": workflowHandlerAudit(node, runtime)})
+		}
+		expectedVersion := workflowInt64(workflowConfigString(config, "expectedVersion"))
+		if expectedVersion == 0 {
+			expectedVersion = workflowStorageStateExpectedVersion(ctx)
+		}
+		requireVersion := workflowConfigBool(config, "requireVersion", false) && expectedVersion > 0
+		appendValue := operation == "APPEND"
+		now := time.Now().UTC()
+		storedRows := make([]any, 0, len(rows))
+		var lastState marketing.StorageState
+		for _, row := range rows {
+			rowKey := workflowDatabaseTableRowKey(row, primaryKey)
+			if rowKey == "" {
+				rowKey = storageKey
+			}
+			state, err := s.repository.UpsertStorageState(ctx, marketing.UpsertStorageStateCommand{
+				State: marketing.StorageState{
+					ID:          marketing.NewID("store"),
+					TenantID:    runtime.Activity.TenantID,
+					Namespace:   tableNamespace,
+					StorageKey:  rowKey,
+					ValueType:   map[bool]string{true: "ARRAY", false: "OBJECT"}[appendValue],
+					Data:        workflowRawJSON(row),
+					LastEventID: runtime.Inbox.Event.EventID,
+					CreatedAt:   now,
+					UpdatedAt:   now,
+				},
+				ExpectedVersion: expectedVersion,
+				RequireVersion:  requireVersion && len(rows) == 1,
+				Append:          appendValue,
+			})
+			if err != nil {
+				code := "STATE_STORE_TABLE_WRITE_FAILED"
+				if errors.Is(err, marketing.ErrStorageStateConflict) {
+					code = "STATE_STORE_TABLE_VERSION_CONFLICT"
+				}
+				return nodeFailed(code+": "+err.Error(), map[string]any{"errorCode": code, "error": err.Error(), "expectedVersion": expectedVersion, "audit": workflowHandlerAudit(node, runtime)})
+			}
+			lastState = state
+			storedRows = append(storedRows, workflowStorageStateData(state))
+		}
+		output := workflowStateStoreOutput(node, runtime, "DATABASE_TABLE", operation, tableNamespace, lastState.StorageKey, "TABLE", storedRows, lastState.Version, true)
+		output["table"] = workflowConfigString(config, "physicalTable")
+		output["primaryKey"] = primaryKey
+		output["rowCount"] = len(storedRows)
+		return nodeSuccess(output)
+	default:
+		return nodeFailed("STATE_STORE_TABLE_OPERATION_UNSUPPORTED: operation is not supported", map[string]any{"errorCode": "STATE_STORE_TABLE_OPERATION_UNSUPPORTED", "operation": operation, "audit": workflowHandlerAudit(node, runtime)})
+	}
+}
+
+func workflowDatabaseTableNamespace(config map[string]any, fallback string) string {
+	for _, key := range []string{"tableNamespace", "physicalTable", "table"} {
+		if value := workflowConfigString(config, key); value != "" {
+			return "table:" + value
+		}
+	}
+	return "table:" + fallback
+}
+
+func workflowDatabaseTableRows(value any, runtime workflowRuntime) []map[string]any {
+	normalized := workflowJSONValue(value)
+	var rows []map[string]any
+	switch typed := normalized.(type) {
+	case []any:
+		for _, item := range typed {
+			if row, ok := item.(map[string]any); ok {
+				rows = append(rows, workflowDatabaseTableEnrichRow(row, runtime))
+			}
+		}
+	case map[string]any:
+		rows = append(rows, workflowDatabaseTableEnrichRow(typed, runtime))
+	}
+	return rows
+}
+
+func workflowDatabaseTableEnrichRow(row map[string]any, runtime workflowRuntime) map[string]any {
+	out := make(map[string]any, len(row)+4)
+	for key, value := range row {
+		out[key] = value
+	}
+	if _, ok := out["tenantId"]; !ok {
+		out["tenantId"] = runtime.Activity.TenantID
+	}
+	if _, ok := out["activityId"]; !ok {
+		out["activityId"] = runtime.Activity.ID
+	}
+	if _, ok := out["subjectId"]; !ok {
+		out["subjectId"] = runtime.Inbox.Event.Subject.ID
+	}
+	if _, ok := out["eventId"]; !ok {
+		out["eventId"] = runtime.Inbox.Event.EventID
+	}
+	return out
+}
+
+func workflowDatabaseTableRowKey(row map[string]any, primaryKey []string) string {
+	parts := make([]string, 0, len(primaryKey))
+	for _, key := range primaryKey {
+		value, ok := row[key]
+		if !ok || value == nil || strings.TrimSpace(fmt.Sprint(value)) == "" {
+			return ""
+		}
+		parts = append(parts, strings.TrimSpace(fmt.Sprint(value)))
+	}
+	return strings.Join(parts, ":")
 }
 
 func workflowStateStoreMissing(node marketing.WorkflowNode, runtime workflowRuntime, config map[string]any, storageType string, namespace string, storageKey string, valueType string) workflowNodeResult {

@@ -1850,6 +1850,257 @@ func TestStateStoreWorkflowNodeHandlerSupportsHTTPProvider(t *testing.T) {
 	}
 }
 
+func TestStateStoreWorkflowNodeHandlerUsesDatabaseTableResource(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	runtime := testWorkflowHandlerRuntime(true)
+	if _, err := service.SaveResource(ctx, marketing.Resource{
+		TenantID:     runtime.Activity.TenantID,
+		WorkspaceID:  runtime.Activity.WorkspaceID,
+		Code:         "checkin_user_state",
+		Name:         "签到用户状态表",
+		Type:         marketing.ResourceDatabaseTable,
+		Driver:       marketing.ResourceDriverPostgres,
+		Scope:        marketing.ResourceScopeWorkspace,
+		Status:       marketing.ResourceActive,
+		Config:       json.RawMessage(`{"physicalTable":"marketing_checkin_user_state","primaryKey":["tenantId","activityId","subjectId"]}`),
+		Capabilities: []marketing.ResourceOperation{marketing.ResourceRead, marketing.ResourceUpsert, marketing.ResourceDelete},
+	}); err != nil {
+		t.Fatalf("save table resource: %v", err)
+	}
+	node := marketing.WorkflowNode{
+		ID:     "store-table",
+		Type:   "state-store",
+		Config: json.RawMessage(`{"resourceRef":"checkin_user_state","operation":"UPSERT","namespace":"checkin","keyTemplate":"ignored","valueType":"TABLE"}`),
+	}
+	nodeCtx := context.WithValue(ctx, workflowNodeExecutionContextKey{}, workflowNodeExecutionContext{
+		ResolvedInput: map[string]any{"value": []any{map[string]any{"streakDays": 2, "lastCheckinDate": "2026-06-14"}}},
+	})
+	upsert := service.stateStoreWorkflowNodeHandler(nodeCtx, node, runtime)
+	if upsert.Status != marketing.WorkflowNodeSuccess || upsert.Output["storageType"] != "DATABASE_TABLE" || upsert.Output["rowCount"] != 1 {
+		t.Fatalf("expected database table upsert, got %+v", upsert)
+	}
+	rows := upsert.Output["stored_value"].([]any)
+	row := rows[0].(map[string]any)
+	if row["tenantId"] != runtime.Activity.TenantID || row["activityId"] != runtime.Activity.ID || row["subjectId"] != runtime.Inbox.Event.Subject.ID {
+		t.Fatalf("expected enriched table row, got %+v", row)
+	}
+
+	readNode := node
+	readNode.Config = json.RawMessage(`{"resourceRef":"checkin_user_state","operation":"READ","namespace":"checkin","keyTemplate":"${tenantId}:${activityId}:${subject.id}","valueType":"TABLE","missingPolicy":"BLOCK"}`)
+	read := service.stateStoreWorkflowNodeHandler(ctx, readNode, runtime)
+	if read.Status != marketing.WorkflowNodeSuccess || read.Output["storageType"] != "DATABASE_TABLE" {
+		t.Fatalf("expected database table read, got %+v", read)
+	}
+	readValue := read.Output["stored_value"].(map[string]any)
+	if readValue["streakDays"] != float64(2) {
+		t.Fatalf("expected stored table row, got %+v", readValue)
+	}
+}
+
+func TestStateStoreWorkflowNodeHandlerAppendsDatabaseTableResourceRows(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	runtime := testWorkflowHandlerRuntime(true)
+	if _, err := service.SaveResource(ctx, marketing.Resource{
+		TenantID:    runtime.Activity.TenantID,
+		WorkspaceID: runtime.Activity.WorkspaceID,
+		Code:        "checkin_history_table",
+		Name:        "签到历史表",
+		Type:        marketing.ResourceDatabaseTable,
+		Driver:      marketing.ResourceDriverPostgres,
+		Scope:       marketing.ResourceScopeWorkspace,
+		Status:      marketing.ResourceActive,
+		Config:      json.RawMessage(`{"physicalTable":"marketing_checkin_history","primaryKey":["tenantId","activityId","subjectId"]}`),
+	}); err != nil {
+		t.Fatalf("save table resource: %v", err)
+	}
+	node := marketing.WorkflowNode{
+		ID:     "append-table",
+		Type:   "state-store",
+		Config: json.RawMessage(`{"resourceRef":"checkin_history_table","operation":"APPEND","namespace":"checkin","keyTemplate":"ignored","valueType":"TABLE"}`),
+	}
+	for _, streakDays := range []int{1, 2} {
+		nodeCtx := context.WithValue(ctx, workflowNodeExecutionContextKey{}, workflowNodeExecutionContext{
+			ResolvedInput: map[string]any{"value": map[string]any{"streakDays": streakDays}},
+		})
+		result := service.stateStoreWorkflowNodeHandler(nodeCtx, node, runtime)
+		if result.Status != marketing.WorkflowNodeSuccess {
+			t.Fatalf("expected append success, got %+v", result)
+		}
+	}
+
+	readNode := node
+	readNode.Config = json.RawMessage(`{"resourceRef":"checkin_history_table","operation":"READ","namespace":"checkin","keyTemplate":"${tenantId}:${activityId}:${subject.id}","valueType":"TABLE","missingPolicy":"BLOCK"}`)
+	read := service.stateStoreWorkflowNodeHandler(ctx, readNode, runtime)
+	if read.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected read success, got %+v", read)
+	}
+	items := read.Output["stored_value"].([]any)
+	if len(items) != 2 {
+		t.Fatalf("expected appended rows, got %+v", read.Output["stored_value"])
+	}
+}
+
+func TestStateStoreWorkflowNodeHandlerRejectsInvalidDatabaseTableResource(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	runtime := testWorkflowHandlerRuntime(true)
+	if _, err := service.SaveResource(ctx, marketing.Resource{
+		TenantID:    runtime.Activity.TenantID,
+		WorkspaceID: runtime.Activity.WorkspaceID,
+		Code:        "bad_table_resource",
+		Name:        "错误公共表",
+		Type:        marketing.ResourceDatabaseTable,
+		Driver:      marketing.ResourceDriverPostgres,
+		Scope:       marketing.ResourceScopeWorkspace,
+		Status:      marketing.ResourceActive,
+		Config:      json.RawMessage(`{"physicalTable":"marketing_bad_table"}`),
+	}); err != nil {
+		t.Fatalf("save invalid table resource: %v", err)
+	}
+	node := marketing.WorkflowNode{
+		ID:     "bad-table",
+		Type:   "state-store",
+		Config: json.RawMessage(`{"resourceRef":"bad_table_resource","operation":"UPSERT","namespace":"checkin","keyTemplate":"ignored","valueType":"TABLE"}`),
+	}
+	nodeCtx := context.WithValue(ctx, workflowNodeExecutionContextKey{}, workflowNodeExecutionContext{
+		ResolvedInput: map[string]any{"value": map[string]any{"streakDays": 1}},
+	})
+	result := service.stateStoreWorkflowNodeHandler(nodeCtx, node, runtime)
+	if result.Status != marketing.WorkflowNodeFailed || result.Output["errorCode"] != "RESOURCE_TABLE_PRIMARY_KEY_REQUIRED" {
+		t.Fatalf("expected invalid resource failure, got %+v", result)
+	}
+}
+
+func TestStateStoreWorkflowNodeHandlerUsesHTTPProviderResourceConfig(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	runtime := testWorkflowHandlerRuntime(true)
+	var receivedMethod string
+	var receivedHeader string
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedMethod = r.Method
+		receivedHeader = r.Header.Get("X-Provider")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"value":{"resourceProvider":"ok"},"version":9,"exists":true}`))
+	}))
+	defer provider.Close()
+	if _, err := service.SaveResource(ctx, marketing.Resource{
+		TenantID:     runtime.Activity.TenantID,
+		WorkspaceID:  runtime.Activity.WorkspaceID,
+		Code:         "external_storage_provider",
+		Name:         "外部存储 Provider",
+		Type:         marketing.ResourceHTTPProvider,
+		Driver:       marketing.ResourceDriverREST,
+		Scope:        marketing.ResourceScopeWorkspace,
+		Status:       marketing.ResourceActive,
+		Config:       json.RawMessage(`{"endpoint":"` + provider.URL + `","method":"PUT","headers":{"X-Provider":"resource-config"},"timeoutSeconds":3}`),
+		Capabilities: []marketing.ResourceOperation{marketing.ResourceRead, marketing.ResourceUpsert, marketing.ResourceTestConnection},
+	}); err != nil {
+		t.Fatalf("save http provider resource: %v", err)
+	}
+	node := marketing.WorkflowNode{
+		ID:     "resource-http-store",
+		Type:   "state-store",
+		Config: json.RawMessage(`{"resourceRef":"external_storage_provider","operation":"UPSERT","namespace":"checkin","keyTemplate":"${activityId}:${subject.id}:external","valueType":"OBJECT"}`),
+	}
+	nodeCtx := context.WithValue(ctx, workflowNodeExecutionContextKey{}, workflowNodeExecutionContext{
+		ResolvedInput: map[string]any{"value": map[string]any{"streakDays": 1}},
+	})
+
+	result := service.stateStoreWorkflowNodeHandler(nodeCtx, node, runtime)
+	if result.Status != marketing.WorkflowNodeSuccess || result.Output["storage_version"] != int64(9) {
+		t.Fatalf("expected http resource provider success, got %+v", result)
+	}
+	if receivedMethod != http.MethodPut || receivedHeader != "resource-config" {
+		t.Fatalf("expected provider config method/header, got method=%s header=%s", receivedMethod, receivedHeader)
+	}
+}
+
+func TestStateStoreWorkflowNodeHandlerUsesHTTPProviderHTTPMethodAlias(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	runtime := testWorkflowHandlerRuntime(true)
+	var receivedMethod string
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedMethod = r.Method
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"value":{"resourceProvider":"ok"},"version":4,"exists":true}`))
+	}))
+	defer provider.Close()
+	if _, err := service.SaveResource(ctx, marketing.Resource{
+		TenantID:    runtime.Activity.TenantID,
+		WorkspaceID: runtime.Activity.WorkspaceID,
+		Code:        "external_storage_provider_http_method",
+		Name:        "外部存储 Provider HTTP Method",
+		Type:        marketing.ResourceHTTPProvider,
+		Driver:      marketing.ResourceDriverREST,
+		Scope:       marketing.ResourceScopeWorkspace,
+		Status:      marketing.ResourceActive,
+		Config:      json.RawMessage(`{"endpoint":"` + provider.URL + `","httpMethod":"PUT"}`),
+	}); err != nil {
+		t.Fatalf("save http provider resource: %v", err)
+	}
+	node := marketing.WorkflowNode{
+		ID:     "resource-http-method-store",
+		Type:   "state-store",
+		Config: json.RawMessage(`{"resourceRef":"external_storage_provider_http_method","operation":"UPSERT","namespace":"checkin","keyTemplate":"${activityId}:${subject.id}:external","valueType":"OBJECT"}`),
+	}
+	nodeCtx := context.WithValue(ctx, workflowNodeExecutionContextKey{}, workflowNodeExecutionContext{
+		ResolvedInput: map[string]any{"value": map[string]any{"streakDays": 1}},
+	})
+
+	result := service.stateStoreWorkflowNodeHandler(nodeCtx, node, runtime)
+	if result.Status != marketing.WorkflowNodeSuccess || receivedMethod != http.MethodPut {
+		t.Fatalf("expected httpMethod alias to use PUT, method=%s result=%+v", receivedMethod, result)
+	}
+}
+
+func TestStateStoreWorkflowNodeHandlerUsesHTTPProviderTimeoutResourceConfig(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	runtime := testWorkflowHandlerRuntime(true)
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(100 * time.Millisecond)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"value":{"late":true},"version":1,"exists":true}`))
+	}))
+	defer provider.Close()
+	if _, err := service.SaveResource(ctx, marketing.Resource{
+		TenantID:    runtime.Activity.TenantID,
+		WorkspaceID: runtime.Activity.WorkspaceID,
+		Code:        "slow_external_storage_provider",
+		Name:        "慢外部存储 Provider",
+		Type:        marketing.ResourceHTTPProvider,
+		Driver:      marketing.ResourceDriverREST,
+		Scope:       marketing.ResourceScopeWorkspace,
+		Status:      marketing.ResourceActive,
+		Config:      json.RawMessage(`{"endpoint":"` + provider.URL + `","method":"POST","timeoutSeconds":0.01}`),
+	}); err != nil {
+		t.Fatalf("save http provider resource: %v", err)
+	}
+	node := marketing.WorkflowNode{
+		ID:     "slow-http-store",
+		Type:   "state-store",
+		Config: json.RawMessage(`{"resourceRef":"slow_external_storage_provider","operation":"UPSERT","namespace":"checkin","keyTemplate":"${activityId}:${subject.id}:slow","valueType":"OBJECT"}`),
+	}
+	nodeCtx := context.WithValue(ctx, workflowNodeExecutionContextKey{}, workflowNodeExecutionContext{
+		ResolvedInput: map[string]any{"value": map[string]any{"streakDays": 1}},
+	})
+
+	result := service.stateStoreWorkflowNodeHandler(nodeCtx, node, runtime)
+	if result.Status != marketing.WorkflowNodeFailed || result.Output["errorCode"] != "STATE_STORE_HTTP_FAILED" {
+		t.Fatalf("expected resource timeout to override schema default, got %+v", result)
+	}
+}
+
 func TestStateStoreWorkflowNodeHandlerUsesResourceRefAndAudits(t *testing.T) {
 	ctx := context.Background()
 	repo := marketing.NewMemoryRepository()

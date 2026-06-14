@@ -1140,6 +1140,24 @@ VIEWER 不能保存写资源节点
 
 目标：支持公共表和外部 provider 的生产使用。
 
+当前实现：
+
+1. `state-store + resourceRef` 已支持 `DATABASE_TABLE`：
+   - 资源配置承载 `physicalTable/table/tableNamespace` 和 `primaryKey`
+   - 执行器按 `primaryKey` 生成行 key，并自动补齐 `tenantId/activityId/subjectId/eventId`
+   - 支持 `READ/WRITE/UPSERT/APPEND/DELETE`，单行写入支持 CAS 版本检查
+   - 底层先使用受控的 `marketing_storage_state` 作为虚拟公共表承载，不直接开放任意 SQL 表写入
+2. `state-store + resourceRef` 已支持 `HTTP_PROVIDER`：
+   - `endpoint/method/headers/timeoutSeconds` 从资源配置读取
+   - 节点只需要引用 `resourceRef`、操作、namespace、keyTemplate、valueType
+   - 资源配置优先于 schema 默认值，节点显式配置仍可覆盖
+3. 资源测试连接已增加 adapter 配置校验：
+   - `DATABASE_TABLE` 必须配置表名和 `primaryKey`
+   - `HTTP_PROVIDER` 必须配置 endpoint，method 只允许 `GET/POST/PUT`
+4. 默认能力已补齐：
+   - `DATABASE_TABLE` 默认支持 `READ/WRITE/UPSERT/APPEND/DELETE/CAS`
+   - `HTTP_PROVIDER` 默认支持 `READ/WRITE/UPSERT/DELETE/CALL/TEST_CONNECTION`
+
 任务：
 
 1. `DATABASE_TABLE` adapter：
@@ -1294,4 +1312,3 @@ Lua 只能访问被 binding 授权的资源
 节点只写 resourceRef + operation + mapping。
 资源管理负责 storageType、driver、endpoint、table、schema、secret、权限和审计。
 ```
-

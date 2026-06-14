@@ -506,7 +506,7 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 				withDescription(stringField("providerCode", "Provider Code", false, "", rules(maxLength(128))), "REDIS/CUSTOM adapter 编码。"),
 			)),
 			fieldGroup("compat", "兼容字段", "过渡期兼容旧节点配置；新流程应只使用 resourceRef。", fields(
-				enumField("storageType", "存储类型", false, "MEMORY", []string{"MEMORY", "WORKFLOW_CONTEXT", "LOCAL_CACHE", "DATABASE", "HTTP", "REST", "EXTERNAL", "REDIS", "GRPC", "PLUGIN", "CUSTOM"}),
+				enumField("storageType", "存储类型", false, "MEMORY", []string{"MEMORY", "WORKFLOW_CONTEXT", "LOCAL_CACHE", "DATABASE", "DATABASE_TABLE", "HTTP", "REST", "EXTERNAL", "REDIS", "GRPC", "PLUGIN", "CUSTOM"}),
 				withDescription(stringField("providerEndpoint", "Provider Endpoint", false, "", rules(maxLength(512))), "HTTP provider 地址；请求体包含 operation、tenantId、namespace、key、value 和版本信息。"),
 				enumField("httpMethod", "HTTP Method", false, "POST", []string{"POST", "PUT"}),
 				objectField("requestHeaders", "请求 Headers", false, nil),

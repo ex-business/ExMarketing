@@ -42,19 +42,26 @@ function PropertyList({ title, items }: { title: string; items: string[] }) {
 
 function PropertyDisclosure({
   title,
+  titleMeta,
   summary,
   children,
   defaultOpen = false,
+  compact = false,
 }: {
   title: string;
+  titleMeta?: string;
   summary?: string;
   children: ReactNode;
   defaultOpen?: boolean;
+  compact?: boolean;
 }) {
   return (
-    <details className="property-section property-disclosure" open={defaultOpen}>
+    <details className={cx('property-section property-disclosure', compact && 'compact')} open={defaultOpen}>
       <summary>
-        <span>{title}</span>
+        <span>
+          {title}
+          {titleMeta ? <small>{titleMeta}</small> : null}
+        </span>
         {summary ? <em>{summary}</em> : null}
       </summary>
       <div className="property-disclosure-body">
@@ -369,6 +376,11 @@ function parseArrayInput(value: string): string[] {
     .filter(Boolean);
 }
 
+function toggleArrayOption(current: unknown, option: string): string[] {
+  const values = Array.isArray(current) ? current.map((item) => String(item)) : parseArrayInput(stringifyConfigValue(current));
+  return values.includes(option) ? values.filter((item) => item !== option) : [...values, option];
+}
+
 function parseObjectInput(value: string): unknown {
   const trimmed = value.trim();
   if (!trimmed) return {};
@@ -434,6 +446,29 @@ function ConfigFieldInput({
     );
   }
   if (field.type === 'ARRAY') {
+    if (field.options?.length) {
+      const selected = Array.isArray(value) ? value.map((item) => String(item)) : parseArrayInput(stringifyConfigValue(value));
+      return (
+        <details className="schema-multi-select">
+          <summary>
+            <span>{selected.length ? selected.join(' / ') : '选择'}</span>
+            <em>{selected.length} 项</em>
+          </summary>
+          <div>
+            {field.options.map((option) => (
+              <label key={option}>
+                <input
+                  type="checkbox"
+                  checked={selected.includes(option)}
+                  onChange={() => onNodeConfigChange(node.id, field.key, toggleArrayOption(selected, option))}
+                />
+                <span>{option}</span>
+              </label>
+            ))}
+          </div>
+        </details>
+      );
+    }
     return (
       <textarea
         value={Array.isArray(value) ? value.join('\n') : stringifyConfigValue(value)}
@@ -596,6 +631,134 @@ function JsonBlock({ title, value, empty = '暂无数据' }: { title: string; va
   );
 }
 
+const RUN_KEY_FIELD_NAMES = new Set([
+  'activityCode',
+  'activityId',
+  'amount',
+  'billNo',
+  'decision',
+  'duplicate',
+  'eventId',
+  'eventType',
+  'failedStage',
+  'grantChannel',
+  'grantStatus',
+  'id',
+  'idempotencyKey',
+  'messageType',
+  'reason',
+  'reasonCode',
+  'rewardAmount',
+  'rewardType',
+  'sendStatus',
+  'status',
+  'subject',
+  'targetChannel',
+  'targetRef',
+  'tenantId',
+]);
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function compactRunValue(value: unknown): string {
+  if (value === null) return 'null';
+  if (value === undefined) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (Array.isArray(value)) return `${value.length} items`;
+  if (isPlainRecord(value)) {
+    const id = value.id ?? value.eventId ?? value.bizId ?? value.type;
+    return id === undefined ? '{...}' : String(id);
+  }
+  return String(value);
+}
+
+function collectRunKeyData(value: unknown, prefix = '', depth = 0, out: Array<{ key: string; value: string }> = []): Array<{ key: string; value: string }> {
+  if (out.length >= 18 || depth > 4 || value === null || value === undefined) return out;
+  if (Array.isArray(value)) {
+    value.slice(0, 3).forEach((item, index) => collectRunKeyData(item, `${prefix}[${index}]`, depth + 1, out));
+    return out;
+  }
+  if (!isPlainRecord(value)) return out;
+  Object.entries(value).forEach(([key, item]) => {
+    if (out.length >= 18) return;
+    const path = prefix ? `${prefix}.${key}` : key;
+    if (RUN_KEY_FIELD_NAMES.has(key) && !isPlainRecord(item) && !Array.isArray(item)) {
+      out.push({ key: path, value: compactRunValue(item) });
+      return;
+    }
+    if (RUN_KEY_FIELD_NAMES.has(key) && (isPlainRecord(item) || Array.isArray(item))) {
+      out.push({ key: path, value: compactRunValue(item) });
+    }
+    collectRunKeyData(item, path, depth + 1, out);
+  });
+  return out;
+}
+
+function mergeRunKeyData(...sources: unknown[]): Array<{ key: string; value: string }> {
+  const seen = new Set<string>();
+  const rows: Array<{ key: string; value: string }> = [];
+  sources.forEach((source) => {
+    collectRunKeyData(source).forEach((row) => {
+      const dedupeKey = `${row.key}:${row.value}`;
+      if (!row.value || seen.has(dedupeKey)) return;
+      seen.add(dedupeKey);
+      rows.push(row);
+    });
+  });
+  return rows.slice(0, 14);
+}
+
+function RunKeyData({
+  title,
+  rows,
+  defaultOpen = true,
+}: {
+  title: string;
+  rows: Array<{ key: string; value: string }>;
+  defaultOpen?: boolean;
+}) {
+  return (
+    <details className="node-run-key-data" open={defaultOpen}>
+      <summary>
+        <span>{title}</span>
+        <em>{rows.length ? `${rows.length} 项` : '无'}</em>
+      </summary>
+      <div className="node-run-key-data-body">
+        {rows.length ? (
+          <dl>
+            {rows.map((row) => (
+              <div key={`${row.key}-${row.value}`}>
+                <dt>{row.key}</dt>
+                <dd>{row.value}</dd>
+              </div>
+            ))}
+          </dl>
+        ) : (
+          <em>没有可提取的关键字段。</em>
+        )}
+      </div>
+    </details>
+  );
+}
+
+function CompactJsonViewer({ title, value }: { title: string; value: unknown }) {
+  const [showFullData, setShowFullData] = useState(false);
+  const rows = mergeRunKeyData(value);
+  return (
+    <div className="compact-json-viewer">
+      <RunKeyData title={`关键 ${title}`} rows={rows} />
+      <label className="node-run-full-toggle">
+        <span>显示完整 {title}</span>
+        <input type="checkbox" checked={showFullData} onChange={(event) => setShowFullData(event.target.checked)} />
+      </label>
+      {showFullData ? <JsonBlock title={title} value={value} /> : null}
+    </div>
+  );
+}
+
 function outputLogsFrom(value: unknown): string[] {
   if (!value || typeof value !== 'object') return [];
   const record = value as Record<string, unknown>;
@@ -613,9 +776,25 @@ function outputLogsFrom(value: unknown): string[] {
   return out;
 }
 
+function compactRunLogs(logs: string[], errorMessage?: string): string[] {
+  const important = logs.filter((line) => /error|failed|exception|warn|retry|skip|decision|status|grant|reward|outbox|event|idempotency/i.test(line));
+  const rows = [...(errorMessage ? [`error ${errorMessage}`] : []), ...(important.length ? important : logs.slice(0, 3))];
+  return rows.slice(0, 6);
+}
+
+function logClassName(line: string): string {
+  if (/error|failed|exception/i.test(line)) return 'log-error';
+  if (/warn|retry|skip/i.test(line)) return 'log-warn';
+  return 'log-info';
+}
+
 function NodeRunInspector({ node }: { node: ActivityNode }) {
+  const [showFullData, setShowFullData] = useState(false);
   const run = node.data.lastRun;
   const logs = outputLogsFrom(run?.output);
+  const inputKeyRows = run ? mergeRunKeyData(run.input) : [];
+  const outputKeyRows = run ? mergeRunKeyData(run.output) : [];
+  const visibleLogs = run ? compactRunLogs(logs, run.errorMessage) : [];
   return (
     <div className="node-run-inspector">
       {run ? (
@@ -625,12 +804,26 @@ function NodeRunInspector({ node }: { node: ActivityNode }) {
             <span>{run.finishedAt ? new Date(run.finishedAt).toLocaleString() : '运行中'}</span>
             <em>{run.errorMessage || `耗时 ${run.durationMs ?? 0}ms · retry ${run.retryCount ?? 0}`}</em>
           </div>
-          <JsonBlock title="节点输入 Input" value={run.input} />
-          <JsonBlock title="节点输出 Output" value={run.output} />
+          <RunKeyData title="关键输入 Input" rows={inputKeyRows} />
+          <RunKeyData title="关键输出 Output" rows={outputKeyRows} />
           <div className="node-run-log-block">
-            <span>输出日志</span>
-            {logs.length ? logs.map((line, index) => <code className={/error|failed|exception/i.test(line) ? 'log-error' : /warn|retry|skip/i.test(line) ? 'log-warn' : 'log-info'} key={`${index}-${line.slice(0, 16)}`}>{line}</code>) : <em>当前节点输出里没有 logs / audit / trace 字段。</em>}
+            <span>关键日志</span>
+            {visibleLogs.length ? visibleLogs.map((line, index) => <code className={logClassName(line)} key={`${index}-${line.slice(0, 16)}`}>{line}</code>) : <em>当前节点输出里没有关键日志。</em>}
           </div>
+          <label className="node-run-full-toggle">
+            <span>显示完整输入 / 输出 / 日志</span>
+            <input type="checkbox" checked={showFullData} onChange={(event) => setShowFullData(event.target.checked)} />
+          </label>
+          {showFullData ? (
+            <div className="node-run-full-data">
+              <JsonBlock title="完整节点输入 Input" value={run.input} />
+              <JsonBlock title="完整节点输出 Output" value={run.output} />
+              <div className="node-run-log-block">
+                <span>完整输出日志</span>
+                {logs.length ? logs.map((line, index) => <code className={logClassName(line)} key={`${index}-${line.slice(0, 16)}`}>{line}</code>) : <em>当前节点输出里没有 logs / audit / trace 字段。</em>}
+              </div>
+            </div>
+          ) : null}
         </>
       ) : (
         <div className="run-summary empty">
@@ -888,23 +1081,24 @@ export function PropertyPanel({ nodes, edges, selectedNodeIds, selectedEdgeIds, 
       ) : null}
       {selectedNode && activeTab === 'settings' ? (
         <div className="property-body">
-          <PropertyDisclosure title="节点信息" summary={selectedNode.data.code}>
-            <div className="property-title-row">
-              <NodeKindIcon node={selectedNode.data} className="palette-dot" />
+          <PropertyDisclosure
+            title="节点信息"
+            titleMeta={`x ${Math.round(selectedNode.position.x)} / y ${Math.round(selectedNode.position.y)}`}
+            summary={`${selectedNode.data.code} · ${selectedNode.data.kind}`}
+            compact
+          >
+            <div className="property-node-compact">
               <div>
                 <h2>{selectedNode.data.title}</h2>
-                <p>{selectedNode.data.code}</p>
+                <p>{selectedNode.data.code} · {selectedNode.data.kind}</p>
               </div>
+              <p title={selectedNode.data.desc}>{selectedNode.data.desc}</p>
             </div>
-            <dl className="property-meta-list">
-              <div><dt>节点 ID</dt><dd>{selectedNode.id}</dd></div>
-              <div><dt>节点类型</dt><dd>{selectedNode.data.kind}</dd></div>
-              <div><dt>位置</dt><dd>x {Math.round(selectedNode.position.x)} / y {Math.round(selectedNode.position.y)}</dd></div>
-            </dl>
           </PropertyDisclosure>
-          <PropertyDisclosure title="说明">
-            <p>{selectedNode.data.desc}</p>
+          <PropertyDisclosure title="配置参数" summary={selectedNodeSchema ? `v${selectedNodeSchema.version}` : '未找到 schema'}>
+            <NodeConfigForm node={selectedNode} schema={selectedNodeSchema} onNodeConfigChange={onNodeConfigChange} />
           </PropertyDisclosure>
+          <LuaScriptEditor node={selectedNode} onNodeConfigChange={onNodeConfigChange} />
           <InputMappingEditor node={selectedNode} schema={selectedNodeSchema} nodes={nodes} edges={edges} schemas={nodeConfigSchemas} onNodeConfigChange={onNodeConfigChange} onLocateNode={onLocateNode} />
           {selectedNodeSchema ? <NodeConfigPreview schema={selectedNodeSchema} /> : null}
           <PropertyList title="输出变量" items={(selectedNodeSchema?.outputs ?? []).map((output) => output.key)} />
@@ -917,10 +1111,6 @@ export function PropertyPanel({ nodes, edges, selectedNodeIds, selectedEdgeIds, 
               </div>
             </div>
           </PropertyDisclosure>
-          <PropertyDisclosure title="配置参数" summary={selectedNodeSchema ? `v${selectedNodeSchema.version}` : '未找到 schema'}>
-            <NodeConfigForm node={selectedNode} schema={selectedNodeSchema} onNodeConfigChange={onNodeConfigChange} />
-          </PropertyDisclosure>
-          <LuaScriptEditor node={selectedNode} onNodeConfigChange={onNodeConfigChange} />
           <PropertyDisclosure title="失败时重试" summary={selectedNode.data.kind === 'reliable' || selectedNode.data.kind === 'dispatch' ? '启用' : '关闭'}>
             <label className="switch-row">
               <span>启用重试</span>
@@ -944,7 +1134,7 @@ export function PropertyPanel({ nodes, edges, selectedNodeIds, selectedEdgeIds, 
             <NodeRunInspector node={selectedNode} />
           </PropertyDisclosure>
           <PropertyDisclosure title="节点配置快照" summary={selectedNode.data.id}>
-            <JsonBlock title="config" value={selectedNode.data.config ?? {}} />
+            <CompactJsonViewer title="config" value={selectedNode.data.config ?? {}} />
           </PropertyDisclosure>
           <PropertyDisclosure title="流程上下文说明" summary="ctx">
             <div className="lua-context-help">

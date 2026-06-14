@@ -57,6 +57,7 @@ type Repository interface {
 	FindEnabledFactProvider(ctx context.Context, tenantID string, factCode string) (FactProvider, error)
 
 	CreateInbox(ctx context.Context, inbox EventInbox) (EventInbox, bool, error)
+	GetInboxByEvent(ctx context.Context, tenantID string, eventID string) (EventInbox, error)
 	UpdateInbox(ctx context.Context, inbox EventInbox) error
 
 	CreateParticipation(ctx context.Context, participation Participation) (Participation, error)

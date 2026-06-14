@@ -2781,8 +2781,8 @@ func TestActivityEventDuplicateAndConflict(t *testing.T) {
 		}
 	}`
 	second := postRawEvent(t, handler, reordered, "site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:pay_duplicate")
-	if second.Code != http.StatusOK || !strings.Contains(second.Body.String(), `"duplicate":true`) {
-		t.Fatalf("expected duplicate 200 response, got %d: %s", second.Code, second.Body.String())
+	if second.Code != http.StatusConflict || !strings.Contains(second.Body.String(), `"duplicate":true`) || !strings.Contains(second.Body.String(), `"code":"DUPLICATE_EVENT"`) {
+		t.Fatalf("expected duplicate 409 response, got %d: %s", second.Code, second.Body.String())
 	}
 	if strings.Contains(second.Body.String(), `"grantOrders":[{`) || strings.Contains(second.Body.String(), `"outboxMessages":[{`) {
 		t.Fatalf("expected duplicate response without new grant/outbox, got: %s", second.Body.String())
@@ -2795,6 +2795,15 @@ func TestActivityEventDuplicateAndConflict(t *testing.T) {
 	}
 	if !strings.Contains(conflictRec.Body.String(), `"code":"INVALID_IDEMPOTENCY_KEY"`) {
 		t.Fatalf("expected idempotency conflict code, got: %s", conflictRec.Body.String())
+	}
+
+	sameEventIDChangedBiz := depositEventJSON("evt_duplicate", "pay_duplicate_changed", `"amount":388.00,"currency":"CNY","vipLevel":5,"isFirstDeposit":false`)
+	sameEventIDChangedBizRec := postRawEvent(t, handler, sameEventIDChangedBiz, "site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:pay_duplicate_changed")
+	if sameEventIDChangedBizRec.Code != http.StatusConflict || !strings.Contains(sameEventIDChangedBizRec.Body.String(), `"duplicate":true`) || !strings.Contains(sameEventIDChangedBizRec.Body.String(), `"code":"DUPLICATE_EVENT"`) {
+		t.Fatalf("expected same eventId duplicate 409 response, got %d: %s", sameEventIDChangedBizRec.Code, sameEventIDChangedBizRec.Body.String())
+	}
+	if strings.Contains(sameEventIDChangedBizRec.Body.String(), `"grantOrders":[{`) || strings.Contains(sameEventIDChangedBizRec.Body.String(), `"outboxMessages":[{`) {
+		t.Fatalf("expected same eventId duplicate response without new grant/outbox, got: %s", sameEventIDChangedBizRec.Body.String())
 	}
 }
 

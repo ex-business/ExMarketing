@@ -734,6 +734,15 @@ func (r *Repository) FindEnabledFactProvider(ctx context.Context, tenantID strin
 
 func (r *Repository) CreateInbox(ctx context.Context, inbox marketing.EventInbox) (marketing.EventInbox, bool, error) {
 	inbox.Event = inbox.Event.Normalized()
+	existing, err := r.inboxByEventIdentity(ctx, inbox.Event.TenantID, inbox.Event.EventID)
+	if err == nil {
+		existing.ProcessStatus = marketing.InboxDuplicate
+		return existing, true, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return marketing.EventInbox{}, false, err
+	}
+
 	payload, err := json.Marshal(inbox.Event)
 	if err != nil {
 		return marketing.EventInbox{}, false, err
@@ -750,7 +759,7 @@ func (r *Repository) CreateInbox(ctx context.Context, inbox marketing.EventInbox
 			$8, $9, $10, $11, $12, $13,
 			$14, $15, $16
 		)
-		ON CONFLICT (idempotency_key) DO NOTHING
+		ON CONFLICT DO NOTHING
 		RETURNING id
 	`, inbox.ID, inbox.Event.TenantID, inbox.Event.EventID, inbox.Event.EventType, inbox.Event.SourceSystem,
 		inbox.Event.Subject.Type, inbox.Event.Subject.ID, inbox.Event.Biz.BizType, inbox.Event.Biz.BizID,
@@ -763,7 +772,15 @@ func (r *Repository) CreateInbox(ctx context.Context, inbox marketing.EventInbox
 		return marketing.EventInbox{}, false, err
 	}
 
-	existing, err := r.inboxByIdempotency(ctx, inbox.IdempotencyKey)
+	existing, err = r.inboxByEventIdentity(ctx, inbox.Event.TenantID, inbox.Event.EventID)
+	if err == nil {
+		existing.ProcessStatus = marketing.InboxDuplicate
+		return existing, true, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return marketing.EventInbox{}, false, err
+	}
+	existing, err = r.inboxByIdempotency(ctx, inbox.IdempotencyKey)
 	if err != nil {
 		return marketing.EventInbox{}, false, err
 	}
@@ -772,6 +789,14 @@ func (r *Repository) CreateInbox(ctx context.Context, inbox marketing.EventInbox
 	}
 	existing.ProcessStatus = marketing.InboxDuplicate
 	return existing, true, nil
+}
+
+func (r *Repository) GetInboxByEvent(ctx context.Context, tenantID string, eventID string) (marketing.EventInbox, error) {
+	inbox, err := r.inboxByEventIdentity(ctx, strings.TrimSpace(tenantID), strings.TrimSpace(eventID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return marketing.EventInbox{}, marketing.ErrNotFound
+	}
+	return inbox, err
 }
 
 func (r *Repository) UpdateInbox(ctx context.Context, inbox marketing.EventInbox) error {
@@ -2294,6 +2319,26 @@ func (r *Repository) inboxByIdempotency(ctx context.Context, key string) (market
 		FROM marketing_event_inbox
 		WHERE idempotency_key = $1
 	`, key).Scan(&inbox.ID, &payload, &inbox.IdempotencyKey, &inbox.ProcessStatus, &inbox.ErrorMessage, &inbox.CreatedAt, &inbox.UpdatedAt)
+	if err != nil {
+		return marketing.EventInbox{}, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(payload))
+	decoder.UseNumber()
+	if err := decoder.Decode(&inbox.Event); err != nil {
+		return marketing.EventInbox{}, err
+	}
+	inbox.Event = inbox.Event.Normalized()
+	return inbox, nil
+}
+
+func (r *Repository) inboxByEventIdentity(ctx context.Context, tenantID string, eventID string) (marketing.EventInbox, error) {
+	var inbox marketing.EventInbox
+	var payload []byte
+	err := r.db.QueryRowContext(ctx, `
+		SELECT id, payload_json, idempotency_key, process_status, COALESCE(error_message, ''), created_at, updated_at
+		FROM marketing_event_inbox
+		WHERE tenant_id = $1 AND event_id = $2
+	`, tenantID, eventID).Scan(&inbox.ID, &payload, &inbox.IdempotencyKey, &inbox.ProcessStatus, &inbox.ErrorMessage, &inbox.CreatedAt, &inbox.UpdatedAt)
 	if err != nil {
 		return marketing.EventInbox{}, err
 	}

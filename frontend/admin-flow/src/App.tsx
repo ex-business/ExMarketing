@@ -827,12 +827,13 @@ function openApiDebugSummary(response: unknown, idempotencyKey: string): DebugRu
     `event ${String(event.eventId ?? body.eventId ?? '-')}`,
     `idempotency ${idempotencyKey}`,
     `duplicate ${duplicate}`,
+    ...(duplicate ? ['rejected duplicate eventId'] : []),
     `participations=${participations.length} grants=${grantOrders.length} outbox=${outboxMessages.length}`,
   ];
   return {
     mode: 'OPENAPI_EVENT',
-    status: duplicate ? 'DUPLICATE' : 'ACCEPTED',
-    title: 'OpenAPI 真实调用结果',
+    status: duplicate ? 'REJECTED' : 'ACCEPTED',
+    title: duplicate ? 'OpenAPI 拦截结果' : 'OpenAPI 真实调用结果',
     eventId: String(event.eventId ?? body.eventId ?? ''),
     idempotencyKey,
     duplicate,
@@ -846,7 +847,7 @@ function openApiDebugSummary(response: unknown, idempotencyKey: string): DebugRu
 
 function debugResultTone(status: string): string {
   if (['SUCCESS', 'ACCEPTED'].includes(status)) return 'success';
-  if (['FAILED', 'ERROR'].includes(status)) return 'failed';
+  if (['FAILED', 'ERROR', 'REJECTED'].includes(status)) return 'failed';
   if (status === 'DUPLICATE') return 'skipped';
   return 'running';
 }
@@ -937,53 +938,73 @@ function DebugRunPanel({
       <header>
         <div>
           <b>调试运行</b>
-          <span>DEBUG_DRAFT · 不影响生产 execution</span>
+          <span>默认 Draft 沙箱运行，OpenAPI 会写真实业务数据</span>
         </div>
         <button onClick={onClose}>×</button>
       </header>
       <section>
-        <label>
-          <span>Payload 模板</span>
-          <select value={state.template} onChange={(event) => onChange({ template: event.target.value })}>
-            <option value="deposit_success">Deposit Success</option>
-            <option value="callback_success">Callback Success</option>
-            <option value="risk_event">Risk Event</option>
-          </select>
-        </label>
-        <label>
-          <span>已保存模板</span>
-          <select value="" onChange={(event) => event.target.value && onLoadTemplate(event.target.value)}>
-            <option value="">选择本地模板</option>
-            {templates.map((template) => (
-              <option key={template.id} value={template.id}>{template.name}</option>
-            ))}
-          </select>
-        </label>
-        <label>
-          <span>测试 Payload JSON</span>
-          <textarea
-            value={state.payloadText}
-            spellCheck={false}
-            placeholder="为空时使用模板 payload"
-            onChange={(event) => onChange({ payloadText: event.target.value })}
-          />
-        </label>
-        <div className="debug-inline-actions">
-          <button type="button" onClick={onSaveTemplate} disabled={!state.payloadText.trim()}>保存为模板</button>
-          <button type="button" onClick={onUseSelectedExecutionPayload} disabled={!selectedExecutionId}>使用选中 execution payload</button>
-        </div>
-        <div className="debug-callout real">
-          <b>主动调用接口</b>
-          <span>调用 `/openapi/v1/events`，会写入真实 inbox、participation、grant order 和 outbox。</span>
-          <button type="button" onClick={onRunOpenApi} disabled={state.openApiLoading || state.loading || !state.payloadText.trim()}>
-            {state.openApiLoading ? '调用中' : '调用 OpenAPI'}
-          </button>
-        </div>
-        <div className="debug-schedule-box">
-          <div>
-            <b>定时模拟参数</b>
-            <span>生成一个 scheduler 事件，可直接用于 Draft 调试或再改成业务定时事件。</span>
+        <div className="debug-mode-cards">
+          <div className="active">
+            <b>Draft 沙箱</b>
+            <span>写 debug execution，不写真实 inbox。</span>
           </div>
+          <div>
+            <b>OpenAPI 真实调用</b>
+            <span>写 inbox、participation、grant order、outbox。</span>
+          </div>
+        </div>
+        <div className="debug-payload-card">
+          <div className="debug-field-grid">
+            <label>
+              <span>Payload 模板</span>
+              <select value={state.template} onChange={(event) => onChange({ template: event.target.value })}>
+                <option value="deposit_success">Deposit Success</option>
+                <option value="callback_success">Callback Success</option>
+                <option value="risk_event">Risk Event</option>
+              </select>
+            </label>
+            <label>
+              <span>已保存模板</span>
+              <select value="" onChange={(event) => event.target.value && onLoadTemplate(event.target.value)}>
+                <option value="">选择本地模板</option>
+                {templates.map((template) => (
+                  <option key={template.id} value={template.id}>{template.name}</option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <label>
+            <span>测试 Payload JSON</span>
+            <textarea
+              value={state.payloadText}
+              spellCheck={false}
+              placeholder="为空时使用模板 payload"
+              onChange={(event) => onChange({ payloadText: event.target.value })}
+            />
+          </label>
+          <div className="debug-inline-actions">
+            <button type="button" onClick={onSaveTemplate} disabled={!state.payloadText.trim()}>保存为模板</button>
+            <button type="button" onClick={onUseSelectedExecutionPayload} disabled={!selectedExecutionId}>使用选中 execution payload</button>
+          </div>
+        </div>
+        <details className="debug-disclosure">
+          <summary>
+            <span>主动调用 OpenAPI</span>
+            <em>真实写入</em>
+          </summary>
+          <div className="debug-callout real">
+            <span>调用 `/openapi/v1/events`，会写入真实 inbox、participation、grant order 和 outbox。</span>
+            <button type="button" onClick={onRunOpenApi} disabled={state.openApiLoading || state.loading || !state.payloadText.trim()}>
+              {state.openApiLoading ? '调用中' : '调用 OpenAPI'}
+            </button>
+          </div>
+        </details>
+        <details className="debug-disclosure">
+          <summary>
+            <span>定时模拟参数</span>
+            <em>生成 scheduler payload</em>
+          </summary>
+          <div className="debug-schedule-box">
           <label>
             <span>事件类型</span>
             <input value={state.scheduleType} placeholder="SCHEDULE_TICK" onChange={(event) => onChange({ scheduleType: event.target.value })} />
@@ -1000,14 +1021,14 @@ function DebugRunPanel({
             <button type="button" onClick={onBuildSchedulePayload}>生成定时 Payload</button>
             <button type="button" onClick={onRunScheduleDraft} disabled={state.loading}>模拟定时跑 Draft</button>
           </div>
-        </div>
-        <label>
-          <span>从节点继续跑</span>
-          <input value={state.startNodeId} placeholder={selectedNodeId || '可选：node id'} onChange={(event) => onChange({ startNodeId: event.target.value })} />
-        </label>
-        <div className="debug-mode-note">
-          <b>DEBUG_DRAFT</b>
-          <span>写入独立 debug execution；从节点继续跑时会复用选中 execution 的上游成功节点输出。</span>
+          </div>
+        </details>
+        <div className="debug-resume-card">
+          <label>
+            <span>从节点继续跑</span>
+            <input value={state.startNodeId} placeholder={selectedNodeId || '可选：node id'} onChange={(event) => onChange({ startNodeId: event.target.value })} />
+          </label>
+          <span>复用选中 execution 的上游成功节点输出。</span>
         </div>
         <DebugRunResult result={state.lastResult} />
       </section>
@@ -2525,12 +2546,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 class APIError extends Error {
   status: number;
   statusText: string;
+  body?: Record<string, unknown>;
 
-  constructor(message: string, status: number, statusText: string) {
+  constructor(message: string, status: number, statusText: string, body?: Record<string, unknown>) {
     super(message);
     this.name = 'APIError';
     this.status = status;
     this.statusText = statusText;
+    this.body = body;
   }
 }
 
@@ -2586,7 +2609,7 @@ async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
   }
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
-    throw new APIError(body.error ?? body.message ?? `${response.status} ${response.statusText}`, response.status, response.statusText);
+    throw new APIError(body.error ?? body.message ?? `${response.status} ${response.statusText}`, response.status, response.statusText, isRecord(body) ? body : undefined);
   }
   return response.json() as Promise<T>;
 }
@@ -6357,6 +6380,16 @@ export function App() {
       setDebugPanel((state) => ({ ...state, openApiLoading: false, message: `OpenAPI 已接收：${idempotencyKey}`, lastResult: openApiDebugSummary(response, idempotencyKey) }));
       await loadRunHistory('', '', 0);
     } catch (error) {
+      if (isAPIError(error) && error.body && error.body.duplicate === true) {
+        setDebugPanel((state) => ({
+          ...state,
+          openApiLoading: false,
+          message: `OpenAPI 已拦截重复事件：${idempotencyKey}`,
+          lastResult: openApiDebugSummary(error.body, idempotencyKey),
+        }));
+        setWorkflowStatus('OpenAPI 已拦截重复事件');
+        return;
+      }
       setDebugPanel((state) => ({ ...state, openApiLoading: false, message: `OpenAPI 调用失败：${(error as Error).message}`, lastResult: {
         mode: 'OPENAPI_EVENT',
         status: 'FAILED',
@@ -6679,7 +6712,7 @@ export function App() {
           onArchiveVersion={archiveWorkflowVersion}
           onRightPanelResizeStart={beginRightPanelResize}
         />
-        <section className={cx('canvas-card', !activityId && 'studio-home-card')}>
+        <section className={cx('canvas-card', !activityId && 'studio-home-card', interactionMode === 'hand' && 'hand-mode')}>
           <ReactFlowProvider>
             {activityId ? (
               <>
@@ -6731,9 +6764,10 @@ export function App() {
               maxZoom={1.6}
               panOnScroll
               panOnDrag={interactionMode === 'hand'}
-              nodesDraggable={canEditActiveWorkflow}
-              nodesConnectable={canEditActiveWorkflow}
-              edgesReconnectable={canEditActiveWorkflow}
+              nodesDraggable={canEditActiveWorkflow && interactionMode === 'pointer'}
+              nodesConnectable={canEditActiveWorkflow && interactionMode === 'pointer'}
+              edgesReconnectable={canEditActiveWorkflow && interactionMode === 'pointer'}
+              elementsSelectable
               selectionOnDrag={canEditActiveWorkflow && interactionMode === 'pointer'}
             >
               <Background color="#e7edf5" gap={16} size={1} />
@@ -6771,14 +6805,20 @@ export function App() {
             {alignmentGuide.horizontal ? (
               <div className={cx('align-guide horizontal', alignmentGuide.horizontal.kind)} style={{ top: alignmentGuide.horizontal.screen, left: alignmentGuide.horizontal.start, width: alignmentGuide.horizontal.end - alignmentGuide.horizontal.start }} />
             ) : null}
-            {contextMenu ? (
+	            {contextMenu && !nodePicker ? (
               <ContextMenu
                 menu={contextMenu}
-                onOpenPicker={() => {
-                  if (contextMenu.type !== 'pane') return;
-                  setNodeSearch('');
-                  setNodePicker({ x: contextMenu.x + 160, y: contextMenu.y - 8, flowX: contextMenu.flowX, flowY: contextMenu.flowY });
-                }}
+	                onOpenPicker={() => {
+	                  if (contextMenu.type !== 'pane') return;
+	                  setNodeSearch('');
+	                  setContextMenu(null);
+	                  setNodePicker({
+	                    x: Math.max(12, Math.min(contextMenu.x + 220, window.innerWidth - 340)),
+	                    y: Math.max(12, Math.min(contextMenu.y - 8, window.innerHeight - 430)),
+	                    flowX: contextMenu.flowX,
+	                    flowY: contextMenu.flowY,
+	                  });
+	                }}
                 onAddNote={addNoteAt}
                 onPreview={() => setLastAdded('Preview')}
                 onExport={() => setLastAdded('Export DSL')}

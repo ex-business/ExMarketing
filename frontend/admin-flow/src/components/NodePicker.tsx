@@ -12,6 +12,7 @@ type Props = {
 const CATEGORY_HINTS: Record<string, string> = {
   'EVENT_INPUT 事件输入': 'HTTP、Webhook、MQ、定时和人工触发',
   'CORE 核心链路': '生产编排主链路',
+  'FACT_QUERY 事实查询': '上下文、缓存、HTTP、Redis、gRPC 和插件查询',
   'ADVANCED 高级集成': '外部系统与扩展动作',
   'OPS 运维节点': '重试、审计、对账和告警',
 };

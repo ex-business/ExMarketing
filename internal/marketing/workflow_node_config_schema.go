@@ -91,9 +91,15 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 	schemas := []WorkflowNodeConfigSchema{
 		groupedSchema("event-in", "标准事件入口", "接收已标准化事件，校验 eventType、sourceSystem、tenant 后进入流程。", groups(
 			fieldGroup("event-source", "事件来源", "限定哪些业务事件可以触发这个 workflow。", fields(
-				withDefault(arrayField("eventTypes", "允许事件类型", true, "例如 DEPOSIT_SUCCESS、PAY_SUCCESS、ORDER_PAID、USER_REGISTERED。为空会阻止发布。", rules(minItems(1), maxItems(30))), []string{"DEPOSIT_SUCCESS", "PAY_SUCCESS"}),
+				withOptions(withDefault(arrayField("eventTypes", "允许事件类型", true, "从标准事件类型中选择。为空会阻止发布。", rules(minItems(1), maxItems(30))), []string{"DEPOSIT_SUCCESS", "PAY_SUCCESS"}), standardEventTypeOptions()),
+				enumField("eventTypeMatchMode", "事件满足方式", true, "ANY", []string{"ANY", "ALL"}),
 				withDefault(arrayField("sourceSystems", "来源系统", true, "允许接入的系统编码，例如 payment、trade、crm。", rules(minItems(1), maxItems(20))), []string{"payment"}),
 				enumField("tenantScope", "租户范围", true, "CURRENT_TENANT", []string{"CURRENT_TENANT", "WORKSPACE_TENANT", "ANY_TENANT"}),
+			)),
+			fieldGroup("multi-event", "多事件聚合", "当事件满足方式为 ALL 时，用于描述多事件关联和等待窗口。", fields(
+				withDescription(stringField("correlationKeyTemplate", "关联 Key", false, "${tenantId}:${subject.id}:${activityId}", rules(maxLength(160))), "例如同一用户同一活动下，签到和存款都发生后才继续。"),
+				numberField("correlationWindowSeconds", "等待窗口秒数", false, 86400, rules(minValue(1), maxValue(2592000))),
+				enumField("allEventsAction", "未满足动作", true, "WAIT", []string{"WAIT", "SKIP", "BLOCK"}),
 			)),
 			fieldGroup("payload-contract", "载荷契约", "控制事件载荷版本、未知事件和 trace 字段。", fields(
 				withDescription(stringField("payloadSchemaVersion", "Payload Schema", true, "standard-v1", rules(minLength(3), maxLength(64))), "后端用于解析 raw_event 的版本号。"),
@@ -230,6 +236,7 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 			fieldGroup("strategy", "匹配策略", "控制匹配数量、优先级和活动状态约束。", fields(
 				enumField("mode", "匹配模式", true, "FIRST_MATCH", []string{"FIRST_MATCH", "ALL_MATCHES", "PRIORITY_MATCH"}),
 				booleanField("requireActiveActivity", "仅匹配已上线活动", false, true),
+				booleanField("requireApprovedActivity", "要求审批通过", false, false),
 				enumField("priorityOrder", "优先级排序", false, "PRIORITY_DESC", []string{"PRIORITY_DESC", "CREATED_DESC", "UPDATED_DESC"}),
 			)),
 			fieldGroup("scope", "范围和失败处理", "限定租户和匹配失败时的下游行为。", fields(
@@ -290,11 +297,27 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 			[]string{"PASS", "BLOCK", "SKIP"},
 			[]string{"画布 route label 应与 cases/defaultCase 保持一致，Executor 按 route rule 决定下一节点。"},
 		)),
-		groupedSchema("fact-query", "事实查询", "查询用户、订单、交易或外部事实数据。", groups(
+		groupedSchema("fact-query", "事实查询", "查询用户、订单、交易或外部事实数据；可作为大节点按 providerChain 组合多种查询方式。", groups(
 			fieldGroup("query", "查询定义", "定义要查询的事实 key 和查询范围。", fields(
 				withDefault(arrayField("factKeys", "事实 Key", true, "需要查询的事实字段，例如 USER_PROFILE、ORDER_SUMMARY。", rules(minItems(1), maxItems(50))), []string{"USER_PROFILE"}),
-				enumField("source", "数据来源", true, "FACT_SERVICE", []string{"FACT_SERVICE", "WAREHOUSE", "CACHE", "HTTP_PROVIDER"}),
+				enumField("source", "数据来源", true, "FACT_SERVICE", []string{"FACT_SERVICE", "HTTP_PROVIDER", "WORKFLOW_CONTEXT", "LOCAL_CACHE", "REDIS", "GRPC", "PLUGIN", "CUSTOM", "LUA_QUERY"}),
+				withDefault(arrayField("providerChain", "Provider Chain", false, "按顺序尝试的查询来源，例如 WORKFLOW_CONTEXT、LOCAL_CACHE、HTTP_PROVIDER。", rules(maxItems(10))), []string{}),
 				withDescription(stringField("subjectPath", "主体 Path", true, "subject.id", rules(minLength(1), maxLength(160))), "从输入中读取 userId、orderId 或业务主体 ID 的路径。"),
+			)),
+			fieldGroup("context", "上下文和缓存", "当 providerChain 包含 WORKFLOW_CONTEXT 或 LOCAL_CACHE 时使用。", fields(
+				withDescription(stringField("sourcePath", "上下文 Path", false, "$.attributes.USER_PROFILE", rules(maxLength(200))), "从 event/input/outputs/vars/facts 中读取事实。"),
+				withDescription(stringField("cachePath", "本地缓存 Path", false, "$.vars.execution.facts.USER_PROFILE", rules(maxLength(200))), "读取 workflow 变量中的事实缓存。"),
+			)),
+			fieldGroup("provider-target", "Provider 目标", "当 source 或 providerChain 使用 HTTP、Redis、gRPC、Plugin、Custom 时描述查询目标。", fields(
+				withDescription(stringField("providerCode", "Provider Code", false, "", rules(maxLength(128))), "可选：引用营销域已登记的 fact provider；为空时按节点内配置执行。"),
+				withDescription(stringField("endpoint", "HTTP Endpoint", false, "", rules(maxLength(2048))), "HTTP_PROVIDER 使用的完整 URL，例如 https://user-service/internal/facts/user-profile。"),
+				enumField("method", "HTTP Method", false, "POST", []string{"GET", "POST"}),
+				withDescription(stringField("authRef", "Auth Ref", false, "", rules(maxLength(128))), "HTTP 鉴权配置引用，不在节点里保存密钥。"),
+				objectField("mapping", "响应映射", false, nil),
+				withDescription(stringField("redisRef", "Redis Ref", false, "", rules(maxLength(128))), "REDIS 使用的连接引用，例如 marketing-fact-cache。"),
+				withDescription(stringField("keyTemplate", "Redis Key 模板", false, "marketing:fact:${tenantId}:USER_PROFILE:${subject.id}", rules(maxLength(256))), "REDIS 查询的 key 模板。"),
+				withDescription(stringField("grpcTarget", "gRPC Target", false, "", rules(maxLength(256))), "GRPC 使用的服务地址或服务发现名。"),
+				withDescription(stringField("pluginCode", "Plugin Code", false, "", rules(maxLength(128))), "PLUGIN 使用的插件编码。"),
 			)),
 			fieldGroup("runtime", "运行策略", "控制查询超时、缓存和失败时的行为。", fields(
 				numberField("timeoutSeconds", "超时秒数", true, 3, rules(minValue(1), maxValue(30))),
@@ -305,6 +328,140 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 			[]string{"subject", "fact_keys", "外部事实源"},
 			[]string{"facts"},
 			[]string{"facts 可供 condition、qualify、reward 等下游节点引用。"},
+		)),
+		groupedSchema("context-query", "上下文查询", "从当前事件、输入映射、上游输出或流程变量读取事实。", groups(
+			fieldGroup("query", "查询定义", "定义事实 key 和上下文路径。", fields(
+				withDefault(arrayField("factKeys", "事实 Key", true, "需要读取的事实 key。", rules(minItems(1), maxItems(50))), []string{"USER_PROFILE"}),
+				withDescription(stringField("sourcePath", "上下文 Path", false, "$.attributes.USER_PROFILE", rules(maxLength(200))), "可读取 $.event、$.attributes、$.subject、$.input、$.outputs、$.vars、$.facts。"),
+			)),
+			fieldGroup("runtime", "运行策略", "控制缺失时的行为。", fields(
+				enumField("failureAction", "缺失动作", true, "BLOCK", []string{"BLOCK", "USE_EMPTY", "SKIP"}),
+			)),
+		), preview(
+			[]string{"event", "input", "outputs", "vars"},
+			[]string{"facts"},
+			[]string{"适合事件 payload 已经携带 VIP、渠道、标签等轻量事实。"},
+		)),
+		groupedSchema("local-cache-query", "本地缓存查询", "读取 ExMarketing 工作流变量或营销事实缓存。", groups(
+			fieldGroup("query", "查询定义", "定义事实 key 和缓存路径。", fields(
+				withDefault(arrayField("factKeys", "事实 Key", true, "需要读取的事实 key。", rules(minItems(1), maxItems(50))), []string{"USER_PROFILE"}),
+				withDescription(stringField("cachePath", "缓存 Path", false, "$.vars.execution.facts.USER_PROFILE", rules(maxLength(200))), "读取 workflow 变量缓存；不是业务私有 Redis key。"),
+			)),
+			fieldGroup("runtime", "运行策略", "控制缺失时的行为。", fields(
+				enumField("failureAction", "缺失动作", true, "BLOCK", []string{"BLOCK", "USE_EMPTY", "SKIP"}),
+				numberField("cacheTtlSeconds", "缓存秒数", false, 60, rules(minValue(0), maxValue(86400))),
+			)),
+		), preview(
+			[]string{"vars.execution.facts", "vars.facts"},
+			[]string{"facts"},
+			[]string{"适合读取营销域自己维护的稳定事实缓存。"},
+		)),
+		groupedSchema("http-query", "HTTP 查询", "通过 HTTP Fact Provider 查询用户中心、钱包、风控等事实。", groups(
+			fieldGroup("query", "查询定义", "定义事实 key 和主体。", fields(
+				withDefault(arrayField("factKeys", "事实 Key", true, "需要查询的事实 key。", rules(minItems(1), maxItems(50))), []string{"USER_PROFILE"}),
+				withDescription(stringField("subjectPath", "主体 Path", true, "subject.id", rules(minLength(1), maxLength(160))), "传给 Fact Provider 的业务主体。"),
+			)),
+			fieldGroup("provider", "HTTP Provider", "定义 HTTP 查询目标和响应到 facts 的映射。", fields(
+				withDescription(stringField("providerCode", "Provider Code", false, "", rules(maxLength(128))), "可选：引用 marketing_fact_provider；为空时使用节点内 endpoint。"),
+				withDescription(stringField("endpoint", "Endpoint", false, "", rules(pattern(`^https?://`, "Endpoint 必须以 http:// 或 https:// 开头。"), maxLength(2048))), "用户中心、钱包或风控服务的事实查询 URL。"),
+				enumField("method", "Method", false, "POST", []string{"GET", "POST"}),
+				withDescription(stringField("authRef", "Auth Ref", false, "", rules(maxLength(128))), "鉴权引用，不直接保存 token。"),
+				objectField("mapping", "响应映射", false, nil),
+			)),
+			fieldGroup("runtime", "运行策略", "控制 HTTP provider 超时和失败策略。", fields(
+				numberField("timeoutSeconds", "超时秒数", true, 3, rules(minValue(1), maxValue(30))),
+				numberField("cacheTtlSeconds", "缓存秒数", false, 60, rules(minValue(0), maxValue(86400))),
+				enumField("failureAction", "失败动作", true, "BLOCK", []string{"BLOCK", "USE_EMPTY", "SKIP"}),
+			)),
+		), preview(
+			[]string{"subject", "factKeys", "marketing_fact_provider"},
+			[]string{"facts"},
+			[]string{"真实调用 /openapi/v1/facts/query 或已配置的 HTTP Fact Provider。"},
+		)),
+		groupedSchema("redis-query", "Redis 查询", "读取稳定契约的营销事实 Redis 缓存；当前需要 Redis adapter。", groups(
+			fieldGroup("query", "查询定义", "定义事实 key 和 Redis key 模板。", fields(
+				withDefault(arrayField("factKeys", "事实 Key", true, "需要查询的事实 key。", rules(minItems(1), maxItems(50))), []string{"USER_PROFILE"}),
+				withDescription(stringField("redisRef", "Redis Ref", true, "marketing-fact-cache", rules(minLength(1), maxLength(128))), "Redis 连接引用，由后端配置管理。"),
+				withDescription(stringField("keyTemplate", "Key 模板", true, "marketing:fact:${tenantId}:USER_PROFILE:${subject.id}", rules(minLength(1), maxLength(256))), "只能指向营销事实缓存，不应读取业务私有 key。"),
+				enumField("command", "Command", false, "GET", []string{"GET", "HGET", "JSON.GET"}),
+				withDescription(stringField("valuePath", "Value Path", false, "$", rules(maxLength(160))), "从 Redis value 中读取事实值的路径。"),
+				objectField("mapping", "Value 映射", false, nil),
+			)),
+			fieldGroup("runtime", "运行策略", "当前阶段不直接注册 Redis client。", fields(
+				enumField("failureAction", "失败动作", true, "SKIP", []string{"BLOCK", "USE_EMPTY", "SKIP"}),
+			)),
+		), preview(
+			[]string{"redis fact cache"},
+			[]string{"facts"},
+			[]string{"解释/计划节点；注册 RedisFactCache adapter 后可真实执行。"},
+		)),
+		groupedSchema("grpc-query", "gRPC 查询", "通过 gRPC Fact Provider 查询内部服务事实；当前需要 gRPC adapter。", groups(
+			fieldGroup("query", "查询定义", "定义服务、方法和事实 key。", fields(
+				withDefault(arrayField("factKeys", "事实 Key", true, "需要查询的事实 key。", rules(minItems(1), maxItems(50))), []string{"USER_PROFILE"}),
+				withDescription(stringField("grpcTarget", "Target", true, "dns:///user-service:9090", rules(minLength(1), maxLength(256))), "gRPC 地址或服务发现 target。"),
+				withDescription(stringField("service", "Service", true, "user.ProfileFactService", rules(minLength(1), maxLength(160))), "gRPC 服务名。"),
+				withDescription(stringField("method", "Method", true, "QueryFacts", rules(minLength(1), maxLength(80))), "gRPC 方法名。"),
+				withDescription(stringField("authority", "Authority", false, "", rules(maxLength(128))), "可选 authority / virtual host。"),
+				booleanField("tls", "启用 TLS", false, true),
+				objectField("mapping", "响应映射", false, nil),
+			)),
+			fieldGroup("runtime", "运行策略", "当前阶段不直接注册 gRPC client。", fields(
+				numberField("timeoutSeconds", "超时秒数", true, 3, rules(minValue(1), maxValue(30))),
+				enumField("failureAction", "失败动作", true, "SKIP", []string{"BLOCK", "USE_EMPTY", "SKIP"}),
+			)),
+		), preview(
+			[]string{"gRPC provider"},
+			[]string{"facts"},
+			[]string{"解释/计划节点；注册 GRPCFactProvider adapter 后可真实执行。"},
+		)),
+		groupedSchema("plugin-query", "插件查询", "通过活动插件或业务插件生成事实。", groups(
+			fieldGroup("plugin", "插件", "定义插件和动作。", fields(
+				withDefault(arrayField("factKeys", "事实 Key", true, "插件需要输出的事实 key。", rules(minItems(1), maxItems(50))), []string{"USER_PROFILE"}),
+				withDescription(stringField("pluginCode", "Plugin Code", true, "checkin", rules(minLength(1), maxLength(128))), "业务插件编码。"),
+				withDescription(stringField("action", "Action", true, "QUERY_FACTS", rules(minLength(1), maxLength(128))), "插件动作。"),
+				withDescription(stringField("inputPath", "输入 Path", false, "$", rules(maxLength(160))), "传给插件的上下文路径。"),
+				objectField("mapping", "输出映射", false, nil),
+			)),
+			fieldGroup("runtime", "运行策略", "当前阶段需要插件 adapter。", fields(
+				numberField("timeoutSeconds", "超时秒数", false, 3, rules(minValue(1), maxValue(30))),
+				enumField("failureAction", "失败动作", true, "SKIP", []string{"BLOCK", "USE_EMPTY", "SKIP"}),
+			)),
+		), preview(
+			[]string{"plugin input", "event_context"},
+			[]string{"facts"},
+			[]string{"解释/计划节点；插件注册后可真实执行。"},
+		)),
+		groupedSchema("custom-query", "自定义查询", "自定义协议或专有 SDK 的事实查询入口。", groups(
+			fieldGroup("provider", "Provider", "定义自定义 provider。", fields(
+				withDefault(arrayField("factKeys", "事实 Key", true, "需要查询的事实 key。", rules(minItems(1), maxItems(50))), []string{"USER_PROFILE"}),
+				withDescription(stringField("providerCode", "Provider Code", true, "custom-user-profile", rules(minLength(1), maxLength(128))), "自定义 provider 编码。"),
+				withDescription(stringField("protocol", "Protocol", true, "CUSTOM", rules(minLength(1), maxLength(64))), "自定义协议名。"),
+				withDescription(stringField("endpoint", "Endpoint / DSN", false, "", rules(maxLength(2048))), "自定义协议目标地址、DSN 或服务发现名。"),
+				objectField("requestTemplate", "请求模板", false, nil),
+				objectField("responseMapping", "响应映射", false, nil),
+			)),
+			fieldGroup("runtime", "运行策略", "当前阶段需要 custom adapter。", fields(
+				numberField("timeoutSeconds", "超时秒数", false, 3, rules(minValue(1), maxValue(30))),
+				enumField("failureAction", "失败动作", true, "SKIP", []string{"BLOCK", "USE_EMPTY", "SKIP"}),
+			)),
+		), preview(
+			[]string{"custom provider"},
+			[]string{"facts"},
+			[]string{"解释/计划节点；需要显式 adapter，避免任意协议直接执行。"},
+		)),
+		groupedSchema("lua-query", "Lua 查询", "用受控 Lua 从当前上下文生成 facts，不允许网络或文件访问。", groups(
+			fieldGroup("script", "脚本", "定义 Lua 脚本和输出事实。", fields(
+				withDescription(stringField("source", "Lua Source", true, "emit({facts = {USER_PROFILE = {vipLevel = input('vipLevel')}}})", rules(minLength(1), maxLength(8000))), "必须 emit facts，或配置 factCode 后 emit value。"),
+				withDescription(stringField("factCode", "Fact Code", false, "USER_PROFILE", rules(maxLength(64))), "当脚本只 emit value 时写入的事实 key。"),
+			)),
+			fieldGroup("runtime", "运行策略", "控制脚本失败行为。", fields(
+				enumField("failureAction", "失败动作", true, "BLOCK", []string{"BLOCK", "USE_EMPTY", "SKIP"}),
+				numberField("timeoutSeconds", "超时秒数", false, 2, rules(minValue(1), maxValue(10))),
+			)),
+		), preview(
+			[]string{"event", "input", "outputs", "vars"},
+			[]string{"facts"},
+			[]string{"真实执行受控 Lua；仅做上下文加工，不做网络查询。"},
 		)),
 		groupedSchema("activity-state", "活动状态", "读取或更新用户活动状态、任务进度、签到状态和插件状态。", groups(
 			fieldGroup("state-key", "状态 Key", "定义活动状态的主体、命名空间和 key。", fields(
@@ -808,14 +965,15 @@ func defaultWorkflowNodeInputs(nodeType string) []WorkflowNodeInputVar {
 	case "qualify":
 		return inputVars(
 			inputVar("event_context", "Event Context", "object", true, "事件上下文。"),
-			inputVar("matched_activity", "Matched Activity", "object", true, "活动匹配结果。"),
+			inputVar("matched_activity", "Matched Activity", "object", false, "活动匹配结果；活动绑定流程可省略，默认使用当前 activity。"),
 		)
 	case "switch":
 		return inputVars(inputVar("stage_result", "Stage Result", "object", true, "上游阶段结果。"))
-	case "fact-query":
+	case "fact-query", "context-query", "local-cache-query", "http-query", "redis-query", "grpc-query", "plugin-query", "custom-query", "lua-query":
 		return inputVars(
-			inputVar("subject", "Subject", "object", true, "业务主体。"),
+			inputVar("subject", "Subject", "object", false, "业务主体；未配置时使用事件 subject。"),
 			inputVar("fact_keys", "Fact Keys", "array", false, "需要查询的事实 key。"),
+			inputVar("facts", "Facts", "object", false, "上游已查询事实。"),
 		)
 	case "activity-state":
 		return inputVars(
@@ -825,7 +983,7 @@ func defaultWorkflowNodeInputs(nodeType string) []WorkflowNodeInputVar {
 	case "quota-check":
 		return inputVars(
 			inputVar("subject", "Subject", "object", true, "参与主体。"),
-			inputVar("activity_id", "Activity ID", "string", true, "活动 ID。"),
+			inputVar("activity_id", "Activity ID", "string", false, "活动 ID；未配置时使用当前 activity。"),
 		)
 	case "candidate-reward":
 		return inputVars(
@@ -972,7 +1130,7 @@ func defaultWorkflowNodeOutputs(nodeType string) []WorkflowNodeOutputVar {
 		)
 	case "switch":
 		return outputVars(outputVar("PASS", "PASS", "object", "通过分支。"), outputVar("BLOCK", "BLOCK", "object", "阻断分支。"), outputVar("SKIP", "SKIP", "object", "跳过分支。"))
-	case "fact-query":
+	case "fact-query", "context-query", "local-cache-query", "http-query", "redis-query", "grpc-query", "plugin-query", "custom-query", "lua-query":
 		return outputVars(outputVar("facts", "Facts", "object", "事实查询结果。"))
 	case "activity-state":
 		return outputVars(
@@ -1105,6 +1263,28 @@ func withDescription(field WorkflowNodeConfigField, description string) Workflow
 func withDefault(field WorkflowNodeConfigField, defaultValue any) WorkflowNodeConfigField {
 	field.Default = defaultValue
 	return field
+}
+
+func withOptions(field WorkflowNodeConfigField, options []string) WorkflowNodeConfigField {
+	field.Options = options
+	return field
+}
+
+func standardEventTypeOptions() []string {
+	return []string{
+		"CHECKIN_SUCCESS",
+		"DEPOSIT_SUCCESS",
+		"PAY_SUCCESS",
+		"ORDER_PAID",
+		"USER_REGISTERED",
+		"FIRST_DEPOSIT_SUCCESS",
+		"REDEPOSIT_SUCCESS",
+		"TRADE_SUCCESS",
+		"WITHDRAW_SUCCESS",
+		"COUPON_CLAIMED",
+		"TASK_COMPLETED",
+		"SCHEDULE_TICK",
+	}
 }
 
 func rules(items ...WorkflowNodeConfigValidationRule) []WorkflowNodeConfigValidationRule {

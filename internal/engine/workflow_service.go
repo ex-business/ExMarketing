@@ -768,10 +768,26 @@ func (s *Service) runWorkflowDebugWithDefinition(ctx context.Context, activity m
 	inbox := marketing.EventInbox{
 		ID:             marketingID("debuginbox"),
 		Event:          event,
-		IdempotencyKey: "debug:" + marketingID("idem"),
+		IdempotencyKey: event.IdempotencyKey(),
 		ProcessStatus:  marketing.InboxReceived,
 		CreatedAt:      now,
 		UpdatedAt:      now,
+	}
+	existingInbox, err := s.repository.GetInboxByEvent(ctx, event.TenantID, event.EventID)
+	if err == nil {
+		existingInbox.ProcessStatus = marketing.InboxDuplicate
+		return s.createDuplicateDebugTrace(ctx, activity, debugVersion, existingInbox, cmd, now)
+	}
+	if err != nil && !errors.Is(err, marketing.ErrNotFound) {
+		return marketing.WorkflowExecutionTrace{}, err
+	}
+	existingExecution, err := s.findAnyExistingWorkflowExecutionForEvent(ctx, activity.ID, event.EventID)
+	if err != nil {
+		return marketing.WorkflowExecutionTrace{}, err
+	}
+	if existingExecution.ID != "" {
+		inbox.ProcessStatus = marketing.InboxDuplicate
+		return s.createDuplicateDebugTrace(ctx, activity, debugVersion, inbox, cmd, now)
 	}
 	participation, grantOrders, outboxMessages, ruleResult, _, _, _, _, _ := s.simulateActivity(ctx, event, activity)
 	qualified := ruleResult.Decision == marketing.RuleDecisionPassed
@@ -802,6 +818,80 @@ func (s *Service) runWorkflowDebugWithDefinition(ctx context.Context, activity m
 	if err != nil {
 		return marketing.WorkflowExecutionTrace{}, err
 	}
+	return s.ExportWorkflowExecutionTrace(ctx, execution.ID)
+}
+
+func (s *Service) findAnyExistingWorkflowExecutionForEvent(ctx context.Context, activityID string, eventID string) (marketing.WorkflowExecution, error) {
+	executions, err := s.repository.ListWorkflowExecutions(ctx, marketing.WorkflowExecutionQuery{
+		ActivityID: strings.TrimSpace(activityID),
+		EventID:    strings.TrimSpace(eventID),
+		Limit:      1,
+	})
+	if err != nil {
+		return marketing.WorkflowExecution{}, err
+	}
+	if len(executions) == 0 {
+		return marketing.WorkflowExecution{}, nil
+	}
+	return executions[0], nil
+}
+
+func (s *Service) createDuplicateDebugTrace(ctx context.Context, activity marketing.Activity, version marketing.WorkflowVersion, inbox marketing.EventInbox, cmd marketing.WorkflowDebugRunCommand, now time.Time) (marketing.WorkflowExecutionTrace, error) {
+	finishedAt := now
+	output := map[string]any{
+		"duplicate":      true,
+		"errorCode":      "DUPLICATE_EVENT",
+		"errorMessage":   "duplicate eventId rejected",
+		"inbox":          inbox,
+		"eventId":        inbox.Event.EventID,
+		"idempotencyKey": inbox.IdempotencyKey,
+		"mode":           "DEBUG_DRAFT",
+		"debug":          true,
+	}
+	execution, err := s.repository.CreateWorkflowExecution(ctx, marketing.WorkflowExecution{
+		ID:                marketingID("wfexec"),
+		TenantID:          activity.TenantID,
+		ActivityID:        activity.ID,
+		WorkflowVersionID: version.ID,
+		WorkflowVersion:   version.Version,
+		EventInboxID:      inbox.ID,
+		EventID:           inbox.Event.EventID,
+		Status:            marketing.WorkflowExecutionFailed,
+		Input: marshalWorkflowPayload(map[string]any{
+			"event":             inbox.Event,
+			"activityId":        activity.ID,
+			"idempotencyKey":    inbox.IdempotencyKey,
+			"mode":              "DEBUG_DRAFT",
+			"debug":             true,
+			"startNodeId":       strings.TrimSpace(cmd.StartNodeID),
+			"sourceExecutionId": strings.TrimSpace(cmd.SourceExecutionID),
+		}),
+		Output:       marshalWorkflowPayload(output),
+		ErrorMessage: "DUPLICATE_EVENT: duplicate eventId rejected",
+		StartedAt:    now,
+		FinishedAt:   &finishedAt,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	})
+	if err != nil {
+		return marketing.WorkflowExecutionTrace{}, err
+	}
+	_, _ = s.repository.CreateWorkflowNodeExecution(ctx, marketing.WorkflowNodeExecution{
+		ID:           marketingID("wfnode"),
+		TenantID:     activity.TenantID,
+		ExecutionID:  execution.ID,
+		NodeID:       "inbox",
+		NodeType:     "inbox",
+		NodeTitle:    "幂等收件箱",
+		Status:       marketing.WorkflowNodeFailed,
+		Input:        marshalWorkflowPayload(map[string]any{"event": inbox.Event}),
+		Output:       marshalWorkflowPayload(output),
+		ErrorMessage: "DUPLICATE_EVENT: duplicate eventId rejected",
+		StartedAt:    now,
+		FinishedAt:   &finishedAt,
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	})
 	return s.ExportWorkflowExecutionTrace(ctx, execution.ID)
 }
 

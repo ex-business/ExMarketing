@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -328,6 +329,14 @@ func (s *Service) workflowNodeHandlers() map[string]workflowNodeHandler {
 		"normalize":         normalizeWorkflowNodeHandler,
 		"match":             matchWorkflowNodeHandler,
 		"fact-query":        s.factQueryWorkflowNodeHandler,
+		"context-query":     contextFactQueryWorkflowNodeHandler,
+		"local-cache-query": localCacheFactQueryWorkflowNodeHandler,
+		"redis-query":       factAdapterRequiredWorkflowNodeHandler("REDIS", "RedisFactCache", false),
+		"http-query":        s.httpFactQueryWorkflowNodeHandler,
+		"grpc-query":        factAdapterRequiredWorkflowNodeHandler("GRPC", "GRPCFactProvider", false),
+		"plugin-query":      factAdapterRequiredWorkflowNodeHandler("PLUGIN", "ActivityPlugin/FactProvider", false),
+		"custom-query":      factAdapterRequiredWorkflowNodeHandler("CUSTOM", "CustomFactProvider", false),
+		"lua-query":         luaFactQueryWorkflowNodeHandler,
 		"activity-state":    activityStateWorkflowNodeHandler,
 		"quota-check":       quotaCheckWorkflowNodeHandler,
 		"condition":         decisionWorkflowNodeHandler,
@@ -1318,6 +1327,63 @@ func workflowFactQueryFailure(node marketing.WorkflowNode, runtime workflowRunti
 	}
 }
 
+func workflowFactQueryKeys(config map[string]any, runtime workflowRuntime) []string {
+	refs := workflowConfigStringList(config, "factKeys")
+	if len(refs) == 0 {
+		for factCode := range marketing.ExtractFactReferences(runtime.Activity.Rules) {
+			refs = append(refs, factCode)
+		}
+	}
+	return workflowNormalizeFactCodes(refs)
+}
+
+func workflowFactQuerySourcePaths(config map[string]any, factCode string) []string {
+	paths := workflowConfigStringList(config, "sourcePaths")
+	if len(paths) == 0 {
+		if path := workflowConfigString(config, "sourcePath"); path != "" {
+			paths = []string{path}
+		}
+	}
+	if len(paths) == 0 && factCode != "" {
+		paths = []string{"$.attributes." + strings.ToLower(factCode), "$.attributes." + factCode, "$.facts." + factCode}
+	}
+	return paths
+}
+
+func workflowFactQueryBaseContext(ctx context.Context, runtime workflowRuntime) map[string]any {
+	execCtx := workflowNodeContext(ctx)
+	return map[string]any{
+		"event":      workflowJSONValue(runtime.Inbox.Event),
+		"attributes": workflowJSONValue(runtime.Inbox.Event.Attributes),
+		"subject":    workflowJSONValue(runtime.Inbox.Event.Subject),
+		"biz":        workflowJSONValue(runtime.Inbox.Event.Biz),
+		"input":      workflowJSONValue(execCtx.ResolvedInput),
+		"outputs":    workflowJSONValue(execCtx.NodeOutputs),
+		"vars":       workflowJSONValue(execCtx.Variables),
+		"facts":      workflowFactsFromContext(ctx),
+	}
+}
+
+func workflowFactValueFromPaths(source any, paths []string) (any, string, bool) {
+	for _, path := range paths {
+		value, err := extractWorkflowJSONPath(source, path)
+		if err == nil {
+			return value, path, true
+		}
+	}
+	return nil, "", false
+}
+
+func workflowFactOutput(node marketing.WorkflowNode, runtime workflowRuntime, source string, facts map[string]any, responses []any) map[string]any {
+	return map[string]any{
+		"factCount": len(facts),
+		"facts":     facts,
+		"responses": responses,
+		"source":    source,
+		"audit":     workflowHandlerAudit(node, runtime),
+	}
+}
+
 func workflowFactQuerySubject(ctx context.Context, config map[string]any, runtime workflowRuntime) marketing.EventSubject {
 	subject := runtime.Inbox.Event.Subject
 	if value, ok := workflowResolvedInput(ctx, "subject"); ok {
@@ -1851,6 +1917,22 @@ func workflowStringInList(value string, allowed []string) bool {
 	return false
 }
 
+func workflowMissingEventTypes(required []string, observed []string) []string {
+	seen := map[string]bool{}
+	for _, item := range observed {
+		seen[strings.TrimSpace(strings.ToUpper(item))] = true
+	}
+	missing := []string{}
+	for _, item := range required {
+		item = strings.TrimSpace(item)
+		if item == "" || seen[strings.ToUpper(item)] {
+			continue
+		}
+		missing = append(missing, item)
+	}
+	return missing
+}
+
 func nodeSuccess(output map[string]any) workflowNodeResult {
 	return workflowNodeResult{Status: marketing.WorkflowNodeSuccess, Output: output}
 }
@@ -1911,12 +1993,18 @@ func entryWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, 
 			"audit":     workflowHandlerAudit(node, runtime),
 		})
 	}
-	if !workflowStringInList(runtime.Inbox.Event.EventType, workflowConfigStringList(config, "eventTypes")) {
-		return nodeFailed("EVENT_IN_TYPE_NOT_ALLOWED: event type is not accepted by node config", map[string]any{
-			"errorCode": "EVENT_IN_TYPE_NOT_ALLOWED",
-			"eventType": runtime.Inbox.Event.EventType,
-			"audit":     workflowHandlerAudit(node, runtime),
-		})
+	eventTypes := workflowConfigStringList(config, "eventTypes")
+	if !workflowStringInList(runtime.Inbox.Event.EventType, eventTypes) {
+		output := map[string]any{
+			"errorCode":          "EVENT_IN_TYPE_NOT_ALLOWED",
+			"eventType":          runtime.Inbox.Event.EventType,
+			"requiredEventTypes": eventTypes,
+			"audit":              workflowHandlerAudit(node, runtime),
+		}
+		if rejectUnknown, ok := config["rejectUnknownEventType"].(bool); ok && !rejectUnknown {
+			return nodeSkipped("EVENT_IN_TYPE_NOT_ALLOWED: event type is not accepted by node config", output)
+		}
+		return nodeFailed("EVENT_IN_TYPE_NOT_ALLOWED: event type is not accepted by node config", output)
 	}
 	if !workflowStringInList(runtime.Inbox.Event.SourceSystem, workflowConfigStringList(config, "sourceSystems")) {
 		return nodeFailed("EVENT_IN_SOURCE_NOT_ALLOWED: source system is not accepted by node config", map[string]any{
@@ -1926,12 +2014,37 @@ func entryWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, 
 		})
 	}
 	rawEvent := workflowJSONValue(runtime.Inbox.Event)
+	matchMode := strings.ToUpper(firstWorkflowString(workflowConfigString(config, "eventTypeMatchMode"), "ANY"))
+	if matchMode == "ALL" && len(eventTypes) > 1 {
+		correlationKey := workflowRenderTemplate(firstWorkflowString(workflowConfigString(config, "correlationKeyTemplate"), "${tenantId}:${subject.id}:${activityId}"), runtime)
+		output := map[string]any{
+			"raw_event":                rawEvent,
+			"eventId":                  runtime.Inbox.Event.EventID,
+			"eventType":                runtime.Inbox.Event.EventType,
+			"tenantId":                 runtime.Inbox.Event.TenantID,
+			"eventTypeMatchMode":       "ALL",
+			"multiEventSatisfied":      false,
+			"currentEventType":         runtime.Inbox.Event.EventType,
+			"requiredEventTypes":       eventTypes,
+			"correlationKey":           correlationKey,
+			"correlationWindowSeconds": workflowConfigNumber(config, "correlationWindowSeconds"),
+			"waitingFor":               workflowMissingEventTypes(eventTypes, []string{runtime.Inbox.Event.EventType}),
+			"audit":                    workflowHandlerAudit(node, runtime),
+		}
+		switch strings.ToUpper(firstWorkflowString(workflowConfigString(config, "allEventsAction"), "WAIT")) {
+		case "BLOCK":
+			return nodeFailed("EVENT_IN_ALL_NOT_SATISFIED: correlated event group is incomplete", output)
+		default:
+			return nodeSkipped("EVENT_IN_ALL_WAITING: correlated event group is incomplete", output)
+		}
+	}
 	return nodeSuccess(map[string]any{
-		"raw_event": rawEvent,
-		"eventId":   runtime.Inbox.Event.EventID,
-		"eventType": runtime.Inbox.Event.EventType,
-		"tenantId":  runtime.Inbox.Event.TenantID,
-		"audit":     workflowHandlerAudit(node, runtime),
+		"raw_event":          rawEvent,
+		"eventId":            runtime.Inbox.Event.EventID,
+		"eventType":          runtime.Inbox.Event.EventType,
+		"tenantId":           runtime.Inbox.Event.TenantID,
+		"eventTypeMatchMode": "ANY",
+		"audit":              workflowHandlerAudit(node, runtime),
 	})
 }
 
@@ -1946,17 +2059,23 @@ func inboxWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, 
 		})
 	}
 	rawEvent := workflowJSONValue(runtime.Inbox.Event)
+	persistenceMode := "PERSISTED"
+	if strings.HasPrefix(runtime.Inbox.ID, "debuginbox_") {
+		persistenceMode = "SIMULATED"
+	}
 	return nodeSuccess(map[string]any{
 		"event_context": map[string]any{
-			"inboxId":        runtime.Inbox.ID,
-			"status":         runtime.Inbox.ProcessStatus,
-			"idempotencyKey": runtime.Inbox.IdempotencyKey,
-			"event":          rawEvent,
+			"inboxId":         runtime.Inbox.ID,
+			"status":          runtime.Inbox.ProcessStatus,
+			"idempotencyKey":  runtime.Inbox.IdempotencyKey,
+			"event":           rawEvent,
+			"persistenceMode": persistenceMode,
 		},
-		"inboxId":        runtime.Inbox.ID,
-		"status":         runtime.Inbox.ProcessStatus,
-		"idempotencyKey": runtime.Inbox.IdempotencyKey,
-		"audit":          workflowHandlerAudit(node, runtime),
+		"inboxId":         runtime.Inbox.ID,
+		"status":          runtime.Inbox.ProcessStatus,
+		"idempotencyKey":  runtime.Inbox.IdempotencyKey,
+		"persistenceMode": persistenceMode,
+		"audit":           workflowHandlerAudit(node, runtime),
 	})
 }
 
@@ -2035,37 +2154,92 @@ func matchWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, 
 		failed.Output["audit"] = workflowHandlerAudit(node, runtime)
 		return failed
 	}
-	if workflowConfigBool(config, "requireActiveActivity", true) && runtime.Activity.Status != marketing.ActivityActive {
-		return nodeFailed("MATCH_ACTIVITY_NOT_ACTIVE: activity is not active", map[string]any{
-			"errorCode":  "MATCH_ACTIVITY_NOT_ACTIVE",
-			"activityId": runtime.Activity.ID,
-			"audit":      workflowHandlerAudit(node, runtime),
-		})
+	event := runtime.Inbox.Event
+	audit := workflowHandlerAudit(node, runtime)
+	baseOutput := map[string]any{
+		"activityId":              runtime.Activity.ID,
+		"activityCode":            runtime.Activity.Code,
+		"eventId":                 event.EventID,
+		"eventType":               event.EventType,
+		"mode":                    strings.ToUpper(firstWorkflowString(workflowConfigString(config, "mode"), "FIRST_MATCH")),
+		"tenantMatchPolicy":       strings.ToUpper(firstWorkflowString(workflowConfigString(config, "tenantMatchPolicy"), "SAME_TENANT")),
+		"fallbackAction":          strings.ToUpper(firstWorkflowString(workflowConfigString(config, "fallbackAction"), "NO_MATCH_FAIL")),
+		"priorityOrder":           strings.ToUpper(firstWorkflowString(workflowConfigString(config, "priorityOrder"), "PRIORITY_DESC")),
+		"requireActiveActivity":   workflowConfigBool(config, "requireActiveActivity", true),
+		"requireApprovedActivity": workflowConfigBool(config, "requireApprovedActivity", false),
+		"audit":                   audit,
 	}
-	matched := runtime.Activity.ID != "" && runtime.Activity.TenantID == runtime.Inbox.Event.TenantID
-	if !matched {
-		return nodeFailed("MATCH_ACTIVITY_MISMATCH: activity tenant does not match event tenant", map[string]any{
-			"errorCode":  "MATCH_ACTIVITY_MISMATCH",
-			"activityId": runtime.Activity.ID,
-			"eventId":    runtime.Inbox.Event.EventID,
-			"audit":      workflowHandlerAudit(node, runtime),
-		})
+	if runtime.Activity.ID == "" {
+		return matchNodeNoMatch("MATCH_ACTIVITY_MISSING", "activity context is missing", baseOutput)
+	}
+	if strings.EqualFold(fmt.Sprint(baseOutput["tenantMatchPolicy"]), "SAME_TENANT") && runtime.Activity.TenantID != event.TenantID {
+		return matchNodeNoMatch("MATCH_ACTIVITY_TENANT_MISMATCH", "activity tenant does not match event tenant", baseOutput)
+	}
+	if len(runtime.Activity.TriggerEvents) > 0 && !containsString(runtime.Activity.TriggerEvents, event.EventType) {
+		return matchNodeNoMatch("MATCH_EVENT_TYPE_NOT_ALLOWED", "eventType is not configured on activity triggerEvents", baseOutput)
+	}
+	if pattern := strings.TrimSpace(workflowConfigString(config, "activityCodePattern")); pattern != "" {
+		matched, err := regexp.MatchString(pattern, runtime.Activity.Code)
+		if err != nil {
+			baseOutput["errorCode"] = "MATCH_ACTIVITY_CODE_PATTERN_INVALID"
+			baseOutput["error"] = err.Error()
+			return nodeFailed("MATCH_ACTIVITY_CODE_PATTERN_INVALID: "+err.Error(), baseOutput)
+		}
+		if !matched {
+			return matchNodeNoMatch("MATCH_ACTIVITY_CODE_PATTERN_NOT_MATCHED", "activityCode does not match configured pattern", baseOutput)
+		}
+	}
+	if workflowConfigBool(config, "requireActiveActivity", true) {
+		decision := matchWindowDecision(runtime.Activity, event.OccurredAt)
+		if decision.ReasonCode == "APPROVAL_REQUIRED" && !workflowConfigBool(config, "requireApprovedActivity", false) {
+			decision = matchDecision{Decision: marketing.RuleDecisionPassed}
+		}
+		if decision.Decision != marketing.RuleDecisionPassed {
+			return matchNodeNoMatch(decision.ReasonCode, decision.Reason, baseOutput)
+		}
+	} else if workflowConfigBool(config, "requireApprovedActivity", false) && !activityApprovalValid(runtime.Activity) {
+		return matchNodeNoMatch("APPROVAL_REQUIRED", "activity version is not approved", baseOutput)
+	}
+	if entryAllowed, entryRuleResult := activityEntryAllowed(runtime.Activity, event); !entryAllowed {
+		return matchNodeNoMatch(entryRuleResult.ReasonCode, entryRuleResult.Reason, baseOutput)
 	}
 	matchedActivity := map[string]any{
-		"activityId":   runtime.Activity.ID,
-		"activityCode": runtime.Activity.Code,
-		"name":         runtime.Activity.Name,
-		"status":       runtime.Activity.Status,
-		"tenantId":     runtime.Activity.TenantID,
-		"matched":      true,
+		"activityId":     runtime.Activity.ID,
+		"activityCode":   runtime.Activity.Code,
+		"name":           runtime.Activity.Name,
+		"status":         runtime.Activity.Status,
+		"tenantId":       runtime.Activity.TenantID,
+		"matched":        true,
+		"priority":       runtime.Activity.Priority,
+		"exclusiveGroup": runtime.Activity.ExclusiveGroup,
+		"stackable":      runtime.Activity.Stackable,
+		"triggerEvents":  runtime.Activity.TriggerEvents,
+		"matchReason":    "tenant/eventType/status/timeWindow/entry matched",
 	}
-	return nodeSuccess(map[string]any{
-		"matched_activity": matchedActivity,
-		"activityId":       runtime.Activity.ID,
-		"activityCode":     runtime.Activity.Code,
-		"matched":          true,
-		"audit":            workflowHandlerAudit(node, runtime),
-	})
+	baseOutput["matched_activity"] = matchedActivity
+	baseOutput["matched"] = true
+	baseOutput["matchReason"] = "tenant/eventType/status/timeWindow/entry matched"
+	return nodeSuccess(baseOutput)
+}
+
+func matchNodeNoMatch(code string, reason string, output map[string]any) workflowNodeResult {
+	output["matched"] = false
+	output["errorCode"] = code
+	output["reason"] = reason
+	output["matched_activity"] = map[string]any{
+		"matched":    false,
+		"reasonCode": code,
+		"reason":     reason,
+	}
+	switch strings.ToUpper(strings.TrimSpace(fmt.Sprint(output["fallbackAction"]))) {
+	case "NO_MATCH_SKIP":
+		return nodeSkipped(code+": "+reason, output)
+	case "USE_DEFAULT_ACTIVITY":
+		output["fallbackUsed"] = true
+		return nodeSuccess(output)
+	default:
+		return nodeFailed(code+": "+reason, output)
+	}
 }
 
 func factQueryWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
@@ -2089,17 +2263,14 @@ func (s *Service) factQueryWorkflowNodeHandler(ctx context.Context, node marketi
 		failed.Output["audit"] = workflowHandlerAudit(node, runtime)
 		return failed
 	}
+	if chain := workflowConfigStringList(config, "providerChain"); len(chain) > 0 {
+		return s.factQueryProviderChainWorkflowNodeHandler(ctx, node, runtime, config, chain)
+	}
 	source := strings.ToUpper(firstWorkflowString(workflowConfigString(config, "source"), "FACT_SERVICE"))
 	if source != "FACT_SERVICE" && source != "HTTP_PROVIDER" {
 		return workflowFactQueryFailure(node, runtime, config, "", "FACT_QUERY_SOURCE_UNSUPPORTED", "fact-query source "+source+" is not supported by workflow executor", map[string]any{}, nil)
 	}
-	refs := workflowConfigStringList(config, "factKeys")
-	if len(refs) == 0 {
-		for factCode := range marketing.ExtractFactReferences(runtime.Activity.Rules) {
-			refs = append(refs, factCode)
-		}
-	}
-	refs = workflowNormalizeFactCodes(refs)
+	refs := workflowFactQueryKeys(config, runtime)
 	if len(refs) == 0 {
 		return nodeSkipped("FACT_QUERY_NO_KEYS: no fact references", map[string]any{
 			"errorCode": "FACT_QUERY_NO_KEYS",
@@ -2119,7 +2290,7 @@ func (s *Service) factQueryWorkflowNodeHandler(ctx context.Context, node marketi
 		if cancel != nil {
 			defer cancel()
 		}
-		response, err := s.QueryFacts(queryCtx, marketing.FactQueryRequest{
+		request := marketing.FactQueryRequest{
 			EventID:      runtime.Inbox.Event.EventID,
 			EventType:    runtime.Inbox.Event.EventType,
 			SourceSystem: runtime.Inbox.Event.SourceSystem,
@@ -2130,7 +2301,8 @@ func (s *Service) factQueryWorkflowNodeHandler(ctx context.Context, node marketi
 			OccurredAt:   runtime.Inbox.Event.OccurredAt,
 			Attributes:   runtime.Inbox.Event.Attributes,
 			TraceID:      runtime.Inbox.Event.EventID,
-		})
+		}
+		response, err := s.queryFactsWithNodeProvider(queryCtx, runtime, config, factCode, request)
 		if err != nil {
 			return workflowFactQueryFailure(node, runtime, config, factCode, "FACT_QUERY_FAILED", err.Error(), facts, responses)
 		}
@@ -2156,6 +2328,361 @@ func (s *Service) factQueryWorkflowNodeHandler(ctx context.Context, node marketi
 		"cacheTtlSeconds": workflowConfigNumber(config, "cacheTtlSeconds"),
 		"audit":           workflowHandlerAudit(node, runtime),
 	})
+}
+
+func (s *Service) factQueryProviderChainWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime, config map[string]any, chain []string) workflowNodeResult {
+	refs := workflowFactQueryKeys(config, runtime)
+	if len(refs) == 0 {
+		return nodeSkipped("FACT_QUERY_NO_KEYS: no fact references", map[string]any{
+			"errorCode": "FACT_QUERY_NO_KEYS",
+			"factCount": 0,
+			"facts":     map[string]any{},
+			"audit":     workflowHandlerAudit(node, runtime),
+		})
+	}
+	facts := map[string]any{}
+	responses := make([]any, 0, len(chain))
+	remaining := append([]string(nil), refs...)
+	for _, rawProvider := range chain {
+		provider := strings.ToUpper(strings.TrimSpace(rawProvider))
+		if provider == "" || len(remaining) == 0 {
+			continue
+		}
+		switch provider {
+		case "WORKFLOW_CONTEXT", "CONTEXT":
+			result := contextFactQuery(ctx, node, runtime, config, remaining)
+			responses = append(responses, result.response)
+			for key, value := range result.facts {
+				facts[key] = value
+			}
+		case "LOCAL_CACHE", "CACHE":
+			result := localCacheFactQuery(ctx, node, runtime, config, remaining)
+			responses = append(responses, result.response)
+			for key, value := range result.facts {
+				facts[key] = value
+			}
+		case "FACT_SERVICE", "HTTP_PROVIDER", "HTTP":
+			httpConfig := map[string]any{}
+			for key, value := range config {
+				httpConfig[key] = value
+			}
+			httpConfig["factKeys"] = remaining
+			httpResult := s.executeHTTPFactQuery(ctx, node, runtime, httpConfig)
+			if httpResult.Status == marketing.WorkflowNodeFailed {
+				return httpResult
+			}
+			responses = append(responses, httpResult.Output["responses"])
+			if mapped, ok := httpResult.Output["facts"].(map[string]any); ok {
+				for key, value := range mapped {
+					facts[key] = value
+				}
+			}
+		default:
+			responses = append(responses, map[string]any{"provider": provider, "status": "ADAPTER_REQUIRED", "remaining": remaining})
+		}
+		remaining = workflowRemainingFactKeys(refs, facts)
+	}
+	if len(facts) == 0 {
+		return workflowFactQueryFailure(node, runtime, config, "", "FACT_QUERY_NO_PROVIDER_HIT", "providerChain did not resolve any requested facts", facts, responses)
+	}
+	return nodeSuccess(map[string]any{
+		"factCount":       len(facts),
+		"factKeys":        refs,
+		"facts":           facts,
+		"responses":       responses,
+		"providerChain":   chain,
+		"cacheTtlSeconds": workflowConfigNumber(config, "cacheTtlSeconds"),
+		"audit":           workflowHandlerAudit(node, runtime),
+	})
+}
+
+func workflowRemainingFactKeys(refs []string, facts map[string]any) []string {
+	out := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		if _, ok := facts[ref]; !ok {
+			out = append(out, ref)
+		}
+	}
+	return out
+}
+
+type workflowFactQueryPartialResult struct {
+	facts    map[string]any
+	response map[string]any
+}
+
+func contextFactQueryWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
+	config, failed, ok := workflowRequireNodeConfig(node)
+	if !ok {
+		failed.Output["audit"] = workflowHandlerAudit(node, runtime)
+		return failed
+	}
+	refs := workflowFactQueryKeys(config, runtime)
+	result := contextFactQuery(ctx, node, runtime, config, refs)
+	if len(result.facts) == 0 {
+		return workflowFactQueryFailure(node, runtime, config, "", "CONTEXT_FACT_NOT_FOUND", "context-query did not resolve any requested facts", map[string]any{}, []any{result.response})
+	}
+	return nodeSuccess(workflowFactOutput(node, runtime, "WORKFLOW_CONTEXT", result.facts, []any{result.response}))
+}
+
+func contextFactQuery(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime, config map[string]any, refs []string) workflowFactQueryPartialResult {
+	base := workflowFactQueryBaseContext(ctx, runtime)
+	facts := map[string]any{}
+	resolved := []any{}
+	for _, factCode := range refs {
+		if value, path, ok := workflowFactValueFromPaths(base, workflowFactQuerySourcePaths(config, factCode)); ok {
+			facts[factCode] = value
+			resolved = append(resolved, map[string]any{"factCode": factCode, "path": path, "hit": true})
+		} else {
+			resolved = append(resolved, map[string]any{"factCode": factCode, "hit": false})
+		}
+	}
+	return workflowFactQueryPartialResult{facts: facts, response: map[string]any{
+		"provider": "WORKFLOW_CONTEXT",
+		"status":   "SUCCESS",
+		"resolved": resolved,
+		"audit":    workflowHandlerAudit(node, runtime),
+	}}
+}
+
+func localCacheFactQueryWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
+	config, failed, ok := workflowRequireNodeConfig(node)
+	if !ok {
+		failed.Output["audit"] = workflowHandlerAudit(node, runtime)
+		return failed
+	}
+	refs := workflowFactQueryKeys(config, runtime)
+	result := localCacheFactQuery(ctx, node, runtime, config, refs)
+	if len(result.facts) == 0 {
+		return workflowFactQueryFailure(node, runtime, config, "", "LOCAL_CACHE_FACT_NOT_FOUND", "local-cache-query did not resolve any requested facts", map[string]any{}, []any{result.response})
+	}
+	return nodeSuccess(workflowFactOutput(node, runtime, "LOCAL_CACHE", result.facts, []any{result.response}))
+}
+
+func localCacheFactQuery(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime, config map[string]any, refs []string) workflowFactQueryPartialResult {
+	execCtx := workflowNodeContext(ctx)
+	cacheRoot := map[string]any{"vars": execCtx.Variables}
+	if facts, ok := workflowJSONValue(workflowGetVar(execCtx.Variables, "execution", "facts")).(map[string]any); ok {
+		cacheRoot["facts"] = facts
+	}
+	facts := map[string]any{}
+	resolved := []any{}
+	for _, factCode := range refs {
+		paths := workflowConfigStringList(config, "cachePaths")
+		if len(paths) == 0 {
+			if path := workflowConfigString(config, "cachePath"); path != "" {
+				paths = []string{path}
+			}
+		}
+		if len(paths) == 0 {
+			paths = []string{"$.facts." + factCode, "$.vars.facts." + factCode, "$.vars.execution.facts." + factCode}
+		}
+		if value, path, ok := workflowFactValueFromPaths(cacheRoot, paths); ok {
+			facts[factCode] = value
+			resolved = append(resolved, map[string]any{"factCode": factCode, "path": path, "hit": true})
+		} else {
+			resolved = append(resolved, map[string]any{"factCode": factCode, "hit": false})
+		}
+	}
+	return workflowFactQueryPartialResult{facts: facts, response: map[string]any{
+		"provider": "LOCAL_CACHE",
+		"status":   "SUCCESS",
+		"resolved": resolved,
+		"audit":    workflowHandlerAudit(node, runtime),
+	}}
+}
+
+func (s *Service) httpFactQueryWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
+	config, failed, ok := workflowRequireNodeConfig(node)
+	if !ok {
+		failed.Output["audit"] = workflowHandlerAudit(node, runtime)
+		return failed
+	}
+	return s.executeHTTPFactQuery(ctx, node, runtime, config)
+}
+
+func (s *Service) executeHTTPFactQuery(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime, config map[string]any) workflowNodeResult {
+	if config == nil {
+		config = map[string]any{}
+	}
+	config["source"] = firstWorkflowString(workflowConfigString(config, "source"), "HTTP_PROVIDER")
+	refs := workflowFactQueryKeys(config, runtime)
+	if len(refs) == 0 {
+		return nodeSkipped("FACT_QUERY_NO_KEYS: no fact references", map[string]any{
+			"errorCode": "FACT_QUERY_NO_KEYS",
+			"factCount": 0,
+			"facts":     map[string]any{},
+			"audit":     workflowHandlerAudit(node, runtime),
+		})
+	}
+	facts := map[string]any{}
+	responses := make([]any, 0, len(refs))
+	for _, factCode := range refs {
+		queryCtx := ctx
+		var cancel context.CancelFunc
+		if timeoutSeconds := workflowConfigNumber(config, "timeoutSeconds"); timeoutSeconds > 0 {
+			queryCtx, cancel = context.WithTimeout(ctx, time.Duration(timeoutSeconds*float64(time.Second)))
+		}
+		if cancel != nil {
+			defer cancel()
+		}
+		request := marketing.FactQueryRequest{
+			EventID:      runtime.Inbox.Event.EventID,
+			EventType:    runtime.Inbox.Event.EventType,
+			SourceSystem: runtime.Inbox.Event.SourceSystem,
+			TenantID:     runtime.Activity.TenantID,
+			FactCode:     factCode,
+			Subject:      workflowFactQuerySubject(ctx, config, runtime),
+			Biz:          runtime.Inbox.Event.Biz,
+			OccurredAt:   runtime.Inbox.Event.OccurredAt,
+			Attributes:   runtime.Inbox.Event.Attributes,
+			TraceID:      runtime.Inbox.Event.EventID,
+		}
+		response, err := s.queryFactsWithNodeProvider(queryCtx, runtime, config, factCode, request)
+		if err != nil {
+			return workflowFactQueryFailure(node, runtime, config, factCode, "FACT_QUERY_FAILED", err.Error(), facts, responses)
+		}
+		responses = append(responses, workflowJSONValue(response))
+		if !response.Success {
+			return workflowFactQueryFailure(node, runtime, config, factCode, response.ErrorCode, response.Error, facts, responses)
+		}
+		if value, ok := response.Facts[factCode]; ok {
+			facts[factCode] = value
+		} else {
+			for key, value := range response.Facts {
+				facts[key] = value
+			}
+		}
+	}
+	return nodeSuccess(map[string]any{
+		"factCount":       len(refs),
+		"factKeys":        refs,
+		"facts":           facts,
+		"responses":       responses,
+		"source":          strings.ToUpper(workflowConfigString(config, "source")),
+		"subject":         workflowJSONValue(workflowFactQuerySubject(ctx, config, runtime)),
+		"cacheTtlSeconds": workflowConfigNumber(config, "cacheTtlSeconds"),
+		"audit":           workflowHandlerAudit(node, runtime),
+	})
+}
+
+func (s *Service) queryFactsWithNodeProvider(ctx context.Context, runtime workflowRuntime, config map[string]any, factCode string, request marketing.FactQueryRequest) (marketing.FactQueryResponse, error) {
+	if provider, ok := workflowInlineHTTPFactProvider(runtime, config, factCode); ok {
+		return s.factClient.Query(ctx, provider, request), nil
+	}
+	return s.QueryFacts(ctx, request)
+}
+
+func workflowInlineHTTPFactProvider(runtime workflowRuntime, config map[string]any, factCode string) (marketing.FactProvider, bool) {
+	endpoint := workflowConfigString(config, "endpoint")
+	if endpoint == "" {
+		endpoint = workflowConfigString(config, "url")
+	}
+	if endpoint == "" {
+		return marketing.FactProvider{}, false
+	}
+	mapping := workflowFactMappingConfig(config)
+	timeoutMS := int(workflowConfigNumber(config, "timeoutMs"))
+	if timeoutMS == 0 {
+		timeoutMS = int(workflowConfigNumber(config, "timeoutSeconds") * 1000)
+	}
+	return marketing.FactProvider{
+		TenantID:        runtime.Activity.TenantID,
+		FactCode:        factCode,
+		ProviderType:    "HTTP",
+		Endpoint:        endpoint,
+		Method:          firstWorkflowString(workflowConfigString(config, "method"), "POST"),
+		AuthRef:         workflowConfigString(config, "authRef"),
+		Mapping:         mapping,
+		CacheTTLSeconds: int(workflowConfigNumber(config, "cacheTtlSeconds")),
+		Enabled:         true,
+		TimeoutMS:       timeoutMS,
+	}, true
+}
+
+func workflowFactMappingConfig(config map[string]any) map[string]marketing.FactMapping {
+	raw := config["mapping"]
+	if raw == nil {
+		raw = config["responseMapping"]
+	}
+	if raw == nil {
+		raw = config["mappingJson"]
+	}
+	if raw == nil {
+		return nil
+	}
+	bytes, err := json.Marshal(raw)
+	if err != nil {
+		return nil
+	}
+	mapping := map[string]marketing.FactMapping{}
+	if err := json.Unmarshal(bytes, &mapping); err != nil {
+		return nil
+	}
+	return mapping
+}
+
+func factAdapterRequiredWorkflowNodeHandler(provider string, adapter string, realExecution bool) workflowNodeHandler {
+	return func(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
+		config, failed, ok := workflowRequireNodeConfig(node)
+		if !ok {
+			failed.Output["audit"] = workflowHandlerAudit(node, runtime)
+			return failed
+		}
+		output := map[string]any{
+			"errorCode":          "FACT_PROVIDER_ADAPTER_REQUIRED",
+			"provider":           provider,
+			"adapter":            adapter,
+			"executionMode":      map[bool]string{true: "REAL_HANDLER_REQUIRED", false: "EXPLAIN_NODE"}[realExecution],
+			"executionAuthority": adapter,
+			"factKeys":           workflowFactQueryKeys(config, runtime),
+			"facts":              map[string]any{},
+			"audit":              workflowHandlerAudit(node, runtime),
+		}
+		if strings.EqualFold(workflowConfigString(config, "failureAction"), "SKIP") || !realExecution {
+			return nodeSkipped("FACT_PROVIDER_ADAPTER_REQUIRED: "+provider+" adapter is not registered", output)
+		}
+		return nodeFailed("FACT_PROVIDER_ADAPTER_REQUIRED: "+provider+" adapter is not registered", output)
+	}
+}
+
+func luaFactQueryWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
+	config, failed, ok := workflowRequireNodeConfig(node)
+	if !ok {
+		failed.Output["audit"] = workflowHandlerAudit(node, runtime)
+		return failed
+	}
+	source := workflowConfigString(config, "source")
+	if source == "" {
+		return nodeFailed("LUA_QUERY_SOURCE_REQUIRED: source is required", map[string]any{
+			"errorCode": "LUA_QUERY_SOURCE_REQUIRED",
+			"audit":     workflowHandlerAudit(node, runtime),
+		})
+	}
+	luaOutput, err := executeWorkflowLua(ctx, node, runtime, source)
+	if err != nil {
+		return nodeFailed("LUA_QUERY_EXECUTION_FAILED: "+err.Error(), map[string]any{
+			"errorCode": "LUA_QUERY_EXECUTION_FAILED",
+			"audit":     workflowHandlerAudit(node, runtime),
+		})
+	}
+	facts := map[string]any{}
+	if mapped, ok := workflowJSONValue(luaOutput["facts"]).(map[string]any); ok {
+		for key, value := range mapped {
+			facts[strings.ToUpper(strings.TrimSpace(key))] = value
+		}
+	}
+	if len(facts) == 0 {
+		if factCode := strings.ToUpper(workflowConfigString(config, "factCode")); factCode != "" {
+			if value, ok := luaOutput["value"]; ok {
+				facts[factCode] = value
+			}
+		}
+	}
+	if len(facts) == 0 {
+		return workflowFactQueryFailure(node, runtime, config, "", "LUA_QUERY_EMPTY_FACTS", "lua-query must emit facts or value with factCode", map[string]any{}, []any{luaOutput})
+	}
+	return nodeSuccess(workflowFactOutput(node, runtime, "LUA_QUERY", facts, []any{luaOutput}))
 }
 
 func activityStateWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {

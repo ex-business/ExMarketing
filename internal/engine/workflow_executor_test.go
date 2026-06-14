@@ -1081,6 +1081,64 @@ func TestServiceFactQueryWorkflowNodeHandlerHonorsUseEmptyFailureAction(t *testi
 	}
 }
 
+func TestContextFactQueryWorkflowNodeHandlerReadsEventAttributes(t *testing.T) {
+	runtime := testWorkflowHandlerRuntime(true)
+	runtime.Inbox.Event.Attributes["USER_PROFILE"] = map[string]any{"vipLevel": 1, "channel": "APP"}
+	node := marketing.WorkflowNode{
+		ID:   "context-query",
+		Type: "context-query",
+		Config: json.RawMessage(`{
+			"factKeys": ["USER_PROFILE"],
+			"sourcePath": "$.attributes.USER_PROFILE",
+			"failureAction": "BLOCK"
+		}`),
+	}
+
+	result := contextFactQueryWorkflowNodeHandler(context.Background(), node, runtime)
+	if result.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected success, got %+v", result)
+	}
+	facts := result.Output["facts"].(map[string]any)
+	profile := facts["USER_PROFILE"].(map[string]any)
+	if profile["vipLevel"].(float64) != 1 || profile["channel"] != "APP" {
+		t.Fatalf("expected mapped profile facts, got %+v", result.Output)
+	}
+}
+
+func TestLuaFactQueryWorkflowNodeHandlerEmitsFacts(t *testing.T) {
+	node := marketing.WorkflowNode{
+		ID:   "lua-query",
+		Type: "lua-query",
+		Config: json.RawMessage(`{
+			"source": "emit({facts = {USER_PROFILE = {vipLevel = 1, channel = 'APP'}}})",
+			"failureAction": "BLOCK"
+		}`),
+	}
+
+	result := luaFactQueryWorkflowNodeHandler(context.Background(), node, testWorkflowHandlerRuntime(true))
+	if result.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected success, got %+v", result)
+	}
+	facts := result.Output["facts"].(map[string]any)
+	profile := facts["USER_PROFILE"].(map[string]any)
+	if profile["vipLevel"].(float64) != 1 || profile["channel"] != "APP" {
+		t.Fatalf("expected lua profile facts, got %+v", result.Output)
+	}
+}
+
+func TestFactAdapterRequiredWorkflowNodeHandlerIsExplicitlySkipped(t *testing.T) {
+	node := marketing.WorkflowNode{
+		ID:     "redis-query",
+		Type:   "redis-query",
+		Config: json.RawMessage(`{"factKeys":["USER_PROFILE"],"failureAction":"SKIP"}`),
+	}
+
+	result := factAdapterRequiredWorkflowNodeHandler("REDIS", "RedisFactCache", false)(context.Background(), node, testWorkflowHandlerRuntime(true))
+	if result.Status != marketing.WorkflowNodeSkipped || result.Output["errorCode"] != "FACT_PROVIDER_ADAPTER_REQUIRED" {
+		t.Fatalf("expected explicit adapter skipped output, got %+v", result)
+	}
+}
+
 func TestServiceFactQueryWorkflowNodeHandlerAppliesSourceAndSubjectPath(t *testing.T) {
 	service := NewService(marketing.NewMemoryRepository())
 	runtime := testWorkflowHandlerRuntime(true)
@@ -1191,6 +1249,59 @@ func TestServiceFactQueryWorkflowNodeHandlerQueriesProviderAndReportsCache(t *te
 	}
 	if atomic.LoadInt32(&calls) != 1 {
 		t.Fatalf("provider calls=%d, want 1", calls)
+	}
+}
+
+func TestServiceHTTPFactQueryWorkflowNodeHandlerUsesInlineEndpointConfig(t *testing.T) {
+	t.Setenv("EX_MARKETING_FACT_ALLOWLIST", "example.com")
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	service.factClient = fact.NewClientWithHTTPClient(&http.Client{Transport: engineRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.String() != "https://example.com/profile" {
+			t.Fatalf("unexpected provider endpoint: %s", req.URL.String())
+		}
+		if req.Method != http.MethodPost {
+			t.Fatalf("unexpected provider method: %s", req.Method)
+		}
+		body, err := io.ReadAll(req.Body)
+		if err != nil {
+			t.Fatalf("read provider request: %v", err)
+		}
+		if !strings.Contains(string(body), "USER_PROFILE") || !strings.Contains(string(body), "user_001") {
+			t.Fatalf("provider request missing fact code or subject: %s", string(body))
+		}
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Status:     "200 OK",
+			Body:       io.NopCloser(strings.NewReader(`{"data":{"profile":{"vipLevel":"VIP1","country":"PH"}}}`)),
+			Header:     http.Header{},
+		}, nil
+	})})
+	node := marketing.WorkflowNode{
+		ID:   "http-query",
+		Type: "http-query",
+		Config: json.RawMessage(`{
+			"factKeys": ["USER_PROFILE"],
+			"subjectPath": "subject.id",
+			"endpoint": "https://example.com/profile",
+			"method": "POST",
+			"mapping": {
+				"vipLevel": {"source": "$.data.profile.vipLevel", "type": "string", "required": true},
+				"country": {"source": "$.data.profile.country", "type": "string", "required": true}
+			},
+			"failureAction": "BLOCK",
+			"timeoutSeconds": 1
+		}`),
+	}
+
+	result := service.httpFactQueryWorkflowNodeHandler(ctx, node, testWorkflowHandlerRuntime(true))
+	if result.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected inline provider query success, got %+v", result)
+	}
+	profile := result.Output["facts"].(map[string]any)["USER_PROFILE"].(map[string]any)
+	if profile["vipLevel"] != "VIP1" || profile["country"] != "PH" {
+		t.Fatalf("expected inline mapped profile facts, got %+v", result.Output)
 	}
 }
 
@@ -1456,6 +1567,36 @@ func TestWorkflowNodeHandlersRespectCanceledContext(t *testing.T) {
 	}
 }
 
+func TestMatchWorkflowNodeHandlerEnforcesActivityMatchSemantics(t *testing.T) {
+	ctx := context.Background()
+	node := marketing.WorkflowNode{ID: "match", Type: "match", Config: json.RawMessage(`{"requireActiveActivity":true,"fallbackAction":"NO_MATCH_FAIL"}`)}
+	ok := matchWorkflowNodeHandler(ctx, node, testWorkflowHandlerRuntime(true))
+	if ok.Status != marketing.WorkflowNodeSuccess || ok.Output["matched"] != true {
+		t.Fatalf("expected successful match, got %+v", ok)
+	}
+
+	eventTypeMismatch := testWorkflowHandlerRuntime(true)
+	eventTypeMismatch.Inbox.Event.EventType = "CHECKIN_SUCCESS"
+	failed := matchWorkflowNodeHandler(ctx, node, eventTypeMismatch)
+	if failed.Status != marketing.WorkflowNodeFailed || failed.Output["errorCode"] != "MATCH_EVENT_TYPE_NOT_ALLOWED" {
+		t.Fatalf("expected event type mismatch failure, got %+v", failed)
+	}
+
+	channelBlocked := testWorkflowHandlerRuntime(true)
+	channelBlocked.Activity.Config = json.RawMessage(`{"entry":{"channels":["APP"]}}`)
+	channelBlocked.Inbox.Event.Attributes["channel"] = "WEB"
+	failed = matchWorkflowNodeHandler(ctx, node, channelBlocked)
+	if failed.Status != marketing.WorkflowNodeFailed || failed.Output["errorCode"] != "ENTRY_CHANNEL_NOT_ALLOWED" {
+		t.Fatalf("expected channel mismatch failure, got %+v", failed)
+	}
+
+	skipNode := marketing.WorkflowNode{ID: "match", Type: "match", Config: json.RawMessage(`{"requireActiveActivity":true,"fallbackAction":"NO_MATCH_SKIP"}`)}
+	skipped := matchWorkflowNodeHandler(ctx, skipNode, eventTypeMismatch)
+	if skipped.Status != marketing.WorkflowNodeSkipped || skipped.Output["errorCode"] != "MATCH_EVENT_TYPE_NOT_ALLOWED" {
+		t.Fatalf("expected skipped mismatch, got %+v", skipped)
+	}
+}
+
 func testWorkflowHandlerRuntime(qualified bool) workflowRuntime {
 	now := time.Date(2026, 6, 5, 8, 0, 0, 0, time.UTC)
 	decision := marketing.RuleDecisionPassed
@@ -1481,11 +1622,19 @@ func testWorkflowHandlerRuntime(qualified bool) workflowRuntime {
 			UpdatedAt: now,
 		},
 		Activity: marketing.Activity{
-			ID:       "activity_handler",
-			TenantID: "site_001",
-			Code:     "HANDLER",
-			Name:     "Handler Activity",
-			Status:   marketing.ActivityActive,
+			ID:            "activity_handler",
+			TenantID:      "site_001",
+			Code:          "HANDLER",
+			Name:          "Handler Activity",
+			Status:        marketing.ActivityActive,
+			TriggerEvents: []string{"DEPOSIT_SUCCESS"},
+			StartTime:     now.Add(-time.Hour),
+			EndTime:       now.Add(time.Hour),
+			Version:       1,
+			Approval: marketing.ApprovalSnapshot{
+				Status:          marketing.ApprovalApproved,
+				ActivityVersion: 1,
+			},
 			Rewards: []marketing.Reward{{
 				ID:            "reward_handler",
 				Code:          "BONUS",

@@ -141,6 +141,18 @@ func TestPostgresCreateInboxDetectsDuplicateAndConflict(t *testing.T) {
 	if _, duplicate, err := repo.CreateInbox(ctx, conflict); !errors.Is(err, marketing.ErrIdempotencyConflict) || duplicate {
 		t.Fatalf("expected idempotency conflict, duplicate=%v err=%v", duplicate, err)
 	}
+
+	eventIDConflict := inbox
+	eventIDConflict.ID = prefix + "_inbox_4"
+	eventIDConflict.Event.Biz.BizID = prefix + "_pay_other"
+	eventIDConflict.IdempotencyKey = eventIDConflict.Event.IdempotencyKey()
+	existing, duplicate, err = repo.CreateInbox(ctx, eventIDConflict)
+	if err != nil || !duplicate {
+		t.Fatalf("expected same event id duplicate, duplicate=%v err=%v", duplicate, err)
+	}
+	if existing.ID != inbox.ID {
+		t.Fatalf("expected original inbox %s, got %s", inbox.ID, existing.ID)
+	}
 }
 
 func TestPostgresWorkspaceCompositeConstraintsRejectCrossWorkspaceReferences(t *testing.T) {

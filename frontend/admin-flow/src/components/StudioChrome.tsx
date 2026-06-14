@@ -1098,8 +1098,24 @@ export function StudioChrome({
         <b>{showPalette ? '收起' : '节点'}</b>
       </button> : null}
       <div className="dify-left-rail">
-        <button className={interactionMode === 'pointer' ? 'active' : ''} title="指针模式" onClick={() => onModeChange('pointer')}>⌖</button>
-        <button className={interactionMode === 'hand' ? 'active' : ''} title="手模式" onClick={() => onModeChange('hand')}>☝</button>
+        <button
+          className={interactionMode === 'pointer' ? 'active' : ''}
+          title="指针模式"
+          onPointerDown={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            onModeChange('pointer');
+          }}
+        >⌖</button>
+        <button
+          className={interactionMode === 'hand' ? 'active' : ''}
+          title="手模式"
+          onPointerDown={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            onModeChange('hand');
+          }}
+        >☝</button>
         <button title="整理节点" disabled={!canEditWorkflow || selectedNodeCount < 2} onClick={onGroup}>▦</button>
         <button title="最大化画布" onClick={onFitView}>□</button>
         <button title="删除选中" disabled={!canEditWorkflow || selectedCount === 0} onClick={onDelete}>⌫</button>

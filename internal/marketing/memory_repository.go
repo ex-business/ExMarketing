@@ -33,6 +33,7 @@ type MemoryRepository struct {
 	nodeExecutions          []WorkflowNodeExecution
 	factProviders           map[string]FactProvider
 	inboxByIdempotency      map[string]EventInbox
+	inboxByEventIdentity    map[string]EventInbox
 	participations          []Participation
 	grantOrders             []GrantOrder
 	quotaReservations       []QuotaReservation
@@ -45,9 +46,10 @@ type MemoryRepository struct {
 
 func NewMemoryRepository() *MemoryRepository {
 	return &MemoryRepository{
-		inboxByIdempotency: make(map[string]EventInbox),
-		factProviders:      make(map[string]FactProvider),
-		workflowDrafts:     make(map[string]WorkflowDraft),
+		inboxByIdempotency:   make(map[string]EventInbox),
+		inboxByEventIdentity: make(map[string]EventInbox),
+		factProviders:        make(map[string]FactProvider),
+		workflowDrafts:       make(map[string]WorkflowDraft),
 	}
 }
 
@@ -556,6 +558,11 @@ func (r *MemoryRepository) CreateInbox(ctx context.Context, inbox EventInbox) (E
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	eventKey := inboxEventIdentityKey(inbox.Event)
+	if existing, ok := r.inboxByEventIdentity[eventKey]; ok {
+		existing.ProcessStatus = InboxDuplicate
+		return existing, true, nil
+	}
 	existing, ok := r.inboxByIdempotency[inbox.IdempotencyKey]
 	if ok {
 		if !existing.Event.SameStandardPayload(inbox.Event) {
@@ -565,7 +572,28 @@ func (r *MemoryRepository) CreateInbox(ctx context.Context, inbox EventInbox) (E
 		return existing, true, nil
 	}
 	r.inboxByIdempotency[inbox.IdempotencyKey] = inbox
+	r.inboxByEventIdentity[eventKey] = inbox
 	return inbox, false, nil
+}
+
+func (r *MemoryRepository) GetInboxByEvent(ctx context.Context, tenantID string, eventID string) (EventInbox, error) {
+	if err := ctx.Err(); err != nil {
+		return EventInbox{}, err
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	inbox, ok := r.inboxByEventIdentity[strings.Join([]string{strings.TrimSpace(tenantID), strings.TrimSpace(eventID)}, ":")]
+	if !ok {
+		return EventInbox{}, ErrNotFound
+	}
+	return inbox, nil
+}
+
+func inboxEventIdentityKey(event ActivityEvent) string {
+	return strings.Join([]string{
+		strings.TrimSpace(event.TenantID),
+		strings.TrimSpace(event.EventID),
+	}, ":")
 }
 
 func (r *MemoryRepository) UpdateInbox(ctx context.Context, inbox EventInbox) error {

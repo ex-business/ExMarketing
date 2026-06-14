@@ -1734,7 +1734,18 @@ func (h *Handler) createEvent(w http.ResponseWriter, r *http.Request) {
 	}
 	if result.Duplicate {
 		record("duplicate", "duplicate")
-		writeJSON(w, http.StatusOK, result)
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"errorCode":      "DUPLICATE_EVENT",
+			"code":           "DUPLICATE_EVENT",
+			"message":        "duplicate eventId rejected",
+			"error":          "duplicate eventId rejected",
+			"inbox":          result.Inbox,
+			"participations": result.Participations,
+			"grantOrders":    result.GrantOrders,
+			"outboxMessages": result.OutboxMessages,
+			"ruleResults":    result.RuleResults,
+			"duplicate":      true,
+		})
 		return
 	}
 	record("success", "ok")

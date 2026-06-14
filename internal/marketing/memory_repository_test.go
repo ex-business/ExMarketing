@@ -704,6 +704,18 @@ func TestMemoryCreateInboxDetectsDuplicateAndConflict(t *testing.T) {
 	if _, duplicate, err := repo.CreateInbox(context.Background(), conflict); !errors.Is(err, ErrIdempotencyConflict) || duplicate {
 		t.Fatalf("expected idempotency conflict, duplicate=%v err=%v", duplicate, err)
 	}
+
+	eventIDConflict := inbox
+	eventIDConflict.ID = "inbox_4"
+	eventIDConflict.Event.Biz.BizID = "pay_other"
+	eventIDConflict.IdempotencyKey = eventIDConflict.Event.IdempotencyKey()
+	existing, duplicate, err = repo.CreateInbox(context.Background(), eventIDConflict)
+	if err != nil || !duplicate {
+		t.Fatalf("expected same event id duplicate, duplicate=%v err=%v", duplicate, err)
+	}
+	if existing.ID != inbox.ID || existing.ProcessStatus != InboxDuplicate {
+		t.Fatalf("expected original inbox duplicate, got %+v", existing)
+	}
 }
 
 func TestActivityEventSameStandardPayloadCanonicalizesNumbers(t *testing.T) {

@@ -323,12 +323,34 @@ func (s *Service) ListWorkflowNodePresets() []marketing.WorkflowNodePreset {
 		nodePreset("event-in-standard", "event-in", "标准事件入口", map[string]any{"eventTypes": []string{"DEPOSIT_SUCCESS"}, "sourceSystems": []string{"payment"}}, "entry"),
 		nodePreset("event-in-checkin-success", "event-in", "签到成功标准事件入口", map[string]any{
 			"eventTypes":             []string{"CHECKIN_SUCCESS"},
+			"eventTypeMatchMode":     "ANY",
 			"sourceSystems":          []string{"app", "user-center"},
 			"tenantScope":            "CURRENT_TENANT",
 			"payloadSchemaVersion":   "standard-v1",
 			"rejectUnknownEventType": true,
 			"traceKeyPath":           "$.traceId",
 		}, "entry", "checkin", "reward"),
+		nodePreset("event-in-checkin-or-deposit", "event-in", "签到或存款标准事件入口", map[string]any{
+			"eventTypes":             []string{"CHECKIN_SUCCESS", "DEPOSIT_SUCCESS"},
+			"eventTypeMatchMode":     "ANY",
+			"sourceSystems":          []string{"app", "payment"},
+			"tenantScope":            "CURRENT_TENANT",
+			"payloadSchemaVersion":   "standard-v1",
+			"rejectUnknownEventType": true,
+			"traceKeyPath":           "$.traceId",
+		}, "entry", "checkin", "deposit", "any"),
+		nodePreset("event-in-checkin-and-deposit", "event-in", "签到且存款标准事件入口", map[string]any{
+			"eventTypes":               []string{"CHECKIN_SUCCESS", "DEPOSIT_SUCCESS"},
+			"eventTypeMatchMode":       "ALL",
+			"sourceSystems":            []string{"app", "payment"},
+			"tenantScope":              "CURRENT_TENANT",
+			"payloadSchemaVersion":     "standard-v1",
+			"rejectUnknownEventType":   true,
+			"traceKeyPath":             "$.traceId",
+			"correlationKeyTemplate":   "${tenantId}:${subject.id}:${activityId}",
+			"correlationWindowSeconds": 86400,
+			"allEventsAction":          "WAIT",
+		}, "entry", "checkin", "deposit", "all", "planned"),
 		nodePreset("http-event-openapi", "http-event", "HTTP 接口事件", map[string]any{"path": "/openapi/v1/events", "method": "POST", "auth": "BEARER_TOKEN", "payloadMode": "STANDARD_EVENT", "maxBodyBytes": 1048576}, "event-input", "http", "explain"),
 		nodePreset("webhook-event-hmac", "webhook-event", "Webhook 映射事件", map[string]any{"receiverCode": "payment-webhook", "signature": "HMAC_SHA256", "allowedTenantIds": []string{"site_001"}, "allowedSourceSystems": []string{"payment"}, "mappingVersion": "v1"}, "event-input", "webhook", "explain"),
 		nodePreset("mq-event-kafka", "mq-event", "MQ Topic 事件", map[string]any{"broker": "KAFKA", "topic": "user-checkin-events", "consumerGroup": "exmarketing-checkin", "ackPolicy": "ACK_AFTER_INBOX_COMMIT", "retryPolicy": "RETRY_THEN_DLQ"}, "event-input", "mq", "planned"),
@@ -339,7 +361,77 @@ func (s *Service) ListWorkflowNodePresets() []marketing.WorkflowNodePreset {
 		nodePreset("normalize-basic", "normalize", "基础标准化", map[string]any{"mapping": map[string]any{}, "defaults": map[string]any{}}, "transform"),
 		nodePreset("match-active-first", "match", "在线活动优先匹配", map[string]any{"mode": "FIRST_MATCH", "requireActiveActivity": true}, "logic"),
 		nodePreset("qualify-risk-block", "qualify", "资格和风控阻断", map[string]any{"ruleCodes": []string{"ELIGIBILITY", "RISK"}, "riskPolicy": "BLOCK"}, "risk"),
-		nodePreset("fact-query-user-order", "fact-query", "用户订单事实增强", map[string]any{"factKeys": []string{"USER_PROFILE", "ORDER_SUMMARY"}, "timeoutSeconds": 3}, "query"),
+		nodePreset("fact-query-user-order", "fact-query", "组合事实查询", map[string]any{
+			"factKeys":      []string{"USER_PROFILE", "ORDER_SUMMARY"},
+			"providerChain": []string{"WORKFLOW_CONTEXT", "LOCAL_CACHE", "HTTP_PROVIDER"},
+			"subjectPath":   "subject.id",
+			"endpoint":      "https://user-service/internal/facts/query",
+			"method":        "POST",
+			"authRef":       "internal-service-token",
+			"mapping": map[string]any{
+				"value": map[string]any{"source": "$.data", "type": "object", "required": false},
+			},
+			"timeoutSeconds": 3,
+		}, "query", "fact"),
+		nodePreset("context-query-user-profile", "context-query", "上下文用户资料", map[string]any{"factKeys": []string{"USER_PROFILE"}, "sourcePath": "$.attributes.USER_PROFILE", "failureAction": "USE_EMPTY"}, "query", "fact", "context"),
+		nodePreset("local-cache-query-user-profile", "local-cache-query", "本地缓存用户资料", map[string]any{"factKeys": []string{"USER_PROFILE"}, "cachePath": "$.vars.execution.facts.USER_PROFILE", "failureAction": "USE_EMPTY"}, "query", "fact", "cache"),
+		nodePreset("http-query-user-profile", "http-query", "HTTP 用户资料查询", map[string]any{
+			"factKeys":    []string{"USER_PROFILE"},
+			"source":      "HTTP_PROVIDER",
+			"subjectPath": "subject.id",
+			"endpoint":    "https://user-service/internal/facts/user-profile",
+			"method":      "POST",
+			"authRef":     "internal-service-token",
+			"mapping": map[string]any{
+				"vipLevel":     map[string]any{"source": "$.data.profile.vipLevel", "type": "string", "required": false},
+				"country":      map[string]any{"source": "$.data.profile.country", "type": "string", "required": false},
+				"registeredAt": map[string]any{"source": "$.data.profile.registeredAt", "type": "string", "required": false},
+			},
+			"timeoutSeconds": 3,
+			"failureAction":  "BLOCK",
+		}, "query", "fact", "http"),
+		nodePreset("redis-query-user-profile", "redis-query", "Redis 用户资料缓存", map[string]any{
+			"factKeys":      []string{"USER_PROFILE"},
+			"redisRef":      "marketing-fact-cache",
+			"keyTemplate":   "marketing:fact:${tenantId}:USER_PROFILE:${subject.id}",
+			"command":       "GET",
+			"valuePath":     "$",
+			"failureAction": "SKIP",
+		}, "query", "fact", "redis", "planned"),
+		nodePreset("grpc-query-user-profile", "grpc-query", "gRPC 用户资料查询", map[string]any{
+			"factKeys":       []string{"USER_PROFILE"},
+			"grpcTarget":     "dns:///user-service:9090",
+			"service":        "user.ProfileFactService",
+			"method":         "QueryFacts",
+			"authority":      "user-service",
+			"tls":            true,
+			"timeoutSeconds": 3,
+			"failureAction":  "SKIP",
+		}, "query", "fact", "grpc", "planned"),
+		nodePreset("plugin-query-user-profile", "plugin-query", "插件用户资料查询", map[string]any{
+			"factKeys":       []string{"USER_PROFILE"},
+			"pluginCode":     "user-profile",
+			"action":         "QUERY_FACTS",
+			"inputPath":      "$",
+			"timeoutSeconds": 3,
+			"failureAction":  "SKIP",
+		}, "query", "fact", "plugin", "planned"),
+		nodePreset("custom-query-user-profile", "custom-query", "自定义事实查询", map[string]any{
+			"factKeys":     []string{"USER_PROFILE"},
+			"providerCode": "custom-user-profile",
+			"protocol":     "CUSTOM",
+			"endpoint":     "custom://user-profile/facts",
+			"requestTemplate": map[string]any{
+				"subjectId": "${subject.id}",
+				"tenantId":  "${tenantId}",
+			},
+			"responseMapping": map[string]any{
+				"USER_PROFILE": map[string]any{"source": "$.profile", "type": "object", "required": false},
+			},
+			"timeoutSeconds": 3,
+			"failureAction":  "SKIP",
+		}, "query", "fact", "custom", "planned"),
+		nodePreset("lua-query-user-profile", "lua-query", "Lua 上下文事实", map[string]any{"factCode": "USER_PROFILE", "source": "emit({facts = {USER_PROFILE = {vipLevel = input('vipLevel')}}})", "failureAction": "BLOCK"}, "query", "fact", "lua"),
 		nodePreset("fact-query-checkin-streak", "fact-query", "签到连续天数事实", map[string]any{"factKeys": []string{"CHECKIN_STREAK"}, "source": "FACT_SERVICE", "subjectPath": "subject.id", "timeoutSeconds": 3, "failureAction": "USE_EMPTY"}, "query", "checkin"),
 		nodePreset("activity-state-checkin", "activity-state", "签到活动状态", map[string]any{"operation": "READ", "namespace": "checkin", "stateKeyTemplate": "${activityId}:${subject.id}", "missingPolicy": "EMPTY_STATE", "requireVersion": true}, "store", "checkin"),
 		nodePreset("quota-check-daily-checkin", "quota-check", "每日签到频控", map[string]any{"scope": "USER", "scopeKeyTemplate": "${subject.id}:${activityId}", "window": "DAY", "maxCount": 1, "consumeMode": "CHECK_ONLY", "exceedAction": "BLOCK"}, "quota", "checkin"),
@@ -690,7 +782,7 @@ func builtinWorkflowDraftTemplates(now time.Time) []marketing.WorkflowDraftTempl
 		builtinWorkflowTemplate("risk-qualify-chain", "风控和资格校验链路模板", "风控资格", "强调资格、事实查询、风控限制和审计。", []string{"event-in", "inbox", "fact-query", "qualify", "limit", "audit"}, now),
 		builtinWorkflowTemplate("quota-protected-reward-chain", "Quota 保护奖励链路模板", "Quota 保护", "奖励前后加入次数限制和原子预算扣减。", []string{"event-in", "inbox", "normalize", "match", "fact-query", "qualify", "reward", "limit", "quota", "participation", "grant-order", "outbox", "audit"}, now),
 		builtinWorkflowTemplate("fact-query-enhanced-chain", "Fact Query 数据增强链路模板", "数据增强", "通过 Fact Query 增强上下文后再匹配和发奖。", []string{"event-in", "inbox", "normalize", "fact-query", "match", "qualify", "reward", "limit", "quota", "participation", "grant-order", "outbox", "audit"}, now),
-		builtinWorkflowTemplate("production-checkin-reward-chain", "生产级签到奖励链路模板", "签到奖励", "签到入口、状态读取、每日频控、候选奖励、预算锁定、发奖、对账和审计。", []string{"event-in", "inbox", "normalize", "match", "fact-query", "activity-state", "quota-check", "qualify", "candidate-reward", "budget-reserve", "participation", "grant-order", "outbox", "reward-reconcile", "audit"}, now),
+		builtinWorkflowTemplate("production-checkin-reward-chain", "生产级签到奖励链路模板", "签到奖励", "签到入口、状态读取、每日频控、候选奖励、预算锁定、发奖、对账和审计。", []string{"event-in", "inbox", "normalize", "fact-query", "activity-state", "quota-check", "qualify", "candidate-reward", "budget-reserve", "participation", "grant-order", "outbox", "reward-reconcile", "audit"}, now),
 	}
 }
 
@@ -825,7 +917,7 @@ func workflowTemplateNodeKind(nodeType string) string {
 		return "grant"
 	case "outbox", "plugin-execute":
 		return "dispatch"
-	case "fact-query":
+	case "fact-query", "context-query", "local-cache-query", "http-query", "redis-query", "grpc-query", "plugin-query", "custom-query", "lua-query":
 		return "query"
 	default:
 		return "logic"
@@ -833,17 +925,17 @@ func workflowTemplateNodeKind(nodeType string) string {
 }
 
 func workflowTemplateNodeTitle(nodeType string) string {
-	titles := map[string]string{"event-in": "标准事件入口", "inbox": "幂等收件箱", "normalize": "事件标准化", "match": "活动匹配", "qualify": "资格校验", "reward": "奖励计算", "limit": "次数限制", "quota": "预算库存扣减", "participation": "参与记录", "grant-order": "发奖订单", "outbox": "消息发件箱", "callback": "结果回调", "audit": "审计记录", "fact-query": "事实查询", "combine": "组合节点", "split": "拆分节点", "activity-state": "活动状态", "quota-check": "次数频控校验", "candidate-reward": "候选奖励", "budget-reserve": "预算库存锁定", "approval-gate": "审批网关", "compensation": "业务补偿", "random-pick": "随机抽取", "plugin-execute": "插件执行", "ab-bucket": "AB 分桶", "risk-score": "风险评分", "settlement-window": "结算窗口", "manual-adjust": "人工调整", "reconcile": "对账校验", "reward-reconcile": "奖励对账"}
+	titles := map[string]string{"event-in": "标准事件入口", "inbox": "幂等收件箱", "normalize": "事件标准化", "match": "活动匹配", "qualify": "资格校验", "reward": "奖励计算", "limit": "次数限制", "quota": "预算库存扣减", "participation": "参与记录", "grant-order": "发奖订单", "outbox": "消息发件箱", "callback": "结果回调", "audit": "审计记录", "fact-query": "事实查询", "context-query": "上下文查询", "local-cache-query": "本地缓存查询", "http-query": "HTTP 查询", "redis-query": "Redis 查询", "grpc-query": "gRPC 查询", "plugin-query": "插件查询", "custom-query": "自定义查询", "lua-query": "Lua 查询", "combine": "组合节点", "split": "拆分节点", "activity-state": "活动状态", "quota-check": "次数频控校验", "candidate-reward": "候选奖励", "budget-reserve": "预算库存锁定", "approval-gate": "审批网关", "compensation": "业务补偿", "random-pick": "随机抽取", "plugin-execute": "插件执行", "ab-bucket": "AB 分桶", "risk-score": "风险评分", "settlement-window": "结算窗口", "manual-adjust": "人工调整", "reconcile": "对账校验", "reward-reconcile": "奖励对账"}
 	return titles[nodeType]
 }
 
 func workflowTemplateNodeInputs(nodeType string) []string {
-	inputs := map[string][]string{"event-in": {"raw_event"}, "inbox": {"raw_event"}, "normalize": {"raw_event"}, "match": {"event_context"}, "qualify": {"matched_activity"}, "reward": {"qualified_context"}, "limit": {"subject"}, "quota": {"reward_items"}, "participation": {"qualified_context", "quota_hold"}, "grant-order": {"participation_id", "reward_items"}, "outbox": {"grant_order"}, "callback": {"quota_hold"}, "audit": {"stage_result"}, "fact-query": {"subject"}, "combine": {"items", "context"}, "split": {"payload", "items"}, "activity-state": {"event_context", "state_patch"}, "quota-check": {"subject", "activity_id"}, "candidate-reward": {"qualified_context", "plugin_result"}, "budget-reserve": {"candidate_rewards", "reward_items"}, "approval-gate": {"candidate_rewards", "risk_result"}, "compensation": {"stage_result"}, "random-pick": {"candidate_rewards"}, "plugin-execute": {"event_context", "activity_state"}, "ab-bucket": {"subject"}, "risk-score": {"facts"}, "settlement-window": {"event_context"}, "manual-adjust": {"operator"}, "reconcile": {"date_range"}, "reward-reconcile": {"date_range"}}
+	inputs := map[string][]string{"event-in": {"raw_event"}, "inbox": {"raw_event"}, "normalize": {"raw_event"}, "match": {"event_context"}, "qualify": {"matched_activity"}, "reward": {"qualified_context"}, "limit": {"subject"}, "quota": {"reward_items"}, "participation": {"qualified_context", "quota_hold"}, "grant-order": {"participation_id", "reward_items"}, "outbox": {"grant_order"}, "callback": {"quota_hold"}, "audit": {"stage_result"}, "fact-query": {"subject"}, "context-query": {"subject"}, "local-cache-query": {"subject"}, "http-query": {"subject"}, "redis-query": {"subject"}, "grpc-query": {"subject"}, "plugin-query": {"subject"}, "custom-query": {"subject"}, "lua-query": {"subject"}, "combine": {"items", "context"}, "split": {"payload", "items"}, "activity-state": {"event_context", "state_patch"}, "quota-check": {"subject", "activity_id"}, "candidate-reward": {"qualified_context", "plugin_result"}, "budget-reserve": {"candidate_rewards", "reward_items"}, "approval-gate": {"candidate_rewards", "risk_result"}, "compensation": {"stage_result"}, "random-pick": {"candidate_rewards"}, "plugin-execute": {"event_context", "activity_state"}, "ab-bucket": {"subject"}, "risk-score": {"facts"}, "settlement-window": {"event_context"}, "manual-adjust": {"operator"}, "reconcile": {"date_range"}, "reward-reconcile": {"date_range"}}
 	return inputs[nodeType]
 }
 
 func workflowTemplateNodeOutputs(nodeType string) []string {
-	outputs := map[string][]string{"event-in": {"raw_event"}, "inbox": {"event_context"}, "normalize": {"normalized_event"}, "match": {"matched_activity"}, "qualify": {"stage_result", "decision", "PASS", "BLOCK", "RISK"}, "reward": {"reward_items"}, "limit": {"limit_hold"}, "quota": {"quota_hold"}, "participation": {"participation_id"}, "grant-order": {"grant_order"}, "outbox": {"HTTP", "MQ", "Webhook", "Failed"}, "callback": {"callback_result"}, "audit": {"audit_log"}, "fact-query": {"facts"}, "combine": {"combined_result"}, "split": {"split_items", "split_result"}, "activity-state": {"activity_state", "state_version"}, "quota-check": {"quota_check", "limit_hold"}, "candidate-reward": {"candidate_rewards", "reward_items"}, "budget-reserve": {"budget_reservation", "quota_hold"}, "approval-gate": {"approval_decision"}, "compensation": {"compensation_plan"}, "random-pick": {"random_pick", "selected_rewards"}, "plugin-execute": {"plugin_result", "candidate_rewards"}, "ab-bucket": {"ab_bucket"}, "risk-score": {"risk_result"}, "settlement-window": {"settlement_window"}, "manual-adjust": {"manual_adjustment"}, "reconcile": {"reconcile_report"}, "reward-reconcile": {"reward_reconcile_report"}}
+	outputs := map[string][]string{"event-in": {"raw_event"}, "inbox": {"event_context"}, "normalize": {"normalized_event"}, "match": {"matched_activity"}, "qualify": {"stage_result", "decision", "PASS", "BLOCK", "RISK"}, "reward": {"reward_items"}, "limit": {"limit_hold"}, "quota": {"quota_hold"}, "participation": {"participation_id"}, "grant-order": {"grant_order"}, "outbox": {"HTTP", "MQ", "Webhook", "Failed"}, "callback": {"callback_result"}, "audit": {"audit_log"}, "fact-query": {"facts"}, "context-query": {"facts"}, "local-cache-query": {"facts"}, "http-query": {"facts"}, "redis-query": {"facts"}, "grpc-query": {"facts"}, "plugin-query": {"facts"}, "custom-query": {"facts"}, "lua-query": {"facts"}, "combine": {"combined_result"}, "split": {"split_items", "split_result"}, "activity-state": {"activity_state", "state_version"}, "quota-check": {"quota_check", "limit_hold"}, "candidate-reward": {"candidate_rewards", "reward_items"}, "budget-reserve": {"budget_reservation", "quota_hold"}, "approval-gate": {"approval_decision"}, "compensation": {"compensation_plan"}, "random-pick": {"random_pick", "selected_rewards"}, "plugin-execute": {"plugin_result", "candidate_rewards"}, "ab-bucket": {"ab_bucket"}, "risk-score": {"risk_result"}, "settlement-window": {"settlement_window"}, "manual-adjust": {"manual_adjustment"}, "reconcile": {"reconcile_report"}, "reward-reconcile": {"reward_reconcile_report"}}
 	return outputs[nodeType]
 }
 
@@ -877,7 +969,7 @@ func workflowTemplateInputMapping(nodeType string, upstreamNodeTypes []string) m
 		return map[string]any{"raw_event": ref("event-in", "raw_event", "")}
 	case "normalize":
 		return map[string]any{"raw_event": ref("event-in", "raw_event", "")}
-	case "fact-query":
+	case "fact-query", "context-query", "local-cache-query", "http-query", "redis-query", "grpc-query", "plugin-query", "custom-query", "lua-query":
 		return map[string]any{"subject": eventContextRef("$.subject")}
 	case "match":
 		return map[string]any{"event_context": eventContextRef("")}
@@ -1006,12 +1098,13 @@ func workflowTemplateNodeConfig(nodeType string) map[string]any {
 			"requireTraceKey":        false,
 		},
 		"match": {
-			"mode":                  "FIRST_MATCH",
-			"requireActiveActivity": true,
-			"priorityOrder":         "PRIORITY_DESC",
-			"tenantMatchPolicy":     "SAME_TENANT",
-			"fallbackAction":        "NO_MATCH_FAIL",
-			"activityCodePattern":   "",
+			"mode":                    "FIRST_MATCH",
+			"requireActiveActivity":   true,
+			"requireApprovedActivity": false,
+			"priorityOrder":           "PRIORITY_DESC",
+			"tenantMatchPolicy":       "SAME_TENANT",
+			"fallbackAction":          "NO_MATCH_FAIL",
+			"activityCodePattern":     "",
 		},
 		"qualify": {
 			"ruleCodes":        []string{"ELIGIBILITY"},
@@ -1079,10 +1172,88 @@ func workflowTemplateNodeConfig(nodeType string) map[string]any {
 		"fact-query": {
 			"factKeys":        []string{"USER_PROFILE"},
 			"source":          "FACT_SERVICE",
+			"providerChain":   []string{},
 			"subjectPath":     "subject.id",
+			"providerCode":    "",
+			"endpoint":        "",
+			"method":          "POST",
+			"authRef":         "",
+			"mapping":         map[string]any{},
+			"redisRef":        "",
+			"keyTemplate":     "",
+			"grpcTarget":      "",
+			"pluginCode":      "",
 			"timeoutSeconds":  3,
 			"cacheTtlSeconds": 60,
 			"failureAction":   "USE_EMPTY",
+		},
+		"context-query": {
+			"factKeys":      []string{"USER_PROFILE"},
+			"sourcePath":    "$.attributes.USER_PROFILE",
+			"failureAction": "USE_EMPTY",
+		},
+		"local-cache-query": {
+			"factKeys":        []string{"USER_PROFILE"},
+			"cachePath":       "$.vars.execution.facts.USER_PROFILE",
+			"cacheTtlSeconds": 60,
+			"failureAction":   "USE_EMPTY",
+		},
+		"http-query": {
+			"factKeys":        []string{"USER_PROFILE"},
+			"source":          "HTTP_PROVIDER",
+			"subjectPath":     "subject.id",
+			"providerCode":    "",
+			"endpoint":        "https://user-service/internal/facts/user-profile",
+			"method":          "POST",
+			"authRef":         "internal-service-token",
+			"mapping":         map[string]any{"vipLevel": map[string]any{"source": "$.data.profile.vipLevel", "type": "string", "required": false}},
+			"timeoutSeconds":  3,
+			"cacheTtlSeconds": 60,
+			"failureAction":   "BLOCK",
+		},
+		"redis-query": {
+			"factKeys":      []string{"USER_PROFILE"},
+			"redisRef":      "marketing-fact-cache",
+			"keyTemplate":   "marketing:fact:${tenantId}:USER_PROFILE:${subject.id}",
+			"command":       "GET",
+			"valuePath":     "$",
+			"mapping":       map[string]any{},
+			"failureAction": "SKIP",
+		},
+		"grpc-query": {
+			"factKeys":       []string{"USER_PROFILE"},
+			"grpcTarget":     "dns:///user-service:9090",
+			"service":        "user.ProfileFactService",
+			"method":         "QueryFacts",
+			"authority":      "user-service",
+			"tls":            true,
+			"mapping":        map[string]any{},
+			"timeoutSeconds": 3,
+			"failureAction":  "SKIP",
+		},
+		"plugin-query": {
+			"factKeys":       []string{"USER_PROFILE"},
+			"pluginCode":     "user-profile",
+			"action":         "QUERY_FACTS",
+			"inputPath":      "$",
+			"mapping":        map[string]any{},
+			"timeoutSeconds": 3,
+			"failureAction":  "SKIP",
+		},
+		"custom-query": {
+			"factKeys":        []string{"USER_PROFILE"},
+			"providerCode":    "custom-user-profile",
+			"protocol":        "CUSTOM",
+			"endpoint":        "custom://user-profile/facts",
+			"requestTemplate": map[string]any{},
+			"responseMapping": map[string]any{},
+			"timeoutSeconds":  3,
+			"failureAction":   "SKIP",
+		},
+		"lua-query": {
+			"factCode":      "USER_PROFILE",
+			"source":        "emit({facts = {USER_PROFILE = {vipLevel = input('vipLevel')}}})",
+			"failureAction": "BLOCK",
 		},
 		"activity-state": {
 			"operation":        "READ",

@@ -3,12 +3,13 @@ import type { ActivityNodeData, CatalogGroup, NodeKind, WorkflowNodeConfigSchema
 const CATEGORY_LABELS: Record<string, string> = {
   EVENT_INPUT: 'EVENT_INPUT 事件输入',
   CORE: 'CORE 核心链路',
+  STORAGE: 'STORAGE 存储节点',
   FACT_QUERY: 'FACT_QUERY 事实查询',
   ADVANCED: 'ADVANCED 高级集成',
   OPS: 'OPS 运维节点',
 };
 
-const CATEGORY_ORDER = ['EVENT_INPUT', 'CORE', 'FACT_QUERY', 'ADVANCED', 'OPS'];
+const CATEGORY_ORDER = ['EVENT_INPUT', 'CORE', 'STORAGE', 'FACT_QUERY', 'ADVANCED', 'OPS'];
 
 const NODE_ORDER = [
   'event-in',
@@ -31,6 +32,7 @@ const NODE_ORDER = [
   'custom-query',
   'lua-query',
   'activity-state',
+  'state-store',
   'quota-check',
   'qualify',
   'candidate-reward',
@@ -88,6 +90,7 @@ const NODE_KIND_BY_TYPE: Record<string, NodeKind> = {
   'custom-query': 'query',
   'lua-query': 'query',
   'activity-state': 'store',
+  'state-store': 'store',
   'quota-check': 'quota',
   condition: 'logic',
   qualify: 'logic',
@@ -145,6 +148,7 @@ const NODE_CODE_BY_TYPE: Record<string, string> = {
   'custom-query': 'Custom Query',
   'lua-query': 'Lua Query',
   'activity-state': 'Activity State',
+  'state-store': 'State Store',
   'quota-check': 'Quota Check',
   condition: 'CONDITION',
   qualify: 'QUALIFY',
@@ -204,7 +208,6 @@ export const nodeCatalog: CatalogGroup[] = [
       nodeDef('inbox', 'CORE', 'Inbox', '幂等收件箱', 'store', '写入 marketing_event_inbox，重复事件直接返回已有结果', ['raw_event', 'Idempotency-Key'], ['event_context']),
       nodeDef('normalize', 'CORE', 'Normalize', '事件标准化', 'transform', '字段映射、默认值、时间格式、租户和业务主体规范化', ['raw_event'], ['normalized_event']),
       nodeDef('match', 'CORE', 'MATCH', '活动匹配', 'logic', '按活动状态、时间窗、事件类型、来源系统匹配活动', ['event_context', 'activity_config'], ['matched_activity']),
-      nodeDef('activity-state', 'CORE', 'Activity State', '活动状态', 'store', '读取或更新用户活动状态、任务进度、签到状态和插件状态', ['event_context', 'state_patch'], ['activity_state', 'state_version']),
       nodeDef('quota-check', 'CORE', 'Quota Check', '次数频控校验', 'quota', '用户、活动、租户、IP、设备和业务维度次数/频率限制', ['subject', 'activity_id'], ['quota_check', 'limit_hold']),
       nodeDef('qualify', 'CORE', 'QUALIFY', '资格校验', 'logic', '用户资格、活动门槛、参与范围、黑白名单和风险规则校验', ['event_context', 'matched_activity'], ['PASS', 'BLOCK', 'RISK']),
       nodeDef('candidate-reward', 'CORE', 'Candidate Reward', '候选奖励', 'reward', '生成待发奖励候选，不直接产生资金副作用', ['qualified_context', 'plugin_result'], ['candidate_rewards', 'reward_items']),
@@ -215,6 +218,13 @@ export const nodeCatalog: CatalogGroup[] = [
       nodeDef('participation', 'CORE', 'Participation', '参与记录', 'store', '写入参与流水，关联事件、活动、奖励、quota 和阶段结果', ['qualified_context', 'quota_hold'], ['participation_id']),
       nodeDef('grant-order', 'CORE', 'GrantOrder', '发奖订单', 'grant', '生成发奖订单，状态流转 CREATED / SENT / SUCCESS / FAILED', ['participation_id', 'reward_items'], ['grant_order']),
       nodeDef('outbox', 'CORE', 'Outbox', '消息发件箱', 'dispatch', '写入 outbox，后续 worker 发送 HTTP / MQ / Webhook', ['grant_order'], ['HTTP', 'MQ', 'Webhook', 'Failed']),
+    ],
+  },
+  {
+    category: 'STORAGE 存储节点',
+    items: [
+      nodeDef('activity-state', 'STORAGE', 'Activity State', '活动状态', 'store', '读取或更新用户活动状态、任务进度、签到状态和插件状态', ['event_context', 'state_patch'], ['activity_state', 'state_version']),
+      nodeDef('state-store', 'STORAGE', 'State Store', '通用存储', 'store', '统一读写内存、工作流上下文、数据库和外部 Provider 存储', ['value', 'state_patch'], ['stored_value', 'storage_entry', 'storage_version']),
     ],
   },
   {

@@ -680,6 +680,18 @@ function saveStudioStringSet(key: string, value: Set<string>) {
   window.localStorage.setItem(key, JSON.stringify([...value].slice(0, 200)));
 }
 
+function uniqueFlowNodeId(base: string, nodes: FlowNode[]): string {
+  const existing = new Set(nodes.map((node) => node.id));
+  const safeBase = base.trim() || 'node';
+  let candidate = `${safeBase}-${Date.now().toString(36)}`;
+  let index = 1;
+  while (existing.has(candidate)) {
+    candidate = `${safeBase}-${Date.now().toString(36)}-${index}`;
+    index += 1;
+  }
+  return candidate;
+}
+
 function activityTimestamp(activity: ActivitySummary): number {
   const value = activity.updatedAt || activity.createdAt || '';
   const time = value ? Date.parse(value) : 0;
@@ -4860,7 +4872,7 @@ export function App() {
 
   const addNodeAt = useCallback((def: ActivityNodeData, x: number, y: number) => {
     invalidateWorkflowValidation();
-    const id = `${def.id}-${Date.now().toString(36)}`;
+    const id = uniqueFlowNodeId(def.id, nodes);
     setNodes((items) => items.concat(flowNode(def.id, x, y, { id })));
     if (nodePicker?.sourceNodeId) {
       const newEdge = edge(nodePicker.sourceNodeId, id, nodePicker.sourceLabel ?? '', nodePicker.sourceHandle);
@@ -4870,7 +4882,7 @@ export function App() {
     }
     setLastAdded(def.title);
     closeFloatingUi();
-  }, [closeFloatingUi, invalidateWorkflowValidation, nodePicker, setEdges, setNodes]);
+  }, [closeFloatingUi, invalidateWorkflowValidation, nodePicker, nodes, setEdges, setNodes]);
 
   const addCatalogNode = useCallback((def: ActivityNodeData) => {
     const offset = nodes.length * 18;
@@ -4899,7 +4911,7 @@ export function App() {
 
   const addNoteAt = useCallback((x: number, y: number) => {
     invalidateWorkflowValidation();
-    const id = `note-${Date.now().toString(36)}`;
+    const id = uniqueFlowNodeId('note', nodes);
     setNodes((items) => items.concat({
       id,
       type: 'note',
@@ -4908,7 +4920,7 @@ export function App() {
     } satisfies NoteNode));
     setLastAdded('备注');
     closeFloatingUi();
-  }, [closeFloatingUi, invalidateWorkflowValidation, setNodes]);
+  }, [closeFloatingUi, invalidateWorkflowValidation, nodes, setNodes]);
 
   const deleteNodes = useCallback((nodeIds: string[]) => {
     if (nodeIds.length === 0) return;
@@ -4944,9 +4956,10 @@ export function App() {
     const current = nodes.find((item) => item.id === nodeId);
     if (!current) return;
     invalidateWorkflowValidation();
+    const duplicateBaseId = current.type === 'activity' ? (current.data.id || current.id) : (current.type || current.id || 'node');
     const duplicate = {
       ...current,
-      id: `${current.type}-${Date.now().toString(36)}`,
+      id: uniqueFlowNodeId(duplicateBaseId, nodes),
       selected: false,
       parentId: undefined,
       extent: undefined,
@@ -5074,7 +5087,7 @@ export function App() {
     const minY = Math.min(...selected.map((node) => node.position.y));
     const maxX = Math.max(...selected.map((node) => node.position.x + ACTIVITY_NODE_WIDTH));
     const maxY = Math.max(...selected.map((node) => node.position.y + activityNodeHeight(node)));
-    const groupId = `group-${Date.now().toString(36)}`;
+    const groupId = uniqueFlowNodeId('group', nodes);
     const groupX = minX - 28;
     const groupY = minY - 58;
     const groupNode: GroupNode = {

@@ -108,12 +108,51 @@ func executeWorkflowLua(ctx context.Context, node marketing.WorkflowNode, runtim
 	}))
 	state.SetGlobal("node_output", state.NewFunction(func(l *lua.LState) int {
 		nodeID := l.CheckString(1)
-		key := l.CheckString(2)
+		key := l.OptString(2, "")
 		if output, ok := executionContext.NodeOutputs[nodeID]; ok {
-			l.Push(goValueToLua(state, output[key]))
+			if key == "" {
+				l.Push(goValueToLua(state, output))
+			} else {
+				l.Push(goValueToLua(state, output[key]))
+			}
 			return 1
 		}
 		l.Push(lua.LNil)
+		return 1
+	}))
+	state.SetGlobal("node_output_path", state.NewFunction(func(l *lua.LState) int {
+		nodeID := l.CheckString(1)
+		path := l.CheckString(2)
+		if output, ok := executionContext.NodeOutputs[nodeID]; ok {
+			l.Push(luaGetPath(goValueToLua(state, output), path))
+			return 1
+		}
+		l.Push(lua.LNil)
+		return 1
+	}))
+	state.SetGlobal("node", state.NewFunction(func(l *lua.LState) int {
+		nodeID := l.CheckString(1)
+		if definition, ok := executionContext.NodeDefinitions[nodeID]; ok {
+			l.Push(goValueToLua(state, workflowLuaNodeDefinitionContext(definition)))
+			return 1
+		}
+		l.Push(lua.LNil)
+		return 1
+	}))
+	state.SetGlobal("node_config", state.NewFunction(func(l *lua.LState) int {
+		nodeID := l.CheckString(1)
+		key := l.OptString(2, "")
+		definition, ok := executionContext.NodeDefinitions[nodeID]
+		if !ok {
+			l.Push(lua.LNil)
+			return 1
+		}
+		config := workflowNodeConfigMap(definition)
+		if key == "" {
+			l.Push(goValueToLua(state, config))
+		} else {
+			l.Push(goValueToLua(state, config[key]))
+		}
 		return 1
 	}))
 	state.SetGlobal("input", state.NewFunction(func(l *lua.LState) int {
@@ -364,8 +403,35 @@ func workflowLuaContext(ctx context.Context, node marketing.WorkflowNode, runtim
 			"config": workflowNodeConfigMap(node),
 			"input":  executionContext.ResolvedInput,
 		},
-		"nodes": cloneWorkflowNodeOutputs(executionContext.NodeOutputs),
+		"nodes": workflowLuaNodesContext(executionContext.NodeDefinitions, executionContext.NodeOutputs),
 		"vars":  cloneWorkflowVars(executionContext.Variables),
+	}
+}
+
+func workflowLuaNodesContext(nodes map[string]marketing.WorkflowNode, outputs map[string]map[string]any) map[string]any {
+	out := map[string]any{}
+	for nodeID, output := range outputs {
+		out[nodeID] = workflowJSONValue(output)
+	}
+	for nodeID := range nodes {
+		if _, ok := out[nodeID]; !ok {
+			out[nodeID] = map[string]any{}
+		}
+	}
+	return out
+}
+
+func workflowLuaNodeDefinitionContext(node marketing.WorkflowNode) map[string]any {
+	return map[string]any{
+		"id":       node.ID,
+		"type":     node.Type,
+		"kind":     node.Kind,
+		"code":     node.Code,
+		"title":    node.Title,
+		"position": workflowJSONValue(node.Position),
+		"inputs":   workflowJSONValue(node.Inputs),
+		"outputs":  workflowJSONValue(node.Outputs),
+		"config":   workflowNodeConfigMap(node),
 	}
 }
 

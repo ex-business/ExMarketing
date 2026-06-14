@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -747,6 +748,139 @@ func TestPostgresActivityStateReadUpsertAndCAS(t *testing.T) {
 	})
 	if !errors.Is(err, marketing.ErrActivityStateConflict) {
 		t.Fatalf("expected version conflict, got %v", err)
+	}
+}
+
+func TestPostgresStorageStateReadUpsertAndCAS(t *testing.T) {
+	ctx, repo := openPostgresIntegrationRepository(t)
+	prefix := "pg_storage_state"
+	cleanupPostgresAtomicTest(t, repo, prefix)
+	t.Cleanup(func() { cleanupPostgresAtomicTest(t, repo, prefix) })
+
+	now := time.Now().UTC()
+	key := marketing.StorageStateKey{
+		TenantID:   "site_001",
+		Namespace:  "checkin",
+		StorageKey: prefix + "_user_1",
+	}
+	if _, err := repo.GetStorageState(ctx, key); !errors.Is(err, marketing.ErrNotFound) {
+		t.Fatalf("expected missing storage state, got %v", err)
+	}
+
+	created, err := repo.UpsertStorageState(ctx, marketing.UpsertStorageStateCommand{
+		State: marketing.StorageState{
+			ID:          prefix + "_state",
+			TenantID:    key.TenantID,
+			Namespace:   key.Namespace,
+			StorageKey:  key.StorageKey,
+			ValueType:   "TABLE",
+			Data:        json.RawMessage(`[{"day":"2026-06-14","reward":10}]`),
+			LastEventID: prefix + "_evt_1",
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		},
+	})
+	if err != nil {
+		t.Fatalf("create storage state: %v", err)
+	}
+	if created.Version != 1 {
+		t.Fatalf("expected version 1, got %+v", created)
+	}
+
+	updated, err := repo.UpsertStorageState(ctx, marketing.UpsertStorageStateCommand{
+		State: marketing.StorageState{
+			TenantID:    key.TenantID,
+			Namespace:   key.Namespace,
+			StorageKey:  key.StorageKey,
+			ValueType:   "TABLE",
+			Data:        json.RawMessage(`[{"day":"2026-06-15","reward":20}]`),
+			LastEventID: prefix + "_evt_2",
+			UpdatedAt:   now.Add(time.Minute),
+		},
+		ExpectedVersion: 1,
+		RequireVersion:  true,
+	})
+	if err != nil {
+		t.Fatalf("cas update storage state: %v", err)
+	}
+	if updated.Version != 2 {
+		t.Fatalf("expected version 2, got %+v", updated)
+	}
+
+	_, err = repo.UpsertStorageState(ctx, marketing.UpsertStorageStateCommand{
+		State: marketing.StorageState{
+			TenantID:   key.TenantID,
+			Namespace:  key.Namespace,
+			StorageKey: key.StorageKey,
+			ValueType:  "TABLE",
+			Data:       json.RawMessage(`[{"day":"2026-06-16","reward":30}]`),
+			UpdatedAt:  now.Add(2 * time.Minute),
+		},
+		ExpectedVersion: 1,
+		RequireVersion:  true,
+	})
+	if !errors.Is(err, marketing.ErrStorageStateConflict) {
+		t.Fatalf("expected version conflict, got %v", err)
+	}
+
+	if err := repo.DeleteStorageState(ctx, key); err != nil {
+		t.Fatalf("delete storage state: %v", err)
+	}
+	if _, err := repo.GetStorageState(ctx, key); !errors.Is(err, marketing.ErrNotFound) {
+		t.Fatalf("expected deleted storage state, got %v", err)
+	}
+}
+
+func TestPostgresStorageStateConcurrentFirstAppend(t *testing.T) {
+	ctx, repo := openPostgresIntegrationRepository(t)
+	prefix := "pg_storage_append"
+	cleanupPostgresAtomicTest(t, repo, prefix)
+	t.Cleanup(func() { cleanupPostgresAtomicTest(t, repo, prefix) })
+
+	key := marketing.StorageStateKey{
+		TenantID:   "site_001",
+		Namespace:  "checkin",
+		StorageKey: prefix + "_events",
+	}
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	for _, value := range []string{"first", "second"} {
+		value := value
+		go func() {
+			<-start
+			_, err := repo.UpsertStorageState(ctx, marketing.UpsertStorageStateCommand{
+				State: marketing.StorageState{
+					ID:          prefix + "_" + value,
+					TenantID:    key.TenantID,
+					Namespace:   key.Namespace,
+					StorageKey:  key.StorageKey,
+					ValueType:   "ARRAY",
+					Data:        json.RawMessage(`"` + value + `"`),
+					LastEventID: prefix + "_evt_" + value,
+					CreatedAt:   time.Now().UTC(),
+					UpdatedAt:   time.Now().UTC(),
+				},
+				Append: true,
+			})
+			errs <- err
+		}()
+	}
+	close(start)
+	for i := 0; i < 2; i++ {
+		if err := <-errs; err != nil {
+			t.Fatalf("append %d failed: %v", i, err)
+		}
+	}
+	state, err := repo.GetStorageState(ctx, key)
+	if err != nil {
+		t.Fatalf("get appended storage state: %v", err)
+	}
+	var items []string
+	if err := json.Unmarshal(state.Data, &items); err != nil {
+		t.Fatalf("decode appended state: %v", err)
+	}
+	if len(items) != 2 || !slices.Contains(items, "first") || !slices.Contains(items, "second") {
+		t.Fatalf("expected both concurrent append values, got %+v", items)
 	}
 }
 
@@ -1761,6 +1895,7 @@ func cleanupPostgresAtomicTest(t *testing.T, repo *Repository, prefix string) {
 		`DELETE FROM marketing_grant_order WHERE id LIKE $1`,
 		`DELETE FROM marketing_participation WHERE id LIKE $1`,
 		`DELETE FROM marketing_quota WHERE id LIKE $1`,
+		`DELETE FROM marketing_storage_state WHERE id LIKE $1 OR storage_key LIKE $1`,
 		`DELETE FROM marketing_activity_state WHERE activity_id LIKE $1 OR id LIKE $1`,
 		`DELETE FROM marketing_activity WHERE id LIKE $1`,
 	} {

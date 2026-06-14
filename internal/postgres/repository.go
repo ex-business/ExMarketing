@@ -809,6 +809,114 @@ func (r *Repository) UpsertActivityState(ctx context.Context, cmd marketing.Upse
 	return updated, nil
 }
 
+func (r *Repository) GetStorageState(ctx context.Context, key marketing.StorageStateKey) (marketing.StorageState, error) {
+	row := r.db.QueryRowContext(ctx, `
+		SELECT id, tenant_id, namespace, storage_key, value_type, data_json, version,
+		       COALESCE(last_event_id, ''), expires_at, created_at, updated_at
+		FROM marketing_storage_state
+		WHERE tenant_id = $1 AND namespace = $2 AND storage_key = $3
+	`, key.TenantID, key.Namespace, key.StorageKey)
+	state, err := scanStorageState(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return marketing.StorageState{}, marketing.ErrNotFound
+		}
+		return marketing.StorageState{}, err
+	}
+	return state, nil
+}
+
+func (r *Repository) UpsertStorageState(ctx context.Context, cmd marketing.UpsertStorageStateCommand) (marketing.StorageState, error) {
+	state := cmd.State
+	if state.ID == "" {
+		state.ID = marketing.NewID("store")
+	}
+	if len(state.Data) == 0 {
+		state.Data = json.RawMessage(`null`)
+	}
+	if state.UpdatedAt.IsZero() {
+		state.UpdatedAt = time.Now().UTC()
+	}
+	if state.CreatedAt.IsZero() {
+		state.CreatedAt = state.UpdatedAt
+	}
+	if cmd.Append && !cmd.RequireVersion {
+		state.Data = marketing.AppendStorageStateData(nil, state.Data)
+		state.ValueType = "ARRAY"
+		appended, err := postgresAppendStorageState(ctx, r.db, state)
+		if err != nil {
+			return marketing.StorageState{}, mapPostgresStorageStateError(err)
+		}
+		return appended, nil
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return marketing.StorageState{}, err
+	}
+	defer rollback(tx)
+	row := tx.QueryRowContext(ctx, `
+		SELECT id, tenant_id, namespace, storage_key, value_type, data_json, version,
+		       COALESCE(last_event_id, ''), expires_at, created_at, updated_at
+		FROM marketing_storage_state
+		WHERE tenant_id = $1 AND namespace = $2 AND storage_key = $3
+		FOR UPDATE
+	`, state.TenantID, state.Namespace, state.StorageKey)
+	existing, err := scanStorageState(row)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return marketing.StorageState{}, err
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		if cmd.RequireVersion && cmd.ExpectedVersion > 0 {
+			return marketing.StorageState{}, marketing.ErrNotFound
+		}
+		if cmd.Append {
+			state.Data = marketing.AppendStorageStateData(nil, state.Data)
+			state.ValueType = "ARRAY"
+		}
+		inserted, err := postgresInsertStorageState(ctx, tx, state)
+		if err != nil {
+			return marketing.StorageState{}, mapPostgresStorageStateError(err)
+		}
+		if err := tx.Commit(); err != nil {
+			return marketing.StorageState{}, err
+		}
+		return inserted, nil
+	}
+	if cmd.RequireVersion && existing.Version != cmd.ExpectedVersion {
+		return marketing.StorageState{}, marketing.ErrStorageStateConflict
+	}
+	if cmd.Append {
+		state.Data = marketing.AppendStorageStateData(existing.Data, state.Data)
+		state.ValueType = "ARRAY"
+	}
+	updated, err := postgresUpdateStorageState(ctx, tx, existing.ID, state, existing.Version+1)
+	if err != nil {
+		return marketing.StorageState{}, mapPostgresStorageStateError(err)
+	}
+	if err := tx.Commit(); err != nil {
+		return marketing.StorageState{}, err
+	}
+	return updated, nil
+}
+
+func (r *Repository) DeleteStorageState(ctx context.Context, key marketing.StorageStateKey) error {
+	result, err := r.db.ExecContext(ctx, `
+		DELETE FROM marketing_storage_state
+		WHERE tenant_id = $1 AND namespace = $2 AND storage_key = $3
+	`, key.TenantID, key.Namespace, key.StorageKey)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return marketing.ErrNotFound
+	}
+	return nil
+}
+
 func (r *Repository) CreateInbox(ctx context.Context, inbox marketing.EventInbox) (marketing.EventInbox, bool, error) {
 	inbox.Event = inbox.Event.Normalized()
 	existing, err := r.inboxByEventIdentity(ctx, inbox.Event.TenantID, inbox.Event.EventID)
@@ -2474,6 +2582,36 @@ func scanActivityState(scanner outboxScanner) (marketing.ActivityState, error) {
 	return state, nil
 }
 
+func scanStorageState(scanner outboxScanner) (marketing.StorageState, error) {
+	var state marketing.StorageState
+	var data []byte
+	var lastEventID string
+	var expiresAt sql.NullTime
+	err := scanner.Scan(
+		&state.ID,
+		&state.TenantID,
+		&state.Namespace,
+		&state.StorageKey,
+		&state.ValueType,
+		&data,
+		&state.Version,
+		&lastEventID,
+		&expiresAt,
+		&state.CreatedAt,
+		&state.UpdatedAt,
+	)
+	if err != nil {
+		return marketing.StorageState{}, err
+	}
+	state.Data = append(json.RawMessage(nil), data...)
+	state.LastEventID = lastEventID
+	if expiresAt.Valid {
+		value := expiresAt.Time
+		state.ExpiresAt = &value
+	}
+	return state, nil
+}
+
 func scanActivity(scanner activityScanner) (marketing.Activity, error) {
 	var activity marketing.Activity
 	var triggerEvents []byte
@@ -2853,6 +2991,67 @@ func mapPostgresActivityStateError(err error) error {
 		case "23505":
 			return marketing.ErrActivityStateConflict
 		}
+	}
+	return err
+}
+
+func postgresInsertStorageState(ctx context.Context, tx *sql.Tx, state marketing.StorageState) (marketing.StorageState, error) {
+	row := tx.QueryRowContext(ctx, `
+		INSERT INTO marketing_storage_state (
+			id, tenant_id, namespace, storage_key, value_type, data_json,
+			version, last_event_id, expires_at, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, 1, NULLIF($7, ''), $8, $9, $10)
+		RETURNING id, tenant_id, namespace, storage_key, value_type, data_json, version,
+		          COALESCE(last_event_id, ''), expires_at, created_at, updated_at
+	`, state.ID, state.TenantID, state.Namespace, state.StorageKey, state.ValueType, state.Data,
+		state.LastEventID, state.ExpiresAt, state.CreatedAt, state.UpdatedAt)
+	return scanStorageState(row)
+}
+
+func postgresUpdateStorageState(ctx context.Context, tx *sql.Tx, id string, state marketing.StorageState, version int64) (marketing.StorageState, error) {
+	row := tx.QueryRowContext(ctx, `
+		UPDATE marketing_storage_state
+		SET value_type = $2,
+		    data_json = $3,
+		    version = $4,
+		    last_event_id = NULLIF($5, ''),
+		    expires_at = $6,
+		    updated_at = $7
+		WHERE id = $1
+		RETURNING id, tenant_id, namespace, storage_key, value_type, data_json, version,
+		          COALESCE(last_event_id, ''), expires_at, created_at, updated_at
+	`, id, state.ValueType, state.Data, version, state.LastEventID, state.ExpiresAt, state.UpdatedAt)
+	return scanStorageState(row)
+}
+
+func postgresAppendStorageState(ctx context.Context, db *sql.DB, state marketing.StorageState) (marketing.StorageState, error) {
+	row := db.QueryRowContext(ctx, `
+		INSERT INTO marketing_storage_state (
+			id, tenant_id, namespace, storage_key, value_type, data_json,
+			version, last_event_id, expires_at, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, 'ARRAY', $5, 1, NULLIF($6, ''), $7, $8, $9)
+		ON CONFLICT (tenant_id, namespace, storage_key) DO UPDATE
+		SET value_type = 'ARRAY',
+		    data_json = CASE
+		        WHEN jsonb_typeof(marketing_storage_state.data_json) = 'array'
+		          THEN marketing_storage_state.data_json || EXCLUDED.data_json
+		        ELSE jsonb_build_array(marketing_storage_state.data_json) || EXCLUDED.data_json
+		    END,
+		    version = marketing_storage_state.version + 1,
+		    last_event_id = EXCLUDED.last_event_id,
+		    expires_at = EXCLUDED.expires_at,
+		    updated_at = EXCLUDED.updated_at
+		RETURNING id, tenant_id, namespace, storage_key, value_type, data_json, version,
+		          COALESCE(last_event_id, ''), expires_at, created_at, updated_at
+	`, state.ID, state.TenantID, state.Namespace, state.StorageKey, state.Data,
+		state.LastEventID, state.ExpiresAt, state.CreatedAt, state.UpdatedAt)
+	return scanStorageState(row)
+}
+
+func mapPostgresStorageStateError(err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		return marketing.ErrStorageStateConflict
 	}
 	return err
 }

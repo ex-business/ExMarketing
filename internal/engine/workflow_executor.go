@@ -1,10 +1,13 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
@@ -35,9 +38,10 @@ type workflowNodeResult struct {
 }
 
 type workflowNodeExecutionContext struct {
-	ResolvedInput map[string]any
-	NodeOutputs   map[string]map[string]any
-	Variables     map[string]any
+	ResolvedInput   map[string]any
+	NodeOutputs     map[string]map[string]any
+	NodeDefinitions map[string]marketing.WorkflowNode
+	Variables       map[string]any
 }
 
 type workflowNodeExecutionContextKey struct{}
@@ -234,9 +238,10 @@ func (s *Service) executeWorkflowDefinition(ctx context.Context, runtime workflo
 		} else {
 			workflowApplyNodeContextConfig(workflowVars, node)
 			nodeCtx := context.WithValue(ctx, workflowNodeExecutionContextKey{}, workflowNodeExecutionContext{
-				ResolvedInput: resolvedInput,
-				NodeOutputs:   cloneWorkflowNodeOutputs(nodeOutputs),
-				Variables:     workflowVars,
+				ResolvedInput:   resolvedInput,
+				NodeOutputs:     cloneWorkflowNodeOutputs(nodeOutputs),
+				NodeDefinitions: plan.NodeByID,
+				Variables:       workflowVars,
 			})
 			result = executeWorkflowNodeWithPolicy(nodeCtx, node, runtime, handler)
 		}
@@ -338,6 +343,7 @@ func (s *Service) workflowNodeHandlers() map[string]workflowNodeHandler {
 		"custom-query":      factAdapterRequiredWorkflowNodeHandler("CUSTOM", "CustomFactProvider", false),
 		"lua-query":         luaFactQueryWorkflowNodeHandler,
 		"activity-state":    s.activityStateWorkflowNodeHandler,
+		"state-store":       s.stateStoreWorkflowNodeHandler,
 		"quota-check":       quotaCheckWorkflowNodeHandler,
 		"condition":         decisionWorkflowNodeHandler,
 		"qualify":           decisionWorkflowNodeHandler,
@@ -1663,6 +1669,10 @@ func workflowRenderTemplate(template string, runtime workflowRuntime) string {
 	return out
 }
 
+func workflowRenderNodeTemplate(template string, runtime workflowRuntime, node marketing.WorkflowNode) string {
+	return strings.ReplaceAll(workflowRenderTemplate(template, runtime), "${nodeId}", node.ID)
+}
+
 func extractWorkflowJSONPath(value any, path string) (any, error) {
 	path = strings.TrimSpace(path)
 	if path == "" || path == "$" {
@@ -1819,6 +1829,15 @@ func firstWorkflowString(value string, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func firstWorkflowAny(values ...any) any {
+	for _, value := range values {
+		if value != nil {
+			return value
+		}
+	}
+	return nil
 }
 
 func workflowConfigMap(config map[string]any, key string) map[string]any {
@@ -2896,6 +2915,26 @@ func workflowActivityStateExpectedVersion(ctx context.Context) int64 {
 	return 0
 }
 
+func workflowStorageStateExpectedVersion(ctx context.Context) int64 {
+	if value, ok := workflowResolvedInput(ctx, "storage_version"); ok {
+		return workflowInt64(value)
+	}
+	if value, ok := workflowResolvedInput(ctx, "storage_entry"); ok {
+		if mapped, ok := workflowJSONValue(value).(map[string]any); ok {
+			return workflowInt64(mapped["version"])
+		}
+	}
+	if value, ok := workflowUpstreamOutput(ctx, "storage_version"); ok {
+		return workflowInt64(value)
+	}
+	if value, ok := workflowUpstreamOutput(ctx, "storage_entry"); ok {
+		if mapped, ok := workflowJSONValue(value).(map[string]any); ok {
+			return workflowInt64(mapped["version"])
+		}
+	}
+	return 0
+}
+
 func workflowActivityStateVersion(value any) (int64, bool) {
 	mapped, ok := workflowJSONValue(value).(map[string]any)
 	if !ok {
@@ -2925,6 +2964,335 @@ func workflowInt64(value any) int64 {
 	default:
 		return 0
 	}
+}
+
+func (s *Service) stateStoreWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
+	if canceled := workflowHandlerContextCanceled(ctx, node, runtime); canceled.Status != "" {
+		return canceled
+	}
+	config, failed, ok := workflowRequireNodeConfig(node)
+	if !ok {
+		failed.Output["audit"] = workflowHandlerAudit(node, runtime)
+		return failed
+	}
+	storageType := strings.ToUpper(firstWorkflowString(workflowConfigString(config, "storageType"), "MEMORY"))
+	operation := strings.ToUpper(firstWorkflowString(workflowConfigString(config, "operation"), "DEFINE"))
+	namespace := firstWorkflowString(workflowConfigString(config, "namespace"), "workflow")
+	storageKey := workflowRenderNodeTemplate(firstWorkflowString(workflowConfigString(config, "keyTemplate"), "${activityId}:${eventId}:${nodeId}"), runtime, node)
+	valueType := strings.ToUpper(firstWorkflowString(workflowConfigString(config, "valueType"), "OBJECT"))
+	switch storageType {
+	case "MEMORY", "WORKFLOW_CONTEXT", "LOCAL_CACHE":
+		return workflowMemoryStateStore(ctx, node, runtime, config, operation, namespace, storageKey, valueType)
+	case "DATABASE":
+		return s.workflowDatabaseStateStore(ctx, node, runtime, config, operation, namespace, storageKey, valueType)
+	case "HTTP", "REST", "EXTERNAL":
+		return s.workflowHTTPStateStore(ctx, node, runtime, config, operation, namespace, storageKey, valueType)
+	case "REDIS", "CUSTOM", "PLUGIN", "GRPC":
+		return nodeFailed("STATE_STORE_ADAPTER_REQUIRED: "+storageType+" storage adapter is not registered", map[string]any{
+			"errorCode":          "STATE_STORE_ADAPTER_REQUIRED",
+			"storageType":        storageType,
+			"providerCode":       workflowConfigString(config, "providerCode"),
+			"executionMode":      "ADAPTER_REQUIRED",
+			"executionAuthority": storageType + "StateStore",
+			"audit":              workflowHandlerAudit(node, runtime),
+		})
+	default:
+		return nodeFailed("STATE_STORE_TYPE_UNSUPPORTED: storageType is not supported", map[string]any{
+			"errorCode":   "STATE_STORE_TYPE_UNSUPPORTED",
+			"storageType": storageType,
+			"audit":       workflowHandlerAudit(node, runtime),
+		})
+	}
+}
+
+func (s *Service) workflowHTTPStateStore(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime, config map[string]any, operation string, namespace string, storageKey string, valueType string) workflowNodeResult {
+	endpoint := strings.TrimSpace(workflowConfigString(config, "providerEndpoint"))
+	if endpoint == "" {
+		endpoint = strings.TrimSpace(workflowConfigString(config, "endpoint"))
+	}
+	if endpoint == "" {
+		return nodeFailed("STATE_STORE_PROVIDER_REQUIRED: HTTP storage endpoint is required", map[string]any{"errorCode": "STATE_STORE_PROVIDER_REQUIRED", "storageType": "HTTP", "audit": workflowHandlerAudit(node, runtime)})
+	}
+	endpoint = workflowRenderNodeTemplate(endpoint, runtime, node)
+	value := workflowStateStoreValue(ctx, config, runtime, valueType)
+	expectedVersion := workflowInt64(workflowConfigString(config, "expectedVersion"))
+	if expectedVersion == 0 {
+		expectedVersion = workflowStorageStateExpectedVersion(ctx)
+	}
+	requestBody := map[string]any{
+		"operation":       operation,
+		"tenantId":        runtime.Activity.TenantID,
+		"activityId":      runtime.Activity.ID,
+		"eventId":         runtime.Inbox.Event.EventID,
+		"namespace":       namespace,
+		"key":             storageKey,
+		"valueType":       valueType,
+		"value":           workflowJSONValue(value),
+		"expectedVersion": expectedVersion,
+		"requireVersion":  workflowConfigBool(config, "requireVersion", false) && expectedVersion > 0,
+		"providerCode":    workflowConfigString(config, "providerCode"),
+	}
+	body, err := json.Marshal(requestBody)
+	if err != nil {
+		return nodeFailed("STATE_STORE_HTTP_REQUEST_INVALID: "+err.Error(), map[string]any{"errorCode": "STATE_STORE_HTTP_REQUEST_INVALID", "error": err.Error(), "audit": workflowHandlerAudit(node, runtime)})
+	}
+	timeoutSeconds := workflowConfigNumber(config, "timeoutSeconds")
+	if timeoutSeconds <= 0 {
+		timeoutSeconds = 3
+	}
+	requestCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds*float64(time.Second)))
+	defer cancel()
+	method := strings.ToUpper(firstWorkflowString(workflowConfigString(config, "httpMethod"), http.MethodPost))
+	req, err := http.NewRequestWithContext(requestCtx, method, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nodeFailed("STATE_STORE_HTTP_REQUEST_INVALID: "+err.Error(), map[string]any{"errorCode": "STATE_STORE_HTTP_REQUEST_INVALID", "error": err.Error(), "audit": workflowHandlerAudit(node, runtime)})
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if rawHeaders, ok := config["requestHeaders"].(map[string]any); ok {
+		for key, value := range rawHeaders {
+			if strings.TrimSpace(key) != "" && value != nil {
+				req.Header.Set(key, fmt.Sprint(value))
+			}
+		}
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nodeFailed("STATE_STORE_HTTP_FAILED: "+err.Error(), map[string]any{"errorCode": "STATE_STORE_HTTP_FAILED", "error": err.Error(), "audit": workflowHandlerAudit(node, runtime)})
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return nodeFailed("STATE_STORE_HTTP_FAILED: provider returned non-2xx", map[string]any{"errorCode": "STATE_STORE_HTTP_FAILED", "statusCode": resp.StatusCode, "response": string(respBody), "audit": workflowHandlerAudit(node, runtime)})
+	}
+	output := workflowHTTPStateStoreOutput(node, runtime, operation, namespace, storageKey, valueType, respBody)
+	return nodeSuccess(output)
+}
+
+func workflowHTTPStateStoreOutput(node marketing.WorkflowNode, runtime workflowRuntime, operation string, namespace string, storageKey string, valueType string, body []byte) map[string]any {
+	if len(strings.TrimSpace(string(body))) == 0 {
+		return workflowStateStoreOutput(node, runtime, "HTTP", operation, namespace, storageKey, valueType, nil, 0, operation != "READ" && operation != "DELETE")
+	}
+	var decoded any
+	if err := json.Unmarshal(body, &decoded); err != nil {
+		return workflowStateStoreOutput(node, runtime, "HTTP", operation, namespace, storageKey, "STRING", string(body), 0, true)
+	}
+	mapped, _ := workflowJSONValue(decoded).(map[string]any)
+	if mapped == nil {
+		return workflowStateStoreOutput(node, runtime, "HTTP", operation, namespace, storageKey, valueType, decoded, 0, true)
+	}
+	value := firstWorkflowAny(mapped["stored_value"], mapped["value"], mapped["data"])
+	version := workflowInt64(firstWorkflowAny(mapped["storage_version"], mapped["version"]))
+	exists := true
+	if rawExists, ok := mapped["exists"]; ok {
+		exists = workflowConfigBool(map[string]any{"exists": rawExists}, "exists", true)
+	}
+	if entry, ok := mapped["storage_entry"].(map[string]any); ok {
+		if value == nil {
+			value = firstWorkflowAny(entry["value"], entry["data"])
+		}
+		if version == 0 {
+			version = workflowInt64(entry["version"])
+		}
+		if rawExists, ok := entry["exists"]; ok {
+			exists = workflowConfigBool(map[string]any{"exists": rawExists}, "exists", exists)
+		}
+	}
+	output := workflowStateStoreOutput(node, runtime, "HTTP", operation, namespace, storageKey, valueType, value, version, exists)
+	output["provider_response"] = workflowJSONValue(decoded)
+	return output
+}
+
+func workflowMemoryStateStore(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime, config map[string]any, operation string, namespace string, storageKey string, valueType string) workflowNodeResult {
+	execCtx := workflowNodeContext(ctx)
+	if execCtx.Variables == nil {
+		return nodeFailed("STATE_STORE_MEMORY_UNAVAILABLE: workflow variables are not available", map[string]any{"errorCode": "STATE_STORE_MEMORY_UNAVAILABLE", "audit": workflowHandlerAudit(node, runtime)})
+	}
+	compositeKey := namespace + ":" + storageKey
+	current := workflowGetVar(execCtx.Variables, "storage", compositeKey)
+	switch operation {
+	case "READ":
+		if current == nil {
+			return workflowStateStoreMissing(node, runtime, config, "MEMORY", namespace, storageKey, valueType)
+		}
+		return nodeSuccess(workflowStateStoreOutput(node, runtime, "MEMORY", operation, namespace, storageKey, valueType, current, 1, true))
+	case "DELETE":
+		if storage, ok := execCtx.Variables["storage"].(map[string]any); ok {
+			delete(storage, compositeKey)
+		}
+		return nodeSuccess(workflowStateStoreOutput(node, runtime, "MEMORY", operation, namespace, storageKey, valueType, nil, 0, false))
+	case "DEFINE", "WRITE", "UPSERT", "APPEND":
+		value := workflowStateStoreValue(ctx, config, runtime, valueType)
+		if operation == "APPEND" {
+			value = appendWorkflowStateValue(current, value)
+			valueType = "ARRAY"
+		}
+		workflowSetVar(execCtx.Variables, "storage", compositeKey, value)
+		return nodeSuccess(workflowStateStoreOutput(node, runtime, "MEMORY", operation, namespace, storageKey, valueType, value, 1, true))
+	default:
+		return nodeFailed("STATE_STORE_OPERATION_UNSUPPORTED: operation is not supported", map[string]any{"errorCode": "STATE_STORE_OPERATION_UNSUPPORTED", "operation": operation, "audit": workflowHandlerAudit(node, runtime)})
+	}
+}
+
+func (s *Service) workflowDatabaseStateStore(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime, config map[string]any, operation string, namespace string, storageKey string, valueType string) workflowNodeResult {
+	key := marketing.StorageStateKey{TenantID: runtime.Activity.TenantID, Namespace: namespace, StorageKey: storageKey}
+	switch operation {
+	case "READ":
+		state, err := s.repository.GetStorageState(ctx, key)
+		if err != nil {
+			if errors.Is(err, marketing.ErrNotFound) {
+				return workflowStateStoreMissing(node, runtime, config, "DATABASE", namespace, storageKey, valueType)
+			}
+			return nodeFailed("STATE_STORE_READ_FAILED: "+err.Error(), map[string]any{"errorCode": "STATE_STORE_READ_FAILED", "error": err.Error(), "audit": workflowHandlerAudit(node, runtime)})
+		}
+		return nodeSuccess(workflowStorageStateOutput(node, runtime, "DATABASE", operation, state, true))
+	case "DELETE":
+		err := s.repository.DeleteStorageState(ctx, key)
+		if err != nil && !errors.Is(err, marketing.ErrNotFound) {
+			return nodeFailed("STATE_STORE_DELETE_FAILED: "+err.Error(), map[string]any{"errorCode": "STATE_STORE_DELETE_FAILED", "error": err.Error(), "audit": workflowHandlerAudit(node, runtime)})
+		}
+		return nodeSuccess(workflowStateStoreOutput(node, runtime, "DATABASE", operation, namespace, storageKey, valueType, nil, 0, false))
+	case "DEFINE", "WRITE", "UPSERT", "APPEND":
+		value := workflowStateStoreValue(ctx, config, runtime, valueType)
+		expectedVersion := workflowInt64(workflowConfigString(config, "expectedVersion"))
+		if expectedVersion == 0 {
+			expectedVersion = workflowStorageStateExpectedVersion(ctx)
+		}
+		appendValue := operation == "APPEND"
+		if appendValue {
+			valueType = "ARRAY"
+		}
+		now := time.Now().UTC()
+		state, err := s.repository.UpsertStorageState(ctx, marketing.UpsertStorageStateCommand{
+			State: marketing.StorageState{
+				ID:          marketing.NewID("store"),
+				TenantID:    runtime.Activity.TenantID,
+				Namespace:   namespace,
+				StorageKey:  storageKey,
+				ValueType:   valueType,
+				Data:        workflowRawJSON(value),
+				LastEventID: runtime.Inbox.Event.EventID,
+				CreatedAt:   now,
+				UpdatedAt:   now,
+			},
+			ExpectedVersion: expectedVersion,
+			RequireVersion:  workflowConfigBool(config, "requireVersion", false) && expectedVersion > 0,
+			Append:          appendValue,
+		})
+		if err != nil {
+			code := "STATE_STORE_WRITE_FAILED"
+			if errors.Is(err, marketing.ErrStorageStateConflict) {
+				code = "STATE_STORE_VERSION_CONFLICT"
+			}
+			return nodeFailed(code+": "+err.Error(), map[string]any{"errorCode": code, "error": err.Error(), "expectedVersion": expectedVersion, "audit": workflowHandlerAudit(node, runtime)})
+		}
+		return nodeSuccess(workflowStorageStateOutput(node, runtime, "DATABASE", operation, state, true))
+	default:
+		return nodeFailed("STATE_STORE_OPERATION_UNSUPPORTED: operation is not supported", map[string]any{"errorCode": "STATE_STORE_OPERATION_UNSUPPORTED", "operation": operation, "audit": workflowHandlerAudit(node, runtime)})
+	}
+}
+
+func workflowStateStoreMissing(node marketing.WorkflowNode, runtime workflowRuntime, config map[string]any, storageType string, namespace string, storageKey string, valueType string) workflowNodeResult {
+	output := workflowStateStoreOutput(node, runtime, storageType, "READ", namespace, storageKey, valueType, nil, 0, false)
+	output["errorCode"] = "STATE_STORE_NOT_FOUND"
+	switch strings.ToUpper(firstWorkflowString(workflowConfigString(config, "missingPolicy"), "EMPTY")) {
+	case "BLOCK":
+		return nodeFailed("STATE_STORE_NOT_FOUND: storage value does not exist", output)
+	default:
+		return nodeSuccess(output)
+	}
+}
+
+func workflowStorageStateOutput(node marketing.WorkflowNode, runtime workflowRuntime, storageType string, operation string, state marketing.StorageState, exists bool) map[string]any {
+	return workflowStateStoreOutput(node, runtime, storageType, operation, state.Namespace, state.StorageKey, state.ValueType, workflowStorageStateData(state), state.Version, exists)
+}
+
+func workflowStateStoreOutput(node marketing.WorkflowNode, runtime workflowRuntime, storageType string, operation string, namespace string, storageKey string, valueType string, value any, version int64, exists bool) map[string]any {
+	return map[string]any{
+		"stored_value":       workflowJSONValue(value),
+		"storage_entry":      map[string]any{"namespace": namespace, "key": storageKey, "valueType": valueType, "value": workflowJSONValue(value), "exists": exists, "version": version},
+		"storage_version":    version,
+		"storageType":        storageType,
+		"operation":          operation,
+		"executionMode":      "REAL_HANDLER",
+		"executionAuthority": "WorkflowExecutor/StateStore",
+		"audit":              workflowHandlerAudit(node, runtime),
+	}
+}
+
+func workflowStorageStateData(state marketing.StorageState) any {
+	if len(state.Data) == 0 {
+		return nil
+	}
+	var out any
+	if err := json.Unmarshal(state.Data, &out); err != nil {
+		return string(state.Data)
+	}
+	return out
+}
+
+func workflowStateStoreValue(ctx context.Context, config map[string]any, runtime workflowRuntime, valueType string) any {
+	valuePath := workflowConfigString(config, "valuePath")
+	if valuePath != "" {
+		base := workflowFactQueryBaseContext(ctx, runtime)
+		if value, err := extractWorkflowJSONPath(base, valuePath); err == nil {
+			return coerceWorkflowStateValue(value, valueType)
+		}
+	}
+	if value, ok := config["defaultValue"]; ok {
+		return coerceWorkflowStateValue(value, valueType)
+	}
+	if value, ok := workflowResolvedInput(ctx, "value"); ok {
+		return coerceWorkflowStateValue(value, valueType)
+	}
+	return coerceWorkflowStateValue(nil, valueType)
+}
+
+func coerceWorkflowStateValue(value any, valueType string) any {
+	switch strings.ToUpper(valueType) {
+	case "STRING":
+		if value == nil {
+			return ""
+		}
+		return fmt.Sprint(value)
+	case "NUMBER":
+		return workflowConfigNumber(map[string]any{"value": value}, "value")
+	case "BOOLEAN":
+		return workflowConfigBool(map[string]any{"value": value}, "value", false)
+	case "ARRAY", "TABLE":
+		if items, ok := workflowJSONValue(value).([]any); ok {
+			return items
+		}
+		if value == nil {
+			return []any{}
+		}
+		return []any{workflowJSONValue(value)}
+	case "OBJECT":
+		if mapped, ok := workflowJSONValue(value).(map[string]any); ok {
+			return mapped
+		}
+		return map[string]any{}
+	default:
+		return workflowJSONValue(value)
+	}
+}
+
+func appendWorkflowStateValue(current any, value any) []any {
+	items, _ := workflowJSONValue(current).([]any)
+	if items == nil {
+		items = []any{}
+	}
+	if incoming, ok := workflowJSONValue(value).([]any); ok {
+		return append(items, incoming...)
+	}
+	return append(items, workflowJSONValue(value))
+}
+
+func workflowRawJSON(value any) json.RawMessage {
+	raw, err := json.Marshal(workflowJSONValue(value))
+	if err != nil || len(raw) == 0 {
+		return json.RawMessage(`null`)
+	}
+	return raw
 }
 
 func quotaCheckWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {

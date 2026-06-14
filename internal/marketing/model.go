@@ -285,6 +285,61 @@ type UpsertActivityStateCommand struct {
 	Merge           bool
 }
 
+type StorageState struct {
+	ID          string          `json:"id"`
+	TenantID    string          `json:"tenantId"`
+	Namespace   string          `json:"namespace"`
+	StorageKey  string          `json:"storageKey"`
+	ValueType   string          `json:"valueType"`
+	Data        json.RawMessage `json:"data"`
+	Version     int64           `json:"version"`
+	LastEventID string          `json:"lastEventId,omitempty"`
+	ExpiresAt   *time.Time      `json:"expiresAt,omitempty"`
+	CreatedAt   time.Time       `json:"createdAt"`
+	UpdatedAt   time.Time       `json:"updatedAt"`
+}
+
+type StorageStateKey struct {
+	TenantID   string
+	Namespace  string
+	StorageKey string
+}
+
+type UpsertStorageStateCommand struct {
+	State           StorageState
+	ExpectedVersion int64
+	RequireVersion  bool
+	Append          bool
+}
+
+func AppendStorageStateData(current json.RawMessage, incoming json.RawMessage) json.RawMessage {
+	var items []any
+	if len(current) > 0 && string(current) != "null" {
+		if err := json.Unmarshal(current, &items); err != nil {
+			var value any
+			if err := json.Unmarshal(current, &value); err == nil && value != nil {
+				items = append(items, value)
+			}
+		}
+	}
+	var value any
+	if len(incoming) > 0 {
+		if err := json.Unmarshal(incoming, &value); err != nil {
+			value = string(incoming)
+		}
+	}
+	if incomingItems, ok := value.([]any); ok {
+		items = append(items, incomingItems...)
+	} else if value != nil {
+		items = append(items, value)
+	}
+	raw, err := json.Marshal(items)
+	if err != nil {
+		return json.RawMessage(`[]`)
+	}
+	return raw
+}
+
 func (r *Rule) UnmarshalJSON(data []byte) error {
 	type alias Rule
 	aux := struct {
@@ -1363,6 +1418,7 @@ var (
 	ErrQuotaReservationConflict  = errors.New("quota reservation conflict")
 	ErrQuotaAggregateConflict    = errors.New("quota aggregate conflict")
 	ErrActivityStateConflict     = errors.New("activity state conflict")
+	ErrStorageStateConflict      = errors.New("storage state conflict")
 	ErrActivityConflict          = errors.New("activity conflict")
 	ErrWorkspaceConflict         = errors.New("workspace conflict")
 	ErrInvalidWorkspace          = errors.New("invalid workspace")

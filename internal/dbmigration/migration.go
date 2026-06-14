@@ -216,6 +216,7 @@ func RequiredTables() []string {
 		"marketing_audit",
 		"marketing_fact_provider",
 		"marketing_activity_state",
+		"marketing_storage_state",
 	}
 }
 

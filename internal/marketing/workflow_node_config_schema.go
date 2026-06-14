@@ -486,6 +486,36 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 			[]string{"activity_state", "state_version"},
 			[]string{"INTERNAL 使用 ExMarketing PG 权威状态；CUSTOM 需要显式状态 provider adapter。"},
 		)),
+		groupedSchema("state-store", "通用存储", "定义、读取和写入工作流通用数据，支持变量、字符串、数组、对象和表格。", groups(
+			fieldGroup("storage-key", "存储定位", "定义存储介质、命名空间和 key。", fields(
+				enumField("storageType", "存储类型", true, "MEMORY", []string{"MEMORY", "WORKFLOW_CONTEXT", "LOCAL_CACHE", "DATABASE", "HTTP", "REST", "EXTERNAL", "REDIS", "GRPC", "PLUGIN", "CUSTOM"}),
+				enumField("operation", "操作", true, "DEFINE", []string{"DEFINE", "READ", "WRITE", "UPSERT", "APPEND", "DELETE"}),
+				withDescription(stringField("namespace", "命名空间", true, "workflow", rules(minLength(1), maxLength(128))), "例如 workflow、debug、checkin、temporary。"),
+				withDescription(stringField("keyTemplate", "Key 模板", true, "${activityId}:${eventId}:${nodeId}", rules(minLength(1), maxLength(512))), "支持 tenantId、activityId、eventId、subject.id、nodeId 等模板变量。"),
+			)),
+			fieldGroup("value", "数据定义", "定义值类型、默认值和写入路径。", fields(
+				enumField("valueType", "数据类型", true, "OBJECT", []string{"STRING", "NUMBER", "BOOLEAN", "OBJECT", "ARRAY", "TABLE", "ANY"}),
+				withDescription(stringField("valuePath", "Value Path", false, "", rules(maxLength(160))), "WRITE/UPSERT/APPEND 时从上下文读取值，例如 $.input.value 或 $.outputs.node.result。"),
+				objectField("defaultValue", "默认值", false, nil),
+				objectField("tableSchema", "表结构", false, nil),
+			)),
+			fieldGroup("runtime", "运行策略", "控制缺失、版本和外部 provider。", fields(
+				enumField("missingPolicy", "缺失策略", true, "EMPTY", []string{"EMPTY", "BLOCK"}),
+				booleanField("requireVersion", "要求版本", false, false),
+				withDescription(stringField("expectedVersion", "期望版本", false, "", rules(maxLength(32))), "CAS 或 requireVersion 场景使用。"),
+				withDescription(stringField("providerCode", "Provider Code", false, "", rules(maxLength(128))), "REDIS/CUSTOM adapter 编码。"),
+			)),
+			fieldGroup("provider", "外部 Provider", "HTTP/REST/EXTERNAL 存储使用统一 provider 协议。", fields(
+				withDescription(stringField("providerEndpoint", "Provider Endpoint", false, "", rules(maxLength(512))), "HTTP provider 地址；请求体包含 operation、tenantId、namespace、key、value 和版本信息。"),
+				enumField("httpMethod", "HTTP Method", false, "POST", []string{"POST", "PUT"}),
+				objectField("requestHeaders", "请求 Headers", false, nil),
+				numberField("timeoutSeconds", "超时秒数", false, 3, rules(minValue(1), maxValue(30))),
+			)),
+		), preview(
+			[]string{"input.value", "valuePath", "storage key"},
+			[]string{"stored_value", "storage_entry", "storage_version"},
+			[]string{"MEMORY/WORKFLOW_CONTEXT/LOCAL_CACHE 写入当前 workflow 变量；DATABASE 写入 marketing_storage_state；HTTP/REST/EXTERNAL 调统一 provider；REDIS/GRPC/PLUGIN/CUSTOM 预留 adapter。"},
+		)),
 		groupedSchema("quota-check", "次数频控校验", "对用户、设备、IP、活动或租户维度做次数和频率校验。", groups(
 			fieldGroup("counter", "计数维度", "定义频控 bucket、窗口和上限。", fields(
 				enumField("scope", "限制范围", true, "USER", []string{"USER", "ACTIVITY", "TENANT", "BIZ", "IP", "DEVICE"}),
@@ -884,6 +914,8 @@ func defaultWorkflowNodeCategory(nodeType string) string {
 	switch strings.TrimSpace(nodeType) {
 	case "event-in", "http-event", "webhook-event", "mq-event", "schedule-event", "state-event", "manual-event":
 		return "EVENT_INPUT"
+	case "activity-state", "state-store", "inbox", "participation":
+		return "STORAGE"
 	case "condition", "switch", "code", "combine", "split", "decimal", "http-call", "mq-publish", "webhook", "callback", "approval-gate", "compensation", "random-pick", "plugin-execute", "ab-bucket", "risk-score", "settlement-window", "manual-adjust":
 		return "ADVANCED"
 	case "retry", "dlq", "audit", "reconcile", "reward-reconcile", "alert":
@@ -986,6 +1018,11 @@ func defaultWorkflowNodeInputs(nodeType string) []WorkflowNodeInputVar {
 		return inputVars(
 			inputVar("event_context", "Event Context", "object", false, "事件上下文。"),
 			inputVar("state_patch", "State Patch", "object", false, "状态写入或 CAS patch。"),
+		)
+	case "state-store":
+		return inputVars(
+			inputVar("value", "Value", "any", false, "要写入的值。"),
+			inputVar("state_patch", "State Patch", "object", false, "可选写入对象。"),
 		)
 	case "quota-check":
 		return inputVars(
@@ -1143,6 +1180,12 @@ func defaultWorkflowNodeOutputs(nodeType string) []WorkflowNodeOutputVar {
 		return outputVars(
 			outputVar("activity_state", "Activity State", "object", "活动状态快照。"),
 			outputVar("state_version", "State Version", "number", "状态版本。"),
+		)
+	case "state-store":
+		return outputVars(
+			outputVar("stored_value", "Stored Value", "any", "读取或写入后的值。"),
+			outputVar("storage_entry", "Storage Entry", "object", "存储项元数据和值。"),
+			outputVar("storage_version", "Storage Version", "number", "数据库存储版本。"),
 		)
 	case "quota-check":
 		return outputVars(

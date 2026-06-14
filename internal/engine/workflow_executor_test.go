@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -1355,7 +1356,19 @@ func TestCodeWorkflowNodeHandlerExecutesLuaWithWorkflowContext(t *testing.T) {
 		NodeOutputs: map[string]map[string]any{
 			"qualify": {
 				"decision": "PASS",
+				"id":       "output-id",
 				"score":    88,
+				"stage_result": map[string]any{
+					"decision": "PASS",
+				},
+			},
+		},
+		NodeDefinitions: map[string]marketing.WorkflowNode{
+			"qualify": {
+				ID:     "qualify",
+				Type:   "qualify",
+				Title:  "资格校验",
+				Config: json.RawMessage(`{"evaluationMode":"ALL_PASS"}`),
 			},
 		},
 	})
@@ -1365,7 +1378,7 @@ func TestCodeWorkflowNodeHandlerExecutesLuaWithWorkflowContext(t *testing.T) {
 		Config: json.RawMessage(`{
 			"language": "LUA",
 			"outputPath": "lua_result",
-			"source": "local user_id = ctx.event.subject.id\nlocal decision = ctx.nodes.qualify.decision\nemit({userId = user_id, decision = decision, amount = ctx.node.input.amount, passed = decision == 'PASS'})"
+			"source": "local user_id = ctx.event.subject.id\nlocal qualify = node('qualify')\nlocal decision = ctx.nodes.qualify.decision\nlocal nested_decision = node_output_path('qualify', '$.stage_result.decision')\nlocal mode = node_config('qualify', 'evaluationMode')\nemit({userId = user_id, nodeTitle = qualify.title, outputId = ctx.nodes.qualify.id, definitionId = qualify.id, decision = decision, nestedDecision = nested_decision, mode = mode, amount = ctx.node.input.amount, passed = decision == 'PASS'})"
 		}`),
 	}
 
@@ -1377,7 +1390,7 @@ func TestCodeWorkflowNodeHandlerExecutesLuaWithWorkflowContext(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected lua_result map, got %+v", result.Output["lua_result"])
 	}
-	if luaResult["userId"] != "user_001" || luaResult["decision"] != "PASS" || luaResult["amount"] != "200.00" || luaResult["passed"] != true {
+	if luaResult["userId"] != "user_001" || luaResult["nodeTitle"] != "资格校验" || luaResult["outputId"] != "output-id" || luaResult["definitionId"] != "qualify" || luaResult["decision"] != "PASS" || luaResult["nestedDecision"] != "PASS" || luaResult["mode"] != "ALL_PASS" || luaResult["amount"] != "200.00" || luaResult["passed"] != true {
 		t.Fatalf("unexpected lua output: %+v", luaResult)
 	}
 	codeResult, ok := result.Output["code_result"].(map[string]any)
@@ -1657,6 +1670,183 @@ func TestActivityStateWorkflowNodeHandlerPersistsInternalState(t *testing.T) {
 	conflict := service.activityStateWorkflowNodeHandler(casCtx, casNode, runtime)
 	if conflict.Status != marketing.WorkflowNodeFailed || conflict.Output["errorCode"] != "ACTIVITY_STATE_VERSION_CONFLICT" {
 		t.Fatalf("expected cas conflict, got %+v", conflict)
+	}
+}
+
+func TestStateStoreWorkflowNodeHandlerSupportsMemoryValues(t *testing.T) {
+	ctx := context.Background()
+	service := NewService(marketing.NewMemoryRepository())
+	runtime := testWorkflowHandlerRuntime(true)
+	vars := map[string]any{}
+	writeCtx := context.WithValue(ctx, workflowNodeExecutionContextKey{}, workflowNodeExecutionContext{
+		Variables: vars,
+		ResolvedInput: map[string]any{
+			"value": map[string]any{"streakDays": 1},
+		},
+	})
+	node := marketing.WorkflowNode{
+		ID:     "store-user",
+		Type:   "state-store",
+		Config: json.RawMessage(`{"storageType":"MEMORY","operation":"DEFINE","namespace":"checkin","keyTemplate":"${activityId}:${eventId}:${nodeId}","valueType":"OBJECT"}`),
+	}
+
+	write := service.stateStoreWorkflowNodeHandler(writeCtx, node, runtime)
+	if write.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected memory write success, got %+v", write)
+	}
+	entry := write.Output["storage_entry"].(map[string]any)
+	if entry["key"] != runtime.Activity.ID+":"+runtime.Inbox.Event.EventID+":store-user" {
+		t.Fatalf("expected node id in rendered key, got %+v", entry)
+	}
+
+	readNode := node
+	readNode.Config = json.RawMessage(`{"storageType":"MEMORY","operation":"READ","namespace":"checkin","keyTemplate":"${activityId}:${eventId}:${nodeId}","valueType":"OBJECT"}`)
+	readCtx := context.WithValue(ctx, workflowNodeExecutionContextKey{}, workflowNodeExecutionContext{Variables: vars})
+	read := service.stateStoreWorkflowNodeHandler(readCtx, readNode, runtime)
+	if read.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected memory read success, got %+v", read)
+	}
+	value := read.Output["stored_value"].(map[string]any)
+	if value["streakDays"] != float64(1) {
+		t.Fatalf("expected stored object, got %+v", value)
+	}
+
+	appendNode := marketing.WorkflowNode{
+		ID:     "events",
+		Type:   "state-store",
+		Config: json.RawMessage(`{"storageType":"MEMORY","operation":"APPEND","namespace":"checkin","keyTemplate":"${activityId}:${subject.id}:events","valueType":"ARRAY"}`),
+	}
+	appendCtx := context.WithValue(ctx, workflowNodeExecutionContextKey{}, workflowNodeExecutionContext{
+		Variables:     vars,
+		ResolvedInput: map[string]any{"value": "CHECKIN_SUCCESS"},
+	})
+	appendResult := service.stateStoreWorkflowNodeHandler(appendCtx, appendNode, runtime)
+	if appendResult.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected append success, got %+v", appendResult)
+	}
+	items := appendResult.Output["stored_value"].([]any)
+	if len(items) != 1 || items[0] != "CHECKIN_SUCCESS" {
+		t.Fatalf("expected appended item, got %+v", items)
+	}
+}
+
+func TestStateStoreWorkflowNodeHandlerPersistsDatabaseValuesAndCAS(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	runtime := testWorkflowHandlerRuntime(true)
+	node := marketing.WorkflowNode{
+		ID:     "store-db",
+		Type:   "state-store",
+		Config: json.RawMessage(`{"storageType":"DATABASE","operation":"UPSERT","namespace":"checkin","keyTemplate":"${activityId}:${subject.id}","valueType":"TABLE","defaultValue":[{"day":"2026-06-14","reward":10}]}`),
+	}
+
+	upsert := service.stateStoreWorkflowNodeHandler(ctx, node, runtime)
+	if upsert.Status != marketing.WorkflowNodeSuccess || upsert.Output["storage_version"] != int64(1) {
+		t.Fatalf("expected database upsert success, got %+v", upsert)
+	}
+	rows := upsert.Output["stored_value"].([]any)
+	if len(rows) != 1 {
+		t.Fatalf("expected stored table row, got %+v", rows)
+	}
+
+	casCtx := context.WithValue(ctx, workflowNodeExecutionContextKey{}, workflowNodeExecutionContext{
+		ResolvedInput: map[string]any{
+			"value":           []any{map[string]any{"day": "2026-06-15", "reward": 20}},
+			"state_version":   int64(1),
+			"storage_version": int64(1),
+		},
+	})
+	casNode := marketing.WorkflowNode{
+		ID:     "store-db",
+		Type:   "state-store",
+		Config: json.RawMessage(`{"storageType":"DATABASE","operation":"UPSERT","namespace":"checkin","keyTemplate":"${activityId}:${subject.id}","valueType":"TABLE","requireVersion":true}`),
+	}
+	cas := service.stateStoreWorkflowNodeHandler(casCtx, casNode, runtime)
+	if cas.Status != marketing.WorkflowNodeSuccess || cas.Output["storage_version"] != int64(2) {
+		t.Fatalf("expected database cas success, got %+v", cas)
+	}
+	conflict := service.stateStoreWorkflowNodeHandler(casCtx, casNode, runtime)
+	if conflict.Status != marketing.WorkflowNodeFailed || conflict.Output["errorCode"] != "STATE_STORE_VERSION_CONFLICT" {
+		t.Fatalf("expected database cas conflict, got %+v", conflict)
+	}
+}
+
+func TestStateStoreWorkflowNodeHandlerAppendsDatabaseValuesInRepository(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	runtime := testWorkflowHandlerRuntime(true)
+	node := marketing.WorkflowNode{
+		ID:     "store-events",
+		Type:   "state-store",
+		Config: json.RawMessage(`{"storageType":"DATABASE","operation":"APPEND","namespace":"checkin","keyTemplate":"${activityId}:${subject.id}:events","valueType":"ARRAY"}`),
+	}
+
+	firstCtx := context.WithValue(ctx, workflowNodeExecutionContextKey{}, workflowNodeExecutionContext{
+		ResolvedInput: map[string]any{"value": "first"},
+	})
+	first := service.stateStoreWorkflowNodeHandler(firstCtx, node, runtime)
+	if first.Status != marketing.WorkflowNodeSuccess || first.Output["storage_version"] != int64(1) {
+		t.Fatalf("expected first append success, got %+v", first)
+	}
+
+	secondCtx := context.WithValue(ctx, workflowNodeExecutionContextKey{}, workflowNodeExecutionContext{
+		ResolvedInput: map[string]any{"value": "second"},
+	})
+	second := service.stateStoreWorkflowNodeHandler(secondCtx, node, runtime)
+	if second.Status != marketing.WorkflowNodeSuccess || second.Output["storage_version"] != int64(2) {
+		t.Fatalf("expected second append success, got %+v", second)
+	}
+	items := second.Output["stored_value"].([]any)
+	if len(items) != 2 || items[0] != "first" || items[1] != "second" {
+		t.Fatalf("expected repository append to preserve both items, got %+v", items)
+	}
+}
+
+func TestStateStoreWorkflowNodeHandlerSupportsHTTPProvider(t *testing.T) {
+	ctx := context.Background()
+	service := NewService(marketing.NewMemoryRepository())
+	runtime := testWorkflowHandlerRuntime(true)
+	var received map[string]any
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("expected POST, got %s", r.Method)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Fatalf("decode provider request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"value":{"provider":"ok"},"version":7,"exists":true}`))
+	}))
+	defer provider.Close()
+	node := marketing.WorkflowNode{
+		ID:   "external-store",
+		Type: "state-store",
+		Config: json.RawMessage(`{
+			"storageType":"HTTP",
+			"operation":"UPSERT",
+			"namespace":"checkin",
+			"keyTemplate":"${activityId}:${subject.id}:external",
+			"valueType":"OBJECT",
+			"providerEndpoint":"` + provider.URL + `",
+			"timeoutSeconds":3
+		}`),
+	}
+	nodeCtx := context.WithValue(ctx, workflowNodeExecutionContextKey{}, workflowNodeExecutionContext{
+		ResolvedInput: map[string]any{"value": map[string]any{"streakDays": 1}},
+	})
+
+	result := service.stateStoreWorkflowNodeHandler(nodeCtx, node, runtime)
+	if result.Status != marketing.WorkflowNodeSuccess || result.Output["storage_version"] != int64(7) {
+		t.Fatalf("expected http provider success, got %+v", result)
+	}
+	if received["operation"] != "UPSERT" || received["namespace"] != "checkin" || received["key"] != runtime.Activity.ID+":"+runtime.Inbox.Event.Subject.ID+":external" {
+		t.Fatalf("expected normalized provider request, got %+v", received)
+	}
+	value := result.Output["stored_value"].(map[string]any)
+	if value["provider"] != "ok" {
+		t.Fatalf("expected normalized provider output, got %+v", result.Output)
 	}
 }
 

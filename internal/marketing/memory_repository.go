@@ -33,6 +33,7 @@ type MemoryRepository struct {
 	nodeExecutions          []WorkflowNodeExecution
 	factProviders           map[string]FactProvider
 	activityStates          []ActivityState
+	storageStates           []StorageState
 	inboxByIdempotency      map[string]EventInbox
 	inboxByEventIdentity    map[string]EventInbox
 	participations          []Participation
@@ -585,6 +586,19 @@ func mergeActivityStateData(existing json.RawMessage, patch json.RawMessage) jso
 	return raw
 }
 
+func sameStorageStateKey(state StorageState, key StorageStateKey) bool {
+	return strings.TrimSpace(state.TenantID) == strings.TrimSpace(key.TenantID) &&
+		strings.TrimSpace(state.Namespace) == strings.TrimSpace(key.Namespace) &&
+		strings.TrimSpace(state.StorageKey) == strings.TrimSpace(key.StorageKey)
+}
+
+func cloneStorageState(state StorageState) StorageState {
+	if len(state.Data) > 0 {
+		state.Data = append(json.RawMessage(nil), state.Data...)
+	}
+	return state
+}
+
 func (r *MemoryRepository) GetActivityState(ctx context.Context, key ActivityStateKey) (ActivityState, error) {
 	if err := ctx.Err(); err != nil {
 		return ActivityState{}, err
@@ -644,6 +658,86 @@ func (r *MemoryRepository) UpsertActivityState(ctx context.Context, cmd UpsertAc
 	state.Version = 1
 	r.activityStates = append(r.activityStates, state)
 	return cloneActivityState(state), nil
+}
+
+func (r *MemoryRepository) GetStorageState(ctx context.Context, key StorageStateKey) (StorageState, error) {
+	if err := ctx.Err(); err != nil {
+		return StorageState{}, err
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, state := range r.storageStates {
+		if sameStorageStateKey(state, key) {
+			return cloneStorageState(state), nil
+		}
+	}
+	return StorageState{}, ErrNotFound
+}
+
+func (r *MemoryRepository) UpsertStorageState(ctx context.Context, cmd UpsertStorageStateCommand) (StorageState, error) {
+	if err := ctx.Err(); err != nil {
+		return StorageState{}, err
+	}
+	state := cloneStorageState(cmd.State)
+	if state.ID == "" {
+		state.ID = NewID("store")
+	}
+	if len(state.Data) == 0 {
+		state.Data = json.RawMessage(`null`)
+	}
+	if state.UpdatedAt.IsZero() {
+		state.UpdatedAt = time.Now().UTC()
+	}
+	if state.CreatedAt.IsZero() {
+		state.CreatedAt = state.UpdatedAt
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	key := StorageStateKey{TenantID: state.TenantID, Namespace: state.Namespace, StorageKey: state.StorageKey}
+	for i := range r.storageStates {
+		if !sameStorageStateKey(r.storageStates[i], key) {
+			continue
+		}
+		if cmd.RequireVersion && r.storageStates[i].Version != cmd.ExpectedVersion {
+			return StorageState{}, ErrStorageStateConflict
+		}
+		if cmd.Append {
+			state.Data = AppendStorageStateData(r.storageStates[i].Data, state.Data)
+			state.ValueType = "ARRAY"
+		}
+		r.storageStates[i].Data = state.Data
+		r.storageStates[i].ValueType = state.ValueType
+		r.storageStates[i].LastEventID = state.LastEventID
+		r.storageStates[i].ExpiresAt = state.ExpiresAt
+		r.storageStates[i].Version++
+		r.storageStates[i].UpdatedAt = state.UpdatedAt
+		return cloneStorageState(r.storageStates[i]), nil
+	}
+	if cmd.RequireVersion && cmd.ExpectedVersion > 0 {
+		return StorageState{}, ErrNotFound
+	}
+	if cmd.Append {
+		state.Data = AppendStorageStateData(nil, state.Data)
+		state.ValueType = "ARRAY"
+	}
+	state.Version = 1
+	r.storageStates = append(r.storageStates, state)
+	return cloneStorageState(state), nil
+}
+
+func (r *MemoryRepository) DeleteStorageState(ctx context.Context, key StorageStateKey) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.storageStates {
+		if sameStorageStateKey(r.storageStates[i], key) {
+			r.storageStates = append(r.storageStates[:i], r.storageStates[i+1:]...)
+			return nil
+		}
+	}
+	return ErrNotFound
 }
 
 func (r *MemoryRepository) CreateInbox(ctx context.Context, inbox EventInbox) (EventInbox, bool, error) {

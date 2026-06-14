@@ -57,6 +57,9 @@ type Repository interface {
 	FindEnabledFactProvider(ctx context.Context, tenantID string, factCode string) (FactProvider, error)
 	GetActivityState(ctx context.Context, key ActivityStateKey) (ActivityState, error)
 	UpsertActivityState(ctx context.Context, cmd UpsertActivityStateCommand) (ActivityState, error)
+	GetStorageState(ctx context.Context, key StorageStateKey) (StorageState, error)
+	UpsertStorageState(ctx context.Context, cmd UpsertStorageStateCommand) (StorageState, error)
+	DeleteStorageState(ctx context.Context, key StorageStateKey) error
 
 	CreateInbox(ctx context.Context, inbox EventInbox) (EventInbox, bool, error)
 	GetInboxByEvent(ctx context.Context, tenantID string, eventID string) (EventInbox, error)

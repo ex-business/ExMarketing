@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import type { ReactNode } from 'react';
-import type { ActivityEdge, ActivityNode, FlowNode, GroupNode, NoteNode, WorkflowEdgeRoute, WorkflowEdgeRouteType, WorkflowNodeConfigField, WorkflowNodeConfigSchema, WorkflowNodeConfigValidationRule } from '../types';
+import type { ActivityEdge, ActivityNode, FlowNode, GroupNode, NoteNode, ResourceSummary, WorkflowEdgeRoute, WorkflowEdgeRouteType, WorkflowNodeConfigField, WorkflowNodeConfigSchema, WorkflowNodeConfigValidationRule } from '../types';
 import { cx } from '../utils/flow';
 import { NodeKindIcon } from './NodeKindIcon';
 
@@ -409,13 +409,30 @@ function ruleLabel(rule: WorkflowNodeConfigValidationRule): string {
 function ConfigFieldInput({
   node,
   field,
+  resourceOptions = [],
   onNodeConfigChange,
 }: {
   node: ActivityNode;
   field: WorkflowNodeConfigField;
+  resourceOptions?: ResourceSummary[];
   onNodeConfigChange: (nodeId: string, key: string, value: unknown) => void;
 }) {
   const value = configValue(node, field);
+  if (field.key === 'resourceRef') {
+    const current = typeof value === 'string' ? value : '';
+    const exists = !current || resourceOptions.some((resource) => resource.code === current);
+    return (
+      <select className={exists ? '' : 'invalid'} value={current} onChange={(event) => onNodeConfigChange(node.id, field.key, event.target.value)}>
+        <option value="">选择资源</option>
+        {!exists ? <option value={current}>{current}（未加载或无权限）</option> : null}
+        {resourceOptions.map((resource) => (
+          <option key={resource.id || resource.code} value={resource.code}>
+            {resource.name || resource.code} · {resource.code} · {resource.type}
+          </option>
+        ))}
+      </select>
+    );
+  }
   if (field.type === 'BOOLEAN') {
     return (
       <label className="schema-switch-row">
@@ -497,10 +514,12 @@ function ConfigFieldInput({
 function ConfigFieldRow({
   node,
   field,
+  resourceOptions,
   onNodeConfigChange,
 }: {
   node: ActivityNode;
   field: WorkflowNodeConfigField;
+  resourceOptions: ResourceSummary[];
   onNodeConfigChange: (nodeId: string, key: string, value: unknown) => void;
 }) {
   return (
@@ -509,7 +528,7 @@ function ConfigFieldRow({
         <b>{field.label}</b>
         {field.required ? <em>必填</em> : null}
       </span>
-      <ConfigFieldInput node={node} field={field} onNodeConfigChange={onNodeConfigChange} />
+      <ConfigFieldInput node={node} field={field} resourceOptions={resourceOptions} onNodeConfigChange={onNodeConfigChange} />
       {field.description ? <small>{field.description}</small> : null}
       {field.validationRules?.length ? (
         <div className="schema-rule-list">
@@ -550,10 +569,12 @@ function NodeConfigPreview({ schema }: { schema: WorkflowNodeConfigSchema }) {
 function NodeConfigForm({
   node,
   schema,
+  resourceOptions,
   onNodeConfigChange,
 }: {
   node: ActivityNode;
   schema?: WorkflowNodeConfigSchema;
+  resourceOptions: ResourceSummary[];
   onNodeConfigChange: (nodeId: string, key: string, value: unknown) => void;
 }) {
   if (!schema) return <p className="property-empty">未找到该节点类型的配置 schema。</p>;
@@ -575,7 +596,7 @@ function NodeConfigForm({
           </div>
           {group.description ? <p>{group.description}</p> : null}
           {group.fields.map((field) => (
-            <ConfigFieldRow key={field.key} node={node} field={field} onNodeConfigChange={onNodeConfigChange} />
+            <ConfigFieldRow key={field.key} node={node} field={field} resourceOptions={resourceOptions} onNodeConfigChange={onNodeConfigChange} />
           ))}
         </div>
       ))}
@@ -1036,9 +1057,10 @@ type Props = {
   onDeleteEdges: (ids: string[]) => void;
   panelWidth: number;
   onResizeStart: (event: ReactPointerEvent<HTMLButtonElement>) => void;
+  resourceOptions: ResourceSummary[];
 };
 
-export function PropertyPanel({ nodes, edges, selectedNodeIds, selectedEdgeIds, nodeConfigSchemas, onNodeConfigChange, onEdgeRouteChange, onLocateNode, onDeleteNodes, onDeleteEdges, panelWidth, onResizeStart }: Props) {
+export function PropertyPanel({ nodes, edges, selectedNodeIds, selectedEdgeIds, nodeConfigSchemas, onNodeConfigChange, onEdgeRouteChange, onLocateNode, onDeleteNodes, onDeleteEdges, panelWidth, onResizeStart, resourceOptions }: Props) {
   const [activeTab, setActiveTab] = useState<PropertyPanelTab>(loadPropertyPanelTab);
   const selectedNode = nodes.find((node): node is ActivityNode => node.id === selectedNodeIds[0] && node.type === 'activity');
   const selectedGroup = nodes.find((node): node is GroupNode => node.id === selectedNodeIds[0] && node.type === 'group');
@@ -1096,7 +1118,7 @@ export function PropertyPanel({ nodes, edges, selectedNodeIds, selectedEdgeIds, 
             </div>
           </PropertyDisclosure>
           <PropertyDisclosure title="配置参数" summary={selectedNodeSchema ? `v${selectedNodeSchema.version}` : '未找到 schema'}>
-            <NodeConfigForm node={selectedNode} schema={selectedNodeSchema} onNodeConfigChange={onNodeConfigChange} />
+            <NodeConfigForm node={selectedNode} schema={selectedNodeSchema} resourceOptions={resourceOptions} onNodeConfigChange={onNodeConfigChange} />
           </PropertyDisclosure>
           <LuaScriptEditor node={selectedNode} onNodeConfigChange={onNodeConfigChange} />
           <InputMappingEditor node={selectedNode} schema={selectedNodeSchema} nodes={nodes} edges={edges} schemas={nodeConfigSchemas} onNodeConfigChange={onNodeConfigChange} onLocateNode={onLocateNode} />

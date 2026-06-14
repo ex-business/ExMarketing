@@ -2975,15 +2975,16 @@ func (s *Service) stateStoreWorkflowNodeHandler(ctx context.Context, node market
 		failed.Output["audit"] = workflowHandlerAudit(node, runtime)
 		return failed
 	}
-	resource, hasResource, resourceResult := s.workflowStateStoreResourceConfig(ctx, node, runtime, config)
-	if resourceResult.Status != "" {
-		return resourceResult
-	}
 	storageType := strings.ToUpper(firstWorkflowString(workflowConfigString(config, "storageType"), "MEMORY"))
 	operation := strings.ToUpper(firstWorkflowString(workflowConfigString(config, "operation"), "DEFINE"))
 	namespace := firstWorkflowString(workflowConfigString(config, "namespace"), "workflow")
 	storageKey := workflowRenderNodeTemplate(firstWorkflowString(workflowConfigString(config, "keyTemplate"), "${activityId}:${eventId}:${nodeId}"), runtime, node)
 	valueType := strings.ToUpper(firstWorkflowString(workflowConfigString(config, "valueType"), "OBJECT"))
+	resource, hasResource, resourceResult := s.workflowStateStoreResourceConfig(ctx, node, runtime, config, marketing.ResourceOperation(operation), namespace, storageKey)
+	if resourceResult.Status != "" {
+		return resourceResult
+	}
+	storageType = strings.ToUpper(firstWorkflowString(workflowConfigString(config, "storageType"), storageType))
 	var result workflowNodeResult
 	switch storageType {
 	case "MEMORY", "WORKFLOW_CONTEXT", "LOCAL_CACHE":
@@ -3019,12 +3020,11 @@ func (s *Service) stateStoreWorkflowNodeHandler(ctx context.Context, node market
 	return result
 }
 
-func (s *Service) workflowStateStoreResourceConfig(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime, config map[string]any) (marketing.Resource, bool, workflowNodeResult) {
+func (s *Service) workflowStateStoreResourceConfig(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime, config map[string]any, operation marketing.ResourceOperation, namespace string, storageKey string) (marketing.Resource, bool, workflowNodeResult) {
 	resourceRef := strings.TrimSpace(workflowExplicitConfigString(node, "resourceRef"))
 	if resourceRef == "" {
 		return marketing.Resource{}, false, workflowNodeResult{}
 	}
-	operation := marketing.ResourceOperation(strings.ToUpper(firstWorkflowString(workflowConfigString(config, "operation"), "DEFINE")))
 	if operation == "DEFINE" {
 		operation = marketing.ResourceWrite
 	}
@@ -3041,7 +3041,8 @@ func (s *Service) workflowStateStoreResourceConfig(ctx context.Context, node mar
 		NodeID:      node.ID,
 		NodeType:    nodeHandlerKey(node),
 		Operation:   operation,
-		Namespace:   workflowConfigString(config, "namespace"),
+		Namespace:   namespace,
+		ResourceKey: storageKey,
 	}
 	if err := s.ValidateResourceAccess(ctx, resource, req); err != nil {
 		code := strings.TrimSpace(err.Error())

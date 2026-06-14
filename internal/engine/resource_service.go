@@ -83,6 +83,9 @@ func (s *Service) SaveResourceBinding(ctx context.Context, binding marketing.Res
 		binding.CreatedAt = now
 	}
 	binding.UpdatedAt = now
+	if err := binding.Validate(); err != nil {
+		return marketing.ResourceBinding{}, err
+	}
 	return s.repository.SaveResourceBinding(ctx, binding)
 }
 

@@ -6,6 +6,7 @@ import {
   FileClock,
   Folder,
   FolderOpen,
+  KeyRound,
   Plus,
   Star,
   Users,
@@ -55,6 +56,7 @@ type WorkspaceSidebarProps = {
   onNavArchived: () => void;
   onNavMembers: () => void;
   onNavAudit: () => void;
+  onNavResources: () => void;
   onManageStorage: () => void;
 };
 
@@ -95,6 +97,7 @@ export function WorkspaceSidebar({
   onNavArchived,
   onNavMembers,
   onNavAudit,
+  onNavResources,
   onManageStorage,
 }: WorkspaceSidebarProps) {
   const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false);
@@ -250,6 +253,7 @@ export function WorkspaceSidebar({
         )) : (
           <>
             <TaNavButton onClick={onNavMembers}><Users size={16} /><span>成员</span><strong>{memberCount}</strong></TaNavButton>
+            <TaNavButton onClick={onNavResources}><KeyRound size={16} /><span>资源</span></TaNavButton>
             <TaNavButton onClick={onNavAudit}><FileClock size={16} /><span>审计</span><strong>{auditCount}</strong></TaNavButton>
           </>
         )}

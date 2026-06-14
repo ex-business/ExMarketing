@@ -110,8 +110,10 @@ func TestMemoryResourceRepositoryStoresBindingsAndAudit(t *testing.T) {
 		TenantID:          "site_001",
 		WorkspaceID:       "hello",
 		NodeType:          "fact-query",
+		MinRole:           WorkspaceRoleEditor,
 		AllowedOperations: []ResourceOperation{ResourceRead},
 		AllowedNamespaces: []string{"profile"},
+		KeyPolicy:         json.RawMessage(`{"allowedPrefixes":["site_001:profile:"],"deniedPrefixes":["site_001:profile:blocked:"]}`),
 		Status:            ResourceBindingActive,
 		CreatedAt:         now,
 		UpdatedAt:         now,
@@ -119,8 +121,14 @@ func TestMemoryResourceRepositoryStoresBindingsAndAudit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("save binding: %v", err)
 	}
-	if !binding.Allows(ResourceAccessRequest{TenantID: "site_001", WorkspaceID: "hello", NodeType: "fact-query", Operation: ResourceRead, Namespace: "profile"}) {
+	if !binding.Allows(ResourceAccessRequest{TenantID: "site_001", WorkspaceID: "hello", NodeType: "fact-query", Operation: ResourceRead, Namespace: "profile", ResourceKey: "site_001:profile:u1", ActorRole: WorkspaceRoleEditor}) {
 		t.Fatalf("expected binding to allow read profile: %+v", binding)
+	}
+	if binding.Allows(ResourceAccessRequest{TenantID: "site_001", WorkspaceID: "hello", NodeType: "fact-query", Operation: ResourceRead, Namespace: "profile", ResourceKey: "site_001:profile:u1", ActorRole: WorkspaceRoleViewer}) {
+		t.Fatalf("expected binding to deny viewer below minRole")
+	}
+	if binding.Allows(ResourceAccessRequest{TenantID: "site_001", WorkspaceID: "hello", NodeType: "fact-query", Operation: ResourceRead, Namespace: "profile", ResourceKey: "site_001:profile:blocked:u1", ActorRole: WorkspaceRoleAdmin}) {
+		t.Fatalf("expected binding to deny blocked key prefix")
 	}
 	bindings, err := repo.ListResourceBindings(ctx, ResourceBindingQuery{ResourceID: saved.ID, TenantID: "site_001", NodeType: "fact-query"})
 	if err != nil {

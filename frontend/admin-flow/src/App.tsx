@@ -18,7 +18,7 @@ import { NodePalette } from './components/NodePalette';
 import { NodePicker } from './components/NodePicker';
 import { PropertyPanel } from './components/PropertyPanel';
 import { StudioChrome } from './components/StudioChrome';
-import { WorkspaceContent, WorkspaceDetailPanel, WorkspaceHomeLayout, WorkspaceSidebar, WorkspaceTopBar } from './components/workspace-home';
+import { ResourceManagement, WorkspaceContent, WorkspaceDetailPanel, WorkspaceHomeLayout, WorkspaceSidebar, WorkspaceTopBar } from './components/workspace-home';
 import type { GlobalSearchResult, WorkspaceDetailTarget, WorkspaceItemAction, WorkspaceSortMode } from './components/workspace-home';
 import { baseEdges, baseNodes, simpleTemplate } from './data/initialFlow';
 import { catalogFromSchemas, getDef } from './data/nodeCatalog';
@@ -44,6 +44,9 @@ import type {
   WorkflowNodeConfigSchema,
   WorkflowNodeExecution,
   WorkflowNodeSummary,
+  ResourceAuditLogSummary,
+  ResourceBindingSummary,
+  ResourceSummary,
   WorkflowValidationIssue,
   WorkflowValidationResult,
   WorkflowVersion,
@@ -2786,7 +2789,13 @@ function StudioActivityStart({
   const [batchActionBusy, setBatchActionBusy] = useState(false);
   const [batchActionError, setBatchActionError] = useState('');
   const [batchActionFailures, setBatchActionFailures] = useState<WorkspaceBatchResult['items']>([]);
-  const [homeUtilityDialog, setHomeUtilityDialog] = useState<'settings' | 'storage' | 'members' | 'share' | 'audit' | ''>('');
+  const [homeUtilityDialog, setHomeUtilityDialog] = useState<'settings' | 'storage' | 'members' | 'share' | 'audit' | 'resources' | ''>('');
+  const [resources, setResources] = useState<ResourceSummary[]>([]);
+  const [resourcesLoading, setResourcesLoading] = useState(false);
+  const [selectedResourceCode, setSelectedResourceCode] = useState('');
+  const [resourceBindings, setResourceBindings] = useState<ResourceBindingSummary[]>([]);
+  const [resourceAudits, setResourceAudits] = useState<ResourceAuditLogSummary[]>([]);
+  const [resourceMessage, setResourceMessage] = useState('');
   const [workspaceSettingsDraft, setWorkspaceSettingsDraft] = useState({
     name: '',
     slug: '',
@@ -2958,6 +2967,7 @@ function StudioActivityStart({
   const workspaceStatusError = workflowStatus.includes('失败') || workflowStatus.includes('不可用') || workflowStatus.includes('异常')
     ? workflowStatus
     : '';
+  const selectedResource = resources.find((resource) => resource.code === selectedResourceCode) ?? resources[0];
   const dismissOpsToast = useCallback((id: number) => {
     setOpsToasts((items) => items.filter((item) => item.id !== id));
   }, []);
@@ -3380,6 +3390,80 @@ function StudioActivityStart({
   const openStorageManager = () => {
     setHomeUtilityDialog('storage');
     if (selectedWorkspace?.id) void refreshWorkspaceFiles(selectedWorkspace.id);
+  };
+  const refreshResources = useCallback(async (selectCode = selectedResourceCode) => {
+    setResourcesLoading(true);
+    try {
+      const params = new URLSearchParams();
+      params.set('tenantId', selectedWorkspace?.tenantId || 'site_001');
+      params.set('limit', '500');
+      const body = await fetchJSON<{ items: ResourceSummary[] }>(`/admin/v1/resources?${params.toString()}`);
+      const items = body.items ?? [];
+      setResources(items);
+      const nextCode = selectCode || items[0]?.code || '';
+      setSelectedResourceCode(nextCode);
+      if (nextCode) {
+        const [bindingsBody, auditsBody] = await Promise.all([
+          fetchJSON<{ items: ResourceBindingSummary[] }>(`/admin/v1/resources/${encodeURIComponent(nextCode)}/bindings?tenantId=${encodeURIComponent(selectedWorkspace?.tenantId || 'site_001')}&limit=100`),
+          fetchJSON<{ items: ResourceAuditLogSummary[] }>(`/admin/v1/resources/${encodeURIComponent(nextCode)}/audit-logs?tenantId=${encodeURIComponent(selectedWorkspace?.tenantId || 'site_001')}&limit=100`),
+        ]);
+        setResourceBindings(bindingsBody.items ?? []);
+        setResourceAudits(auditsBody.items ?? []);
+      } else {
+        setResourceBindings([]);
+        setResourceAudits([]);
+      }
+      setResourceMessage('资源已刷新');
+    } catch (error) {
+      setResourceMessage((error as Error).message);
+    } finally {
+      setResourcesLoading(false);
+    }
+  }, [selectedResourceCode, selectedWorkspace?.tenantId]);
+  const openResourceManager = () => {
+    setHomeUtilityDialog('resources');
+    void refreshResources();
+  };
+  const selectResource = useCallback((code: string) => {
+    setSelectedResourceCode(code);
+    if (!code) {
+      setResourceBindings([]);
+      setResourceAudits([]);
+      return;
+    }
+    const tenantId = selectedWorkspace?.tenantId || 'site_001';
+    void Promise.all([
+      fetchJSON<{ items: ResourceBindingSummary[] }>(`/admin/v1/resources/${encodeURIComponent(code)}/bindings?tenantId=${encodeURIComponent(tenantId)}&limit=100`),
+      fetchJSON<{ items: ResourceAuditLogSummary[] }>(`/admin/v1/resources/${encodeURIComponent(code)}/audit-logs?tenantId=${encodeURIComponent(tenantId)}&limit=100`),
+    ]).then(([bindingsBody, auditsBody]) => {
+      setResourceBindings(bindingsBody.items ?? []);
+      setResourceAudits(auditsBody.items ?? []);
+    }).catch((error) => setResourceMessage((error as Error).message));
+  }, [selectedWorkspace?.tenantId]);
+  const saveResource = async (resource: Partial<ResourceSummary> & { code: string }) => {
+    if (!resource.code.trim()) throw new Error('资源 Code 必填');
+    const tenantId = resource.tenantId || selectedWorkspace?.tenantId || 'site_001';
+    await fetchJSON<ResourceSummary>(`/admin/v1/resources/${encodeURIComponent(resource.code)}?tenantId=${encodeURIComponent(tenantId)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ ...resource, tenantId }),
+    });
+    setResourceMessage(`资源已保存：${resource.code}`);
+    await refreshResources(resource.code);
+  };
+  const saveResourceBinding = async (resourceCode: string, binding: Partial<ResourceBindingSummary>) => {
+    const tenantId = binding.tenantId || selectedWorkspace?.tenantId || 'site_001';
+    await fetchJSON<ResourceBindingSummary>(`/admin/v1/resources/${encodeURIComponent(resourceCode)}/bindings?tenantId=${encodeURIComponent(tenantId)}`, {
+      method: 'POST',
+      body: JSON.stringify({ ...binding, tenantId }),
+    });
+    setResourceMessage(`资源权限已保存：${resourceCode}`);
+    selectResource(resourceCode);
+  };
+  const testResource = async (resourceCode: string) => {
+    const tenantId = selectedWorkspace?.tenantId || 'site_001';
+    const result = await fetchJSON<{ ok?: boolean; errorCode?: string }>(`/admin/v1/resources/${encodeURIComponent(resourceCode)}/test?tenantId=${encodeURIComponent(tenantId)}`, { method: 'POST' });
+    setResourceMessage(result.ok ? `资源测试通过：${resourceCode}` : `资源测试失败：${result.errorCode || resourceCode}`);
+    selectResource(resourceCode);
   };
   const normalizeDetailVisibility = (value?: string): WorkspaceDetailTarget['visibility'] => {
     const normalized = (value || '').toLowerCase();
@@ -3816,6 +3900,7 @@ function StudioActivityStart({
                 setShowFavoritesOnly(false);
               }}
               onNavMembers={() => setHomeUtilityDialog('members')}
+              onNavResources={openResourceManager}
               onNavAudit={() => setHomeUtilityDialog('audit')}
               onManageStorage={openStorageManager}
             />
@@ -4020,7 +4105,7 @@ function StudioActivityStart({
           <section className="studio-create-dialog" role="dialog" aria-modal="true" aria-labelledby="home-utility-dialog-title" data-testid="home-utility-dialog" onClick={(event) => event.stopPropagation()}>
             <div className="studio-create-dialog-head">
               <div>
-                <b id="home-utility-dialog-title">{homeUtilityDialog === 'settings' ? 'Workspace 设置' : homeUtilityDialog === 'storage' ? '存储空间' : homeUtilityDialog === 'members' ? '成员管理' : homeUtilityDialog === 'share' ? '分享管理' : '审计记录'}</b>
+                <b id="home-utility-dialog-title">{homeUtilityDialog === 'settings' ? 'Workspace 设置' : homeUtilityDialog === 'storage' ? '存储空间' : homeUtilityDialog === 'members' ? '成员管理' : homeUtilityDialog === 'share' ? '分享管理' : homeUtilityDialog === 'resources' ? '资源管理' : '审计记录'}</b>
                 <span>{selectedWorkspace?.name ?? 'hello'}</span>
               </div>
               <button onClick={() => setHomeUtilityDialog('')}>×</button>
@@ -4164,6 +4249,24 @@ function StudioActivityStart({
                   setHomeUtilityDialog('');
                 }}>清理本地归档标记</button>
               </div>
+            ) : homeUtilityDialog === 'resources' ? (
+              <ResourceManagement
+                tenantId={selectedWorkspace?.tenantId || 'site_001'}
+                workspaceId={selectedWorkspace?.id}
+                folderId={selectedFolder?.id}
+                resources={resources}
+                selectedResourceCode={selectedResource?.code || selectedResourceCode}
+                selectedResource={selectedResource}
+                bindings={resourceBindings}
+                audits={resourceAudits}
+                loading={resourcesLoading}
+                message={resourceMessage}
+                onRefresh={() => void refreshResources()}
+                onSelectResource={selectResource}
+                onSaveResource={saveResource}
+                onSaveBinding={saveResourceBinding}
+                onTestResource={testResource}
+              />
             ) : homeUtilityDialog === 'members' ? (
               <div className="studio-member-manager">
                 {canManageMembers ? (
@@ -4462,6 +4565,7 @@ export function App() {
   const [nodeConfigSchemas, setNodeConfigSchemas] = useState<WorkflowNodeConfigSchema[]>([]);
   const [workflowTemplates, setWorkflowTemplates] = useState<WorkflowDraftTemplateSummary[]>([]);
   const [workflowNodePresets, setWorkflowNodePresets] = useState<WorkflowNodePresetSummary[]>([]);
+  const [canvasResources, setCanvasResources] = useState<ResourceSummary[]>([]);
   const [workflowTemplateVersions, setWorkflowTemplateVersions] = useState<WorkflowDraftTemplateSummary[]>([]);
   const [loadingTemplateVersions, setLoadingTemplateVersions] = useState(false);
   const [showTemplatePanel, setShowTemplatePanel] = useState(false);
@@ -4552,6 +4656,12 @@ export function App() {
   const activeWorkspaceRole = workspaceRoleForActor(activeWorkspace, activeWorkspace ? workspaceMembers[activeWorkspace.id] ?? [] : [], currentActorId);
   const canEditActiveWorkflow = !activeWorkspace || workspaceRoleAllows(activeWorkspaceRole, 'EDITOR');
   const canPublishActiveWorkflow = !activeWorkspace || workspaceRoleAllows(activeWorkspaceRole, 'ADMIN');
+  useEffect(() => {
+    const tenantId = activities.find((activity) => activity.id === activityId)?.tenantId || activeWorkspace?.tenantId || 'site_001';
+    fetchJSON<{ items: ResourceSummary[] }>(`/admin/v1/resources?tenantId=${encodeURIComponent(tenantId)}&limit=500`)
+      .then((body) => setCanvasResources(body.items ?? []))
+      .catch(() => setCanvasResources([]));
+  }, [activityId, activeWorkspace?.tenantId, activities]);
   const currentWorkflowDefinition = useMemo(() => (
     activityId && nodeConfigSchemas.length > 0
       ? serializeWorkflowDefinition(nodes, edges, nodeConfigSchemas, reactFlowInstance?.getViewport(), {
@@ -7006,7 +7116,7 @@ export function App() {
           </section>
         </div>
       ) : null}
-      {propertyPanelVisible ? <PropertyPanel nodes={nodes} edges={edges} selectedNodeIds={selectedNodeIds} selectedEdgeIds={selectedEdgeIds} nodeConfigSchemas={nodeConfigSchemas} onNodeConfigChange={updateNodeConfig} onEdgeRouteChange={updateEdgeRoute} onLocateNode={(nodeId) => focusNodeById(nodeId, '已定位变量来源')} onDeleteNodes={deleteNodes} onDeleteEdges={deleteEdges} panelWidth={rightPanelWidth} onResizeStart={beginRightPanelResize} /> : null}
+      {propertyPanelVisible ? <PropertyPanel nodes={nodes} edges={edges} selectedNodeIds={selectedNodeIds} selectedEdgeIds={selectedEdgeIds} nodeConfigSchemas={nodeConfigSchemas} resourceOptions={canvasResources} onNodeConfigChange={updateNodeConfig} onEdgeRouteChange={updateEdgeRoute} onLocateNode={(nodeId) => focusNodeById(nodeId, '已定位变量来源')} onDeleteNodes={deleteNodes} onDeleteEdges={deleteEdges} panelWidth={rightPanelWidth} onResizeStart={beginRightPanelResize} /> : null}
     </div>
   );
 }

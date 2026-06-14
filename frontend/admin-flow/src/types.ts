@@ -258,6 +258,85 @@ export type WorkflowNodeConfigSchema = {
   outputs: WorkflowNodeOutputVar[];
 };
 
+export type ResourceOperation =
+  | 'READ'
+  | 'WRITE'
+  | 'UPSERT'
+  | 'APPEND'
+  | 'DELETE'
+  | 'CAS'
+  | 'CALL'
+  | 'PUBLISH'
+  | 'TEST_CONNECTION'
+  | 'CHECK_AND_INCREMENT';
+
+export type ResourceSummary = {
+  id: string;
+  tenantId: string;
+  workspaceId?: string;
+  folderId?: string;
+  activityId?: string;
+  code: string;
+  name: string;
+  description?: string;
+  type: string;
+  driver: string;
+  scope: string;
+  status: string;
+  environment?: string;
+  config?: Record<string, unknown>;
+  capabilities?: ResourceOperation[];
+  schemaVersion?: number;
+  createdBy?: string;
+  updatedBy?: string;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type ResourceBindingSummary = {
+  id: string;
+  resourceId: string;
+  tenantId: string;
+  workspaceId?: string;
+  folderId?: string;
+  activityId?: string;
+  nodeType?: string;
+  nodeId?: string;
+  principalType?: string;
+  principalId?: string;
+  minRole?: string;
+  allowedOperations?: ResourceOperation[];
+  allowedNamespaces?: string[];
+  keyPolicy?: Record<string, unknown>;
+  includeSubfolders?: boolean;
+  requireApproval?: boolean;
+  status: string;
+  createdBy?: string;
+  updatedBy?: string;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type ResourceAuditLogSummary = {
+  id: string;
+  tenantId: string;
+  workspaceId?: string;
+  folderId?: string;
+  activityId?: string;
+  workflowExecutionId?: string;
+  nodeId?: string;
+  nodeType?: string;
+  resourceId: string;
+  resourceCode: string;
+  operation: ResourceOperation;
+  status: string;
+  durationMs?: number;
+  errorCode?: string;
+  errorMessage?: string;
+  actorId?: string;
+  createdAt?: string;
+};
+
 export type WorkflowNodeInputVar = {
   key: string;
   label: string;

@@ -72,7 +72,9 @@ func (h *Handler) listAvailableResources(w http.ResponseWriter, r *http.Request)
 		NodeType:    strings.TrimSpace(r.URL.Query().Get("nodeType")),
 		Operation:   marketing.ResourceOperation(strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("operation")))),
 		Namespace:   strings.TrimSpace(r.URL.Query().Get("namespace")),
+		ResourceKey: strings.TrimSpace(r.URL.Query().Get("resourceKey")),
 		ActorID:     actorFromRequest(r),
+		ActorRole:   marketing.WorkspaceRole(strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("actorRole")))),
 	})
 	if err != nil {
 		workspaceError(w, err)

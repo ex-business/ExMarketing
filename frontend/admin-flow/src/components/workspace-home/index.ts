@@ -6,6 +6,7 @@ export { WorkspaceContent } from './WorkspaceContent';
 export { WorkspaceDetailPanel } from './WorkspaceDetailPanel';
 export { WorkspaceHomeLayout } from './WorkspaceHomeLayout';
 export { WorkspaceTopBar } from './WorkspaceTopBar';
+export { ResourceManagement } from './ResourceManagement';
 export type { WorkspaceContentFolder, WorkspaceContentWorkflow, WorkspaceItemAction, WorkspaceSortMode } from './WorkspaceContent';
 export type { WorkspaceDetailAudit, WorkspaceDetailMember, WorkspaceDetailTarget } from './WorkspaceDetailPanel';
 export type { WorkspaceSidebarFolder, WorkspaceSidebarWorkspace } from './WorkspaceSidebar';

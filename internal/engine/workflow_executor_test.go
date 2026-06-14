@@ -1880,6 +1880,37 @@ func TestStateStoreWorkflowNodeHandlerUsesResourceRefAndAudits(t *testing.T) {
 	}
 }
 
+func TestStateStoreWorkflowNodeHandlerDeniesResourceKeyPolicy(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	runtime := testWorkflowHandlerRuntime(true)
+	if _, err := service.SaveResourceBinding(ctx, marketing.ResourceBinding{
+		ResourceID:        "res_builtin_default_workflow_state",
+		TenantID:          runtime.Activity.TenantID,
+		WorkspaceID:       runtime.Activity.WorkspaceID,
+		NodeType:          "state-store",
+		AllowedOperations: []marketing.ResourceOperation{marketing.ResourceUpsert},
+		AllowedNamespaces: []string{"checkin"},
+		KeyPolicy:         json.RawMessage(`{"allowedPrefixes":["allowed:"]}`),
+	}); err != nil {
+		t.Fatalf("save resource binding: %v", err)
+	}
+	node := marketing.WorkflowNode{
+		ID:     "resource-store-denied",
+		Type:   "state-store",
+		Config: json.RawMessage(`{"resourceRef":"default_workflow_state","operation":"UPSERT","namespace":"checkin","keyTemplate":"denied:${subject.id}","valueType":"OBJECT"}`),
+	}
+	nodeCtx := context.WithValue(ctx, workflowNodeExecutionContextKey{}, workflowNodeExecutionContext{
+		ResolvedInput: map[string]any{"value": map[string]any{"streakDays": 3}},
+	})
+
+	result := service.stateStoreWorkflowNodeHandler(nodeCtx, node, runtime)
+	if result.Status != marketing.WorkflowNodeFailed || result.Output["errorCode"] != "RESOURCE_PERMISSION_DENIED" {
+		t.Fatalf("expected resource permission denied, got %+v", result)
+	}
+}
+
 func testWorkflowHandlerRuntime(qualified bool) workflowRuntime {
 	now := time.Date(2026, 6, 5, 8, 0, 0, 0, time.UTC)
 	decision := marketing.RuleDecisionPassed

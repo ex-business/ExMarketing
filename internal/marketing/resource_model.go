@@ -174,7 +174,9 @@ type ResourceAccessRequest struct {
 	NodeType    string            `json:"nodeType,omitempty"`
 	Operation   ResourceOperation `json:"operation"`
 	Namespace   string            `json:"namespace,omitempty"`
+	ResourceKey string            `json:"resourceKey,omitempty"`
 	ActorID     string            `json:"actorId,omitempty"`
+	ActorRole   WorkspaceRole     `json:"actorRole,omitempty"`
 }
 
 type AvailableResource struct {
@@ -262,7 +264,46 @@ func (b ResourceBinding) Allows(req ResourceAccessRequest) bool {
 	if len(b.AllowedNamespaces) > 0 && req.Namespace != "" && !slices.Contains(b.AllowedNamespaces, req.Namespace) {
 		return false
 	}
+	if b.MinRole != "" && req.ActorRole != "" && workspaceRoleRank(req.ActorRole) < workspaceRoleRank(b.MinRole) {
+		return false
+	}
+	if !resourceKeyPolicyAllows(b.KeyPolicy, req.ResourceKey) {
+		return false
+	}
 	return true
+}
+
+func (b ResourceBinding) Validate() error {
+	if strings.TrimSpace(b.ResourceID) == "" {
+		return errors.Join(ErrInvalidResource, errors.New("resourceId is required"))
+	}
+	if strings.TrimSpace(b.TenantID) == "" {
+		return errors.Join(ErrInvalidResource, errors.New("tenantId is required"))
+	}
+	if b.Status != "" && b.Status != ResourceBindingActive && b.Status != ResourceBindingDisabled {
+		return errors.Join(ErrInvalidResource, errors.New("binding status is invalid"))
+	}
+	if b.PrincipalType != "" && !validWorkspacePrincipalType(b.PrincipalType) {
+		return errors.Join(ErrInvalidResource, errors.New("principalType is invalid"))
+	}
+	if b.MinRole != "" && !validWorkspaceRole(b.MinRole) {
+		return errors.Join(ErrInvalidResource, errors.New("minRole is invalid"))
+	}
+	for _, operation := range b.AllowedOperations {
+		if !validResourceOperation(operation) {
+			return errors.Join(ErrInvalidResource, errors.New("allowedOperations contains invalid operation"))
+		}
+	}
+	if len(b.KeyPolicy) > 0 && string(b.KeyPolicy) != "{}" {
+		var policy map[string]any
+		if err := json.Unmarshal(b.KeyPolicy, &policy); err != nil {
+			return errors.Join(ErrInvalidResource, errors.New("keyPolicy must be json object"))
+		}
+		if policy == nil {
+			return errors.Join(ErrInvalidResource, errors.New("keyPolicy must be json object"))
+		}
+	}
+	return nil
 }
 
 func validResourceType(value ResourceType) bool {
@@ -290,4 +331,61 @@ func validResourceStatus(value ResourceStatus) bool {
 	default:
 		return false
 	}
+}
+
+func validResourceOperation(value ResourceOperation) bool {
+	switch value {
+	case ResourceRead, ResourceWrite, ResourceUpsert, ResourceAppend, ResourceDelete, ResourceCAS, ResourceCall, ResourcePublish, ResourceTestConnection, ResourceCheckAndIncrement:
+		return true
+	default:
+		return false
+	}
+}
+
+func workspaceRoleRank(role WorkspaceRole) int {
+	switch role {
+	case WorkspaceRoleOwner:
+		return 5
+	case WorkspaceRoleAdmin:
+		return 4
+	case WorkspaceRoleEditor:
+		return 3
+	case WorkspaceRoleViewer:
+		return 2
+	case WorkspaceRoleGuest:
+		return 1
+	default:
+		return 0
+	}
+}
+
+func resourceKeyPolicyAllows(raw json.RawMessage, resourceKey string) bool {
+	if len(raw) == 0 || string(raw) == "{}" || strings.TrimSpace(resourceKey) == "" {
+		return true
+	}
+	var policy struct {
+		AllowedPrefixes []string `json:"allowedPrefixes"`
+		DeniedPrefixes  []string `json:"deniedPrefixes"`
+		ExactKeys       []string `json:"exactKeys"`
+	}
+	if err := json.Unmarshal(raw, &policy); err != nil {
+		return false
+	}
+	for _, prefix := range policy.DeniedPrefixes {
+		if prefix != "" && strings.HasPrefix(resourceKey, prefix) {
+			return false
+		}
+	}
+	if len(policy.ExactKeys) > 0 {
+		return slices.Contains(policy.ExactKeys, resourceKey)
+	}
+	if len(policy.AllowedPrefixes) == 0 {
+		return true
+	}
+	for _, prefix := range policy.AllowedPrefixes {
+		if prefix != "" && strings.HasPrefix(resourceKey, prefix) {
+			return true
+		}
+	}
+	return false
 }

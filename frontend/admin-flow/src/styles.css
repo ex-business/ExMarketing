@@ -17997,3 +17997,223 @@ input:focus-visible {
   background: #f8fafc;
   color: #64748b;
 }
+
+.resource-manager {
+  min-width: min(920px, calc(100vw - 64px));
+  max-width: 1080px;
+  display: grid;
+  gap: 14px;
+}
+
+.resource-manager-head {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--ta-gray-200);
+}
+
+.resource-manager-head div:first-child {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.resource-manager-head b {
+  color: var(--ta-gray-900);
+  font-size: 16px;
+  line-height: 22px;
+}
+
+.resource-manager-head span,
+.resource-manager-message,
+.resource-manager-error {
+  color: var(--ta-gray-500);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.resource-manager-head div:last-child,
+.resource-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.resource-manager-error {
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  background: #fef2f2;
+  color: #b91c1c;
+  padding: 8px 10px;
+}
+
+.resource-manager-grid {
+  min-height: 560px;
+  display: grid;
+  grid-template-columns: 280px minmax(0, 1fr);
+  gap: 14px;
+}
+
+.resource-list,
+.resource-detail {
+  min-width: 0;
+  border: 1px solid var(--ta-gray-200);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.resource-list {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  padding: 12px;
+}
+
+.resource-list label,
+.resource-form label,
+.resource-binding-form label {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+  color: var(--ta-gray-600);
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: 700;
+}
+
+.resource-list > div {
+  min-width: 0;
+  max-height: 500px;
+  display: grid;
+  gap: 6px;
+  overflow: auto;
+}
+
+.resource-list button {
+  min-width: 0;
+  min-height: 54px;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--ta-gray-200);
+  border-radius: 8px;
+  background: #fff;
+  padding: 8px;
+  text-align: left;
+}
+
+.resource-list button.active {
+  border-color: #2563eb;
+  background: #eff6ff;
+}
+
+.resource-list i {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: #e0f2fe;
+  color: #0369a1;
+  font-style: normal;
+  font-weight: 900;
+}
+
+.resource-list span {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.resource-list b,
+.resource-list em {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.resource-list b {
+  color: var(--ta-gray-900);
+  font-size: 13px;
+}
+
+.resource-list em {
+  color: var(--ta-gray-500);
+  font-size: 11px;
+  font-style: normal;
+}
+
+.resource-detail {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  padding: 14px;
+}
+
+.resource-form,
+.resource-binding-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.resource-form .wide,
+.resource-binding-form .wide,
+.resource-actions,
+.resource-binding-table,
+.resource-audit-table {
+  grid-column: 1 / -1;
+}
+
+.resource-form textarea,
+.resource-binding-form textarea {
+  min-height: 96px;
+  resize: vertical;
+  border: 1px solid var(--ta-gray-200);
+  border-radius: 8px;
+  padding: 9px 10px;
+  font: 12px/18px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+}
+
+.resource-form .wide:last-of-type textarea {
+  min-height: 150px;
+}
+
+.resource-checkbox {
+  display: flex !important;
+  align-items: center;
+  gap: 8px;
+}
+
+.resource-checkbox input {
+  width: 16px;
+  height: 16px;
+}
+
+.resource-permission {
+  display: grid;
+  gap: 14px;
+}
+
+.resource-binding-table .ta-table-row,
+.resource-audit-table .ta-table-row {
+  grid-template-columns: minmax(120px, 1.2fr) minmax(120px, 1.1fr) minmax(110px, 1fr) minmax(80px, 0.7fr) minmax(90px, 0.8fr);
+}
+
+@media (max-width: 920px) {
+  .resource-manager {
+    min-width: 0;
+  }
+
+  .resource-manager-grid,
+  .resource-form,
+  .resource-binding-form {
+    grid-template-columns: 1fr;
+  }
+}

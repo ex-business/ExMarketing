@@ -333,6 +333,7 @@ func TestPluginSchedulerMarksInboxConflictNonRetryable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("map conflict event: %v", err)
 	}
+	conflictingEvent.EventID = conflictingEvent.EventID + ":conflict"
 	_, _, err = inbox.CreateInbox(ctx, marketing.EventInbox{
 		ID:             "inbox_existing",
 		Event:          conflictingEvent,

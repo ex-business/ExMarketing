@@ -64,6 +64,94 @@ func TestMemoryAtomicGrantRollsBackWhenSecondRewardStockExceeded(t *testing.T) {
 	}
 }
 
+func TestMemoryResourceRepositoryStoresBindingsAndAudit(t *testing.T) {
+	ctx := context.Background()
+	repo := NewMemoryRepository()
+	now := time.Now().UTC()
+	resource := Resource{
+		ID:           "res_memory_test",
+		TenantID:     "site_001",
+		WorkspaceID:  "hello",
+		Code:         "user_profile_cache",
+		Name:         "用户资料缓存",
+		Type:         ResourceRedisHash,
+		Driver:       ResourceDriverInternal,
+		Scope:        ResourceScopeWorkspace,
+		Status:       ResourceActive,
+		Config:       json.RawMessage(`{"keyPrefix":"marketing:user"}`),
+		Capabilities: []ResourceOperation{ResourceRead, ResourceWrite},
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+	saved, err := repo.SaveResource(ctx, resource)
+	if err != nil {
+		t.Fatalf("save resource: %v", err)
+	}
+	if saved.Code != resource.Code || saved.ConfigMap()["keyPrefix"] != "marketing:user" {
+		t.Fatalf("unexpected saved resource: %+v", saved)
+	}
+	updated := saved
+	updated.Name = "用户资料缓存 V2"
+	updated.Capabilities = append(updated.Capabilities, ResourceUpsert)
+	if _, err := repo.SaveResource(ctx, updated); err != nil {
+		t.Fatalf("update resource: %v", err)
+	}
+	listed, err := repo.ListResources(ctx, ResourceQuery{TenantID: "site_001", WorkspaceID: "hello", Type: ResourceRedisHash, Status: ResourceActive})
+	if err != nil {
+		t.Fatalf("list resources: %v", err)
+	}
+	if len(listed) != 1 || listed[0].Name != "用户资料缓存 V2" || !listed[0].Supports(ResourceUpsert) {
+		t.Fatalf("expected updated resource in list, got %+v", listed)
+	}
+
+	binding, err := repo.SaveResourceBinding(ctx, ResourceBinding{
+		ID:                "resbind_memory_test",
+		ResourceID:        saved.ID,
+		TenantID:          "site_001",
+		WorkspaceID:       "hello",
+		NodeType:          "fact-query",
+		AllowedOperations: []ResourceOperation{ResourceRead},
+		AllowedNamespaces: []string{"profile"},
+		Status:            ResourceBindingActive,
+		CreatedAt:         now,
+		UpdatedAt:         now,
+	})
+	if err != nil {
+		t.Fatalf("save binding: %v", err)
+	}
+	if !binding.Allows(ResourceAccessRequest{TenantID: "site_001", WorkspaceID: "hello", NodeType: "fact-query", Operation: ResourceRead, Namespace: "profile"}) {
+		t.Fatalf("expected binding to allow read profile: %+v", binding)
+	}
+	bindings, err := repo.ListResourceBindings(ctx, ResourceBindingQuery{ResourceID: saved.ID, TenantID: "site_001", NodeType: "fact-query"})
+	if err != nil {
+		t.Fatalf("list bindings: %v", err)
+	}
+	if len(bindings) != 1 || bindings[0].ID != binding.ID {
+		t.Fatalf("expected binding in list, got %+v", bindings)
+	}
+
+	if err := repo.CreateResourceAuditLog(ctx, ResourceAuditLog{
+		ID:           "resaudit_memory_test",
+		TenantID:     "site_001",
+		WorkspaceID:  "hello",
+		ResourceID:   saved.ID,
+		ResourceCode: saved.Code,
+		Operation:    ResourceRead,
+		Status:       ResourceAuditSuccess,
+		NodeID:       "node_fact",
+		CreatedAt:    now,
+	}); err != nil {
+		t.Fatalf("create audit: %v", err)
+	}
+	logs, err := repo.ListResourceAuditLogs(ctx, ResourceAuditQuery{ResourceID: saved.ID, TenantID: "site_001", WorkspaceID: "hello", Status: ResourceAuditSuccess})
+	if err != nil {
+		t.Fatalf("list audit logs: %v", err)
+	}
+	if len(logs) != 1 || logs[0].NodeID != "node_fact" || logs[0].ResourceCode != saved.Code {
+		t.Fatalf("expected audit log, got %+v", logs)
+	}
+}
+
 func TestFactProviderValidateRejectsInvalidMappingContract(t *testing.T) {
 	base := FactProvider{
 		TenantID:        "site_001",

@@ -487,8 +487,8 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 			[]string{"INTERNAL 使用 ExMarketing PG 权威状态；CUSTOM 需要显式状态 provider adapter。"},
 		)),
 		groupedSchema("state-store", "通用存储", "定义、读取和写入工作流通用数据，支持变量、字符串、数组、对象和表格。", groups(
-			fieldGroup("storage-key", "存储定位", "定义存储介质、命名空间和 key。", fields(
-				enumField("storageType", "存储类型", true, "MEMORY", []string{"MEMORY", "WORKFLOW_CONTEXT", "LOCAL_CACHE", "DATABASE", "HTTP", "REST", "EXTERNAL", "REDIS", "GRPC", "PLUGIN", "CUSTOM"}),
+			fieldGroup("resource", "资源引用", "优先使用资源管理中的 resourceRef；存储介质、endpoint、表结构和密钥不应放在节点中。", fields(
+				withDescription(stringField("resourceRef", "资源 Ref", false, "default_workflow_state", rules(maxLength(128))), "引用资源管理中的资源 Code，例如 default_workflow_state、workflow_memory、user_profile_provider。"),
 				enumField("operation", "操作", true, "DEFINE", []string{"DEFINE", "READ", "WRITE", "UPSERT", "APPEND", "DELETE"}),
 				withDescription(stringField("namespace", "命名空间", true, "workflow", rules(minLength(1), maxLength(128))), "例如 workflow、debug、checkin、temporary。"),
 				withDescription(stringField("keyTemplate", "Key 模板", true, "${activityId}:${eventId}:${nodeId}", rules(minLength(1), maxLength(512))), "支持 tenantId、activityId、eventId、subject.id、nodeId 等模板变量。"),
@@ -505,7 +505,8 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 				withDescription(stringField("expectedVersion", "期望版本", false, "", rules(maxLength(32))), "CAS 或 requireVersion 场景使用。"),
 				withDescription(stringField("providerCode", "Provider Code", false, "", rules(maxLength(128))), "REDIS/CUSTOM adapter 编码。"),
 			)),
-			fieldGroup("provider", "外部 Provider", "HTTP/REST/EXTERNAL 存储使用统一 provider 协议。", fields(
+			fieldGroup("compat", "兼容字段", "过渡期兼容旧节点配置；新流程应只使用 resourceRef。", fields(
+				enumField("storageType", "存储类型", false, "MEMORY", []string{"MEMORY", "WORKFLOW_CONTEXT", "LOCAL_CACHE", "DATABASE", "HTTP", "REST", "EXTERNAL", "REDIS", "GRPC", "PLUGIN", "CUSTOM"}),
 				withDescription(stringField("providerEndpoint", "Provider Endpoint", false, "", rules(maxLength(512))), "HTTP provider 地址；请求体包含 operation、tenantId、namespace、key、value 和版本信息。"),
 				enumField("httpMethod", "HTTP Method", false, "POST", []string{"POST", "PUT"}),
 				objectField("requestHeaders", "请求 Headers", false, nil),
@@ -514,7 +515,7 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 		), preview(
 			[]string{"input.value", "valuePath", "storage key"},
 			[]string{"stored_value", "storage_entry", "storage_version"},
-			[]string{"MEMORY/WORKFLOW_CONTEXT/LOCAL_CACHE 写入当前 workflow 变量；DATABASE 写入 marketing_storage_state；HTTP/REST/EXTERNAL 调统一 provider；REDIS/GRPC/PLUGIN/CUSTOM 预留 adapter。"},
+			[]string{"节点只引用 resourceRef；资源管理负责存储类型、endpoint、表、schema、密钥、权限和审计。"},
 		)),
 		groupedSchema("quota-check", "次数频控校验", "对用户、设备、IP、活动或租户维度做次数和频率校验。", groups(
 			fieldGroup("counter", "计数维度", "定义频控 bucket、窗口和上限。", fields(

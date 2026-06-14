@@ -1425,6 +1425,8 @@ var (
 	ErrInvalidWorkspaceMember    = errors.New("invalid workspace member")
 	ErrInvalidWorkspaceFolder    = errors.New("invalid workspace folder")
 	ErrInvalidWorkspaceShare     = errors.New("invalid workspace share")
+	ErrInvalidResource           = errors.New("invalid resource")
+	ErrResourceConflict          = errors.New("resource conflict")
 	ErrForbidden                 = errors.New("forbidden")
 	ErrManualGrantExportRequired = errors.New("manual export file is required before success confirmation")
 )

@@ -2975,20 +2975,25 @@ func (s *Service) stateStoreWorkflowNodeHandler(ctx context.Context, node market
 		failed.Output["audit"] = workflowHandlerAudit(node, runtime)
 		return failed
 	}
+	resource, hasResource, resourceResult := s.workflowStateStoreResourceConfig(ctx, node, runtime, config)
+	if resourceResult.Status != "" {
+		return resourceResult
+	}
 	storageType := strings.ToUpper(firstWorkflowString(workflowConfigString(config, "storageType"), "MEMORY"))
 	operation := strings.ToUpper(firstWorkflowString(workflowConfigString(config, "operation"), "DEFINE"))
 	namespace := firstWorkflowString(workflowConfigString(config, "namespace"), "workflow")
 	storageKey := workflowRenderNodeTemplate(firstWorkflowString(workflowConfigString(config, "keyTemplate"), "${activityId}:${eventId}:${nodeId}"), runtime, node)
 	valueType := strings.ToUpper(firstWorkflowString(workflowConfigString(config, "valueType"), "OBJECT"))
+	var result workflowNodeResult
 	switch storageType {
 	case "MEMORY", "WORKFLOW_CONTEXT", "LOCAL_CACHE":
-		return workflowMemoryStateStore(ctx, node, runtime, config, operation, namespace, storageKey, valueType)
+		result = workflowMemoryStateStore(ctx, node, runtime, config, operation, namespace, storageKey, valueType)
 	case "DATABASE":
-		return s.workflowDatabaseStateStore(ctx, node, runtime, config, operation, namespace, storageKey, valueType)
+		result = s.workflowDatabaseStateStore(ctx, node, runtime, config, operation, namespace, storageKey, valueType)
 	case "HTTP", "REST", "EXTERNAL":
-		return s.workflowHTTPStateStore(ctx, node, runtime, config, operation, namespace, storageKey, valueType)
+		result = s.workflowHTTPStateStore(ctx, node, runtime, config, operation, namespace, storageKey, valueType)
 	case "REDIS", "CUSTOM", "PLUGIN", "GRPC":
-		return nodeFailed("STATE_STORE_ADAPTER_REQUIRED: "+storageType+" storage adapter is not registered", map[string]any{
+		result = nodeFailed("STATE_STORE_ADAPTER_REQUIRED: "+storageType+" storage adapter is not registered", map[string]any{
 			"errorCode":          "STATE_STORE_ADAPTER_REQUIRED",
 			"storageType":        storageType,
 			"providerCode":       workflowConfigString(config, "providerCode"),
@@ -2997,12 +3002,120 @@ func (s *Service) stateStoreWorkflowNodeHandler(ctx context.Context, node market
 			"audit":              workflowHandlerAudit(node, runtime),
 		})
 	default:
-		return nodeFailed("STATE_STORE_TYPE_UNSUPPORTED: storageType is not supported", map[string]any{
+		result = nodeFailed("STATE_STORE_TYPE_UNSUPPORTED: storageType is not supported", map[string]any{
 			"errorCode":   "STATE_STORE_TYPE_UNSUPPORTED",
 			"storageType": storageType,
 			"audit":       workflowHandlerAudit(node, runtime),
 		})
 	}
+	if hasResource {
+		if result.Output == nil {
+			result.Output = map[string]any{}
+		}
+		result.Output["resourceRef"] = resource.Code
+		result.Output["resource"] = map[string]any{"id": resource.ID, "code": resource.Code, "type": resource.Type, "driver": resource.Driver}
+		_ = s.workflowRecordResourceAudit(ctx, resource, runtime, node, marketing.ResourceOperation(operation), result)
+	}
+	return result
+}
+
+func (s *Service) workflowStateStoreResourceConfig(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime, config map[string]any) (marketing.Resource, bool, workflowNodeResult) {
+	resourceRef := strings.TrimSpace(workflowExplicitConfigString(node, "resourceRef"))
+	if resourceRef == "" {
+		return marketing.Resource{}, false, workflowNodeResult{}
+	}
+	operation := marketing.ResourceOperation(strings.ToUpper(firstWorkflowString(workflowConfigString(config, "operation"), "DEFINE")))
+	if operation == "DEFINE" {
+		operation = marketing.ResourceWrite
+	}
+	resource, err := s.GetResource(ctx, runtime.Activity.TenantID, resourceRef)
+	if err != nil {
+		code := "RESOURCE_NOT_FOUND"
+		return marketing.Resource{}, true, nodeFailed(code+": "+err.Error(), map[string]any{"errorCode": code, "resourceRef": resourceRef, "audit": workflowHandlerAudit(node, runtime)})
+	}
+	req := marketing.ResourceAccessRequest{
+		TenantID:    runtime.Activity.TenantID,
+		WorkspaceID: runtime.Activity.WorkspaceID,
+		FolderID:    runtime.Activity.FolderID,
+		ActivityID:  runtime.Activity.ID,
+		NodeID:      node.ID,
+		NodeType:    nodeHandlerKey(node),
+		Operation:   operation,
+		Namespace:   workflowConfigString(config, "namespace"),
+	}
+	if err := s.ValidateResourceAccess(ctx, resource, req); err != nil {
+		code := strings.TrimSpace(err.Error())
+		if code == "" {
+			code = "RESOURCE_PERMISSION_DENIED"
+		}
+		return resource, true, nodeFailed(code+": resource access denied", map[string]any{"errorCode": code, "resourceRef": resourceRef, "resourceType": resource.Type, "audit": workflowHandlerAudit(node, runtime)})
+	}
+	for key, value := range resource.ConfigMap() {
+		if _, exists := config[key]; !exists {
+			config[key] = value
+		}
+	}
+	config["storageType"] = workflowStorageTypeForResource(resource)
+	return resource, true, workflowNodeResult{}
+}
+
+func workflowExplicitConfigString(node marketing.WorkflowNode, key string) string {
+	if len(node.Config) == 0 {
+		return ""
+	}
+	var config map[string]any
+	if err := json.Unmarshal(node.Config, &config); err != nil {
+		return ""
+	}
+	return workflowConfigString(config, key)
+}
+
+func workflowStorageTypeForResource(resource marketing.Resource) string {
+	switch resource.Type {
+	case marketing.ResourceMemory, marketing.ResourceWorkflowContext:
+		return "MEMORY"
+	case marketing.ResourceDatabaseKV, marketing.ResourceDatabaseTable:
+		return "DATABASE"
+	case marketing.ResourceHTTPProvider:
+		return "HTTP"
+	case marketing.ResourceRedisKV, marketing.ResourceRedisHash, marketing.ResourceRedisCounter, marketing.ResourceRedisLock:
+		return "REDIS"
+	case marketing.ResourceGRPCProvider:
+		return "GRPC"
+	case marketing.ResourcePluginProvider:
+		return "PLUGIN"
+	default:
+		return "CUSTOM"
+	}
+}
+
+func (s *Service) workflowRecordResourceAudit(ctx context.Context, resource marketing.Resource, runtime workflowRuntime, node marketing.WorkflowNode, operation marketing.ResourceOperation, result workflowNodeResult) error {
+	status := marketing.ResourceAuditSuccess
+	errorCode := ""
+	errorMessage := ""
+	if result.Status != marketing.WorkflowNodeSuccess {
+		status = marketing.ResourceAuditFailed
+		errorMessage = result.Error
+		if result.Output != nil {
+			errorCode = workflowConfigString(result.Output, "errorCode")
+		}
+	}
+	return s.repository.CreateResourceAuditLog(ctx, marketing.ResourceAuditLog{
+		ID:           marketing.NewID("resaudit"),
+		TenantID:     runtime.Activity.TenantID,
+		WorkspaceID:  runtime.Activity.WorkspaceID,
+		FolderID:     runtime.Activity.FolderID,
+		ActivityID:   runtime.Activity.ID,
+		NodeID:       node.ID,
+		NodeType:     nodeHandlerKey(node),
+		ResourceID:   resource.ID,
+		ResourceCode: resource.Code,
+		Operation:    operation,
+		Status:       status,
+		ErrorCode:    errorCode,
+		ErrorMessage: errorMessage,
+		CreatedAt:    time.Now().UTC(),
+	})
 }
 
 func (s *Service) workflowHTTPStateStore(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime, config map[string]any, operation string, namespace string, storageKey string, valueType string) workflowNodeResult {

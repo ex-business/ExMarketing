@@ -60,6 +60,14 @@ type Repository interface {
 	GetStorageState(ctx context.Context, key StorageStateKey) (StorageState, error)
 	UpsertStorageState(ctx context.Context, cmd UpsertStorageStateCommand) (StorageState, error)
 	DeleteStorageState(ctx context.Context, key StorageStateKey) error
+	SaveResource(ctx context.Context, resource Resource) (Resource, error)
+	GetResource(ctx context.Context, tenantID string, code string) (Resource, error)
+	GetResourceByID(ctx context.Context, id string) (Resource, error)
+	ListResources(ctx context.Context, query ResourceQuery) ([]Resource, error)
+	SaveResourceBinding(ctx context.Context, binding ResourceBinding) (ResourceBinding, error)
+	ListResourceBindings(ctx context.Context, query ResourceBindingQuery) ([]ResourceBinding, error)
+	CreateResourceAuditLog(ctx context.Context, log ResourceAuditLog) error
+	ListResourceAuditLogs(ctx context.Context, query ResourceAuditQuery) ([]ResourceAuditLog, error)
 
 	CreateInbox(ctx context.Context, inbox EventInbox) (EventInbox, bool, error)
 	GetInboxByEvent(ctx context.Context, tenantID string, eventID string) (EventInbox, error)

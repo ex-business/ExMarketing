@@ -217,6 +217,11 @@ func RequiredTables() []string {
 		"marketing_fact_provider",
 		"marketing_activity_state",
 		"marketing_storage_state",
+		"marketing_resource",
+		"marketing_resource_schema",
+		"marketing_resource_binding",
+		"marketing_resource_secret",
+		"marketing_resource_audit",
 	}
 }
 

@@ -1850,6 +1850,36 @@ func TestStateStoreWorkflowNodeHandlerSupportsHTTPProvider(t *testing.T) {
 	}
 }
 
+func TestStateStoreWorkflowNodeHandlerUsesResourceRefAndAudits(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	runtime := testWorkflowHandlerRuntime(true)
+	node := marketing.WorkflowNode{
+		ID:     "resource-store",
+		Type:   "state-store",
+		Config: json.RawMessage(`{"resourceRef":"default_workflow_state","operation":"UPSERT","namespace":"checkin","keyTemplate":"${activityId}:${subject.id}:resource","valueType":"OBJECT"}`),
+	}
+	nodeCtx := context.WithValue(ctx, workflowNodeExecutionContextKey{}, workflowNodeExecutionContext{
+		ResolvedInput: map[string]any{"value": map[string]any{"streakDays": 3}},
+	})
+
+	result := service.stateStoreWorkflowNodeHandler(nodeCtx, node, runtime)
+	if result.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected resourceRef state-store success, got %+v", result)
+	}
+	if result.Output["resourceRef"] != "default_workflow_state" || result.Output["storageType"] != "DATABASE" {
+		t.Fatalf("expected database resource output, got %+v", result.Output)
+	}
+	logs, err := repo.ListResourceAuditLogs(ctx, marketing.ResourceAuditQuery{ResourceID: "res_builtin_default_workflow_state"})
+	if err != nil {
+		t.Fatalf("list resource audit logs: %v", err)
+	}
+	if len(logs) != 1 || logs[0].ResourceCode != "default_workflow_state" || logs[0].NodeID != "resource-store" || logs[0].Status != marketing.ResourceAuditSuccess {
+		t.Fatalf("expected resource audit log, got %+v", logs)
+	}
+}
+
 func testWorkflowHandlerRuntime(qualified bool) workflowRuntime {
 	now := time.Date(2026, 6, 5, 8, 0, 0, 0, time.UTC)
 	decision := marketing.RuleDecisionPassed

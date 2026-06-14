@@ -917,6 +917,295 @@ func (r *Repository) DeleteStorageState(ctx context.Context, key marketing.Stora
 	return nil
 }
 
+func (r *Repository) SaveResource(ctx context.Context, resource marketing.Resource) (marketing.Resource, error) {
+	if resource.ID == "" {
+		resource.ID = marketing.NewID("res")
+	}
+	if resource.Status == "" {
+		resource.Status = marketing.ResourceActive
+	}
+	if resource.Scope == "" {
+		resource.Scope = marketing.ResourceScopeWorkspace
+	}
+	if resource.Driver == "" {
+		resource.Driver = marketing.ResourceDriverInternal
+	}
+	if len(resource.Config) == 0 {
+		resource.Config = json.RawMessage(`{}`)
+	}
+	if resource.SchemaVersion == 0 {
+		resource.SchemaVersion = 1
+	}
+	if resource.CreatedAt.IsZero() {
+		resource.CreatedAt = time.Now().UTC()
+	}
+	if resource.UpdatedAt.IsZero() {
+		resource.UpdatedAt = resource.CreatedAt
+	}
+	if err := resource.Validate(); err != nil {
+		return marketing.Resource{}, err
+	}
+	capabilities, err := json.Marshal(resource.Capabilities)
+	if err != nil {
+		return marketing.Resource{}, err
+	}
+	row := r.db.QueryRowContext(ctx, `
+		INSERT INTO marketing_resource (
+			id, tenant_id, workspace_id, folder_id, activity_id, code, name, description,
+			type, driver, scope, status, environment, config_json, capabilities_json,
+			schema_version, created_by, updated_by, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+		ON CONFLICT (tenant_id, code) DO UPDATE
+		SET workspace_id = EXCLUDED.workspace_id,
+		    folder_id = EXCLUDED.folder_id,
+		    activity_id = EXCLUDED.activity_id,
+		    name = EXCLUDED.name,
+		    description = EXCLUDED.description,
+		    type = EXCLUDED.type,
+		    driver = EXCLUDED.driver,
+		    scope = EXCLUDED.scope,
+		    status = EXCLUDED.status,
+		    environment = EXCLUDED.environment,
+		    config_json = EXCLUDED.config_json,
+		    capabilities_json = EXCLUDED.capabilities_json,
+		    schema_version = EXCLUDED.schema_version,
+		    updated_by = EXCLUDED.updated_by,
+		    updated_at = EXCLUDED.updated_at
+		RETURNING id, tenant_id, workspace_id, folder_id, activity_id, code, name, description,
+		          type, driver, scope, status, environment, config_json, capabilities_json,
+		          schema_version, created_by, updated_by, created_at, updated_at
+	`, resource.ID, resource.TenantID, resource.WorkspaceID, resource.FolderID, resource.ActivityID,
+		resource.Code, resource.Name, resource.Description, resource.Type, resource.Driver, resource.Scope,
+		resource.Status, resource.Environment, resource.Config, json.RawMessage(capabilities), resource.SchemaVersion,
+		resource.CreatedBy, resource.UpdatedBy, resource.CreatedAt, resource.UpdatedAt)
+	saved, err := scanResource(row)
+	if err != nil {
+		return marketing.Resource{}, mapPostgresResourceError(err)
+	}
+	return saved, nil
+}
+
+func (r *Repository) GetResource(ctx context.Context, tenantID string, code string) (marketing.Resource, error) {
+	row := r.db.QueryRowContext(ctx, `
+		SELECT id, tenant_id, workspace_id, folder_id, activity_id, code, name, description,
+		       type, driver, scope, status, environment, config_json, capabilities_json,
+		       schema_version, created_by, updated_by, created_at, updated_at
+		FROM marketing_resource
+		WHERE tenant_id = $1 AND code = $2
+	`, tenantID, code)
+	resource, err := scanResource(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return marketing.Resource{}, marketing.ErrNotFound
+		}
+		return marketing.Resource{}, err
+	}
+	return resource, nil
+}
+
+func (r *Repository) GetResourceByID(ctx context.Context, id string) (marketing.Resource, error) {
+	row := r.db.QueryRowContext(ctx, `
+		SELECT id, tenant_id, workspace_id, folder_id, activity_id, code, name, description,
+		       type, driver, scope, status, environment, config_json, capabilities_json,
+		       schema_version, created_by, updated_by, created_at, updated_at
+		FROM marketing_resource
+		WHERE id = $1
+	`, id)
+	resource, err := scanResource(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return marketing.Resource{}, marketing.ErrNotFound
+		}
+		return marketing.Resource{}, err
+	}
+	return resource, nil
+}
+
+func (r *Repository) ListResources(ctx context.Context, query marketing.ResourceQuery) ([]marketing.Resource, error) {
+	limit := query.Limit
+	if limit <= 0 || limit > 500 {
+		limit = 500
+	}
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, tenant_id, workspace_id, folder_id, activity_id, code, name, description,
+		       type, driver, scope, status, environment, config_json, capabilities_json,
+		       schema_version, created_by, updated_by, created_at, updated_at
+		FROM marketing_resource
+		WHERE ($1 = '' OR tenant_id = $1)
+		  AND ($2 = '' OR workspace_id = $2)
+		  AND ($3 = '' OR folder_id = $3)
+		  AND ($4 = '' OR activity_id = $4)
+		  AND ($5 = '' OR type = $5)
+		  AND ($6 = '' OR status = $6)
+		  AND ($7 = '' OR code = $7)
+		ORDER BY updated_at DESC, code ASC
+		LIMIT $8
+	`, query.TenantID, query.WorkspaceID, query.FolderID, query.ActivityID, query.Type, query.Status, query.Code, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []marketing.Resource
+	for rows.Next() {
+		resource, err := scanResource(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, resource)
+	}
+	return out, rows.Err()
+}
+
+func (r *Repository) SaveResourceBinding(ctx context.Context, binding marketing.ResourceBinding) (marketing.ResourceBinding, error) {
+	if binding.ID == "" {
+		binding.ID = marketing.NewID("resbind")
+	}
+	if binding.Status == "" {
+		binding.Status = marketing.ResourceBindingActive
+	}
+	if len(binding.KeyPolicy) == 0 {
+		binding.KeyPolicy = json.RawMessage(`{}`)
+	}
+	if binding.CreatedAt.IsZero() {
+		binding.CreatedAt = time.Now().UTC()
+	}
+	if binding.UpdatedAt.IsZero() {
+		binding.UpdatedAt = binding.CreatedAt
+	}
+	operations, err := json.Marshal(binding.AllowedOperations)
+	if err != nil {
+		return marketing.ResourceBinding{}, err
+	}
+	namespaces, err := json.Marshal(binding.AllowedNamespaces)
+	if err != nil {
+		return marketing.ResourceBinding{}, err
+	}
+	row := r.db.QueryRowContext(ctx, `
+		INSERT INTO marketing_resource_binding (
+			id, resource_id, tenant_id, workspace_id, folder_id, activity_id, node_type, node_id,
+			principal_type, principal_id, min_role, allowed_operations_json, allowed_namespaces_json,
+			key_policy_json, include_subfolders, require_approval, status, created_by, updated_by, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
+		ON CONFLICT (id) DO UPDATE
+		SET workspace_id = EXCLUDED.workspace_id,
+		    folder_id = EXCLUDED.folder_id,
+		    activity_id = EXCLUDED.activity_id,
+		    node_type = EXCLUDED.node_type,
+		    node_id = EXCLUDED.node_id,
+		    principal_type = EXCLUDED.principal_type,
+		    principal_id = EXCLUDED.principal_id,
+		    min_role = EXCLUDED.min_role,
+		    allowed_operations_json = EXCLUDED.allowed_operations_json,
+		    allowed_namespaces_json = EXCLUDED.allowed_namespaces_json,
+		    key_policy_json = EXCLUDED.key_policy_json,
+		    include_subfolders = EXCLUDED.include_subfolders,
+		    require_approval = EXCLUDED.require_approval,
+		    status = EXCLUDED.status,
+		    updated_by = EXCLUDED.updated_by,
+		    updated_at = EXCLUDED.updated_at
+		RETURNING id, resource_id, tenant_id, workspace_id, folder_id, activity_id, node_type, node_id,
+		          principal_type, principal_id, min_role, allowed_operations_json, allowed_namespaces_json,
+		          key_policy_json, include_subfolders, require_approval, status, created_by, updated_by, created_at, updated_at
+	`, binding.ID, binding.ResourceID, binding.TenantID, binding.WorkspaceID, binding.FolderID, binding.ActivityID,
+		binding.NodeType, binding.NodeID, binding.PrincipalType, binding.PrincipalID, binding.MinRole,
+		json.RawMessage(operations), json.RawMessage(namespaces), binding.KeyPolicy, binding.IncludeSubfolders,
+		binding.RequireApproval, binding.Status, binding.CreatedBy, binding.UpdatedBy, binding.CreatedAt, binding.UpdatedAt)
+	saved, err := scanResourceBinding(row)
+	if err != nil {
+		return marketing.ResourceBinding{}, err
+	}
+	return saved, nil
+}
+
+func (r *Repository) ListResourceBindings(ctx context.Context, query marketing.ResourceBindingQuery) ([]marketing.ResourceBinding, error) {
+	limit := query.Limit
+	if limit <= 0 || limit > 500 {
+		limit = 500
+	}
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, resource_id, tenant_id, workspace_id, folder_id, activity_id, node_type, node_id,
+		       principal_type, principal_id, min_role, allowed_operations_json, allowed_namespaces_json,
+		       key_policy_json, include_subfolders, require_approval, status, created_by, updated_by, created_at, updated_at
+		FROM marketing_resource_binding
+		WHERE ($1 = '' OR resource_id = $1)
+		  AND ($2 = '' OR tenant_id = $2)
+		  AND ($3 = '' OR workspace_id = $3)
+		  AND ($4 = '' OR folder_id = $4)
+		  AND ($5 = '' OR activity_id = $5)
+		  AND ($6 = '' OR node_type = '' OR node_type = $6)
+		  AND ($7 = '' OR status = $7)
+		ORDER BY updated_at DESC, id ASC
+		LIMIT $8
+	`, query.ResourceID, query.TenantID, query.WorkspaceID, query.FolderID, query.ActivityID, query.NodeType, query.Status, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []marketing.ResourceBinding
+	for rows.Next() {
+		binding, err := scanResourceBinding(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, binding)
+	}
+	return out, rows.Err()
+}
+
+func (r *Repository) CreateResourceAuditLog(ctx context.Context, log marketing.ResourceAuditLog) error {
+	if log.ID == "" {
+		log.ID = marketing.NewID("resaudit")
+	}
+	if log.CreatedAt.IsZero() {
+		log.CreatedAt = time.Now().UTC()
+	}
+	_, err := r.db.ExecContext(ctx, `
+		INSERT INTO marketing_resource_audit (
+			id, tenant_id, workspace_id, folder_id, activity_id, workflow_execution_id,
+			node_id, node_type, resource_id, resource_code, operation, status, duration_ms,
+			error_code, error_message, actor_id, created_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+	`, log.ID, log.TenantID, log.WorkspaceID, log.FolderID, log.ActivityID, log.WorkflowExecutionID,
+		log.NodeID, log.NodeType, log.ResourceID, log.ResourceCode, log.Operation, log.Status, log.DurationMS,
+		log.ErrorCode, log.ErrorMessage, log.ActorID, log.CreatedAt)
+	return err
+}
+
+func (r *Repository) ListResourceAuditLogs(ctx context.Context, query marketing.ResourceAuditQuery) ([]marketing.ResourceAuditLog, error) {
+	limit := query.Limit
+	if limit <= 0 || limit > 200 {
+		limit = 200
+	}
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, tenant_id, workspace_id, folder_id, activity_id, workflow_execution_id,
+		       node_id, node_type, resource_id, resource_code, operation, status, duration_ms,
+		       error_code, error_message, actor_id, created_at
+		FROM marketing_resource_audit
+		WHERE ($1 = '' OR resource_id = $1)
+		  AND ($2 = '' OR tenant_id = $2)
+		  AND ($3 = '' OR workspace_id = $3)
+		  AND ($4 = '' OR activity_id = $4)
+		  AND ($5 = '' OR status = $5)
+		ORDER BY created_at DESC
+		LIMIT $6
+	`, query.ResourceID, query.TenantID, query.WorkspaceID, query.ActivityID, query.Status, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []marketing.ResourceAuditLog
+	for rows.Next() {
+		var log marketing.ResourceAuditLog
+		if err := rows.Scan(&log.ID, &log.TenantID, &log.WorkspaceID, &log.FolderID, &log.ActivityID, &log.WorkflowExecutionID,
+			&log.NodeID, &log.NodeType, &log.ResourceID, &log.ResourceCode, &log.Operation, &log.Status, &log.DurationMS,
+			&log.ErrorCode, &log.ErrorMessage, &log.ActorID, &log.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, log)
+	}
+	return out, rows.Err()
+}
+
 func (r *Repository) CreateInbox(ctx context.Context, inbox marketing.EventInbox) (marketing.EventInbox, bool, error) {
 	inbox.Event = inbox.Event.Normalized()
 	existing, err := r.inboxByEventIdentity(ctx, inbox.Event.TenantID, inbox.Event.EventID)
@@ -2612,6 +2901,44 @@ func scanStorageState(scanner outboxScanner) (marketing.StorageState, error) {
 	return state, nil
 }
 
+func scanResource(scanner outboxScanner) (marketing.Resource, error) {
+	var resource marketing.Resource
+	var capabilities json.RawMessage
+	if err := scanner.Scan(&resource.ID, &resource.TenantID, &resource.WorkspaceID, &resource.FolderID, &resource.ActivityID,
+		&resource.Code, &resource.Name, &resource.Description, &resource.Type, &resource.Driver, &resource.Scope,
+		&resource.Status, &resource.Environment, &resource.Config, &capabilities, &resource.SchemaVersion,
+		&resource.CreatedBy, &resource.UpdatedBy, &resource.CreatedAt, &resource.UpdatedAt); err != nil {
+		return marketing.Resource{}, err
+	}
+	if len(capabilities) > 0 {
+		_ = json.Unmarshal(capabilities, &resource.Capabilities)
+	}
+	if resource.Capabilities == nil {
+		resource.Capabilities = []marketing.ResourceOperation{}
+	}
+	return resource, nil
+}
+
+func scanResourceBinding(scanner outboxScanner) (marketing.ResourceBinding, error) {
+	var binding marketing.ResourceBinding
+	var operations json.RawMessage
+	var namespaces json.RawMessage
+	if err := scanner.Scan(&binding.ID, &binding.ResourceID, &binding.TenantID, &binding.WorkspaceID, &binding.FolderID,
+		&binding.ActivityID, &binding.NodeType, &binding.NodeID, &binding.PrincipalType, &binding.PrincipalID,
+		&binding.MinRole, &operations, &namespaces, &binding.KeyPolicy, &binding.IncludeSubfolders,
+		&binding.RequireApproval, &binding.Status, &binding.CreatedBy, &binding.UpdatedBy, &binding.CreatedAt,
+		&binding.UpdatedAt); err != nil {
+		return marketing.ResourceBinding{}, err
+	}
+	if len(operations) > 0 {
+		_ = json.Unmarshal(operations, &binding.AllowedOperations)
+	}
+	if len(namespaces) > 0 {
+		_ = json.Unmarshal(namespaces, &binding.AllowedNamespaces)
+	}
+	return binding, nil
+}
+
 func scanActivity(scanner activityScanner) (marketing.Activity, error) {
 	var activity marketing.Activity
 	var triggerEvents []byte
@@ -3052,6 +3379,14 @@ func mapPostgresStorageStateError(err error) error {
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
 		return marketing.ErrStorageStateConflict
+	}
+	return err
+}
+
+func mapPostgresResourceError(err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		return marketing.ErrResourceConflict
 	}
 	return err
 }

@@ -848,7 +848,25 @@ func (r *workerTestRepo) SaveFactProvider(context.Context, marketing.FactProvide
 func (r *workerTestRepo) FindEnabledFactProvider(context.Context, string, string) (marketing.FactProvider, error) {
 	panic("not implemented")
 }
+func (r *workerTestRepo) GetActivityState(context.Context, marketing.ActivityStateKey) (marketing.ActivityState, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) UpsertActivityState(context.Context, marketing.UpsertActivityStateCommand) (marketing.ActivityState, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) GetStorageState(context.Context, marketing.StorageStateKey) (marketing.StorageState, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) UpsertStorageState(context.Context, marketing.UpsertStorageStateCommand) (marketing.StorageState, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) DeleteStorageState(context.Context, marketing.StorageStateKey) error {
+	panic("not implemented")
+}
 func (r *workerTestRepo) CreateInbox(context.Context, marketing.EventInbox) (marketing.EventInbox, bool, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) GetInboxByEvent(context.Context, string, string) (marketing.EventInbox, error) {
 	panic("not implemented")
 }
 func (r *workerTestRepo) UpdateInbox(context.Context, marketing.EventInbox) error {
@@ -905,6 +923,30 @@ func (r *workerTestRepo) ListActivityQuotas(context.Context, string) ([]marketin
 	panic("not implemented")
 }
 func (r *workerTestRepo) ReserveQuota(context.Context, string, marketing.QuotaType, marketing.QuotaScope, string, string) (bool, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) SaveResource(context.Context, marketing.Resource) (marketing.Resource, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) GetResource(context.Context, string, string) (marketing.Resource, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) GetResourceByID(context.Context, string) (marketing.Resource, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) ListResources(context.Context, marketing.ResourceQuery) ([]marketing.Resource, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) SaveResourceBinding(context.Context, marketing.ResourceBinding) (marketing.ResourceBinding, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) ListResourceBindings(context.Context, marketing.ResourceBindingQuery) ([]marketing.ResourceBinding, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) CreateResourceAuditLog(context.Context, marketing.ResourceAuditLog) error {
+	panic("not implemented")
+}
+func (r *workerTestRepo) ListResourceAuditLogs(context.Context, marketing.ResourceAuditQuery) ([]marketing.ResourceAuditLog, error) {
 	panic("not implemented")
 }
 func (r *workerTestRepo) ListOutboxDLQ(context.Context, string, bool, int) ([]marketing.OutboxMessage, error) {

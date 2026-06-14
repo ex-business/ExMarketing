@@ -252,6 +252,105 @@ func TestPostgresWorkspaceCompositeConstraintsRejectCrossWorkspaceReferences(t *
 	}
 }
 
+func TestPostgresResourceRepositoryStoresBindingsAndAudit(t *testing.T) {
+	ctx, repo := openPostgresIntegrationRepository(t)
+	prefix := fmt.Sprintf("pg_resource_%d", time.Now().UnixNano())
+	cleanupPostgresAtomicTest(t, repo, prefix)
+	t.Cleanup(func() { cleanupPostgresAtomicTest(t, repo, prefix) })
+
+	now := time.Now().UTC()
+	resource := marketing.Resource{
+		ID:           prefix + "_res",
+		TenantID:     "site_001",
+		WorkspaceID:  prefix + "_ws",
+		Code:         prefix + "_user_profile",
+		Name:         "用户资料 HTTP 资源",
+		Type:         marketing.ResourceHTTPProvider,
+		Driver:       marketing.ResourceDriverHTTP,
+		Scope:        marketing.ResourceScopeWorkspace,
+		Status:       marketing.ResourceActive,
+		Config:       json.RawMessage(`{"endpoint":"https://profile.example.com/query","method":"POST"}`),
+		Capabilities: []marketing.ResourceOperation{marketing.ResourceRead, marketing.ResourceCall, marketing.ResourceTestConnection},
+		CreatedAt:    now,
+		UpdatedAt:    now,
+	}
+	saved, err := repo.SaveResource(ctx, resource)
+	if err != nil {
+		t.Fatalf("save resource: %v", err)
+	}
+	if saved.ID != resource.ID || saved.ConfigMap()["endpoint"] != "https://profile.example.com/query" {
+		t.Fatalf("unexpected saved resource: %+v", saved)
+	}
+	resource.Name = "用户资料 HTTP 资源 V2"
+	resource.Capabilities = []marketing.ResourceOperation{marketing.ResourceRead}
+	updated, err := repo.SaveResource(ctx, resource)
+	if err != nil {
+		t.Fatalf("update resource: %v", err)
+	}
+	if updated.ID != resource.ID || updated.Name != "用户资料 HTTP 资源 V2" || !updated.Supports(marketing.ResourceRead) || updated.Supports(marketing.ResourceCall) {
+		t.Fatalf("unexpected updated resource: %+v", updated)
+	}
+	got, err := repo.GetResource(ctx, "site_001", resource.Code)
+	if err != nil {
+		t.Fatalf("get resource: %v", err)
+	}
+	if got.ID != resource.ID {
+		t.Fatalf("expected resource id %s, got %+v", resource.ID, got)
+	}
+	listed, err := repo.ListResources(ctx, marketing.ResourceQuery{TenantID: "site_001", WorkspaceID: prefix + "_ws", Type: marketing.ResourceHTTPProvider, Status: marketing.ResourceActive})
+	if err != nil {
+		t.Fatalf("list resources: %v", err)
+	}
+	if len(listed) != 1 || listed[0].Code != resource.Code {
+		t.Fatalf("expected resource in list, got %+v", listed)
+	}
+
+	binding, err := repo.SaveResourceBinding(ctx, marketing.ResourceBinding{
+		ID:                prefix + "_bind",
+		ResourceID:        resource.ID,
+		TenantID:          "site_001",
+		WorkspaceID:       prefix + "_ws",
+		NodeType:          "fact-query-http",
+		AllowedOperations: []marketing.ResourceOperation{marketing.ResourceRead},
+		AllowedNamespaces: []string{"profile"},
+		Status:            marketing.ResourceBindingActive,
+		CreatedAt:         now,
+		UpdatedAt:         now,
+	})
+	if err != nil {
+		t.Fatalf("save binding: %v", err)
+	}
+	bindings, err := repo.ListResourceBindings(ctx, marketing.ResourceBindingQuery{ResourceID: resource.ID, TenantID: "site_001", WorkspaceID: prefix + "_ws", NodeType: "fact-query-http", Status: marketing.ResourceBindingActive})
+	if err != nil {
+		t.Fatalf("list bindings: %v", err)
+	}
+	if len(bindings) != 1 || bindings[0].ID != binding.ID || !bindings[0].Allows(marketing.ResourceAccessRequest{TenantID: "site_001", WorkspaceID: prefix + "_ws", NodeType: "fact-query-http", Operation: marketing.ResourceRead, Namespace: "profile"}) {
+		t.Fatalf("expected matching binding, got %+v", bindings)
+	}
+
+	if err := repo.CreateResourceAuditLog(ctx, marketing.ResourceAuditLog{
+		ID:           prefix + "_audit",
+		TenantID:     "site_001",
+		WorkspaceID:  prefix + "_ws",
+		ResourceID:   resource.ID,
+		ResourceCode: resource.Code,
+		Operation:    marketing.ResourceRead,
+		Status:       marketing.ResourceAuditSuccess,
+		NodeID:       prefix + "_node",
+		NodeType:     "fact-query-http",
+		CreatedAt:    now,
+	}); err != nil {
+		t.Fatalf("create audit log: %v", err)
+	}
+	logs, err := repo.ListResourceAuditLogs(ctx, marketing.ResourceAuditQuery{ResourceID: resource.ID, TenantID: "site_001", WorkspaceID: prefix + "_ws", Status: marketing.ResourceAuditSuccess})
+	if err != nil {
+		t.Fatalf("list audit logs: %v", err)
+	}
+	if len(logs) != 1 || logs[0].ResourceCode != resource.Code || logs[0].NodeID != prefix+"_node" {
+		t.Fatalf("expected audit log, got %+v", logs)
+	}
+}
+
 func TestPostgresWorkspaceSearchLargeDatasetPerformance(t *testing.T) {
 	ctx, repo := openPostgresIntegrationRepository(t)
 	prefix := fmt.Sprintf("pg_search_perf_%d", time.Now().UnixNano())
@@ -1887,6 +1986,11 @@ func cleanupPostgresAtomicTest(t *testing.T, repo *Repository, prefix string) {
 	t.Helper()
 	ctx := context.Background()
 	for _, stmt := range []string{
+		`DELETE FROM marketing_resource_audit WHERE id LIKE $1 OR resource_id LIKE $1 OR resource_code LIKE $1`,
+		`DELETE FROM marketing_resource_binding WHERE id LIKE $1 OR resource_id LIKE $1`,
+		`DELETE FROM marketing_resource_secret WHERE id LIKE $1 OR resource_id LIKE $1`,
+		`DELETE FROM marketing_resource_schema WHERE id LIKE $1 OR resource_id LIKE $1`,
+		`DELETE FROM marketing_resource WHERE id LIKE $1 OR code LIKE $1`,
 		`DELETE FROM marketing_audit WHERE resource_id LIKE $1 OR payload_json::text LIKE '%' || $1 || '%'`,
 		`DELETE FROM marketing_manual_grant_export_detail WHERE grant_order_id LIKE $1 OR export_id LIKE $1 OR id LIKE $1`,
 		`DELETE FROM marketing_manual_grant_export_file WHERE id LIKE $1`,

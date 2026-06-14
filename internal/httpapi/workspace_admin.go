@@ -979,10 +979,13 @@ func workspaceError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, marketing.ErrWorkspaceConflict):
 		writeError(w, http.StatusConflict, err.Error())
+	case errors.Is(err, marketing.ErrResourceConflict):
+		writeError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, marketing.ErrInvalidWorkspace),
 		errors.Is(err, marketing.ErrInvalidWorkspaceMember),
 		errors.Is(err, marketing.ErrInvalidWorkspaceFolder),
-		errors.Is(err, marketing.ErrInvalidWorkspaceShare):
+		errors.Is(err, marketing.ErrInvalidWorkspaceShare),
+		errors.Is(err, marketing.ErrInvalidResource):
 		writeError(w, http.StatusBadRequest, err.Error())
 	default:
 		writeError(w, http.StatusInternalServerError, err.Error())

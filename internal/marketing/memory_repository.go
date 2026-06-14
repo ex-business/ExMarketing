@@ -34,6 +34,9 @@ type MemoryRepository struct {
 	factProviders           map[string]FactProvider
 	activityStates          []ActivityState
 	storageStates           []StorageState
+	resources               []Resource
+	resourceBindings        []ResourceBinding
+	resourceAuditLogs       []ResourceAuditLog
 	inboxByIdempotency      map[string]EventInbox
 	inboxByEventIdentity    map[string]EventInbox
 	participations          []Participation
@@ -599,6 +602,23 @@ func cloneStorageState(state StorageState) StorageState {
 	return state
 }
 
+func cloneResource(resource Resource) Resource {
+	if len(resource.Config) > 0 {
+		resource.Config = append(json.RawMessage(nil), resource.Config...)
+	}
+	resource.Capabilities = slices.Clone(resource.Capabilities)
+	return resource
+}
+
+func cloneResourceBinding(binding ResourceBinding) ResourceBinding {
+	binding.AllowedOperations = slices.Clone(binding.AllowedOperations)
+	binding.AllowedNamespaces = slices.Clone(binding.AllowedNamespaces)
+	if len(binding.KeyPolicy) > 0 {
+		binding.KeyPolicy = append(json.RawMessage(nil), binding.KeyPolicy...)
+	}
+	return binding
+}
+
 func (r *MemoryRepository) GetActivityState(ctx context.Context, key ActivityStateKey) (ActivityState, error) {
 	if err := ctx.Err(); err != nil {
 		return ActivityState{}, err
@@ -738,6 +758,245 @@ func (r *MemoryRepository) DeleteStorageState(ctx context.Context, key StorageSt
 		}
 	}
 	return ErrNotFound
+}
+
+func (r *MemoryRepository) SaveResource(ctx context.Context, resource Resource) (Resource, error) {
+	if err := ctx.Err(); err != nil {
+		return Resource{}, err
+	}
+	if resource.ID == "" {
+		resource.ID = NewID("res")
+	}
+	if resource.Status == "" {
+		resource.Status = ResourceActive
+	}
+	if resource.Scope == "" {
+		resource.Scope = ResourceScopeWorkspace
+	}
+	if resource.Driver == "" {
+		resource.Driver = ResourceDriverInternal
+	}
+	if len(resource.Config) == 0 {
+		resource.Config = json.RawMessage(`{}`)
+	}
+	if resource.SchemaVersion == 0 {
+		resource.SchemaVersion = 1
+	}
+	if resource.CreatedAt.IsZero() {
+		resource.CreatedAt = time.Now().UTC()
+	}
+	if resource.UpdatedAt.IsZero() {
+		resource.UpdatedAt = resource.CreatedAt
+	}
+	if err := resource.Validate(); err != nil {
+		return Resource{}, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.resources {
+		if r.resources[i].TenantID == resource.TenantID && r.resources[i].Code == resource.Code && r.resources[i].ID != resource.ID {
+			return Resource{}, ErrResourceConflict
+		}
+		if r.resources[i].ID == resource.ID {
+			r.resources[i] = cloneResource(resource)
+			return cloneResource(resource), nil
+		}
+	}
+	r.resources = append(r.resources, cloneResource(resource))
+	return cloneResource(resource), nil
+}
+
+func (r *MemoryRepository) GetResource(ctx context.Context, tenantID string, code string) (Resource, error) {
+	if err := ctx.Err(); err != nil {
+		return Resource{}, err
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, resource := range r.resources {
+		if resource.TenantID == tenantID && resource.Code == code {
+			return cloneResource(resource), nil
+		}
+	}
+	return Resource{}, ErrNotFound
+}
+
+func (r *MemoryRepository) GetResourceByID(ctx context.Context, id string) (Resource, error) {
+	if err := ctx.Err(); err != nil {
+		return Resource{}, err
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, resource := range r.resources {
+		if resource.ID == id {
+			return cloneResource(resource), nil
+		}
+	}
+	return Resource{}, ErrNotFound
+}
+
+func (r *MemoryRepository) ListResources(ctx context.Context, query ResourceQuery) ([]Resource, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	limit := query.Limit
+	if limit <= 0 || limit > 500 {
+		limit = 500
+	}
+	var out []Resource
+	for _, resource := range r.resources {
+		if query.TenantID != "" && resource.TenantID != query.TenantID {
+			continue
+		}
+		if query.WorkspaceID != "" && resource.WorkspaceID != query.WorkspaceID {
+			continue
+		}
+		if query.FolderID != "" && resource.FolderID != query.FolderID {
+			continue
+		}
+		if query.ActivityID != "" && resource.ActivityID != query.ActivityID {
+			continue
+		}
+		if query.Type != "" && resource.Type != query.Type {
+			continue
+		}
+		if query.Status != "" && resource.Status != query.Status {
+			continue
+		}
+		if query.Code != "" && resource.Code != query.Code {
+			continue
+		}
+		out = append(out, cloneResource(resource))
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
+}
+
+func (r *MemoryRepository) SaveResourceBinding(ctx context.Context, binding ResourceBinding) (ResourceBinding, error) {
+	if err := ctx.Err(); err != nil {
+		return ResourceBinding{}, err
+	}
+	if binding.ID == "" {
+		binding.ID = NewID("resbind")
+	}
+	if binding.Status == "" {
+		binding.Status = ResourceBindingActive
+	}
+	if len(binding.KeyPolicy) == 0 {
+		binding.KeyPolicy = json.RawMessage(`{}`)
+	}
+	if binding.CreatedAt.IsZero() {
+		binding.CreatedAt = time.Now().UTC()
+	}
+	if binding.UpdatedAt.IsZero() {
+		binding.UpdatedAt = binding.CreatedAt
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.resourceBindings {
+		if r.resourceBindings[i].ID == binding.ID {
+			r.resourceBindings[i] = cloneResourceBinding(binding)
+			return cloneResourceBinding(binding), nil
+		}
+	}
+	r.resourceBindings = append(r.resourceBindings, cloneResourceBinding(binding))
+	return cloneResourceBinding(binding), nil
+}
+
+func (r *MemoryRepository) ListResourceBindings(ctx context.Context, query ResourceBindingQuery) ([]ResourceBinding, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	limit := query.Limit
+	if limit <= 0 || limit > 500 {
+		limit = 500
+	}
+	var out []ResourceBinding
+	for _, binding := range r.resourceBindings {
+		if query.ResourceID != "" && binding.ResourceID != query.ResourceID {
+			continue
+		}
+		if query.TenantID != "" && binding.TenantID != query.TenantID {
+			continue
+		}
+		if query.WorkspaceID != "" && binding.WorkspaceID != query.WorkspaceID {
+			continue
+		}
+		if query.FolderID != "" && binding.FolderID != query.FolderID {
+			continue
+		}
+		if query.ActivityID != "" && binding.ActivityID != query.ActivityID {
+			continue
+		}
+		if query.NodeType != "" && binding.NodeType != "" && binding.NodeType != query.NodeType {
+			continue
+		}
+		if query.Status != "" && binding.Status != query.Status {
+			continue
+		}
+		out = append(out, cloneResourceBinding(binding))
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
+}
+
+func (r *MemoryRepository) CreateResourceAuditLog(ctx context.Context, log ResourceAuditLog) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if log.ID == "" {
+		log.ID = NewID("resaudit")
+	}
+	if log.CreatedAt.IsZero() {
+		log.CreatedAt = time.Now().UTC()
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.resourceAuditLogs = append(r.resourceAuditLogs, log)
+	return nil
+}
+
+func (r *MemoryRepository) ListResourceAuditLogs(ctx context.Context, query ResourceAuditQuery) ([]ResourceAuditLog, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	limit := query.Limit
+	if limit <= 0 || limit > 200 {
+		limit = 200
+	}
+	var out []ResourceAuditLog
+	for i := len(r.resourceAuditLogs) - 1; i >= 0; i-- {
+		log := r.resourceAuditLogs[i]
+		if query.ResourceID != "" && log.ResourceID != query.ResourceID {
+			continue
+		}
+		if query.TenantID != "" && log.TenantID != query.TenantID {
+			continue
+		}
+		if query.WorkspaceID != "" && log.WorkspaceID != query.WorkspaceID {
+			continue
+		}
+		if query.ActivityID != "" && log.ActivityID != query.ActivityID {
+			continue
+		}
+		if query.Status != "" && log.Status != query.Status {
+			continue
+		}
+		out = append(out, log)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
 }
 
 func (r *MemoryRepository) CreateInbox(ctx context.Context, inbox EventInbox) (EventInbox, bool, error) {

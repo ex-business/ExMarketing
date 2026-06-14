@@ -9,28 +9,49 @@ func TestDefaultWorkflowNodeConfigSchemasCoverSupportedNodeTypes(t *testing.T) {
 	registry := DefaultWorkflowNodeConfigSchemas()
 	for _, nodeType := range []string{
 		"event-in",
+		"http-event",
+		"webhook-event",
+		"mq-event",
+		"schedule-event",
+		"state-event",
+		"manual-event",
 		"inbox",
 		"normalize",
 		"match",
 		"fact-query",
+		"activity-state",
+		"quota-check",
 		"code",
+		"combine",
+		"split",
 		"condition",
 		"qualify",
 		"switch",
+		"candidate-reward",
 		"reward",
 		"decimal",
 		"limit",
 		"quota",
+		"budget-reserve",
 		"participation",
 		"audit",
 		"grant-order",
 		"outbox",
+		"approval-gate",
+		"compensation",
+		"random-pick",
+		"plugin-execute",
+		"ab-bucket",
+		"risk-score",
+		"settlement-window",
+		"manual-adjust",
 		"retry",
 		"dlq",
 		"http-call",
 		"mq-publish",
 		"webhook",
 		"callback",
+		"reward-reconcile",
 		"reconcile",
 		"alert",
 	} {
@@ -48,6 +69,12 @@ func TestWorkflowNodeConfigSchemasCoverCoreStudioNodes(t *testing.T) {
 	registry := DefaultWorkflowNodeConfigSchemas()
 	for _, nodeType := range []string{
 		"event-in",
+		"http-event",
+		"webhook-event",
+		"mq-event",
+		"schedule-event",
+		"state-event",
+		"manual-event",
 		"inbox",
 		"normalize",
 		"match",
@@ -55,11 +82,23 @@ func TestWorkflowNodeConfigSchemasCoverCoreStudioNodes(t *testing.T) {
 		"qualify",
 		"switch",
 		"fact-query",
+		"activity-state",
+		"quota-check",
 		"code",
+		"combine",
+		"split",
+		"candidate-reward",
 		"reward",
 		"limit",
 		"quota",
+		"budget-reserve",
 		"callback",
+		"approval-gate",
+		"random-pick",
+		"plugin-execute",
+		"ab-bucket",
+		"risk-score",
+		"settlement-window",
 		"audit",
 	} {
 		if _, ok := registry.Get(nodeType); !ok {
@@ -79,11 +118,16 @@ func TestCoreStudioNodeConfigSchemaFieldsAreRenderable(t *testing.T) {
 		"qualify",
 		"switch",
 		"fact-query",
+		"activity-state",
+		"quota-check",
 		"code",
+		"candidate-reward",
 		"reward",
 		"limit",
 		"quota",
+		"budget-reserve",
 		"callback",
+		"approval-gate",
 		"audit",
 	} {
 		schema, ok := registry.Get(nodeType)
@@ -93,7 +137,7 @@ func TestCoreStudioNodeConfigSchemaFieldsAreRenderable(t *testing.T) {
 		if len(schema.Fields) == 0 {
 			t.Fatalf("expected renderable config fields for %s", nodeType)
 		}
-		if nodeType != "event-in" && len(schema.Inputs) == 0 {
+		if !slices.Contains([]string{"event-in", "http-event", "webhook-event", "mq-event", "schedule-event", "state-event", "manual-event"}, nodeType) && len(schema.Inputs) == 0 {
 			t.Fatalf("expected declared input variables for %s", nodeType)
 		}
 		if len(schema.Outputs) == 0 {
@@ -147,23 +191,44 @@ func TestDefaultWorkflowNodeConfigSchemasAreSorted(t *testing.T) {
 	}
 }
 
-func TestDefaultWorkflowNodeConfigSchemasClassifyCoreAdvancedAndOpsNodes(t *testing.T) {
+func TestDefaultWorkflowNodeConfigSchemasClassifyEventInputCoreAdvancedAndOpsNodes(t *testing.T) {
 	registry := DefaultWorkflowNodeConfigSchemas()
 	cases := map[string]string{
-		"event-in":  "CORE",
-		"condition": "ADVANCED",
-		"switch":    "ADVANCED",
-		"code":      "ADVANCED",
-		"decimal":   "ADVANCED",
-		"quota":     "CORE",
-		"outbox":    "CORE",
-		"http-call": "ADVANCED",
-		"callback":  "ADVANCED",
-		"retry":     "OPS",
-		"dlq":       "OPS",
-		"audit":     "OPS",
-		"reconcile": "OPS",
-		"alert":     "OPS",
+		"event-in":          "EVENT_INPUT",
+		"http-event":        "EVENT_INPUT",
+		"webhook-event":     "EVENT_INPUT",
+		"mq-event":          "EVENT_INPUT",
+		"schedule-event":    "EVENT_INPUT",
+		"state-event":       "EVENT_INPUT",
+		"manual-event":      "EVENT_INPUT",
+		"condition":         "ADVANCED",
+		"switch":            "ADVANCED",
+		"code":              "ADVANCED",
+		"combine":           "ADVANCED",
+		"split":             "ADVANCED",
+		"activity-state":    "CORE",
+		"quota-check":       "CORE",
+		"candidate-reward":  "CORE",
+		"decimal":           "ADVANCED",
+		"quota":             "CORE",
+		"budget-reserve":    "CORE",
+		"outbox":            "CORE",
+		"approval-gate":     "ADVANCED",
+		"compensation":      "ADVANCED",
+		"random-pick":       "ADVANCED",
+		"plugin-execute":    "ADVANCED",
+		"ab-bucket":         "ADVANCED",
+		"risk-score":        "ADVANCED",
+		"settlement-window": "ADVANCED",
+		"manual-adjust":     "ADVANCED",
+		"http-call":         "ADVANCED",
+		"callback":          "ADVANCED",
+		"retry":             "OPS",
+		"dlq":               "OPS",
+		"audit":             "OPS",
+		"reward-reconcile":  "OPS",
+		"reconcile":         "OPS",
+		"alert":             "OPS",
 	}
 	for nodeType, want := range cases {
 		schema, ok := registry.Get(nodeType)
@@ -251,7 +316,7 @@ func TestDefaultWorkflowNodeConfigSchemasExposeOnlyImplementedHandlerOptions(t *
 
 func TestAdvancedAndOpsSchemasExposeExecutionSemantics(t *testing.T) {
 	registry := DefaultWorkflowNodeConfigSchemas()
-	for _, nodeType := range []string{"http-call", "mq-publish", "webhook", "callback", "retry", "dlq", "reconcile", "alert"} {
+	for _, nodeType := range []string{"http-event", "webhook-event", "mq-event", "schedule-event", "state-event", "manual-event", "http-call", "mq-publish", "webhook", "callback", "retry", "dlq", "reconcile", "alert"} {
 		schema, ok := registry.Get(nodeType)
 		if !ok {
 			t.Fatalf("expected schema for %s", nodeType)
@@ -268,7 +333,7 @@ func TestAdvancedAndOpsSchemasExposeExecutionSemantics(t *testing.T) {
 
 func TestProductizedCoreNodeConfigSchemasIncludeGroupsAndPreview(t *testing.T) {
 	registry := DefaultWorkflowNodeConfigSchemas()
-	for _, nodeType := range []string{"event-in", "inbox", "match", "condition", "qualify", "switch", "fact-query", "code", "reward", "limit", "quota", "callback", "audit"} {
+	for _, nodeType := range []string{"event-in", "inbox", "match", "condition", "qualify", "switch", "fact-query", "code", "combine", "split", "reward", "limit", "quota", "callback", "audit"} {
 		schema, ok := registry.Get(nodeType)
 		if !ok {
 			t.Fatalf("expected schema for %s", nodeType)

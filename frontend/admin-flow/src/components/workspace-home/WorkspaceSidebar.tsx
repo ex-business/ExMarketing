@@ -150,6 +150,10 @@ export function WorkspaceSidebar({
     );
   };
 
+  if (isLoading) {
+    return <div className="exm-sidebar" aria-busy="true" />;
+  }
+
   return (
     <div className="exm-sidebar">
       {isLoading ? (

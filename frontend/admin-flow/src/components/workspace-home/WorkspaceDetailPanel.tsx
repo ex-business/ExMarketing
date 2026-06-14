@@ -189,46 +189,7 @@ export function WorkspaceDetailPanel({
   };
 
   if (isLoading) {
-    return (
-      <section className="exm-detail-panel loading">
-        <header className="exm-detail-head">
-          <div>
-            <span className="exm-skeleton exm-detail-label-skeleton" />
-            <h2><i className="exm-skeleton exm-detail-icon-skeleton" /><b className="exm-skeleton exm-detail-title-skeleton" /></h2>
-            <p className="exm-skeleton exm-detail-meta-skeleton" />
-          </div>
-          <TaIconButton disabled aria-label="收藏"><Star size={17} /></TaIconButton>
-          <TaIconButton disabled aria-label="更多"><MoreHorizontal size={17} /></TaIconButton>
-          <TaIconButton disabled aria-label="关闭详情"><X size={17} /></TaIconButton>
-        </header>
-        <nav className="exm-detail-tabs skeleton-tabs">
-          {Array.from({ length: 4 }).map((_, index) => <span key={index} className="exm-skeleton" />)}
-        </nav>
-        <div className="exm-detail-body">
-          <section className="exm-detail-section">
-            <span className="exm-skeleton exm-section-title-skeleton" />
-            <div className="exm-visibility-switch skeleton-switch">
-              {Array.from({ length: 3 }).map((_, index) => <span key={index} className="exm-skeleton" />)}
-            </div>
-          </section>
-          <section className="exm-detail-stats skeleton-stats">
-            {Array.from({ length: 3 }).map((_, index) => (
-              <div key={index}><span className="exm-skeleton" /><b className="exm-skeleton" /></div>
-            ))}
-          </section>
-          {Array.from({ length: 3 }).map((_, index) => (
-            <section key={index} className="exm-detail-section skeleton-detail-section">
-              <span className="exm-skeleton" />
-              <p className="exm-skeleton" />
-              <p className="exm-skeleton short" />
-            </section>
-          ))}
-        </div>
-        <footer className="exm-detail-actions skeleton-actions">
-          {Array.from({ length: 3 }).map((_, index) => <span key={index} className="exm-skeleton" />)}
-        </footer>
-      </section>
-    );
+    return null;
   }
 
   return (

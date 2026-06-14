@@ -762,6 +762,8 @@ func TestCoreWorkflowNodeHandlersProduceStableOutputs(t *testing.T) {
 		{name: "fact query", node: marketing.WorkflowNode{ID: "node_fact", Type: "fact-query", Config: json.RawMessage(`{"factKeys":["profile.level"],"failureAction":"USE_EMPTY"}`)}, handler: service.factQueryWorkflowNodeHandler, outputKey: "facts"},
 		{name: "switch", node: marketing.WorkflowNode{ID: "node_switch", Type: "switch"}, handler: decisionWorkflowNodeHandler, outputKey: "route"},
 		{name: "code", node: marketing.WorkflowNode{ID: "node_code", Type: "code", Config: json.RawMessage(`{"language":"EXPRESSION","source":"$.subject.id","outputPath":"subject_id"}`)}, handler: codeWorkflowNodeHandler, outputKey: "code_result"},
+		{name: "combine", node: marketing.WorkflowNode{ID: "node_combine", Type: "combine", Config: json.RawMessage(`{"language":"LUA","source":"emit({combined = {eventId = ctx.event.eventId}})"}`)}, handler: transformScriptWorkflowNodeHandler("combine", "combined_result"), outputKey: "combined_result"},
+		{name: "split", node: marketing.WorkflowNode{ID: "node_split", Type: "split", Config: json.RawMessage(`{"language":"LUA","source":"emit({items = {'a', 'b'}})"}`)}, handler: transformScriptWorkflowNodeHandler("split", "split_items"), outputKey: "split_items"},
 		{name: "decimal", node: marketing.WorkflowNode{ID: "node_decimal", Type: "decimal"}, handler: decimalWorkflowNodeHandler, outputKey: "decimal_amount", ctx: decimalCtx},
 		{name: "callback", node: marketing.WorkflowNode{ID: "node_callback", Type: "callback", Config: json.RawMessage(`{"provider":"wallet","requireSignature":true}`)}, handler: callbackWorkflowNodeHandler, outputKey: "callback_result"},
 		{name: "audit", node: marketing.WorkflowNode{ID: "node_audit", Type: "audit", Config: json.RawMessage(`{"action":"WORKFLOW_AUDIT","includePayload":true}`)}, handler: auditWorkflowNodeHandler, outputKey: "audit_log"},
@@ -1381,6 +1383,67 @@ func TestCodeWorkflowNodeHandlerRejectsOversizedLuaOutput(t *testing.T) {
 	result := codeWorkflowNodeHandler(context.Background(), node, testWorkflowHandlerRuntime(true))
 	if result.Status != marketing.WorkflowNodeFailed || result.Output["errorCode"] != "CODE_LUA_EXECUTION_FAILED" || !strings.Contains(result.Error, "maxOutputBytes") {
 		t.Fatalf("expected oversized output failure, got %+v", result)
+	}
+}
+
+func TestCombineAndSplitWorkflowNodeHandlersSupportLua(t *testing.T) {
+	ctx := context.WithValue(context.Background(), workflowNodeExecutionContextKey{}, workflowNodeExecutionContext{
+		ResolvedInput: map[string]any{
+			"items": []any{
+				map[string]any{"id": "a", "amount": "10.00"},
+				map[string]any{"id": "b", "amount": "20.00"},
+			},
+			"context": map[string]any{"source": "unit-test"},
+		},
+	})
+	runtime := testWorkflowHandlerRuntime(true)
+	combineNode := marketing.WorkflowNode{
+		ID:   "combine",
+		Type: "combine",
+		Config: json.RawMessage(`{
+			"language": "LUA",
+			"outputPath": "combined_result",
+			"source": "local items = input('items')\nemit({combined = {count = #items, firstId = items[1].id, eventId = ctx.event.eventId}})"
+		}`),
+	}
+
+	combined := transformScriptWorkflowNodeHandler("combine", "combined_result")(ctx, combineNode, runtime)
+	if combined.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected combine success, got %+v", combined)
+	}
+	combinedResult, ok := combined.Output["combined_result"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected combined_result map, got %+v", combined.Output["combined_result"])
+	}
+	if combinedResult["count"] != float64(2) || combinedResult["firstId"] != "a" || combinedResult["eventId"] != "evt_handler" {
+		t.Fatalf("unexpected combined result: %+v", combinedResult)
+	}
+
+	splitCtx := context.WithValue(context.Background(), workflowNodeExecutionContextKey{}, workflowNodeExecutionContext{
+		ResolvedInput: map[string]any{
+			"payload": combinedResult,
+			"items":   []any{"gold", "silver"},
+		},
+	})
+	splitNode := marketing.WorkflowNode{
+		ID:   "split",
+		Type: "split",
+		Config: json.RawMessage(`{
+			"language": "LUA",
+			"outputPath": "split_items",
+			"source": "emit({items = {input('items')[1], input('items')[2], input('payload').firstId}})"
+		}`),
+	}
+	split := transformScriptWorkflowNodeHandler("split", "split_items")(splitCtx, splitNode, runtime)
+	if split.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected split success, got %+v", split)
+	}
+	items, ok := split.Output["split_items"].([]any)
+	if !ok || len(items) != 3 || items[0] != "gold" || items[2] != "a" {
+		t.Fatalf("unexpected split items: %+v", split.Output["split_items"])
+	}
+	if _, ok := split.Output["split_result"]; !ok {
+		t.Fatalf("expected split_result output, got %+v", split.Output)
 	}
 }
 

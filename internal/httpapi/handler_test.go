@@ -1550,7 +1550,7 @@ func TestActivityWorkflowHTTPAPI(t *testing.T) {
 
 	debugRun := httptest.NewRecorder()
 	handler.Routes().ServeHTTP(debugRun, httptest.NewRequest(http.MethodPost, "/admin/v1/activities/"+activityID+"/workflow/debug-run", strings.NewReader(`{"operator":"ops","template":"deposit_success"}`)))
-	if debugRun.Code != http.StatusCreated || !strings.Contains(debugRun.Body.String(), `"workflowVersionId":"debug-draft"`) || !strings.Contains(debugRun.Body.String(), `"nodeExecutions"`) {
+	if debugRun.Code != http.StatusCreated || !strings.Contains(debugRun.Body.String(), `"workflowVersionId":"debug-draft-`) || !strings.Contains(debugRun.Body.String(), `"nodeExecutions"`) {
 		t.Fatalf("expected debug run trace, got %d: %s", debugRun.Code, debugRun.Body.String())
 	}
 	var debugTrace marketing.WorkflowExecutionTrace
@@ -1629,7 +1629,7 @@ func TestActivityWorkflowHTTPAPI(t *testing.T) {
 	}
 	var productionExecution marketing.WorkflowExecution
 	for _, item := range executions.Items {
-		if item.WorkflowVersionID != "debug-draft" {
+		if !strings.HasPrefix(item.WorkflowVersionID, "debug-draft-") {
 			productionExecution = item
 			break
 		}

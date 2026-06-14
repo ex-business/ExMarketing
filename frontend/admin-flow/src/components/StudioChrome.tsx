@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import type { PointerEvent as ReactPointerEvent } from 'react';
 import type { WorkflowDefinition, WorkflowDiffDetail, WorkflowDiffItem, WorkflowDiffSummary, WorkflowValidationIssue, WorkflowValidationResult, WorkflowVersion } from '../types';
 import { BrandMark } from './workspace-home';
 
@@ -54,8 +55,8 @@ type ChecklistItem = ChecklistDefinition & {
 const CHECKLIST_DEFINITIONS: ChecklistDefinition[] = [
   {
     id: 'entry',
-    title: '入口节点存在',
-    description: '必须有 Event In 或 entry 节点。',
+    title: '标准事件入口存在',
+    description: '必须有标准事件入口节点。',
     match: (item) => item.code === 'WORKFLOW_ENTRY_MISSING',
   },
   {
@@ -174,6 +175,7 @@ type Props = {
   onGlobalPanelOpen: () => void;
   onDebugRun: () => void;
   onToggleChecklist: () => void;
+  onRightPanelResizeStart: (event: ReactPointerEvent<HTMLButtonElement>) => void;
   onValidationIssueFocus: (item: WorkflowValidationIssue) => void;
   onWorkflowDiffFocus: (item: WorkflowDiffItem) => void;
   onPublish: (releaseNote: string) => void;
@@ -591,6 +593,7 @@ export function StudioChrome({
   onGlobalPanelOpen,
   onDebugRun,
   onToggleChecklist,
+  onRightPanelResizeStart,
   onValidationIssueFocus,
   onWorkflowDiffFocus,
   onPublish,
@@ -938,7 +941,6 @@ export function StudioChrome({
             setShowVersionPanel(false);
             if (showChecklist) onToggleChecklist();
             onRunHistory();
-            window.setTimeout(onFitView, 80);
           }}
         >
           运行历史
@@ -951,7 +953,6 @@ export function StudioChrome({
             if (runHistoryOpen) onCloseRunHistory();
             setShowVersionPanel((value) => {
               const next = !value;
-              if (next) window.setTimeout(onFitView, 80);
               return next;
             });
           }}
@@ -965,7 +966,6 @@ export function StudioChrome({
             setShowVersionPanel(false);
             if (runHistoryOpen) onCloseRunHistory();
             onToggleChecklist();
-            window.setTimeout(onFitView, 120);
           }}
         >
           检查清单 <span>{checklistBadge}</span>
@@ -1014,6 +1014,7 @@ export function StudioChrome({
       ) : null}
       {showVersionPanel ? (
         <div className="version-popover">
+          <button className="right-panel-resize-handle" type="button" aria-label="调整版本面板宽度" onPointerDown={onRightPanelResizeStart} />
           <div className="version-head">
             <div>
               <b>版本管理</b>
@@ -1120,7 +1121,7 @@ export function StudioChrome({
               <kbd>⌘ 1</kbd>
             </button>
             <button onClick={onToggleMiniMap}>
-              <span>{showMiniMap ? '✓' : ''} Minimap</span>
+              <span>{showMiniMap ? '✓' : ''} 画布缩略图</span>
             </button>
           </div>
         ) : null}
@@ -1128,6 +1129,7 @@ export function StudioChrome({
       {showChecklist ? (
         <div className="checklist-modal-layer">
         <div className="checklist-popover">
+          <button className="right-panel-resize-handle" type="button" aria-label="调整检查清单面板宽度" onPointerDown={onRightPanelResizeStart} />
           <div className="checklist-head">
             <div>
               <b>发布检查清单</b>

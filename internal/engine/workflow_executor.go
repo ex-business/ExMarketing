@@ -231,6 +231,7 @@ func (s *Service) executeWorkflowDefinition(ctx context.Context, runtime workflo
 		if inputErr != nil {
 			result = nodeFailed(inputErr.Error(), map[string]any{"inputMappingError": inputErr.Error()})
 		} else {
+			workflowApplyNodeContextConfig(workflowVars, node)
 			nodeCtx := context.WithValue(ctx, workflowNodeExecutionContextKey{}, workflowNodeExecutionContext{
 				ResolvedInput: resolvedInput,
 				NodeOutputs:   cloneWorkflowNodeOutputs(nodeOutputs),
@@ -316,31 +317,52 @@ func (s *Service) executeWorkflowDefinition(ctx context.Context, runtime workflo
 
 func (s *Service) workflowNodeHandlers() map[string]workflowNodeHandler {
 	return map[string]workflowNodeHandler{
-		"event-in":      entryWorkflowNodeHandler,
-		"inbox":         inboxWorkflowNodeHandler,
-		"normalize":     normalizeWorkflowNodeHandler,
-		"match":         matchWorkflowNodeHandler,
-		"fact-query":    s.factQueryWorkflowNodeHandler,
-		"condition":     decisionWorkflowNodeHandler,
-		"qualify":       decisionWorkflowNodeHandler,
-		"switch":        decisionWorkflowNodeHandler,
-		"code":          codeWorkflowNodeHandler,
-		"reward":        rewardWorkflowNodeHandler,
-		"decimal":       decimalWorkflowNodeHandler,
-		"limit":         limitWorkflowNodeHandler,
-		"quota":         quotaWorkflowNodeHandler,
-		"participation": participationWorkflowNodeHandler,
-		"audit":         auditWorkflowNodeHandler,
-		"grant-order":   grantOrderWorkflowNodeHandler,
-		"outbox":        outboxWorkflowNodeHandler,
-		"retry":         retryWorkflowNodeHandler,
-		"dlq":           dlqWorkflowNodeHandler,
-		"http-call":     dispatchWorkflowNodeHandler("HTTP"),
-		"mq-publish":    dispatchWorkflowNodeHandler("MQ"),
-		"webhook":       dispatchWorkflowNodeHandler("WEBHOOK"),
-		"callback":      callbackWorkflowNodeHandler,
-		"reconcile":     reconcileWorkflowNodeHandler,
-		"alert":         alertWorkflowNodeHandler,
+		"event-in":          entryWorkflowNodeHandler,
+		"http-event":        eventInputExplainWorkflowNodeHandler("HTTP", "OpenAPIEventHandler", true),
+		"webhook-event":     eventInputExplainWorkflowNodeHandler("WEBHOOK", "WebhookReceiver", true),
+		"mq-event":          eventInputExplainWorkflowNodeHandler("MQ", "MQTriggerWorker", false),
+		"schedule-event":    eventInputExplainWorkflowNodeHandler("SCHEDULE", "Scheduler", false),
+		"state-event":       eventInputExplainWorkflowNodeHandler("STATE", "StateWatcher", false),
+		"manual-event":      eventInputExplainWorkflowNodeHandler("MANUAL", "AdminManualTriggerAPI", false),
+		"inbox":             inboxWorkflowNodeHandler,
+		"normalize":         normalizeWorkflowNodeHandler,
+		"match":             matchWorkflowNodeHandler,
+		"fact-query":        s.factQueryWorkflowNodeHandler,
+		"activity-state":    activityStateWorkflowNodeHandler,
+		"quota-check":       quotaCheckWorkflowNodeHandler,
+		"condition":         decisionWorkflowNodeHandler,
+		"qualify":           decisionWorkflowNodeHandler,
+		"switch":            decisionWorkflowNodeHandler,
+		"code":              codeWorkflowNodeHandler,
+		"combine":           transformScriptWorkflowNodeHandler("combine", "combined_result"),
+		"split":             transformScriptWorkflowNodeHandler("split", "split_items"),
+		"candidate-reward":  candidateRewardWorkflowNodeHandler,
+		"reward":            rewardWorkflowNodeHandler,
+		"decimal":           decimalWorkflowNodeHandler,
+		"limit":             limitWorkflowNodeHandler,
+		"quota":             quotaWorkflowNodeHandler,
+		"budget-reserve":    budgetReserveWorkflowNodeHandler,
+		"participation":     participationWorkflowNodeHandler,
+		"audit":             auditWorkflowNodeHandler,
+		"grant-order":       grantOrderWorkflowNodeHandler,
+		"outbox":            outboxWorkflowNodeHandler,
+		"retry":             retryWorkflowNodeHandler,
+		"dlq":               dlqWorkflowNodeHandler,
+		"http-call":         dispatchWorkflowNodeHandler("HTTP"),
+		"mq-publish":        dispatchWorkflowNodeHandler("MQ"),
+		"webhook":           dispatchWorkflowNodeHandler("WEBHOOK"),
+		"callback":          callbackWorkflowNodeHandler,
+		"approval-gate":     approvalGateWorkflowNodeHandler,
+		"compensation":      compensationWorkflowNodeHandler,
+		"random-pick":       randomPickWorkflowNodeHandler,
+		"plugin-execute":    pluginExecuteWorkflowNodeHandler,
+		"ab-bucket":         abBucketWorkflowNodeHandler,
+		"risk-score":        riskScoreWorkflowNodeHandler,
+		"settlement-window": settlementWindowWorkflowNodeHandler,
+		"manual-adjust":     manualAdjustWorkflowNodeHandler,
+		"reconcile":         reconcileWorkflowNodeHandler,
+		"reward-reconcile":  rewardReconcileWorkflowNodeHandler,
+		"alert":             alertWorkflowNodeHandler,
 	}
 }
 
@@ -388,7 +410,7 @@ func workflowExecutionPlan(definition marketing.WorkflowDefinition) (workflowExe
 	}
 	if len(roots) == 0 && len(definition.Nodes) > 0 {
 		return workflowExecutionPlanData{}, workflowPlanCompileError{Issues: []marketing.WorkflowValidationIssue{
-			workflowCompileIssue("WORKFLOW_DAG_ENTRY_MISSING", "DAG compile failed: Event In entry node is required", "nodes", "", ""),
+			workflowCompileIssue("WORKFLOW_DAG_ENTRY_MISSING", "DAG compile failed: standard event entry node is required", "nodes", "", ""),
 		}}
 	}
 	topo, levels, err := workflowTopologicalOrder(definition, incoming, edgesBySource)
@@ -513,7 +535,7 @@ func workflowExecutionRouteTraceItem(edge marketing.WorkflowEdge, result workflo
 
 func workflowNodeIsBranch(node marketing.WorkflowNode) bool {
 	switch strings.ToLower(strings.TrimSpace(node.Type)) {
-	case "condition", "qualify", "switch":
+	case "condition", "qualify", "switch", "approval-gate", "ab-bucket", "risk-score", "settlement-window":
 		return true
 	default:
 		return false
@@ -1450,6 +1472,112 @@ func workflowGrantOrdersTotalAmount(orders []marketing.GrantOrder) string {
 	return strconv.FormatFloat(total, 'f', -1, 64)
 }
 
+func workflowWorkflowRewardAmount(ctx context.Context, runtime workflowRuntime) float64 {
+	for _, key := range []string{"candidate_rewards", "reward_items", "selected_rewards"} {
+		if value, ok := workflowUpstreamOutput(ctx, key); ok {
+			total := 0.0
+			for _, item := range workflowAnyArray(value) {
+				if object, ok := item.(map[string]any); ok {
+					if number, ok := workflowRouteNumber(object["amount"]); ok {
+						total += number
+					}
+				}
+			}
+			if total > 0 {
+				return total
+			}
+		}
+	}
+	total, _ := strconv.ParseFloat(workflowGrantOrdersTotalAmount(runtime.GrantOrders), 64)
+	return total
+}
+
+func workflowAnyArray(value any) []any {
+	normalized := workflowJSONValue(value)
+	switch typed := normalized.(type) {
+	case []any:
+		return typed
+	case map[string]any:
+		for _, key := range []string{"candidate_rewards", "reward_items", "selected_rewards", "items"} {
+			if items, ok := typed[key]; ok {
+				if array, ok := workflowJSONValue(items).([]any); ok {
+					return array
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func workflowStableIndex(seed string, modulo int) int {
+	if modulo <= 0 {
+		return 0
+	}
+	var hash uint32 = 2166136261
+	for _, b := range []byte(seed) {
+		hash ^= uint32(b)
+		hash *= 16777619
+	}
+	return int(hash % uint32(modulo))
+}
+
+func workflowPickWeightedLabel(seed string, buckets []string) string {
+	type bucketSpec struct {
+		label  string
+		weight int
+	}
+	parsed := make([]bucketSpec, 0, len(buckets))
+	total := 0
+	for _, raw := range buckets {
+		parts := strings.SplitN(raw, ":", 2)
+		label := strings.TrimSpace(parts[0])
+		if label == "" {
+			continue
+		}
+		weight := 1
+		if len(parts) == 2 {
+			if parsedWeight, err := strconv.Atoi(strings.TrimSpace(parts[1])); err == nil && parsedWeight > 0 {
+				weight = parsedWeight
+			}
+		}
+		parsed = append(parsed, bucketSpec{label: label, weight: weight})
+		total += weight
+	}
+	if len(parsed) == 0 || total <= 0 {
+		return "A"
+	}
+	point := workflowStableIndex(seed, total)
+	acc := 0
+	for _, bucket := range parsed {
+		acc += bucket.weight
+		if point < acc {
+			return bucket.label
+		}
+	}
+	return parsed[len(parsed)-1].label
+}
+
+func workflowExtractRiskScore(ctx context.Context, config map[string]any) float64 {
+	scorePath := firstWorkflowString(workflowConfigString(config, "scorePath"), "$.facts.riskScore")
+	input := map[string]any{
+		"facts": workflowFactsFromContext(ctx),
+	}
+	if value, ok := workflowResolvedInput(ctx, "facts"); ok {
+		input["facts"] = workflowJSONValue(value)
+	}
+	if value, err := extractWorkflowJSONPath(input, scorePath); err == nil {
+		if score, ok := workflowRouteNumber(value); ok {
+			return score
+		}
+	}
+	if value, ok := workflowUpstreamOutput(ctx, "riskScore"); ok {
+		if score, ok := workflowRouteNumber(value); ok {
+			return score
+		}
+	}
+	return 0
+}
+
 func workflowRenderTemplate(template string, runtime workflowRuntime) string {
 	replacements := map[string]string{
 		"${subject.id}":   runtime.Inbox.Event.Subject.ID,
@@ -1627,6 +1755,56 @@ func firstWorkflowString(value string, fallback string) string {
 	return value
 }
 
+func workflowConfigMap(config map[string]any, key string) map[string]any {
+	if config == nil {
+		return nil
+	}
+	value, ok := config[key]
+	if !ok || value == nil {
+		return nil
+	}
+	if typed, ok := value.(map[string]any); ok {
+		return typed
+	}
+	return nil
+}
+
+func workflowApplyNodeContextConfig(vars map[string]any, node marketing.WorkflowNode) {
+	if vars == nil {
+		return
+	}
+	config := workflowNodeConfigMap(node)
+	if len(config) == 0 {
+		return
+	}
+	for key, value := range workflowConfigMap(config, "publicParams") {
+		workflowSetVar(vars, "public", key, value)
+	}
+	for path, value := range workflowConfigMap(config, "contextPatch") {
+		workflowApplyContextPatch(vars, path, value)
+	}
+}
+
+func workflowApplyContextPatch(vars map[string]any, path string, value any) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return
+	}
+	path = strings.TrimPrefix(path, "$.")
+	path = strings.TrimPrefix(path, "vars.")
+	parts := strings.Split(path, ".")
+	if len(parts) == 1 {
+		workflowSetVar(vars, "execution", parts[0], value)
+		return
+	}
+	scope := strings.TrimSpace(parts[0])
+	key := strings.TrimSpace(strings.Join(parts[1:], "."))
+	if scope == "" || key == "" {
+		return
+	}
+	workflowSetVar(vars, scope, key, value)
+}
+
 func workflowConfigStringList(config map[string]any, key string) []string {
 	value, ok := config[key]
 	if !ok || value == nil {
@@ -1687,6 +1865,35 @@ func nodeSkipped(reason string, output map[string]any) workflowNodeResult {
 
 func nodeFailed(message string, output map[string]any) workflowNodeResult {
 	return workflowNodeResult{Status: marketing.WorkflowNodeFailed, Error: message, Output: output}
+}
+
+func eventInputExplainWorkflowNodeHandler(sourceType string, authority string, implemented bool) workflowNodeHandler {
+	return func(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
+		if canceled := workflowHandlerContextCanceled(ctx, node, runtime); canceled.Status != "" {
+			return canceled
+		}
+		mode := "EXPLAIN_ONLY"
+		if implemented {
+			mode = "EXTERNAL_ENDPOINT"
+		}
+		return nodeSuccess(map[string]any{
+			"standard_event": workflowJSONValue(runtime.Inbox.Event),
+			"source": map[string]any{
+				"type":        sourceType,
+				"implemented": implemented,
+				"receivedAt":  runtime.Inbox.CreatedAt,
+			},
+			"adapter": map[string]any{
+				"version":        "standard-v1",
+				"mappingVersion": workflowConfigString(workflowNodeConfigMap(node), "mappingVersion"),
+			},
+			"executionMode":      mode,
+			"executionAuthority": authority,
+			"implemented":        implemented,
+			"explanation":        "Event input nodes describe trigger/adaptor boundaries; workflow execution starts from the committed standard event.",
+			"audit":              workflowHandlerAudit(node, runtime),
+		})
+	}
 }
 
 func entryWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
@@ -1951,6 +2158,62 @@ func (s *Service) factQueryWorkflowNodeHandler(ctx context.Context, node marketi
 	})
 }
 
+func activityStateWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
+	if canceled := workflowHandlerContextCanceled(ctx, node, runtime); canceled.Status != "" {
+		return canceled
+	}
+	config, failed, ok := workflowRequireNodeConfig(node)
+	if !ok {
+		failed.Output["audit"] = workflowHandlerAudit(node, runtime)
+		return failed
+	}
+	operation := strings.ToUpper(firstWorkflowString(workflowConfigString(config, "operation"), "READ"))
+	stateKey := workflowRenderTemplate(firstWorkflowString(workflowConfigString(config, "stateKeyTemplate"), "${activityId}:${subject.id}"), runtime)
+	namespace := firstWorkflowString(workflowConfigString(config, "namespace"), "activity")
+	state := map[string]any{
+		"namespace": namespace,
+		"stateKey":  stateKey,
+		"subject":   workflowJSONValue(runtime.Inbox.Event.Subject),
+		"activity": map[string]any{
+			"id":      runtime.Activity.ID,
+			"code":    runtime.Activity.Code,
+			"version": runtime.Activity.Version,
+			"status":  runtime.Activity.Status,
+		},
+		"eventId": runtime.Inbox.Event.EventID,
+		"version": 1,
+		"data":    map[string]any{},
+	}
+	if value, ok := workflowResolvedInput(ctx, "state_patch"); ok {
+		state["data"] = workflowJSONValue(value)
+	} else if value, ok := workflowUpstreamOutput(ctx, "plugin_result"); ok {
+		state["data"] = workflowJSONValue(value)
+	}
+	return nodeSuccess(map[string]any{
+		"activity_state":     state,
+		"state_version":      1,
+		"operation":          operation,
+		"executionMode":      "REAL_HANDLER",
+		"executionAuthority": "WorkflowExecutor",
+		"persistenceNote":    "cross-execution durable state should be owned by ActivityPlugin/StateStore",
+		"audit":              workflowHandlerAudit(node, runtime),
+	})
+}
+
+func quotaCheckWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
+	result := limitWorkflowNodeHandler(ctx, node, runtime)
+	if result.Output == nil {
+		result.Output = map[string]any{}
+	}
+	if hold, ok := result.Output["limit_hold"]; ok {
+		result.Output["quota_check"] = hold
+	}
+	result.Output["nodeType"] = nodeHandlerKey(node)
+	result.Output["executionMode"] = "REAL_HANDLER"
+	result.Output["executionAuthority"] = "WorkflowExecutor/QuotaStore"
+	return result
+}
+
 func decisionWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
 	if canceled := workflowHandlerContextCanceled(ctx, node, runtime); canceled.Status != "" {
 		return canceled
@@ -2063,6 +2326,39 @@ func decisionWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNod
 	})
 }
 
+func candidateRewardWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
+	if canceled := workflowHandlerContextCanceled(ctx, node, runtime); canceled.Status != "" {
+		return canceled
+	}
+	config, failed, ok := workflowRequireNodeConfig(node)
+	if !ok {
+		failed.Output["audit"] = workflowHandlerAudit(node, runtime)
+		return failed
+	}
+	if !runtime.Qualified {
+		output := map[string]any{"errorCode": "CANDIDATE_REWARD_NOT_QUALIFIED", "candidate_rewards": []any{}, "reward_items": []any{}, "audit": workflowHandlerAudit(node, runtime)}
+		if strings.EqualFold(workflowConfigString(config, "notQualifiedAction"), "BLOCK") {
+			return nodeFailed("CANDIDATE_REWARD_NOT_QUALIFIED: activity not qualified", output)
+		}
+		return nodeSkipped("CANDIDATE_REWARD_NOT_QUALIFIED: activity not qualified", output)
+	}
+	items := workflowCandidateRewardItems(ctx, runtime, config)
+	if len(items) == 0 {
+		output := map[string]any{"errorCode": "CANDIDATE_REWARD_EMPTY", "candidate_rewards": []any{}, "reward_items": []any{}, "audit": workflowHandlerAudit(node, runtime)}
+		if strings.EqualFold(workflowConfigString(config, "emptyAction"), "SKIP") {
+			return nodeSkipped("CANDIDATE_REWARD_EMPTY: no reward candidates", output)
+		}
+		return nodeFailed("CANDIDATE_REWARD_EMPTY: no reward candidates", output)
+	}
+	return nodeSuccess(map[string]any{
+		"candidate_rewards": items,
+		"reward_items":      items,
+		"candidateCount":    len(items),
+		"source":            firstWorkflowString(workflowConfigString(config, "source"), "ACTIVITY_REWARD_CONFIG"),
+		"audit":             workflowHandlerAudit(node, runtime),
+	})
+}
+
 func codeWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
 	if canceled := workflowHandlerContextCanceled(ctx, node, runtime); canceled.Status != "" {
 		return canceled
@@ -2131,6 +2427,123 @@ func codeWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, r
 	})
 }
 
+func transformScriptWorkflowNodeHandler(kind string, defaultOutputPath string) workflowNodeHandler {
+	return func(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
+		if canceled := workflowHandlerContextCanceled(ctx, node, runtime); canceled.Status != "" {
+			return canceled
+		}
+		config, failed, ok := workflowRequireNodeConfig(node)
+		if !ok {
+			failed.Output["audit"] = workflowHandlerAudit(node, runtime)
+			return failed
+		}
+		language := strings.ToUpper(firstWorkflowString(workflowConfigString(config, "language"), "LUA"))
+		source := workflowConfigString(config, "source")
+		if source == "" {
+			code := strings.ToUpper(kind)
+			return nodeFailed(code+"_CONFIG_SOURCE_REQUIRED: source is required", map[string]any{
+				"errorCode": code + "_CONFIG_SOURCE_REQUIRED",
+				"audit":     workflowHandlerAudit(node, runtime),
+			})
+		}
+		outputPath := firstWorkflowString(workflowConfigString(config, "outputPath"), defaultOutputPath)
+		result := map[string]any{
+			"nodeType":   nodeHandlerKey(node),
+			"language":   language,
+			"source":     source,
+			"outputPath": outputPath,
+			"eventId":    runtime.Inbox.Event.EventID,
+		}
+		var value any
+		switch language {
+		case "LUA":
+			luaOutput, err := executeWorkflowLua(ctx, node, runtime, source)
+			if err != nil {
+				code := strings.ToUpper(kind)
+				return nodeFailed(code+"_LUA_EXECUTION_FAILED: "+err.Error(), map[string]any{
+					"errorCode": code + "_LUA_EXECUTION_FAILED",
+					"language":  language,
+					"eventId":   runtime.Inbox.Event.EventID,
+					"audit":     workflowHandlerAudit(node, runtime),
+				})
+			}
+			result["value"] = luaOutput
+			for key, item := range luaOutput {
+				result[key] = item
+			}
+			if item, ok := luaOutput[outputPath]; ok {
+				value = item
+			} else if kind == "split" {
+				if item, ok := luaOutput["items"]; ok {
+					value = item
+				} else {
+					value = luaOutput
+				}
+			} else if item, ok := luaOutput["combined"]; ok {
+				value = item
+			} else {
+				value = luaOutput
+			}
+		case "EXPRESSION":
+			expressionInput := workflowJSONValue(runtime.Inbox.Event)
+			if resolved, ok := workflowResolvedInputFromContext(ctx); ok && len(resolved) > 0 {
+				expressionInput = resolved
+			}
+			extracted, err := extractWorkflowJSONPath(expressionInput, source)
+			if err != nil {
+				result["error"] = err.Error()
+				value = nil
+			} else {
+				value = extracted
+			}
+			result["value"] = value
+		default:
+			code := strings.ToUpper(kind)
+			return nodeFailed(code+"_LANGUAGE_UNSUPPORTED: language "+language+" is not supported", map[string]any{
+				"errorCode": code + "_LANGUAGE_UNSUPPORTED",
+				"language":  language,
+				"eventId":   runtime.Inbox.Event.EventID,
+				"audit":     workflowHandlerAudit(node, runtime),
+			})
+		}
+		if kind == "split" {
+			result["split_items"] = value
+			result["split_result"] = map[string]any{
+				"items": value,
+				"value": result["value"],
+			}
+			return nodeSuccess(map[string]any{
+				"split_items":  value,
+				"split_result": result["split_result"],
+				outputPath:     value,
+				"nodeType":     nodeHandlerKey(node),
+				"language":     language,
+				"outputPath":   outputPath,
+				"eventId":      runtime.Inbox.Event.EventID,
+				"audit":        workflowHandlerAudit(node, runtime),
+			})
+		}
+		result["combined_result"] = value
+		return nodeSuccess(map[string]any{
+			"combined_result": value,
+			outputPath:        value,
+			"nodeType":        nodeHandlerKey(node),
+			"language":        language,
+			"outputPath":      outputPath,
+			"eventId":         runtime.Inbox.Event.EventID,
+			"audit":           workflowHandlerAudit(node, runtime),
+		})
+	}
+}
+
+func workflowResolvedInputFromContext(ctx context.Context) (map[string]any, bool) {
+	executionContext, ok := ctx.Value(workflowNodeExecutionContextKey{}).(workflowNodeExecutionContext)
+	if !ok || executionContext.ResolvedInput == nil {
+		return nil, false
+	}
+	return executionContext.ResolvedInput, true
+}
+
 func rewardWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
 	if canceled := workflowHandlerContextCanceled(ctx, node, runtime); canceled.Status != "" {
 		return canceled
@@ -2193,6 +2606,59 @@ func rewardWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode,
 		"grantOrderCount":       len(runtime.GrantOrders),
 		"audit":                 workflowHandlerAudit(node, runtime),
 	})
+}
+
+func workflowCandidateRewardItems(ctx context.Context, runtime workflowRuntime, config map[string]any) []any {
+	source := strings.ToUpper(firstWorkflowString(workflowConfigString(config, "source"), "ACTIVITY_REWARD_CONFIG"))
+	if source == "INPUT" || source == "PLUGIN_RESULT" {
+		if value, ok := workflowResolvedInput(ctx, "plugin_result"); ok {
+			if items := workflowAnyArray(value); len(items) > 0 {
+				return items
+			}
+		}
+		for _, key := range []string{"candidate_rewards", "reward_items", "selected_rewards"} {
+			if value, ok := workflowUpstreamOutput(ctx, key); ok {
+				if items := workflowAnyArray(value); len(items) > 0 {
+					return items
+				}
+			}
+		}
+	}
+	items := make([]any, 0, len(runtime.Activity.Rewards))
+	calculator := rewardcalc.ConfigCalculator{}
+	includeDisabled := workflowConfigBool(config, "includeDisabledRewards", false)
+	for _, reward := range runtime.Activity.Rewards {
+		if !reward.Enabled && !includeDisabled {
+			continue
+		}
+		item := map[string]any{
+			"rewardId":      reward.ID,
+			"rewardCode":    reward.Code,
+			"rewardType":    reward.Type,
+			"calculateType": reward.CalculateType,
+			"grantMode":     reward.GrantMode,
+			"grantChannel":  reward.GrantChannel,
+			"candidate":     true,
+		}
+		if reward.Enabled && len(reward.Config) > 0 {
+			if calculated, err := calculator.Calculate(rewardcalc.Context{
+				Event:          runtime.Inbox.Event,
+				TenantID:       runtime.Activity.TenantID,
+				ActivityID:     runtime.Activity.ID,
+				IdempotencyKey: runtime.Inbox.IdempotencyKey,
+				Facts:          workflowFactsFromContext(ctx),
+			}, reward); err == nil {
+				item["amount"] = calculated.Amount
+				item["currency"] = calculated.Currency
+				item["payload"] = calculated.Payload
+				item["reasonCode"] = calculated.ReasonCode
+				item["reason"] = calculated.Reason
+				item["skipped"] = calculated.Skipped
+			}
+		}
+		items = append(items, item)
+	}
+	return items
 }
 
 func decimalWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
@@ -2346,6 +2812,20 @@ func quotaWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, 
 		"status":     hold["status"],
 		"audit":      workflowHandlerAudit(node, runtime),
 	})
+}
+
+func budgetReserveWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
+	result := quotaWorkflowNodeHandler(ctx, node, runtime)
+	if result.Output == nil {
+		result.Output = map[string]any{}
+	}
+	if hold, ok := result.Output["quota_hold"]; ok {
+		result.Output["budget_reservation"] = hold
+	}
+	result.Output["nodeType"] = nodeHandlerKey(node)
+	result.Output["reserveMode"] = workflowConfigString(workflowNodeConfigMap(node), "reserveMode")
+	result.Output["releaseOnFailure"] = workflowConfigBool(workflowNodeConfigMap(node), "releaseOnFailure", true)
+	return result
 }
 
 func participationWorkflowNodeHandler(_ context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
@@ -2529,6 +3009,270 @@ func callbackWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNod
 	})
 }
 
+func approvalGateWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
+	if canceled := workflowHandlerContextCanceled(ctx, node, runtime); canceled.Status != "" {
+		return canceled
+	}
+	config, failed, ok := workflowRequireNodeConfig(node)
+	if !ok {
+		failed.Output["audit"] = workflowHandlerAudit(node, runtime)
+		return failed
+	}
+	mode := strings.ToUpper(firstWorkflowString(workflowConfigString(config, "mode"), "AUTO_BELOW_THRESHOLD"))
+	amount := workflowWorkflowRewardAmount(ctx, runtime)
+	threshold := workflowConfigNumber(config, "amountThreshold")
+	decision := "APPROVED"
+	reason := "auto approved"
+	if mode == "MANUAL_REQUIRED" {
+		decision, reason = "PENDING", "manual approval required"
+	} else if mode == "RISK_REQUIRED" {
+		decision, reason = "PENDING", "risk review required"
+	} else if mode == "AUTO_BELOW_THRESHOLD" && threshold > 0 && amount > threshold {
+		decision, reason = "PENDING", "amount exceeds approval threshold"
+	}
+	result := map[string]any{
+		"decision":           decision,
+		"reason":             reason,
+		"mode":               mode,
+		"amount":             amount,
+		"amountThreshold":    threshold,
+		"pendingAction":      firstWorkflowString(workflowConfigString(config, "pendingAction"), "PAUSE"),
+		"executionMode":      "EXTERNAL_ENDPOINT",
+		"executionAuthority": "ActivityApproval/AdminAPI",
+	}
+	return nodeSuccess(map[string]any{
+		"approval_decision": result,
+		"decision":          decision,
+		"route":             decision,
+		"audit":             workflowHandlerAudit(node, runtime),
+	})
+}
+
+func compensationWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
+	if canceled := workflowHandlerContextCanceled(ctx, node, runtime); canceled.Status != "" {
+		return canceled
+	}
+	config, failed, ok := workflowRequireNodeConfig(node)
+	if !ok {
+		failed.Output["audit"] = workflowHandlerAudit(node, runtime)
+		return failed
+	}
+	plan := map[string]any{
+		"triggerOn":          firstWorkflowString(workflowConfigString(config, "triggerOn"), "FAILED"),
+		"sourcePath":         firstWorkflowString(workflowConfigString(config, "sourcePath"), "$.stage_result"),
+		"action":             firstWorkflowString(workflowConfigString(config, "action"), "RETRY_CALLBACK"),
+		"maxAttempts":        workflowConfigNumber(config, "maxAttempts"),
+		"grantOrderCount":    len(runtime.GrantOrders),
+		"reservationCount":   len(runtime.Reservations),
+		"executionMode":      "EXPLAIN_ONLY",
+		"executionAuthority": "CompensationWorker/AdminAPI",
+	}
+	return nodeSuccess(map[string]any{
+		"compensation_plan": plan,
+		"audit":             workflowHandlerAudit(node, runtime),
+	})
+}
+
+func randomPickWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
+	if canceled := workflowHandlerContextCanceled(ctx, node, runtime); canceled.Status != "" {
+		return canceled
+	}
+	config, failed, ok := workflowRequireNodeConfig(node)
+	if !ok {
+		failed.Output["audit"] = workflowHandlerAudit(node, runtime)
+		return failed
+	}
+	items := workflowCandidateRewardItems(ctx, runtime, map[string]any{"source": "INPUT"})
+	if len(items) == 0 {
+		output := map[string]any{"errorCode": "RANDOM_PICK_EMPTY", "selected_rewards": []any{}, "audit": workflowHandlerAudit(node, runtime)}
+		if strings.EqualFold(workflowConfigString(config, "emptyAction"), "BLOCK") {
+			return nodeFailed("RANDOM_PICK_EMPTY: no candidates", output)
+		}
+		return nodeSkipped("RANDOM_PICK_EMPTY: no candidates", output)
+	}
+	pickCount := int(workflowConfigNumber(config, "pickCount"))
+	if pickCount <= 0 {
+		pickCount = 1
+	}
+	if pickCount > len(items) {
+		pickCount = len(items)
+	}
+	seed := workflowRenderTemplate(firstWorkflowString(workflowConfigString(config, "seedTemplate"), "${tenantId}:${activityId}:${eventId}"), runtime)
+	start := workflowStableIndex(seed, len(items))
+	selected := make([]any, 0, pickCount)
+	for i := 0; i < pickCount; i++ {
+		selected = append(selected, items[(start+i)%len(items)])
+	}
+	audit := map[string]any{
+		"mode":       firstWorkflowString(workflowConfigString(config, "mode"), "WEIGHTED"),
+		"seed":       seed,
+		"startIndex": start,
+		"pickCount":  pickCount,
+		"total":      len(items),
+	}
+	return nodeSuccess(map[string]any{
+		"random_pick":      audit,
+		"selected_rewards": selected,
+		"audit":            workflowHandlerAudit(node, runtime),
+	})
+}
+
+func pluginExecuteWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
+	if canceled := workflowHandlerContextCanceled(ctx, node, runtime); canceled.Status != "" {
+		return canceled
+	}
+	config, failed, ok := workflowRequireNodeConfig(node)
+	if !ok {
+		failed.Output["audit"] = workflowHandlerAudit(node, runtime)
+		return failed
+	}
+	result := map[string]any{
+		"pluginCode":         workflowConfigString(config, "pluginCode"),
+		"action":             workflowConfigString(config, "action"),
+		"activityId":         runtime.Activity.ID,
+		"subject":            workflowJSONValue(runtime.Inbox.Event.Subject),
+		"executionMode":      "EXTERNAL_ENDPOINT",
+		"executionAuthority": "ActivityPlugin",
+		"planned":            true,
+	}
+	return nodeSuccess(map[string]any{
+		"plugin_result":      result,
+		"candidate_rewards":  []any{},
+		"executionMode":      "EXTERNAL_ENDPOINT",
+		"executionAuthority": "ActivityPlugin",
+		"audit":              workflowHandlerAudit(node, runtime),
+	})
+}
+
+func abBucketWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
+	if canceled := workflowHandlerContextCanceled(ctx, node, runtime); canceled.Status != "" {
+		return canceled
+	}
+	config, failed, ok := workflowRequireNodeConfig(node)
+	if !ok {
+		failed.Output["audit"] = workflowHandlerAudit(node, runtime)
+		return failed
+	}
+	experiment := firstWorkflowString(workflowConfigString(config, "experimentKey"), "default-experiment")
+	subject := workflowRenderTemplate(firstWorkflowString(workflowConfigString(config, "subjectKeyTemplate"), "${subject.id}"), runtime)
+	buckets := workflowConfigStringList(config, "buckets")
+	if len(buckets) == 0 {
+		buckets = []string{"A:50", "B:50"}
+	}
+	bucket := workflowPickWeightedLabel(experiment+":"+subject, buckets)
+	return nodeSuccess(map[string]any{
+		"ab_bucket": map[string]any{
+			"experimentKey": experiment,
+			"subjectKey":    subject,
+			"bucket":        bucket,
+			"buckets":       buckets,
+		},
+		"bucket": bucket,
+		"route":  bucket,
+		"audit":  workflowHandlerAudit(node, runtime),
+	})
+}
+
+func riskScoreWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
+	if canceled := workflowHandlerContextCanceled(ctx, node, runtime); canceled.Status != "" {
+		return canceled
+	}
+	config, failed, ok := workflowRequireNodeConfig(node)
+	if !ok {
+		failed.Output["audit"] = workflowHandlerAudit(node, runtime)
+		return failed
+	}
+	score := workflowExtractRiskScore(ctx, config)
+	blockThreshold := workflowConfigNumber(config, "blockThreshold")
+	reviewThreshold := workflowConfigNumber(config, "reviewThreshold")
+	decision := "PASS"
+	if score >= blockThreshold && blockThreshold > 0 {
+		decision = "BLOCK"
+	} else if score >= reviewThreshold && reviewThreshold > 0 {
+		decision = "RISK"
+	}
+	result := map[string]any{
+		"source":          firstWorkflowString(workflowConfigString(config, "source"), "FACTS"),
+		"score":           score,
+		"decision":        decision,
+		"blockThreshold":  blockThreshold,
+		"reviewThreshold": reviewThreshold,
+	}
+	return nodeSuccess(map[string]any{
+		"risk_result": result,
+		"decision":    decision,
+		"route":       decision,
+		"PASS":        decision == "PASS",
+		"BLOCK":       decision == "BLOCK",
+		"RISK":        decision == "RISK",
+		"audit":       workflowHandlerAudit(node, runtime),
+	})
+}
+
+func settlementWindowWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
+	if canceled := workflowHandlerContextCanceled(ctx, node, runtime); canceled.Status != "" {
+		return canceled
+	}
+	config, failed, ok := workflowRequireNodeConfig(node)
+	if !ok {
+		failed.Output["audit"] = workflowHandlerAudit(node, runtime)
+		return failed
+	}
+	inWindow := true
+	reason := "window check is advisory when time expression is not parsed"
+	start := workflowConfigString(config, "start")
+	end := workflowConfigString(config, "end")
+	if start != "" && end != "" {
+		nowText := runtime.Inbox.Event.OccurredAt.UTC().Format("15:04")
+		inWindow = start <= nowText && nowText <= end
+		reason = "event occurred at " + nowText + " UTC"
+	}
+	action := "PASS"
+	if !inWindow {
+		action = strings.ToUpper(firstWorkflowString(workflowConfigString(config, "outsideAction"), "SKIP"))
+	}
+	result := map[string]any{
+		"inWindow":      inWindow,
+		"action":        action,
+		"windowType":    firstWorkflowString(workflowConfigString(config, "windowType"), "DAILY"),
+		"start":         start,
+		"end":           end,
+		"timezone":      firstWorkflowString(workflowConfigString(config, "timezone"), "UTC"),
+		"reason":        reason,
+		"executionMode": "REAL_HANDLER",
+	}
+	return nodeSuccess(map[string]any{
+		"settlement_window": result,
+		"decision":          action,
+		"route":             action,
+		"audit":             workflowHandlerAudit(node, runtime),
+	})
+}
+
+func manualAdjustWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
+	if canceled := workflowHandlerContextCanceled(ctx, node, runtime); canceled.Status != "" {
+		return canceled
+	}
+	config, failed, ok := workflowRequireNodeConfig(node)
+	if !ok {
+		failed.Output["audit"] = workflowHandlerAudit(node, runtime)
+		return failed
+	}
+	adjustment := map[string]any{
+		"adjustType":         firstWorkflowString(workflowConfigString(config, "adjustType"), "REWARD"),
+		"targetPath":         firstWorkflowString(workflowConfigString(config, "targetPath"), "$.grant_order"),
+		"requireReason":      workflowConfigBool(config, "requireReason", true),
+		"requireApproval":    workflowConfigBool(config, "requireApproval", true),
+		"executionMode":      "EXTERNAL_ENDPOINT",
+		"executionAuthority": "AdminManualAdjustAPI",
+		"planned":            true,
+	}
+	return nodeSuccess(map[string]any{
+		"manual_adjustment": adjustment,
+		"audit":             workflowHandlerAudit(node, runtime),
+	})
+}
+
 func reconcileWorkflowNodeHandler(_ context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
 	if len(runtime.GrantOrders) == 0 {
 		return nodeSkipped("no grant order to reconcile", map[string]any{
@@ -2544,6 +3288,21 @@ func reconcileWorkflowNodeHandler(_ context.Context, node marketing.WorkflowNode
 		"grantOrderCount":       len(runtime.GrantOrders),
 		"audit":                 workflowHandlerAudit(node, runtime),
 	})
+}
+
+func rewardReconcileWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
+	result := reconcileWorkflowNodeHandler(ctx, node, runtime)
+	if result.Output == nil {
+		result.Output = map[string]any{}
+	}
+	result.Output["reward_reconcile_report"] = map[string]any{
+		"reconciliationTracked": result.Output["reconciliationTracked"],
+		"grantOrderCount":       len(runtime.GrantOrders),
+		"reservationCount":      len(runtime.Reservations),
+		"executionMode":         "EXPLAIN_ONLY",
+		"executionAuthority":    "Reconciliation/Admin API",
+	}
+	return result
 }
 
 func alertWorkflowNodeHandler(_ context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {

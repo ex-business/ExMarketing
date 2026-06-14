@@ -26,7 +26,7 @@ export type ActivityNodeData = {
   id: string;
   code: string;
   title: string;
-  category?: 'CORE' | 'ADVANCED' | 'OPS' | string;
+  category?: 'EVENT_INPUT' | 'CORE' | 'ADVANCED' | 'OPS' | string;
   kind: NodeKind;
   desc: string;
   inputs: string[];
@@ -248,7 +248,7 @@ export type WorkflowNodeConfigPreview = {
 export type WorkflowNodeConfigSchema = {
   nodeType: string;
   version: number;
-  category?: 'CORE' | 'ADVANCED' | 'OPS' | string;
+  category?: 'EVENT_INPUT' | 'CORE' | 'ADVANCED' | 'OPS' | string;
   title: string;
   description?: string;
   fields: WorkflowNodeConfigField[];

@@ -283,7 +283,7 @@ func (r *MemoryRepository) CreateWorkflowVersion(ctx context.Context, version Wo
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if version.Version <= 0 {
+	if version.Version == 0 {
 		version.Version = 1
 		for _, existing := range r.workflowVersions {
 			if existing.ActivityID == version.ActivityID && existing.Version >= version.Version {
@@ -291,9 +291,11 @@ func (r *MemoryRepository) CreateWorkflowVersion(ctx context.Context, version Wo
 			}
 		}
 	}
-	for i := range r.workflowVersions {
-		if r.workflowVersions[i].ActivityID == version.ActivityID && r.workflowVersions[i].Status == WorkflowVersionActive {
-			r.workflowVersions[i].Status = WorkflowVersionSuperseded
+	if version.Status == WorkflowVersionActive {
+		for i := range r.workflowVersions {
+			if r.workflowVersions[i].ActivityID == version.ActivityID && r.workflowVersions[i].Status == WorkflowVersionActive {
+				r.workflowVersions[i].Status = WorkflowVersionSuperseded
+			}
 		}
 	}
 	r.workflowVersions = append(r.workflowVersions, version)

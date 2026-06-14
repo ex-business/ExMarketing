@@ -43,11 +43,7 @@ export function WorkspaceTopBar({
         <BrandMark />
         <nav className="exm-breadcrumb" aria-label="Breadcrumb">
           {isLoading ? (
-            <>
-              <span className="exm-skeleton exm-topbar-crumb-skeleton" />
-              <i>/</i>
-              <span className="exm-skeleton exm-topbar-crumb-skeleton short" />
-            </>
+            null
           ) : (
             <>
               <span>Activity Studio</span>
@@ -64,13 +60,7 @@ export function WorkspaceTopBar({
         </nav>
       </div>
       {isLoading ? (
-        <div className="exm-topbar-search-skeleton">
-          <span className="exm-skeleton" />
-          <b className="exm-skeleton" />
-          <i className="exm-skeleton" />
-          <i className="exm-skeleton" />
-          <i className="exm-skeleton" />
-        </div>
+        null
       ) : (
         <GlobalSearch
           value={searchValue}

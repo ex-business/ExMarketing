@@ -718,32 +718,7 @@ export function WorkspaceContent({
       ) : null}
 
       {isLoading ? (
-        <TaTable className="exm-table-view loading" aria-label="工作台加载中">
-          <TaTableRow header className="exm-table-row">
-            <span />
-            <span>名称</span>
-            <span>类型</span>
-            <span>状态</span>
-            <span>版本</span>
-            <span>更新</span>
-            <span>负责人</span>
-            <span>可见性</span>
-            <span>操作</span>
-          </TaTableRow>
-          {Array.from({ length: 8 }).map((_, index) => (
-            <TaTableRow key={index} className="exm-table-row skeleton-row">
-              <span><i className="exm-skeleton" /></span>
-              <span className="name-cell"><i className="exm-skeleton icon-skeleton" /><b className="exm-skeleton" /></span>
-              <span><i className="exm-skeleton" /></span>
-              <span><i className="exm-skeleton" /></span>
-              <span><i className="exm-skeleton" /></span>
-              <span><i className="exm-skeleton" /></span>
-              <span><i className="exm-skeleton" /></span>
-              <span><i className="exm-skeleton" /></span>
-              <span><i className="exm-skeleton" /></span>
-            </TaTableRow>
-          ))}
-        </TaTable>
+        <div className="exm-content-loading" aria-label="工作台加载中" />
       ) : isEmptyPage ? (
         <TaEmptyState className={`exm-content-empty ${emptyState.kind}`}>
           <b>{emptyState.title}</b>

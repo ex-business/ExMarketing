@@ -97,7 +97,7 @@ func (s WorkflowValidationService) ValidateDefinition(raw json.RawMessage) Workf
 		}
 	}
 	if entryCount == 0 {
-		result.addIssue(WorkflowValidationBlock, "WORKFLOW_ENTRY_MISSING", "入口节点不存在，请添加 Event In 节点。", "nodes", "", "")
+		result.addIssue(WorkflowValidationBlock, "WORKFLOW_ENTRY_MISSING", "标准事件入口节点不存在，请添加标准事件入口节点。", "nodes", "", "")
 	}
 	adjacency := map[string][]string{}
 	hasIncomingEdge := map[string]bool{}

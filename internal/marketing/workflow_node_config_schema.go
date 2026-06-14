@@ -89,7 +89,7 @@ type WorkflowNodeConfigSchemaRegistry struct {
 
 func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 	schemas := []WorkflowNodeConfigSchema{
-		groupedSchema("event-in", "事件入口", "接收活动事件并生成标准 raw_event。", groups(
+		groupedSchema("event-in", "标准事件入口", "接收已标准化事件，校验 eventType、sourceSystem、tenant 后进入流程。", groups(
 			fieldGroup("event-source", "事件来源", "限定哪些业务事件可以触发这个 workflow。", fields(
 				withDefault(arrayField("eventTypes", "允许事件类型", true, "例如 DEPOSIT_SUCCESS、PAY_SUCCESS、ORDER_PAID、USER_REGISTERED。为空会阻止发布。", rules(minItems(1), maxItems(30))), []string{"DEPOSIT_SUCCESS", "PAY_SUCCESS"}),
 				withDefault(arrayField("sourceSystems", "来源系统", true, "允许接入的系统编码，例如 payment、trade、crm。", rules(minItems(1), maxItems(20))), []string{"payment"}),
@@ -101,9 +101,111 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 				withDescription(stringField("traceKeyPath", "Trace Key Path", false, "$.traceId", rules(maxLength(128))), "从 raw_event 中读取 trace key 的 JSONPath。"),
 			)),
 		), preview(
-			[]string{"外部事件 payload", "tenantId / eventType / eventId", "sourceSystem"},
+			[]string{"已标准化事件", "tenantId / eventType / eventId", "sourceSystem"},
 			[]string{"raw_event", "eventId", "eventType", "tenantId"},
-			[]string{"不做业务判断，只负责入口过滤和标准 raw_event 生成。"},
+			[]string{"不监听 HTTP/MQ/Webhook，只负责标准事件进入 workflow 前的入口校验。"},
+		)),
+		groupedSchema("http-event", "HTTP 接口事件", "外部系统通过 OpenAPI 主动上报标准事件。", groups(
+			fieldGroup("endpoint", "接口定义", "描述当前活动可使用的标准事件上报接口。", fields(
+				withDescription(stringField("path", "Path", true, "/openapi/v1/events", rules(minLength(1), maxLength(160))), "生产入口由 OpenAPI HTTP handler 承担，workflow 节点只做配置解释。"),
+				enumField("method", "Method", true, "POST", []string{"POST"}),
+				enumField("payloadMode", "Payload 模式", true, "STANDARD_EVENT", []string{"STANDARD_EVENT"}),
+			)),
+			fieldGroup("security", "安全策略", "描述 HTTP 入口鉴权和请求限制。", fields(
+				enumField("auth", "鉴权", true, "BEARER_TOKEN", []string{"BEARER_TOKEN"}),
+				numberField("maxBodyBytes", "最大请求字节数", true, 1048576, rules(minValue(1024), maxValue(10485760))),
+				executionModeField("EXTERNAL_ENDPOINT"),
+				executionAuthorityField("OpenAPIEventHandler"),
+			)),
+		), preview(
+			[]string{"HTTP JSON request", "Authorization", "Idempotency-Key"},
+			[]string{"standard_event"},
+			[]string{"解释型入口节点；真实接收由 /openapi/v1/events 完成。"},
+		)),
+		groupedSchema("webhook-event", "Webhook 映射事件", "接收第三方 payload，签名校验后映射为标准事件。", groups(
+			fieldGroup("receiver", "Receiver", "描述 webhook receiver 和来源白名单。", fields(
+				withDescription(stringField("receiverCode", "Receiver Code", true, "payment-webhook", rules(minLength(1), maxLength(128))), "对应 /openapi/v1/webhooks/{receiverCode}。"),
+				enumField("signature", "签名算法", true, "HMAC_SHA256", []string{"HMAC_SHA256"}),
+				withDefault(arrayField("allowedTenantIds", "允许租户", true, "允许接入的 tenantId。", rules(minItems(1), maxItems(20))), []string{"site_001"}),
+				withDefault(arrayField("allowedSourceSystems", "允许来源系统", true, "允许接入的 sourceSystem。", rules(minItems(1), maxItems(20))), []string{"payment"}),
+			)),
+			fieldGroup("mapping", "映射说明", "描述第三方 payload 到标准事件的映射版本。", fields(
+				withDescription(stringField("mappingVersion", "Mapping Version", true, "v1", rules(minLength(1), maxLength(64))), "具体 mapping 仍由 receiver 配置管理。"),
+				executionModeField("EXTERNAL_ENDPOINT"),
+				executionAuthorityField("WebhookReceiver"),
+			)),
+		), preview(
+			[]string{"Webhook raw payload", "signature headers", "receiver mapping"},
+			[]string{"standard_event"},
+			[]string{"解释型入口节点；真实接收和签名校验由 WebhookReceiver 完成。"},
+		)),
+		groupedSchema("mq-event", "MQ Topic 事件", "监听 Kafka/RabbitMQ/Pulsar topic 并映射消息为标准事件。", groups(
+			fieldGroup("consumer", "Consumer", "描述消息来源和消费组。", fields(
+				enumField("broker", "Broker", true, "KAFKA", []string{"KAFKA", "RABBITMQ", "PULSAR"}),
+				withDescription(stringField("topic", "Topic / Queue", true, "", rules(minLength(1), maxLength(256))), "待监听的 topic 或 queue。"),
+				withDescription(stringField("consumerGroup", "Consumer Group", true, "", rules(minLength(1), maxLength(256))), "消费组必须稳定。"),
+			)),
+			fieldGroup("runtime", "运行策略", "当前阶段仅做能力占位，不启动真实 consumer。", fields(
+				enumField("ackPolicy", "Ack 策略", true, "ACK_AFTER_INBOX_COMMIT", []string{"ACK_AFTER_INBOX_COMMIT"}),
+				enumField("retryPolicy", "重试策略", true, "RETRY_THEN_DLQ", []string{"RETRY_THEN_DLQ"}),
+				executionModeField("EXPLAIN_ONLY"),
+				executionAuthorityField("MQTriggerWorker"),
+			)),
+		), preview(
+			[]string{"MQ message", "topic / partition / offset"},
+			[]string{"standard_event"},
+			[]string{"待实现入口节点；真实 consumer 需要单独实现 offset、ack、retry 和 DLQ。"},
+		)),
+		groupedSchema("schedule-event", "定时事件", "按 cron 或延迟任务生成标准事件。", groups(
+			fieldGroup("schedule", "调度", "描述定时触发规则。", fields(
+				enumField("scheduleType", "调度类型", true, "CRON", []string{"CRON", "DELAY"}),
+				withDescription(stringField("cron", "Cron", false, "0 0 * * *", rules(maxLength(128))), "CRON 调度表达式。"),
+				withDescription(stringField("timezone", "时区", true, "UTC", rules(minLength(2), maxLength(64))), "例如 UTC、Asia/Shanghai。"),
+			)),
+			fieldGroup("runtime", "运行策略", "当前阶段仅做能力占位。", fields(
+				enumField("misfirePolicy", "错过执行策略", true, "FIRE_ONCE", []string{"FIRE_ONCE", "SKIP", "CATCH_UP"}),
+				numberField("jitterSeconds", "抖动秒数", false, 0, rules(minValue(0), maxValue(3600))),
+				executionModeField("EXPLAIN_ONLY"),
+				executionAuthorityField("Scheduler"),
+			)),
+		), preview(
+			[]string{"cron / delay schedule", "event template"},
+			[]string{"standard_event"},
+			[]string{"待实现入口节点；同一计划时间必须生成稳定 bizId。"},
+		)),
+		groupedSchema("state-event", "状态监听事件", "监听 Redis、配置、指标或全局状态条件并生成标准事件。", groups(
+			fieldGroup("watch", "监听源", "描述可恢复状态来源和路径。", fields(
+				enumField("source", "状态来源", true, "REDIS", []string{"REDIS", "DATABASE", "CONFIG", "METRICS"}),
+				withDescription(stringField("key", "Key / Path", true, "", rules(minLength(1), maxLength(256))), "不建议使用进程内临时全局变量。"),
+				withDescription(stringField("condition", "触发条件", true, "", rules(minLength(1), maxLength(2000))), "条件命中后生成标准事件。"),
+			)),
+			fieldGroup("runtime", "运行策略", "当前阶段仅做能力占位。", fields(
+				numberField("intervalSeconds", "轮询秒数", true, 10, rules(minValue(1), maxValue(3600))),
+				numberField("debounceSeconds", "去抖秒数", false, 60, rules(minValue(0), maxValue(86400))),
+				executionModeField("EXPLAIN_ONLY"),
+				executionAuthorityField("StateWatcher"),
+			)),
+		), preview(
+			[]string{"state snapshot", "condition", "last-seen cursor"},
+			[]string{"standard_event"},
+			[]string{"待实现入口节点；生产环境必须监听可恢复状态并记录 cursor。"},
+		)),
+		groupedSchema("manual-event", "人工触发事件", "管理台人工补偿、重放或手动执行标准事件。", groups(
+			fieldGroup("permission", "权限", "描述人工触发需要的权限和审计。", fields(
+				withDefault(arrayField("allowedRoles", "允许角色", true, "可人工触发的角色。", rules(minItems(1), maxItems(20))), []string{"OPS", "ADMIN"}),
+				booleanField("requireReason", "要求原因", false, true),
+				booleanField("requireApproval", "要求审批", false, false),
+			)),
+			fieldGroup("runtime", "运行策略", "区分 debug-run 和有副作用的生产人工触发。", fields(
+				enumField("payloadMode", "Payload 模式", true, "STANDARD_EVENT", []string{"STANDARD_EVENT"}),
+				withDescription(stringField("auditAction", "审计 Action", true, "MANUAL_EVENT_TRIGGERED", rules(minLength(1), maxLength(128))), "生产人工触发必须写审计。"),
+				executionModeField("EXTERNAL_ENDPOINT"),
+				executionAuthorityField("AdminManualTriggerAPI"),
+			)),
+		), preview(
+			[]string{"operator", "reason", "standard event payload"},
+			[]string{"standard_event"},
+			[]string{"生产人工触发必须进入 Event Inbox；debug-run 仍保持无副作用。"},
 		)),
 		groupedSchema("inbox", "幂等收件箱", "写入事件收件箱，处理重复事件和 payload 冲突。", groups(
 			fieldGroup("idempotency", "幂等策略", "决定同一个业务事件重复进入时如何处理。", fields(
@@ -204,6 +306,56 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 			[]string{"facts"},
 			[]string{"facts 可供 condition、qualify、reward 等下游节点引用。"},
 		)),
+		groupedSchema("activity-state", "活动状态", "读取或更新用户活动状态、任务进度、签到状态和插件状态。", groups(
+			fieldGroup("state-key", "状态 Key", "定义活动状态的主体、命名空间和 key。", fields(
+				enumField("operation", "操作", true, "READ", []string{"READ", "WRITE", "UPSERT", "CAS"}),
+				withDescription(stringField("namespace", "命名空间", true, "activity", rules(minLength(1), maxLength(128))), "状态命名空间，例如 checkin、task、lottery、red-envelope。"),
+				withDescription(stringField("stateKeyTemplate", "State Key 模板", true, "${activityId}:${subject.id}", rules(minLength(1), maxLength(256))), "必须稳定定位一个用户或业务维度的活动状态。"),
+			)),
+			fieldGroup("state-data", "状态数据", "控制写入路径、版本和并发策略。", fields(
+				withDescription(stringField("valuePath", "Value Path", false, "$.state", rules(maxLength(160))), "WRITE/UPSERT/CAS 时从上下文读取要写入的状态。"),
+				booleanField("requireVersion", "要求版本", false, true),
+				enumField("missingPolicy", "缺失策略", true, "EMPTY_STATE", []string{"EMPTY_STATE", "BLOCK", "CREATE"}),
+			)),
+		), preview(
+			[]string{"event_context", "facts", "plugin_state"},
+			[]string{"activity_state", "state_version"},
+			[]string{"当前 Executor 输出可运行状态快照；真实跨执行持久化权威应接 ActivityPlugin/StateStore。"},
+		)),
+		groupedSchema("quota-check", "次数频控校验", "对用户、设备、IP、活动或租户维度做次数和频率校验。", groups(
+			fieldGroup("counter", "计数维度", "定义频控 bucket、窗口和上限。", fields(
+				enumField("scope", "限制范围", true, "USER", []string{"USER", "ACTIVITY", "TENANT", "BIZ", "IP", "DEVICE"}),
+				withDescription(stringField("scopeKeyTemplate", "Scope Key 模板", true, "${subject.id}:${activityId}", rules(minLength(1), maxLength(256))), "用于组成频控 key。"),
+				enumField("window", "窗口", true, "DAY", []string{"ACTIVITY", "DAY", "WEEK", "MONTH", "ROLLING_WINDOW"}),
+				numberField("maxCount", "最大次数", true, 1, rules(minValue(1), maxValue(1000000))),
+			)),
+			fieldGroup("policy", "处理策略", "控制校验、占用和超限分支。", fields(
+				enumField("consumeMode", "占用模式", true, "CHECK_ONLY", []string{"CHECK_ONLY", "ATOMIC", "RESERVE_ONLY"}),
+				enumField("exceedAction", "超限动作", true, "BLOCK", []string{"BLOCK", "RISK", "SKIP"}),
+				executionModeField("REAL_HANDLER"),
+				executionAuthorityField("WorkflowExecutor/QuotaStore"),
+			)),
+		), preview(
+			[]string{"subject", "activity_id", "event_context"},
+			[]string{"quota_check", "limit_hold"},
+			[]string{"quota-check 是 limit 的生产语义别名，专门表达次数/频控，不表达预算库存。"},
+		)),
+		groupedSchema("candidate-reward", "候选奖励", "根据活动配置和上游状态生成待发奖励候选，不直接产生资金副作用。", groups(
+			fieldGroup("source", "奖励来源", "定义候选奖励从哪里生成。", fields(
+				enumField("source", "来源", true, "ACTIVITY_REWARD_CONFIG", []string{"ACTIVITY_REWARD_CONFIG", "INPUT", "PLUGIN_RESULT"}),
+				withDescription(stringField("rewardItemsPath", "奖励 Path", false, "$.reward_items", rules(maxLength(160))), "source=INPUT/PLUGIN_RESULT 时读取上游奖励数组。"),
+				booleanField("includeDisabledRewards", "包含禁用奖励", false, false),
+			)),
+			fieldGroup("decision", "候选策略", "控制未通过资格、空候选和审计字段。", fields(
+				enumField("notQualifiedAction", "未通过动作", true, "SKIP", []string{"SKIP", "BLOCK"}),
+				enumField("emptyAction", "空候选动作", true, "BLOCK", []string{"BLOCK", "SKIP"}),
+				booleanField("includeTrace", "包含 Trace", false, true),
+			)),
+		), preview(
+			[]string{"qualified_context", "activity reward config", "plugin_result"},
+			[]string{"candidate_rewards", "reward_items"},
+			[]string{"候选奖励只决定“应该给什么”，真正发奖仍由 budget-reserve/quota、grant-order、outbox 完成。"},
+		)),
 		groupedSchema("code", "代码执行", "用受控代码片段处理上下文并输出 code_result。", groups(
 			fieldGroup("runtime", "运行时", "定义代码语言、执行超时和输出限制。", fields(
 				enumField("language", "语言", true, "LUA", []string{"LUA", "EXPRESSION"}),
@@ -219,6 +371,38 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 			[]string{"context", "input", "上游变量引用"},
 			[]string{"code_result"},
 			[]string{"仅暴露当前 Executor 真实支持的 LUA / EXPRESSION；外部网络访问默认关闭。"},
+		)),
+		groupedSchema("combine", "组合节点", "用 Lua 或表达式把多个上游输入组合成一个结构化结果。", groups(
+			fieldGroup("runtime", "运行时", "定义组合脚本语言、超时和输出限制。", fields(
+				enumField("language", "语言", true, "LUA", []string{"LUA", "EXPRESSION"}),
+				numberField("timeoutSeconds", "超时秒数", true, 5, rules(minValue(1), maxValue(60))),
+				numberField("maxOutputBytes", "最大输出字节数", true, 65536, rules(minValue(1024), maxValue(1048576))),
+			)),
+			fieldGroup("script", "组合脚本", "从 input、ctx、node_output 读取多个来源并 emit 组合结果。", fields(
+				withDescription(stringField("source", "代码", true, "emit({combined = ctx.node.input})", rules(minLength(1), maxLength(20000))), "Lua 中使用 emit({...}) 输出组合结果。"),
+				withDescription(stringField("outputPath", "输出路径", true, "combined_result", rules(minLength(1), maxLength(128))), "组合结果写入上下文的 key。"),
+				booleanField("allowNetwork", "允许网络访问", false, false),
+			)),
+		), preview(
+			[]string{"上游多个输出", "input", "ctx", "node_output"},
+			[]string{"combined_result"},
+			[]string{"适合把事件、事实、资格结果、奖励配置组合成一个下游上下文。Lua 运行在受控沙箱中。"},
+		)),
+		groupedSchema("split", "拆分节点", "用 Lua 或表达式把一个结构化输入拆分成数组或多个输出分片。", groups(
+			fieldGroup("runtime", "运行时", "定义拆分脚本语言、超时和输出限制。", fields(
+				enumField("language", "语言", true, "LUA", []string{"LUA", "EXPRESSION"}),
+				numberField("timeoutSeconds", "超时秒数", true, 5, rules(minValue(1), maxValue(60))),
+				numberField("maxOutputBytes", "最大输出字节数", true, 65536, rules(minValue(1024), maxValue(1048576))),
+			)),
+			fieldGroup("script", "拆分脚本", "从 input、ctx、node_output 读取对象并 emit 拆分结果。", fields(
+				withDescription(stringField("source", "代码", true, "emit({items = ctx.node.input.items})", rules(minLength(1), maxLength(20000))), "Lua 中建议输出 items 数组，例如 emit({items = {...}})。"),
+				withDescription(stringField("outputPath", "输出路径", true, "split_items", rules(minLength(1), maxLength(128))), "拆分结果写入上下文的 key。"),
+				booleanField("allowNetwork", "允许网络访问", false, false),
+			)),
+		), preview(
+			[]string{"结构化输入", "input", "ctx", "node_output"},
+			[]string{"split_items", "split_result"},
+			[]string{"适合把批量权益、名单、奖励明细拆成下游可循环/路由处理的分片。Lua 运行在受控沙箱中。"},
 		)),
 		groupedSchema("reward", "奖励计算", "根据资格结果生成 reward_items。", groups(
 			fieldGroup("reward-definition", "奖励定义", "定义奖励编码、类型和金额计算方式。", fields(
@@ -277,6 +461,24 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 			[]string{"quota_hold"},
 			[]string{"ATOMIC 模式会在 Executor 中记录 quota_hold，失败时走 BLOCK/RISK/SKIP 分支。"},
 		)),
+		groupedSchema("budget-reserve", "预算库存锁定", "在发奖前锁定活动预算、奖品库存或用户额度，避免并发超发。", groups(
+			fieldGroup("reserve-target", "锁定对象", "定义要锁定的预算、库存或额度维度。", fields(
+				withDescription(stringField("quotaCode", "Quota Code", true, "DEFAULT_REWARD_BUDGET", rules(minLength(2), maxLength(128))), "后端 quota 资源编码。"),
+				enumField("quotaType", "Quota 类型", true, "BUDGET", []string{"BUDGET", "STOCK", "USER_LIMIT", "DAILY_LIMIT"}),
+				enumField("scope", "作用范围", true, "ACTIVITY", []string{"ACTIVITY", "USER", "TENANT", "WORKSPACE"}),
+				withDescription(stringField("scopeKeyTemplate", "Scope Key 模板", true, "${activityId}", rules(minLength(1), maxLength(256))), "用于组成锁定 bucket。"),
+			)),
+			fieldGroup("reserve-policy", "锁定策略", "控制锁定数量、释放策略和失败动作。", fields(
+				withDescription(stringField("amountField", "锁定数量字段", true, "candidate_rewards[0].amount", rules(minLength(1), maxLength(160))), "从 candidate_rewards/reward_items 或上下文读取锁定金额/数量。"),
+				enumField("reserveMode", "锁定模式", true, "ATOMIC", []string{"ATOMIC", "RESERVE_ONLY", "CHECK_ONLY"}),
+				enumField("failAction", "锁定失败动作", true, "BLOCK", []string{"BLOCK", "RISK", "SKIP"}),
+				booleanField("releaseOnFailure", "失败释放", false, true),
+			)),
+		), preview(
+			[]string{"candidate_rewards", "reward_items", "quota_check"},
+			[]string{"budget_reservation", "quota_hold"},
+			[]string{"budget-reserve 是 quota 的生产语义别名，强调发奖前的预算/库存锁定。"},
+		)),
 		schema("participation", "参与记录", "写入参与流水", fields(
 			stringField("status", "初始状态", false, "CREATED"),
 			booleanField("deduplicate", "参与去重", false, true),
@@ -330,6 +532,136 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 			[]string{"callback_result"},
 			[]string{"callback_result 会影响发奖订单最终状态，并可进入 audit / reconcile。"},
 		)),
+		groupedSchema("approval-gate", "审批网关", "根据金额、风险或活动策略决定自动通过、阻断或进入人工审批。", groups(
+			fieldGroup("policy", "审批策略", "定义哪些场景需要人工审批。", fields(
+				enumField("mode", "模式", true, "AUTO_BELOW_THRESHOLD", []string{"AUTO", "AUTO_BELOW_THRESHOLD", "MANUAL_REQUIRED", "RISK_REQUIRED"}),
+				numberField("amountThreshold", "金额阈值", false, 1000, rules(minValue(0))),
+				withDefault(arrayField("riskLabels", "风险标签", false, "命中这些风险标签时进入审批。", rules(maxItems(50))), []string{"HIGH_RISK"}),
+			)),
+			fieldGroup("runtime", "运行权威", "审批状态由外部审批 API 和人工操作决定。", fields(
+				enumField("pendingAction", "待审动作", true, "PAUSE", []string{"PAUSE", "BLOCK", "SKIP"}),
+				executionModeField("EXTERNAL_ENDPOINT"),
+				executionAuthorityField("ActivityApproval/AdminAPI"),
+			)),
+		), preview(
+			[]string{"candidate_rewards", "risk_result", "operator"},
+			[]string{"approval_decision"},
+			[]string{"Executor 只生成审批决策；真实审批流由 ActivityApproval/AdminAPI 负责。"},
+		)),
+		groupedSchema("compensation", "业务补偿", "描述发奖、预算、回调、通知失败后的补偿动作。", groups(
+			fieldGroup("trigger", "触发条件", "定义何时创建补偿动作。", fields(
+				enumField("triggerOn", "触发状态", true, "FAILED", []string{"FAILED", "TIMEOUT", "PARTIAL", "DRIFT"}),
+				withDescription(stringField("sourcePath", "来源 Path", true, "$.stage_result", rules(minLength(1), maxLength(160))), "从上游输出读取失败或漂移来源。"),
+				enumField("action", "补偿动作", true, "RETRY_CALLBACK", []string{"RETRY_CALLBACK", "RELEASE_BUDGET", "QUERY_PROVIDER", "REPLAY_EVENT", "MANUAL_REVIEW"}),
+			)),
+			fieldGroup("runtime", "执行权威", "补偿副作用应由后台任务或人工 API 执行。", fields(
+				numberField("maxAttempts", "最大尝试次数", false, 3, rules(minValue(1), maxValue(10))),
+				executionModeField("EXPLAIN_ONLY"),
+				executionAuthorityField("CompensationWorker/AdminAPI"),
+			)),
+		), preview(
+			[]string{"failed stage", "grant_order", "quota_hold"},
+			[]string{"compensation_plan"},
+			[]string{"当前节点生成补偿计划，不直接释放预算或重放消息。"},
+		)),
+		groupedSchema("random-pick", "随机抽取", "执行可审计的权重随机、奖池抽取或分桶随机。", groups(
+			fieldGroup("random", "随机策略", "定义随机来源、候选集合和种子。", fields(
+				enumField("mode", "模式", true, "WEIGHTED", []string{"WEIGHTED", "UNIFORM", "POOL", "BUCKET"}),
+				withDescription(stringField("itemsPath", "候选 Path", false, "$.candidate_rewards", rules(maxLength(160))), "候选数组路径。"),
+				withDescription(stringField("seedTemplate", "Seed 模板", true, "${tenantId}:${activityId}:${eventId}", rules(minLength(1), maxLength(256))), "生产随机必须可审计、可复现。"),
+			)),
+			fieldGroup("output", "输出", "控制抽取数量和空候选策略。", fields(
+				numberField("pickCount", "抽取数量", true, 1, rules(minValue(1), maxValue(100))),
+				enumField("emptyAction", "空候选动作", true, "SKIP", []string{"SKIP", "BLOCK"}),
+				executionModeField("REAL_HANDLER"),
+				executionAuthorityField("WorkflowExecutor"),
+			)),
+		), preview(
+			[]string{"candidate_rewards", "seed"},
+			[]string{"random_pick", "selected_rewards"},
+			[]string{"避免在 Lua 内直接使用不可追溯随机。"},
+		)),
+		groupedSchema("plugin-execute", "插件执行", "调用活动插件动作，例如签到、抽奖、拆红包或任务结算。", groups(
+			fieldGroup("plugin", "插件", "定义插件编码、动作和输入路径。", fields(
+				withDescription(stringField("pluginCode", "插件 Code", true, "checkin", rules(minLength(1), maxLength(128))), "例如 checkin、lottery、red-envelope。"),
+				withDescription(stringField("action", "动作", true, "EXECUTE", rules(minLength(1), maxLength(128))), "插件内动作，例如 SIGN_IN、DRAW、OPEN_PACKET。"),
+				withDescription(stringField("inputPath", "输入 Path", false, "$", rules(maxLength(160))), "插件执行输入来源。"),
+			)),
+			fieldGroup("runtime", "执行权威", "复杂领域状态由 ActivityPlugin 负责。", fields(
+				enumField("failureAction", "失败动作", true, "BLOCK", []string{"BLOCK", "SKIP", "RISK"}),
+				executionModeField("EXTERNAL_ENDPOINT"),
+				executionAuthorityField("ActivityPlugin"),
+			)),
+		), preview(
+			[]string{"event_context", "activity_state", "plugin_context"},
+			[]string{"plugin_result", "candidate_rewards"},
+			[]string{"Workflow 负责编排，插件负责领域状态、库存、随机和领取细节。"},
+		)),
+		groupedSchema("ab-bucket", "AB 分桶", "按稳定主体把用户分配到实验桶或运营策略桶。", groups(
+			fieldGroup("bucket", "分桶", "定义实验编码、主体和桶比例。", fields(
+				withDescription(stringField("experimentKey", "实验 Key", true, "default-experiment", rules(minLength(1), maxLength(128))), "实验或策略编码。"),
+				withDescription(stringField("subjectKeyTemplate", "主体 Key 模板", true, "${subject.id}", rules(minLength(1), maxLength(256))), "稳定分桶主体。"),
+				withDefault(arrayField("buckets", "桶列表", true, "桶配置，例如 A:50,B:50。", rules(minItems(1), maxItems(20))), []string{"A:50", "B:50"}),
+			)),
+			fieldGroup("runtime", "执行语义", "分桶在 Executor 内可确定性计算。", fields(
+				executionModeField("REAL_HANDLER"),
+				executionAuthorityField("WorkflowExecutor"),
+			)),
+		), preview(
+			[]string{"subject", "experimentKey"},
+			[]string{"ab_bucket"},
+			[]string{"用于活动策略分流，不应替代风控或资格规则。"},
+		)),
+		groupedSchema("risk-score", "风险评分", "根据事实、规则或外部风控结果输出风险评分和标签。", groups(
+			fieldGroup("risk", "风险策略", "定义风险来源和阈值。", fields(
+				enumField("source", "来源", true, "FACTS", []string{"FACTS", "RULE_RESULT", "EXTERNAL_PROVIDER"}),
+				withDescription(stringField("scorePath", "分数 Path", false, "$.facts.riskScore", rules(maxLength(160))), "从事实或 provider 结果读取风险分。"),
+				numberField("blockThreshold", "阻断阈值", true, 90, rules(minValue(0), maxValue(100))),
+				numberField("reviewThreshold", "复核阈值", true, 70, rules(minValue(0), maxValue(100))),
+			)),
+			fieldGroup("runtime", "运行策略", "外部 provider 暂由 fact-query 或风控服务承接。", fields(
+				enumField("failureAction", "失败动作", true, "REVIEW", []string{"REVIEW", "BLOCK", "PASS"}),
+				executionModeField("REAL_HANDLER"),
+				executionAuthorityField("WorkflowExecutor/FactService"),
+			)),
+		), preview(
+			[]string{"facts", "rule_result", "provider_result"},
+			[]string{"risk_result"},
+			[]string{"高风险可接 approval-gate 或 audit/alert。"},
+		)),
+		groupedSchema("settlement-window", "结算窗口", "限制活动发奖、对账或结算只能在指定窗口内执行。", groups(
+			fieldGroup("window", "窗口", "定义允许执行的时间范围。", fields(
+				enumField("windowType", "窗口类型", true, "DAILY", []string{"DAILY", "WEEKLY", "MONTHLY", "CUSTOM"}),
+				withDescription(stringField("start", "开始", true, "00:00", rules(minLength(1), maxLength(64))), "窗口开始时间。"),
+				withDescription(stringField("end", "结束", true, "23:59", rules(minLength(1), maxLength(64))), "窗口结束时间。"),
+				withDescription(stringField("timezone", "时区", true, "UTC", rules(minLength(2), maxLength(64))), "例如 UTC、Asia/Shanghai。"),
+			)),
+			fieldGroup("policy", "策略", "控制窗口外如何处理。", fields(
+				enumField("outsideAction", "窗口外动作", true, "SKIP", []string{"SKIP", "BLOCK", "DEFER"}),
+				executionModeField("REAL_HANDLER"),
+				executionAuthorityField("WorkflowExecutor/Scheduler"),
+			)),
+		), preview(
+			[]string{"event time", "current time", "activity timezone"},
+			[]string{"settlement_window"},
+			[]string{"DEFER 的真实调度需要 Scheduler；Executor 当前只输出决策。"},
+		)),
+		groupedSchema("manual-adjust", "人工调整", "记录人工补偿、修正、加减奖励或状态修复意图。", groups(
+			fieldGroup("adjust", "调整", "定义人工调整类型和对象。", fields(
+				enumField("adjustType", "调整类型", true, "REWARD", []string{"REWARD", "BUDGET", "STATE", "GRANT_ORDER"}),
+				withDescription(stringField("targetPath", "对象 Path", true, "$.grant_order", rules(minLength(1), maxLength(160))), "被调整对象路径。"),
+				booleanField("requireReason", "要求原因", false, true),
+				booleanField("requireApproval", "要求审批", false, true),
+			)),
+			fieldGroup("runtime", "执行权威", "真实调整必须由 AdminAPI 写审计并执行。", fields(
+				executionModeField("EXTERNAL_ENDPOINT"),
+				executionAuthorityField("AdminManualAdjustAPI"),
+			)),
+		), preview(
+			[]string{"operator", "reason", "target"},
+			[]string{"manual_adjustment"},
+			[]string{"生产调整不应由普通 workflow 自动执行，必须保留人工审计链。"},
+		)),
 		schema("retry", "失败重试", "失败消息重试", fields(
 			numberField("maxAttempts", "最大次数", false, 3, rules(minValue(1), maxValue(10))),
 			numberField("backoffSeconds", "退避秒数", false, 30, rules(minValue(1), maxValue(3600))),
@@ -363,6 +695,12 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 			executionModeField("EXPLAIN_ONLY"),
 			executionAuthorityField("ReconciliationJob"),
 		)),
+		schema("reward-reconcile", "奖励对账", "对发奖订单、预算锁定、回调和 outbox 做奖励链路一致性校验。", fields(
+			arrayField("targets", "对账对象", false, "grant、quota、callback、outbox。", rules(maxItems(10))),
+			booleanField("autoRepair", "自动修复", false, false),
+			executionModeField("EXPLAIN_ONLY"),
+			executionAuthorityField("ReconciliationJob"),
+		)),
 		schema("alert", "告警通知", "发送告警事件", fields(
 			enumField("level", "级别", false, "WARN", []string{"INFO", "WARN", "ERROR", "CRITICAL"}),
 			stringField("channel", "通知渠道", false, "default"),
@@ -380,9 +718,11 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 
 func defaultWorkflowNodeCategory(nodeType string) string {
 	switch strings.TrimSpace(nodeType) {
-	case "condition", "switch", "code", "decimal", "http-call", "mq-publish", "webhook", "callback":
+	case "event-in", "http-event", "webhook-event", "mq-event", "schedule-event", "state-event", "manual-event":
+		return "EVENT_INPUT"
+	case "condition", "switch", "code", "combine", "split", "decimal", "http-call", "mq-publish", "webhook", "callback", "approval-gate", "compensation", "random-pick", "plugin-execute", "ab-bucket", "risk-score", "settlement-window", "manual-adjust":
 		return "ADVANCED"
-	case "retry", "dlq", "audit", "reconcile", "alert":
+	case "retry", "dlq", "audit", "reconcile", "reward-reconcile", "alert":
 		return "OPS"
 	default:
 		return "CORE"
@@ -446,7 +786,7 @@ func preview(reads []string, writes []string, notes []string) WorkflowNodeConfig
 
 func defaultWorkflowNodeInputs(nodeType string) []WorkflowNodeInputVar {
 	switch nodeType {
-	case "event-in":
+	case "event-in", "http-event", "webhook-event", "mq-event", "schedule-event", "state-event", "manual-event":
 		return nil
 	case "inbox":
 		return inputVars(
@@ -477,10 +817,35 @@ func defaultWorkflowNodeInputs(nodeType string) []WorkflowNodeInputVar {
 			inputVar("subject", "Subject", "object", true, "业务主体。"),
 			inputVar("fact_keys", "Fact Keys", "array", false, "需要查询的事实 key。"),
 		)
+	case "activity-state":
+		return inputVars(
+			inputVar("event_context", "Event Context", "object", false, "事件上下文。"),
+			inputVar("state_patch", "State Patch", "object", false, "状态写入或 CAS patch。"),
+		)
+	case "quota-check":
+		return inputVars(
+			inputVar("subject", "Subject", "object", true, "参与主体。"),
+			inputVar("activity_id", "Activity ID", "string", true, "活动 ID。"),
+		)
+	case "candidate-reward":
+		return inputVars(
+			inputVar("qualified_context", "Qualified Context", "object", false, "资格通过后的上下文。"),
+			inputVar("plugin_result", "Plugin Result", "object", false, "插件输出。"),
+		)
 	case "code":
 		return inputVars(
 			inputVar("context", "Context", "object", true, "工作流上下文。"),
 			inputVar("input", "Input", "object", false, "上游输入对象。"),
+		)
+	case "combine":
+		return inputVars(
+			inputVar("items", "Items", "array", false, "待组合的上游对象数组。"),
+			inputVar("context", "Context", "object", false, "可选组合上下文。"),
+		)
+	case "split":
+		return inputVars(
+			inputVar("payload", "Payload", "object", false, "待拆分的结构化对象。"),
+			inputVar("items", "Items", "array", false, "待拆分的数组。"),
 		)
 	case "reward":
 		return inputVars(
@@ -498,6 +863,11 @@ func defaultWorkflowNodeInputs(nodeType string) []WorkflowNodeInputVar {
 		return inputVars(
 			inputVar("reward_items", "Reward Items", "array", true, "奖励明细。"),
 			inputVar("limit_hold", "Limit Hold", "object", false, "限制占用结果。"),
+		)
+	case "budget-reserve":
+		return inputVars(
+			inputVar("candidate_rewards", "Candidate Rewards", "array", false, "候选奖励明细。"),
+			inputVar("reward_items", "Reward Items", "array", false, "奖励明细。"),
 		)
 	case "participation":
 		return inputVars(
@@ -517,13 +887,35 @@ func defaultWorkflowNodeInputs(nodeType string) []WorkflowNodeInputVar {
 		return inputVars(inputVar("stage_result", "Stage Result", "object", true, "阶段结果。"))
 	case "callback":
 		return inputVars(inputVar("provider_callback", "Provider Callback", "object", true, "渠道回调数据。"))
+	case "approval-gate":
+		return inputVars(
+			inputVar("candidate_rewards", "Candidate Rewards", "array", false, "候选奖励明细。"),
+			inputVar("risk_result", "Risk Result", "object", false, "风险结果。"),
+		)
+	case "compensation":
+		return inputVars(inputVar("stage_result", "Stage Result", "object", true, "失败、超时或漂移阶段结果。"))
+	case "random-pick":
+		return inputVars(inputVar("candidate_rewards", "Candidate Rewards", "array", false, "候选奖励数组。"))
+	case "plugin-execute":
+		return inputVars(
+			inputVar("event_context", "Event Context", "object", false, "事件上下文。"),
+			inputVar("activity_state", "Activity State", "object", false, "活动状态。"),
+		)
+	case "ab-bucket":
+		return inputVars(inputVar("subject", "Subject", "object", false, "分桶主体。"))
+	case "risk-score":
+		return inputVars(inputVar("facts", "Facts", "object", false, "事实和风控特征。"))
+	case "settlement-window":
+		return inputVars(inputVar("event_context", "Event Context", "object", false, "事件上下文。"))
+	case "manual-adjust":
+		return inputVars(inputVar("operator", "Operator", "object", false, "人工操作人。"))
 	case "retry":
 		return inputVars(inputVar("failed_message", "Failed Message", "object", true, "失败消息。"))
 	case "dlq":
 		return inputVars(inputVar("failed_message", "Failed Message", "object", true, "失败消息。"))
 	case "audit":
 		return inputVars(inputVar("stage_result", "Stage Result", "object", true, "待审计阶段结果。"))
-	case "reconcile":
+	case "reconcile", "reward-reconcile":
 		return inputVars(inputVar("date_range", "Date Range", "object", true, "对账时间范围。"))
 	case "alert":
 		return inputVars(inputVar("metric_event", "Metric Event", "object", true, "指标事件。"))
@@ -542,6 +934,12 @@ func inputVar(key string, label string, valueType string, required bool, descrip
 
 func defaultWorkflowNodeOutputs(nodeType string) []WorkflowNodeOutputVar {
 	switch nodeType {
+	case "http-event", "webhook-event", "mq-event", "schedule-event", "state-event", "manual-event":
+		return outputVars(
+			outputVar("standard_event", "Standard Event", "object", "由入口适配器产出的标准事件。"),
+			outputVar("source", "Source Metadata", "object", "入口来源、trace、request、offset 或 operator 信息。"),
+			outputVar("adapter", "Adapter Metadata", "object", "入口适配器和 mapping 版本信息。"),
+		)
 	case "event-in":
 		return outputVars(
 			outputVar("raw_event", "Raw Event", "object", "标准化前的事件载荷。"),
@@ -553,6 +951,13 @@ func defaultWorkflowNodeOutputs(nodeType string) []WorkflowNodeOutputVar {
 		return outputVars(outputVar("event_context", "Event Context", "object", "幂等收件箱处理后的事件上下文。"))
 	case "normalize":
 		return outputVars(outputVar("normalized_event", "Normalized Event", "object", "字段标准化后的事件。"))
+	case "combine":
+		return outputVars(outputVar("combined_result", "Combined Result", "object", "组合后的结构化结果。"))
+	case "split":
+		return outputVars(
+			outputVar("split_items", "Split Items", "array", "拆分后的项目数组。"),
+			outputVar("split_result", "Split Result", "object", "完整拆分输出对象。"),
+		)
 	case "match":
 		return outputVars(outputVar("matched_activity", "Matched Activity", "object", "匹配到的活动上下文。"))
 	case "condition":
@@ -569,6 +974,21 @@ func defaultWorkflowNodeOutputs(nodeType string) []WorkflowNodeOutputVar {
 		return outputVars(outputVar("PASS", "PASS", "object", "通过分支。"), outputVar("BLOCK", "BLOCK", "object", "阻断分支。"), outputVar("SKIP", "SKIP", "object", "跳过分支。"))
 	case "fact-query":
 		return outputVars(outputVar("facts", "Facts", "object", "事实查询结果。"))
+	case "activity-state":
+		return outputVars(
+			outputVar("activity_state", "Activity State", "object", "活动状态快照。"),
+			outputVar("state_version", "State Version", "number", "状态版本。"),
+		)
+	case "quota-check":
+		return outputVars(
+			outputVar("quota_check", "Quota Check", "object", "次数/频控校验结果。"),
+			outputVar("limit_hold", "Limit Hold", "object", "兼容 limit 节点的限制占用结果。"),
+		)
+	case "candidate-reward":
+		return outputVars(
+			outputVar("candidate_rewards", "Candidate Rewards", "array", "待发奖励候选。"),
+			outputVar("reward_items", "Reward Items", "array", "兼容下游发奖节点的奖励明细。"),
+		)
 	case "code":
 		return outputVars(outputVar("code_result", "Code Result", "object", "代码节点输出。"))
 	case "reward":
@@ -579,6 +999,11 @@ func defaultWorkflowNodeOutputs(nodeType string) []WorkflowNodeOutputVar {
 		return outputVars(outputVar("limit_hold", "Limit Hold", "object", "次数限制占用结果。"))
 	case "quota":
 		return outputVars(outputVar("quota_hold", "Quota Hold", "object", "预算库存冻结结果。"))
+	case "budget-reserve":
+		return outputVars(
+			outputVar("budget_reservation", "Budget Reservation", "object", "预算库存锁定结果。"),
+			outputVar("quota_hold", "Quota Hold", "object", "兼容 quota 节点的锁定结果。"),
+		)
 	case "participation":
 		return outputVars(outputVar("participation_id", "Participation ID", "string", "参与记录 ID。"))
 	case "grant-order":
@@ -593,6 +1018,28 @@ func defaultWorkflowNodeOutputs(nodeType string) []WorkflowNodeOutputVar {
 		return outputVars(outputVar("webhook_result", "Webhook Result", "object", "Webhook 推送结果。"))
 	case "callback":
 		return outputVars(outputVar("callback_result", "Callback Result", "object", "回调处理结果。"))
+	case "approval-gate":
+		return outputVars(outputVar("approval_decision", "Approval Decision", "object", "审批决策。"))
+	case "compensation":
+		return outputVars(outputVar("compensation_plan", "Compensation Plan", "object", "补偿计划。"))
+	case "random-pick":
+		return outputVars(
+			outputVar("random_pick", "Random Pick", "object", "随机抽取审计结果。"),
+			outputVar("selected_rewards", "Selected Rewards", "array", "选中的奖励。"),
+		)
+	case "plugin-execute":
+		return outputVars(
+			outputVar("plugin_result", "Plugin Result", "object", "插件执行结果。"),
+			outputVar("candidate_rewards", "Candidate Rewards", "array", "插件生成的候选奖励。"),
+		)
+	case "ab-bucket":
+		return outputVars(outputVar("ab_bucket", "AB Bucket", "object", "分桶结果。"))
+	case "risk-score":
+		return outputVars(outputVar("risk_result", "Risk Result", "object", "风险评分结果。"))
+	case "settlement-window":
+		return outputVars(outputVar("settlement_window", "Settlement Window", "object", "结算窗口判定。"))
+	case "manual-adjust":
+		return outputVars(outputVar("manual_adjustment", "Manual Adjustment", "object", "人工调整意图。"))
 	case "retry":
 		return outputVars(outputVar("retry_message", "Retry Message", "object", "重试消息。"))
 	case "dlq":
@@ -601,6 +1048,8 @@ func defaultWorkflowNodeOutputs(nodeType string) []WorkflowNodeOutputVar {
 		return outputVars(outputVar("audit_log", "Audit Log", "object", "审计记录。"))
 	case "reconcile":
 		return outputVars(outputVar("reconcile_report", "Reconcile Report", "object", "对账报告。"))
+	case "reward-reconcile":
+		return outputVars(outputVar("reward_reconcile_report", "Reward Reconcile Report", "object", "奖励链路对账报告。"))
 	case "alert":
 		return outputVars(outputVar("alert_event", "Alert Event", "object", "告警事件。"))
 	default:

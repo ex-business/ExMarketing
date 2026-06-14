@@ -745,6 +745,26 @@ func (s *Service) runWorkflowDebugWithDefinition(ctx context.Context, activity m
 	}
 	event = event.Normalized()
 	now := s.now()
+	debugVersionNumber, err := s.nextDebugWorkflowVersionNumber(ctx, activity.ID)
+	if err != nil {
+		return marketing.WorkflowExecutionTrace{}, err
+	}
+	debugVersion, err := s.repository.CreateWorkflowVersion(ctx, marketing.WorkflowVersion{
+		ID:          "debug-draft-" + marketingID("wfdbg"),
+		TenantID:    activity.TenantID,
+		ActivityID:  activity.ID,
+		Version:     debugVersionNumber,
+		Status:      marketing.WorkflowVersionDraft,
+		Definition:  definition,
+		PublishedBy: strings.TrimSpace(cmd.Operator),
+		PublishedAt: now,
+		ReleaseNote: "Studio debug draft snapshot",
+		Action:      "DEBUG_DRAFT",
+		CreatedAt:   now,
+	})
+	if err != nil {
+		return marketing.WorkflowExecutionTrace{}, err
+	}
 	inbox := marketing.EventInbox{
 		ID:             marketingID("debuginbox"),
 		Event:          event,
@@ -769,8 +789,8 @@ func (s *Service) runWorkflowDebugWithDefinition(ctx context.Context, activity m
 		Qualified:      qualified,
 		Reason:         ruleResult.Reason,
 	}, workflowExecutionOptions{
-		WorkflowVersionID:  "debug-draft",
-		WorkflowVersion:    0,
+		WorkflowVersionID:  debugVersion.ID,
+		WorkflowVersion:    debugVersion.Version,
 		Definition:         definition,
 		Mode:               "DEBUG_DRAFT",
 		IdempotencyKey:     inbox.IdempotencyKey,
@@ -783,6 +803,20 @@ func (s *Service) runWorkflowDebugWithDefinition(ctx context.Context, activity m
 		return marketing.WorkflowExecutionTrace{}, err
 	}
 	return s.ExportWorkflowExecutionTrace(ctx, execution.ID)
+}
+
+func (s *Service) nextDebugWorkflowVersionNumber(ctx context.Context, activityID string) (int, error) {
+	versions, err := s.repository.ListWorkflowVersions(ctx, activityID)
+	if err != nil {
+		return 0, err
+	}
+	next := -1
+	for _, version := range versions {
+		if version.Version <= next {
+			next = version.Version - 1
+		}
+	}
+	return next, nil
 }
 
 func (s *Service) debugInitialNodeOutputs(ctx context.Context, sourceExecutionID string, startNodeID string) (map[string]map[string]any, error) {

@@ -418,12 +418,12 @@ func (r *Repository) CreateWorkflowVersion(ctx context.Context, version marketin
 		}
 		return marketing.WorkflowVersion{}, err
 	}
-	if version.Version <= 0 {
+	if version.Version == 0 {
 		err = tx.QueryRowContext(ctx, `
-			SELECT COALESCE(MAX(version), 0) + 1
-			FROM marketing_workflow_version
-			WHERE activity_id = $1
-		`, version.ActivityID).Scan(&version.Version)
+				SELECT COALESCE(MAX(version), 0) + 1
+				FROM marketing_workflow_version
+				WHERE activity_id = $1 AND version > 0
+			`, version.ActivityID).Scan(&version.Version)
 		if err != nil {
 			return marketing.WorkflowVersion{}, err
 		}

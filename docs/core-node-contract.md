@@ -12,19 +12,38 @@ The production main chain is intentionally small:
 event-in -> inbox -> normalize -> match -> fact-query -> qualify -> reward -> limit -> quota -> participation -> grant-order -> outbox
 ```
 
+The production activity chain may use the stricter P0 nodes when the activity
+needs explicit state, frequency, candidate reward, and budget-reservation
+semantics:
+
+```text
+event-in -> inbox -> normalize -> match -> fact-query -> activity-state -> quota-check -> qualify -> candidate-reward -> budget-reserve -> participation -> grant-order -> outbox
+```
+
 `audit` is a mandatory sidecar/terminal node for blocked, risk, skipped, and
 successful terminal paths. It is not counted as a business main-chain node.
 
-`condition`, `switch`, `code`, `callback`, `retry`, `dlq`, `reconcile`, `alert`,
-`http-call`, `mq-publish`, `webhook`, and `decimal` remain advanced or
+`condition`, `switch`, `code`, `combine`, `split`, `callback`, `retry`, `dlq`,
+`reconcile`, `alert`, `http-call`, `mq-publish`, `webhook`, `decimal`,
+`approval-gate`, `compensation`, `random-pick`, `plugin-execute`, `ab-bucket`,
+`risk-score`, `settlement-window`, and `manual-adjust` remain advanced or
 operational nodes. They must not be required by the default production chain.
 
 Node schema categories are:
 
-- `CORE`: default production-chain nodes.
+- `EVENT_INPUT`: trigger/adaptor boundary nodes such as `event-in`,
+  `http-event`, `webhook-event`, `mq-event`, `schedule-event`, `state-event`,
+  and `manual-event`. `event-in` is the standard event validation node; the
+  other event input nodes describe external trigger/adaptor boundaries and must
+  not be confused with in-workflow HTTP/MQ/Webhook execution.
+- `CORE`: default production-chain nodes, including the P0 production activity
+  nodes `activity-state`, `quota-check`, `candidate-reward`, and
+  `budget-reserve`.
 - `ADVANCED`: controlled branch/extension and external integration nodes such
-  as `condition`, `switch`, `code`, `decimal`, `http-call`, `mq-publish`,
-  `webhook`, and `callback`.
+  as `condition`, `switch`, `code`, `combine`, `split`, `decimal`,
+  `approval-gate`, `compensation`, `random-pick`, `plugin-execute`,
+  `ab-bucket`, `risk-score`, `settlement-window`, `manual-adjust`,
+  `http-call`, `mq-publish`, `webhook`, and `callback`.
 - `OPS`: operational observability/recovery nodes such as `retry`, `dlq`,
   `audit`, `reconcile`, and `alert`.
 
@@ -85,15 +104,19 @@ outside the default quick-start path.
 
 | Node | Required Input | Required Config | Stable Output | Failure / Route |
 | --- | --- | --- | --- | --- |
-| `event-in` | external standard event | `eventTypes`, `sourceSystems`, `tenantScope` | `raw_event`, `eventId`, `eventType`, `tenantId` | fail with `EVENT_IN_*` |
+| `event-in` | committed standard event | `eventTypes`, `sourceSystems`, `tenantScope` | `raw_event`, `eventId`, `eventType`, `tenantId` | fail with `EVENT_IN_*` |
 | `inbox` | `raw_event` | `idempotencyKeyTemplate`, `duplicatePolicy`, `ttlSeconds` | `event_context` | duplicate policy decides return/reject/reprocess |
 | `normalize` | `raw_event` | `mapping`, `defaults` | `normalized_event` | fail only on invalid mapping |
 | `match` | `event_context`, optional `activity_config` | `mode`, `tenantMatchPolicy`, `fallbackAction` | `matched_activity` | fail/skip according to fallback action |
 | `fact-query` | `subject`, `fact_keys` | `factKeys`, `source`, `timeoutSeconds`, `failureAction` | `facts` | block/use-empty/skip according to failure action |
+| `activity-state` | `event_context`, optional `state_patch` | `operation`, `namespace`, `stateKeyTemplate`, `missingPolicy` | `activity_state`, `state_version` | durable state authority remains ActivityPlugin/StateStore |
+| `quota-check` | `subject`, `activity_id` | `scope`, `scopeKeyTemplate`, `window`, `maxCount`, `consumeMode` | `quota_check`, `limit_hold` | frequency/limit semantics; compatible with `limit` |
 | `qualify` | `event_context`, `matched_activity`, optional `facts` | `ruleCodes`, `evaluationMode`, `riskPolicy`, `blockAction` | `stage_result`, `PASS`, `BLOCK`, `RISK`, `decision` | route by `PASS/BLOCK/RISK` |
+| `candidate-reward` | `qualified_context`, optional `plugin_result` | `source`, `notQualifiedAction`, `emptyAction` | `candidate_rewards`, `reward_items` | skip/block when not qualified or empty |
 | `reward` | `qualified_context`, optional `reward_config` | `rewardCode`, `rewardType`, `calculateType`, `amount`, `currency` | `reward_items` | skip when not qualified; fail on invalid reward config |
 | `limit` | `subject`, `activity_id` | `scope`, `scopeKeyTemplate`, `period`, `maxCount`, `consumeMode` | `limit_hold` | route/fail by `exceedAction` |
 | `quota` | `reward_items`, optional `limit_hold` | `quotaCode`, `quotaType`, `scope`, `consumeMode`, `amountField` | `quota_hold` | route/fail by `failAction` |
+| `budget-reserve` | `candidate_rewards`, optional `reward_items` | `quotaCode`, `quotaType`, `scope`, `reserveMode`, `amountField` | `budget_reservation`, `quota_hold` | budget/inventory reservation semantics; compatible with `quota` |
 | `participation` | `qualified_context`, optional `quota_hold` | `status`, `deduplicate` | `participation_id`, `commitMode`, `commitAuthority` | fail if participation snapshot cannot be created |
 | `grant-order` | `participation_id`, `reward_items` | `provider`, `expireSeconds` | `grant_order`, `grant_orders`, `commitMode`, `commitAuthority` | skip if no reward; fail on state-machine violation |
 | `outbox` | `grant_order` | `channel`, `maxAttempts` | `HTTP`, `MQ`, `Webhook`, `Failed`, `commitMode`, `commitAuthority` | failed dispatch must remain replayable |

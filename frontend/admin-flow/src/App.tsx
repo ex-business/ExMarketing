@@ -57,6 +57,7 @@ type ActivitySummary = {
   activityCode: string;
   activityName: string;
   tenantId: string;
+  triggerEvents?: string[];
   status?: string;
   visibility?: 'PRIVATE' | 'TEAM' | 'PUBLIC';
   version?: number;
@@ -405,10 +406,34 @@ type JsonDiffRow = WorkflowExecutionJSONDiff;
 type DebugPanelState = {
   open: boolean;
   loading: boolean;
+  openApiLoading: boolean;
   template: string;
   payloadText: string;
   startNodeId: string;
+  scheduleType: string;
+  scheduleAt: string;
+  scheduleTimezone: string;
+  lastResult?: DebugRunResultSummary;
   message: string;
+};
+
+type DebugRunResultSummary = {
+  mode: 'DEBUG_DRAFT' | 'OPENAPI_EVENT';
+  status: string;
+  title: string;
+  executionId?: string;
+  eventId?: string;
+  idempotencyKey?: string;
+  duplicate?: boolean;
+  nodeTotal?: number;
+  nodeSuccess?: number;
+  nodeFailed?: number;
+  nodeSkipped?: number;
+  participations?: Array<Record<string, unknown>>;
+  grantOrders?: Array<Record<string, unknown>>;
+  outboxMessages?: Array<Record<string, unknown>>;
+  ruleResults?: Array<Record<string, unknown>>;
+  logs: string[];
 };
 
 type DebugPayloadTemplate = {
@@ -419,6 +444,21 @@ type DebugPayloadTemplate = {
 };
 
 const DEBUG_PAYLOAD_TEMPLATE_STORAGE_KEY = 'exmarketing.studio.debugPayloadTemplates';
+const RIGHT_PANEL_WIDTH_STORAGE_KEY = 'exmarketing.studio.rightPanelWidth';
+const DEFAULT_RIGHT_PANEL_WIDTH = 432;
+const MIN_RIGHT_PANEL_WIDTH = 340;
+const MAX_RIGHT_PANEL_WIDTH = 760;
+
+function clampRightPanelWidth(value: number): number {
+  const viewportMax = typeof window === 'undefined' ? MAX_RIGHT_PANEL_WIDTH : Math.max(MIN_RIGHT_PANEL_WIDTH, Math.min(MAX_RIGHT_PANEL_WIDTH, window.innerWidth - 280));
+  return Math.min(viewportMax, Math.max(MIN_RIGHT_PANEL_WIDTH, Math.round(value)));
+}
+
+function loadRightPanelWidth(): number {
+  const parsed = Number(window.localStorage.getItem(RIGHT_PANEL_WIDTH_STORAGE_KEY));
+  if (!Number.isFinite(parsed)) return DEFAULT_RIGHT_PANEL_WIDTH;
+  return clampRightPanelWidth(parsed);
+}
 
 function edgeRouteVisual(edgeItem: ActivityEdge): EdgeRouteVisual {
   const route = edgeItem.data?.route;
@@ -601,9 +641,10 @@ function downloadJSON(filename: string, value: unknown) {
 }
 
 function builtinDebugPayloadTemplate(activity?: ActivitySummary): string {
+  const eventType = activity?.triggerEvents?.[0] || 'DEPOSIT_SUCCESS';
   return JSON.stringify({
     eventId: `debug_evt_${Date.now()}`,
-    eventType: activity?.activityCode ? `${activity.activityCode}_DEBUG` : 'DEPOSIT_SUCCESS',
+    eventType,
     sourceSystem: 'studio-debug',
     tenantId: activity?.tenantId || 'site_001',
     subject: { type: 'USER', id: 'debug_user' },
@@ -698,17 +739,175 @@ function workflowExecutionEventPayload(execution?: WorkflowExecution): unknown {
   return event ?? execution.input;
 }
 
+function workflowEventIdempotencyKey(event: unknown): string {
+  if (!event || typeof event !== 'object') return '';
+  const item = event as Record<string, unknown>;
+  const biz = item.biz && typeof item.biz === 'object' ? item.biz as Record<string, unknown> : {};
+  const parts = [item.tenantId, item.sourceSystem, item.eventType, biz.bizType, biz.bizId].map((part) => String(part ?? '').trim());
+  return parts.every(Boolean) ? parts.join(':') : '';
+}
+
+function scheduleDebugPayloadTemplate(activity: ActivitySummary | undefined, input: { scheduleType: string; scheduleAt: string; timezone: string }): string {
+  const now = new Date();
+  const scheduledAt = input.scheduleAt.trim() || now.toISOString();
+  const eventType = input.scheduleType.trim() || activity?.triggerEvents?.[0] || 'SCHEDULE_TICK';
+  const tenantId = activity?.tenantId || 'site_001';
+  const activityCode = activity?.activityCode || 'workflow';
+  return JSON.stringify({
+    eventId: `schedule_evt_${Date.now()}`,
+    eventType,
+    sourceSystem: 'scheduler',
+    tenantId,
+    subject: { type: 'SYSTEM', id: 'scheduler' },
+    biz: { bizType: 'SCHEDULE', bizId: `${activityCode}:${scheduledAt}` },
+    occurredAt: scheduledAt,
+    attributes: {
+      scheduleType: eventType,
+      scheduleAt: scheduledAt,
+      timezone: input.timezone.trim() || 'UTC',
+      activityId: activity?.id ?? '',
+      activityCode,
+      simulated: true,
+    },
+  }, null, 2);
+}
+
+function asRecordArray(value: unknown): Array<Record<string, unknown>> {
+  return Array.isArray(value) ? value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object' && !Array.isArray(item)) : [];
+}
+
+function compactDebugItem(item: Record<string, unknown>, keys: string[]): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  keys.forEach((key) => {
+    if (item[key] !== undefined && item[key] !== null && item[key] !== '') out[key] = item[key];
+  });
+  return Object.keys(out).length > 0 ? out : item;
+}
+
+function debugTraceSummary(trace: WorkflowExecutionTrace): DebugRunResultSummary {
+  const nodes = trace.nodeExecutions ?? [];
+  const success = nodes.filter((item) => item.status === 'SUCCESS').length;
+  const failed = nodes.filter((item) => item.status === 'FAILED').length;
+  const skipped = nodes.filter((item) => item.status === 'SKIPPED').length;
+  const output = trace.execution.output && typeof trace.execution.output === 'object' ? trace.execution.output as Record<string, unknown> : {};
+  const logs = [
+    `execution ${trace.execution.id}`,
+    `status ${trace.execution.status}`,
+    `nodes success=${success} failed=${failed} skipped=${skipped}`,
+  ];
+  if (trace.execution.errorMessage) logs.push(`error ${trace.execution.errorMessage}`);
+  return {
+    mode: 'DEBUG_DRAFT',
+    status: trace.execution.status,
+    title: 'Draft 调试结果',
+    executionId: trace.execution.id,
+    eventId: trace.execution.eventId,
+    nodeTotal: nodes.length,
+    nodeSuccess: success,
+    nodeFailed: failed,
+    nodeSkipped: skipped,
+    participations: asRecordArray(output.participations).map((item) => compactDebugItem(item, ['id', 'activityId', 'status', 'idempotencyKey'])),
+    grantOrders: asRecordArray(output.grantOrders).map((item) => compactDebugItem(item, ['id', 'billNo', 'rewardType', 'rewardAmount', 'grantStatus', 'grantChannel'])),
+    outboxMessages: asRecordArray(output.outboxMessages).map((item) => compactDebugItem(item, ['id', 'messageType', 'targetChannel', 'targetRef', 'sendStatus', 'retryCount'])),
+    ruleResults: asRecordArray(output.ruleResults).map((item) => compactDebugItem(item, ['activityId', 'activityCode', 'decision', 'failedStage', 'reasonCode', 'reason'])),
+    logs,
+  };
+}
+
+function openApiDebugSummary(response: unknown, idempotencyKey: string): DebugRunResultSummary {
+  const body = response && typeof response === 'object' ? response as Record<string, unknown> : {};
+  const inbox = body.inbox && typeof body.inbox === 'object' ? body.inbox as Record<string, unknown> : {};
+  const event = inbox.event && typeof inbox.event === 'object' ? inbox.event as Record<string, unknown> : {};
+  const participations = asRecordArray(body.participations).map((item) => compactDebugItem(item, ['id', 'activityId', 'status', 'idempotencyKey']));
+  const grantOrders = asRecordArray(body.grantOrders).map((item) => compactDebugItem(item, ['id', 'billNo', 'rewardType', 'rewardAmount', 'grantStatus', 'grantChannel']));
+  const outboxMessages = asRecordArray(body.outboxMessages).map((item) => compactDebugItem(item, ['id', 'messageType', 'targetChannel', 'targetRef', 'sendStatus', 'retryCount']));
+  const ruleResults = asRecordArray(body.ruleResults).map((item) => compactDebugItem(item, ['activityId', 'activityCode', 'decision', 'failedStage', 'reasonCode', 'reason']));
+  const duplicate = Boolean(body.duplicate);
+  const logs = [
+    `event ${String(event.eventId ?? body.eventId ?? '-')}`,
+    `idempotency ${idempotencyKey}`,
+    `duplicate ${duplicate}`,
+    `participations=${participations.length} grants=${grantOrders.length} outbox=${outboxMessages.length}`,
+  ];
+  return {
+    mode: 'OPENAPI_EVENT',
+    status: duplicate ? 'DUPLICATE' : 'ACCEPTED',
+    title: 'OpenAPI 真实调用结果',
+    eventId: String(event.eventId ?? body.eventId ?? ''),
+    idempotencyKey,
+    duplicate,
+    participations,
+    grantOrders,
+    outboxMessages,
+    ruleResults,
+    logs,
+  };
+}
+
+function debugResultTone(status: string): string {
+  if (['SUCCESS', 'ACCEPTED'].includes(status)) return 'success';
+  if (['FAILED', 'ERROR'].includes(status)) return 'failed';
+  if (status === 'DUPLICATE') return 'skipped';
+  return 'running';
+}
+
+function DebugResultList({ title, items }: { title: string; items?: Array<Record<string, unknown>> }) {
+  const rows = items ?? [];
+  return (
+    <div className="debug-result-list">
+      <span>{title}</span>
+      {rows.length ? rows.slice(0, 5).map((item, index) => (
+        <code key={`${title}-${index}`}>{JSON.stringify(item)}</code>
+      )) : <em>0 条</em>}
+      {rows.length > 5 ? <em>仅显示前 5 条 / 共 {rows.length} 条</em> : null}
+    </div>
+  );
+}
+
+function DebugRunResult({ result }: { result?: DebugRunResultSummary }) {
+  if (!result) return null;
+  return (
+    <div className={cx('debug-result-card', debugResultTone(result.status))}>
+      <div className="debug-result-head">
+        <span>
+          <b>{result.title}</b>
+          <em>{result.mode} · {result.status}</em>
+        </span>
+        <strong>{result.duplicate ? 'DUP' : result.nodeTotal !== undefined ? `${result.nodeSuccess ?? 0}/${result.nodeTotal}` : `${result.participations?.length ?? 0}P`}</strong>
+      </div>
+      <div className="debug-result-metrics">
+        {result.executionId ? <div><span>Execution</span><b>{result.executionId}</b></div> : null}
+        {result.eventId ? <div><span>Event</span><b>{result.eventId}</b></div> : null}
+        {result.idempotencyKey ? <div><span>Idempotency</span><b>{result.idempotencyKey}</b></div> : null}
+        {result.nodeTotal !== undefined ? <div><span>Nodes</span><b>{result.nodeSuccess ?? 0} 成功 / {result.nodeFailed ?? 0} 失败 / {result.nodeSkipped ?? 0} 跳过</b></div> : null}
+      </div>
+      <DebugResultList title="Participations" items={result.participations} />
+      <DebugResultList title="Grant Orders" items={result.grantOrders} />
+      <DebugResultList title="Outbox Messages" items={result.outboxMessages} />
+      <DebugResultList title="Rule Results" items={result.ruleResults} />
+      <div className="debug-log-list">
+        <span>Logs</span>
+        {result.logs.map((line) => <code key={line}>{line}</code>)}
+      </div>
+    </div>
+  );
+}
+
 function DebugRunPanel({
   state,
   templates,
   selectedExecutionId,
   selectedNodeId,
+  onResizeStart,
   onChange,
   onClose,
   onLoadTemplate,
   onSaveTemplate,
   onUseSelectedExecutionPayload,
   onRunDraft,
+  onRunOpenApi,
+  onBuildSchedulePayload,
+  onRunScheduleDraft,
   onRerun,
   onContinueFromNode,
   onExportTrace,
@@ -717,12 +916,16 @@ function DebugRunPanel({
   templates: DebugPayloadTemplate[];
   selectedExecutionId: string;
   selectedNodeId: string;
+  onResizeStart: (event: React.PointerEvent<HTMLButtonElement>) => void;
   onChange: (patch: Partial<DebugPanelState>) => void;
   onClose: () => void;
   onLoadTemplate: (templateId: string) => void;
   onSaveTemplate: () => void;
   onUseSelectedExecutionPayload: () => void;
   onRunDraft: () => void;
+  onRunOpenApi: () => void;
+  onBuildSchedulePayload: () => void;
+  onRunScheduleDraft: () => void;
   onRerun: () => void;
   onContinueFromNode: () => void;
   onExportTrace: () => void;
@@ -730,6 +933,7 @@ function DebugRunPanel({
   if (!state.open) return null;
   return (
     <aside className="debug-run-panel">
+      <button className="right-panel-resize-handle" type="button" aria-label="调整调试面板宽度" onPointerDown={onResizeStart} />
       <header>
         <div>
           <b>调试运行</b>
@@ -768,6 +972,35 @@ function DebugRunPanel({
           <button type="button" onClick={onSaveTemplate} disabled={!state.payloadText.trim()}>保存为模板</button>
           <button type="button" onClick={onUseSelectedExecutionPayload} disabled={!selectedExecutionId}>使用选中 execution payload</button>
         </div>
+        <div className="debug-callout real">
+          <b>主动调用接口</b>
+          <span>调用 `/openapi/v1/events`，会写入真实 inbox、participation、grant order 和 outbox。</span>
+          <button type="button" onClick={onRunOpenApi} disabled={state.openApiLoading || state.loading || !state.payloadText.trim()}>
+            {state.openApiLoading ? '调用中' : '调用 OpenAPI'}
+          </button>
+        </div>
+        <div className="debug-schedule-box">
+          <div>
+            <b>定时模拟参数</b>
+            <span>生成一个 scheduler 事件，可直接用于 Draft 调试或再改成业务定时事件。</span>
+          </div>
+          <label>
+            <span>事件类型</span>
+            <input value={state.scheduleType} placeholder="SCHEDULE_TICK" onChange={(event) => onChange({ scheduleType: event.target.value })} />
+          </label>
+          <label>
+            <span>触发时间</span>
+            <input value={state.scheduleAt} placeholder={new Date().toISOString()} onChange={(event) => onChange({ scheduleAt: event.target.value })} />
+          </label>
+          <label>
+            <span>时区</span>
+            <input value={state.scheduleTimezone} placeholder="UTC" onChange={(event) => onChange({ scheduleTimezone: event.target.value })} />
+          </label>
+          <div className="debug-inline-actions">
+            <button type="button" onClick={onBuildSchedulePayload}>生成定时 Payload</button>
+            <button type="button" onClick={onRunScheduleDraft} disabled={state.loading}>模拟定时跑 Draft</button>
+          </div>
+        </div>
         <label>
           <span>从节点继续跑</span>
           <input value={state.startNodeId} placeholder={selectedNodeId || '可选：node id'} onChange={(event) => onChange({ startNodeId: event.target.value })} />
@@ -776,6 +1009,7 @@ function DebugRunPanel({
           <b>DEBUG_DRAFT</b>
           <span>写入独立 debug execution；从节点继续跑时会复用选中 execution 的上游成功节点输出。</span>
         </div>
+        <DebugRunResult result={state.lastResult} />
       </section>
       <div className="debug-actions">
         <button onClick={onRunDraft} disabled={state.loading}>{state.loading ? '运行中' : '运行 Draft'}</button>
@@ -895,6 +1129,7 @@ function WorkflowTemplatePanel({
   message,
   templateVersions,
   loadingVersions,
+  onResizeStart,
   onClose,
   onApply,
   onSave,
@@ -915,6 +1150,7 @@ function WorkflowTemplatePanel({
   message: string;
   templateVersions: WorkflowDraftTemplateSummary[];
   loadingVersions: boolean;
+  onResizeStart: (event: React.PointerEvent<HTMLButtonElement>) => void;
   onClose: () => void;
   onApply: (templateId: string, input: { versionId?: string; version?: number; parameters: Record<string, string | number> }) => void;
   onSave: (input: { name: string; workspaceId: string; folderId: string; visibility: string }) => void;
@@ -1021,6 +1257,7 @@ function WorkflowTemplatePanel({
   if (!open) return null;
   return (
     <aside className="workflow-template-panel">
+      <button className="right-panel-resize-handle" type="button" aria-label="调整模板面板宽度" onPointerDown={onResizeStart} />
       <header>
         <span>
           <b>Workflow Templates</b>
@@ -1722,6 +1959,7 @@ function RunExecutionCompare({
 function RunHistoryPanel({
   state,
   workflowVersions,
+  onResizeStart,
   onClose,
   onVersionChange,
   onSelectExecution,
@@ -1734,6 +1972,7 @@ function RunHistoryPanel({
 }: {
   state: RunHistoryState;
   workflowVersions: WorkflowVersion[];
+  onResizeStart: (event: React.PointerEvent<HTMLButtonElement>) => void;
   onClose: () => void;
   onVersionChange: (versionId: string) => void;
   onSelectExecution: (executionId: string) => void;
@@ -1787,6 +2026,7 @@ function RunHistoryPanel({
   };
   return (
     <aside className="run-history-panel">
+      <button className="right-panel-resize-handle" type="button" aria-label="调整运行历史面板宽度" onPointerDown={onResizeStart} />
       <header>
         <div>
           <b>运行历史</b>
@@ -4179,8 +4419,9 @@ export function App() {
   const [showPalette, setShowPalette] = useState(false);
   const [interactionMode, setInteractionMode] = useState<'pointer' | 'hand'>('pointer');
   const [zoomPercent, setZoomPercent] = useState(100);
-  const [showMiniMap, setShowMiniMap] = useState(false);
+  const [showMiniMap, setShowMiniMap] = useState(true);
   const [showChecklist, setShowChecklist] = useState(false);
+  const [rightPanelWidth, setRightPanelWidth] = useState(loadRightPanelWidth);
   const [validatingWorkflow, setValidatingWorkflow] = useState(false);
   const [workflowValidation, setWorkflowValidation] = useState<WorkflowValidationResult | null>(null);
   const [nodeConfigSchemas, setNodeConfigSchemas] = useState<WorkflowNodeConfigSchema[]>([]);
@@ -4250,9 +4491,14 @@ export function App() {
   const [debugPanel, setDebugPanel] = useState<DebugPanelState>({
     open: false,
     loading: false,
+    openApiLoading: false,
     template: 'deposit_success',
     payloadText: '',
     startNodeId: '',
+    scheduleType: 'SCHEDULE_TICK',
+    scheduleAt: '',
+    scheduleTimezone: 'UTC',
+    lastResult: undefined,
     message: '',
   });
   const [debugPayloadTemplates, setDebugPayloadTemplates] = useState<DebugPayloadTemplate[]>(() => loadDebugPayloadTemplates());
@@ -5045,8 +5291,8 @@ export function App() {
   const handleFlowInit = useCallback((instance: ReactFlowInstance<FlowNode, ActivityEdge>) => {
     setReactFlowInstance(instance);
     window.setTimeout(() => {
-      instance.fitView({ padding: 0.18, duration: 0 });
-      setZoomPercent(Math.round(instance.getZoom() * 100));
+      instance.setViewport({ x: 24, y: 36, zoom: 1 }, { duration: 0 });
+      setZoomPercent(100);
     }, 120);
   }, []);
 
@@ -5976,6 +6222,7 @@ export function App() {
       setSelectedNodeIds([failed.nodeId]);
       setSelectedEdgeIds([]);
     }
+    setDebugPanel((state) => ({ ...state, lastResult: debugTraceSummary(trace) }));
     setWorkflowStatus(`Debug run：${trace.execution.status} · DEBUG_DRAFT`);
   }, [applyRunOverlay]);
 
@@ -6024,7 +6271,7 @@ export function App() {
     }));
   }, [runHistory.executions, runHistory.selectedExecutionId]);
 
-  const debugPayloadBody = useCallback((startNodeId = '') => {
+  const debugPayloadBody = useCallback((startNodeId = '', payloadTextOverride?: string) => {
     const body: Record<string, unknown> = {
       operator: 'admin-flow',
       template: debugPanel.template,
@@ -6033,33 +6280,93 @@ export function App() {
     if (startNodeId && runHistory.selectedExecutionId) {
       body.sourceExecutionId = runHistory.selectedExecutionId;
     }
-    const payload = debugPanel.payloadText.trim();
+    const payload = (payloadTextOverride ?? debugPanel.payloadText).trim();
     if (payload) {
       body.payload = JSON.parse(payload);
     }
     return body;
   }, [debugPanel.payloadText, debugPanel.template, runHistory.selectedExecutionId]);
 
-  const runDraftDebug = useCallback(async (startNodeId = '') => {
+  const runDraftDebug = useCallback(async (startNodeId = '', payloadTextOverride?: string) => {
     if (!activityId) return;
     if (!canEditActiveWorkflow) {
       setDebugPanel((state) => ({ ...state, message: `当前角色 ${activeWorkspaceRole} 不能调试 draft` }));
       return;
     }
-    setDebugPanel((state) => ({ ...state, loading: true, message: '' }));
+    setDebugPanel((state) => ({ ...state, loading: true, message: '', lastResult: undefined }));
     try {
       const trace = await fetchJSON<WorkflowExecutionTrace>(`/admin/v1/activities/${activityId}/workflow/debug-run`, {
         method: 'POST',
-        body: JSON.stringify(debugPayloadBody(startNodeId)),
+        body: JSON.stringify(debugPayloadBody(startNodeId, payloadTextOverride)),
       });
       applyDebugTrace(trace);
       const validation = await validateCurrentDraft();
       setDebugPanel((state) => ({ ...state, loading: false, message: `已生成 DEBUG_DRAFT ${trace.execution.id.slice(0, 12)}${validation ? ` · 检查 ${validation.valid ? '通过' : `${validation.summary.blockCount} 个阻塞`}` : ''}` }));
     } catch (error) {
-      setDebugPanel((state) => ({ ...state, loading: false, message: `调试失败：${(error as Error).message}` }));
+      setDebugPanel((state) => ({ ...state, loading: false, message: `调试失败：${(error as Error).message}`, lastResult: {
+        mode: 'DEBUG_DRAFT',
+        status: 'FAILED',
+        title: 'Draft 调试失败',
+        logs: [(error as Error).message],
+      } }));
       setWorkflowStatus(`调试失败：${(error as Error).message}`);
     }
   }, [activityId, activeWorkspaceRole, applyDebugTrace, canEditActiveWorkflow, debugPayloadBody, validateCurrentDraft]);
+
+  const buildScheduleDebugPayload = useCallback(() => {
+    const activity = activities.find((item) => item.id === activityId);
+    const payloadText = scheduleDebugPayloadTemplate(activity, {
+      scheduleType: debugPanel.scheduleType,
+      scheduleAt: debugPanel.scheduleAt,
+      timezone: debugPanel.scheduleTimezone,
+    });
+    setDebugPanel((state) => ({ ...state, payloadText, message: '已生成定时模拟 payload' }));
+    return payloadText;
+  }, [activities, activityId, debugPanel.scheduleAt, debugPanel.scheduleTimezone, debugPanel.scheduleType]);
+
+  const runScheduleDraftDebug = useCallback(() => {
+    const payloadText = buildScheduleDebugPayload();
+    void runDraftDebug('', payloadText);
+  }, [buildScheduleDebugPayload, runDraftDebug]);
+
+  const runOpenAPIEventDebug = useCallback(async () => {
+    const payloadText = debugPanel.payloadText.trim();
+    if (!payloadText) {
+      setDebugPanel((state) => ({ ...state, message: '请先填写事件 payload' }));
+      return;
+    }
+    let payload: unknown;
+    try {
+      payload = JSON.parse(payloadText);
+    } catch (error) {
+      setDebugPanel((state) => ({ ...state, message: `Payload JSON 无效：${(error as Error).message}` }));
+      return;
+    }
+    const idempotencyKey = workflowEventIdempotencyKey(payload);
+    if (!idempotencyKey) {
+      setDebugPanel((state) => ({ ...state, message: 'OpenAPI 事件缺少 tenantId/sourceSystem/eventType/biz.bizType/biz.bizId，无法生成 Idempotency-Key' }));
+      return;
+    }
+    setDebugPanel((state) => ({ ...state, openApiLoading: true, message: '', lastResult: undefined }));
+    try {
+      const response = await fetchJSON<unknown>('/openapi/v1/events', {
+        method: 'POST',
+        headers: { 'Idempotency-Key': idempotencyKey },
+        body: JSON.stringify(payload),
+      });
+      setDebugPanel((state) => ({ ...state, openApiLoading: false, message: `OpenAPI 已接收：${idempotencyKey}`, lastResult: openApiDebugSummary(response, idempotencyKey) }));
+      await loadRunHistory('', '', 0);
+    } catch (error) {
+      setDebugPanel((state) => ({ ...state, openApiLoading: false, message: `OpenAPI 调用失败：${(error as Error).message}`, lastResult: {
+        mode: 'OPENAPI_EVENT',
+        status: 'FAILED',
+        title: 'OpenAPI 调用失败',
+        idempotencyKey,
+        logs: [(error as Error).message],
+      } }));
+      setWorkflowStatus(`OpenAPI 调用失败：${(error as Error).message}`);
+    }
+  }, [debugPanel.payloadText, loadRunHistory]);
 
   const rerunSelectedExecution = useCallback(async () => {
     if (!activityId || !runHistory.selectedExecutionId) return;
@@ -6244,9 +6551,32 @@ export function App() {
     const query = new URLSearchParams({ leftVersionId, rightVersionId });
     return fetchJSON<WorkflowDraftTemplateCompareResult>(`/admin/v1/workflow/draft-templates/${templateId}/compare?${query.toString()}`);
   }, []);
+  const beginRightPanelResize = useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = rightPanelWidth;
+    let latestWidth = startWidth;
+    const updateWidth = (moveEvent: PointerEvent) => {
+      latestWidth = clampRightPanelWidth(startWidth + startX - moveEvent.clientX);
+      setRightPanelWidth(latestWidth);
+    };
+    const stopResize = () => {
+      document.body.classList.remove('property-panel-resizing');
+      document.body.classList.remove('right-panel-resizing');
+      window.localStorage.setItem(RIGHT_PANEL_WIDTH_STORAGE_KEY, String(latestWidth));
+      window.removeEventListener('pointermove', updateWidth);
+      window.removeEventListener('pointerup', stopResize);
+    };
+    document.body.classList.add('property-panel-resizing');
+    document.body.classList.add('right-panel-resizing');
+    window.addEventListener('pointermove', updateWidth);
+    window.addEventListener('pointerup', stopResize, { once: true });
+  }, [rightPanelWidth]);
+  const rightPanelStyle = useMemo(() => ({ '--diagnostic-panel-width': `${rightPanelWidth}px` } as React.CSSProperties), [rightPanelWidth]);
+  const propertyPanelVisible = Boolean(activityId && selectedCount > 0 && !runHistory.open && !showChecklist && !debugPanel.open);
 
   return (
-    <div className={cx('flow-shell', activityId && selectedCount > 0 && !runHistory.open && !showChecklist && !debugPanel.open && 'property-panel-visible')}>
+    <div className={cx('flow-shell', propertyPanelVisible && 'property-panel-visible')} style={rightPanelStyle}>
       <NodePalette open={activityId ? showPalette : false} catalog={schemaCatalog} selectedTemplate={selectedTemplate} onAddNode={addCatalogNode} onDefault={resetDefault} onSimple={loadSimpleTemplate} />
       <main className={cx('studio', !activityId && 'studio-home')}>
         <StudioChrome
@@ -6347,6 +6677,7 @@ export function App() {
           onPublish={publishWorkflow}
           onRollbackVersion={rollbackWorkflowVersion}
           onArchiveVersion={archiveWorkflowVersion}
+          onRightPanelResizeStart={beginRightPanelResize}
         />
         <section className={cx('canvas-card', !activityId && 'studio-home-card')}>
           <ReactFlowProvider>
@@ -6413,9 +6744,9 @@ export function App() {
               <div className="canvas-empty-guide">
                 <i>+</i>
                 <b>空画布</b>
-                <span>从入口节点开始，或选择一个成熟模板生成 workflow draft。</span>
+                <span>从标准事件入口开始，或选择一个成熟模板生成 workflow draft。</span>
                 <div>
-                  <button type="button" onClick={() => addCatalogNode(getDef('event-in'))}>添加入口节点</button>
+                  <button type="button" onClick={() => addCatalogNode(getDef('event-in'))}>添加标准事件入口</button>
                   <button type="button" onClick={() => {
                     setShowTemplatePanel(true);
                     void refreshWorkflowTemplates();
@@ -6503,6 +6834,7 @@ export function App() {
       <RunHistoryPanel
         state={runHistory}
         workflowVersions={workflowVersions}
+        onResizeStart={beginRightPanelResize}
         onClose={() => {
           setRunHistory((state) => ({ ...state, open: false }));
           replaceUrlParams({ executionId: undefined, replayStep: undefined, compareExecutionId: undefined });
@@ -6529,6 +6861,7 @@ export function App() {
         templates={debugPayloadTemplates}
         selectedExecutionId={runHistory.selectedExecutionId}
         selectedNodeId={selectedNodeIds[0] ?? ''}
+        onResizeStart={beginRightPanelResize}
         onChange={(patch) => setDebugPanel((state) => ({ ...state, ...patch }))}
         onClose={() => setDebugPanel((state) => ({ ...state, open: false }))}
         onLoadTemplate={loadDebugPayloadTemplate}
@@ -6537,6 +6870,11 @@ export function App() {
         onRunDraft={() => {
           void runDraftDebug('');
         }}
+        onRunOpenApi={() => {
+          void runOpenAPIEventDebug();
+        }}
+        onBuildSchedulePayload={buildScheduleDebugPayload}
+        onRunScheduleDraft={runScheduleDraftDebug}
         onRerun={() => {
           void rerunSelectedExecution();
         }}
@@ -6561,6 +6899,7 @@ export function App() {
         message={templateMessage}
         templateVersions={workflowTemplateVersions}
         loadingVersions={loadingTemplateVersions}
+        onResizeStart={beginRightPanelResize}
         onClose={() => setShowTemplatePanel(false)}
         onApply={(templateId, input) => {
           void applyWorkflowTemplate(templateId, input);
@@ -6614,7 +6953,7 @@ export function App() {
           </section>
         </div>
       ) : null}
-      {activityId && selectedCount > 0 && !runHistory.open && !showChecklist && !debugPanel.open ? <PropertyPanel nodes={nodes} edges={edges} selectedNodeIds={selectedNodeIds} selectedEdgeIds={selectedEdgeIds} nodeConfigSchemas={nodeConfigSchemas} onNodeConfigChange={updateNodeConfig} onEdgeRouteChange={updateEdgeRoute} onLocateNode={(nodeId) => focusNodeById(nodeId, '已定位变量来源')} onDeleteNodes={deleteNodes} onDeleteEdges={deleteEdges} /> : null}
+      {propertyPanelVisible ? <PropertyPanel nodes={nodes} edges={edges} selectedNodeIds={selectedNodeIds} selectedEdgeIds={selectedEdgeIds} nodeConfigSchemas={nodeConfigSchemas} onNodeConfigChange={updateNodeConfig} onEdgeRouteChange={updateEdgeRoute} onLocateNode={(nodeId) => focusNodeById(nodeId, '已定位变量来源')} onDeleteNodes={deleteNodes} onDeleteEdges={deleteEdges} panelWidth={rightPanelWidth} onResizeStart={beginRightPanelResize} /> : null}
     </div>
   );
 }

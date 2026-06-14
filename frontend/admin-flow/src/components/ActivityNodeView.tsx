@@ -46,6 +46,21 @@ function sectionTitleFor(kind: ActivityNodeData['kind']): string {
   return kind === 'entry' ? 'START VARIABLES' : kind === 'dispatch' ? 'OUTPUT TARGET' : 'INPUT VARIABLE';
 }
 
+function runStatusLabel(status: ActivityNodeData['runStatus']): string {
+  switch (status) {
+    case 'RUNNING':
+      return '运行中';
+    case 'SUCCESS':
+      return '成功';
+    case 'FAILED':
+      return '失败';
+    case 'SKIPPED':
+      return '跳过';
+    default:
+      return '';
+  }
+}
+
 export function ActivityNodeView({ id, data, selected }: NodeProps<ActivityNode>) {
   const inputs = data.inputs.length > 0 ? data.inputs : ['input'];
   const outputs = data.outputs.length > 0 ? data.outputs : ['output'];
@@ -103,7 +118,16 @@ export function ActivityNodeView({ id, data, selected }: NodeProps<ActivityNode>
             {data.validationCount && data.validationCount > 1 ? data.validationCount : ''}
           </span>
         ) : null}
-        {data.runStatus ? <span className="node-run-dot" title={`上次运行：${data.runStatus}`} /> : null}
+        {data.runStatus ? (
+          <span
+            className="node-run-pill"
+            title={data.lastRun?.errorMessage || `上次运行：${data.runStatus}`}
+          >
+            <i className="node-run-dot" />
+            {runStatusLabel(data.runStatus)}
+            {data.lastRun?.durationMs !== undefined ? <em>{data.lastRun.durationMs}ms</em> : null}
+          </span>
+        ) : null}
         <button
           className="node-delete"
           title="删除节点"
@@ -176,8 +200,17 @@ export function ActivityNodeView({ id, data, selected }: NodeProps<ActivityNode>
         </>
       )}
       <div className="node-drag-hint">
-        <span>点击添加节点</span>
-        <span>拖拽连接节点</span>
+        {data.lastRun ? (
+          <>
+            <span>{data.lastRun.errorMessage || `retry ${data.lastRun.retryCount ?? 0}`}</span>
+            <span>{data.lastRun.finishedAt ? new Date(data.lastRun.finishedAt).toLocaleTimeString() : '运行中'}</span>
+          </>
+        ) : (
+          <>
+            <span>点击添加节点</span>
+            <span>拖拽连接节点</span>
+          </>
+        )}
       </div>
       <div className={cx('output-handles', isBranchNode && 'branch-output-handles')} aria-hidden="true">
         {outputItems.slice(0, 4).map((item, index) => (

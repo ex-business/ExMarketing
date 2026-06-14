@@ -1,5 +1,6 @@
-import { useCallback, useState } from 'react';
+import { useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
+import type { ReactNode } from 'react';
 import type { ActivityEdge, ActivityNode, FlowNode, GroupNode, NoteNode, WorkflowEdgeRoute, WorkflowEdgeRouteType, WorkflowNodeConfigField, WorkflowNodeConfigSchema, WorkflowNodeConfigValidationRule } from '../types';
 import { cx } from '../utils/flow';
 import { NodeKindIcon } from './NodeKindIcon';
@@ -22,15 +23,44 @@ const DEFAULT_ROUTE_EXPRESSIONS: Partial<Record<WorkflowEdgeRouteType, string>> 
 };
 
 const DEFAULT_ROUTE_TYPES = new Set<WorkflowEdgeRouteType>(['DEFAULT', 'ELSE', 'RISK', 'SKIP']);
+const PROPERTY_PANEL_TAB_STORAGE_KEY = 'exmarketing.studio.propertyPanelTab';
+type PropertyPanelTab = 'settings' | 'run';
+
+function loadPropertyPanelTab(): PropertyPanelTab {
+  return window.localStorage.getItem(PROPERTY_PANEL_TAB_STORAGE_KEY) === 'run' ? 'run' : 'settings';
+}
 
 function PropertyList({ title, items }: { title: string; items: string[] }) {
   return (
-    <section className="property-section">
-      <h3>{title}</h3>
+    <PropertyDisclosure title={title} summary={`${items.length} 项`}>
       <div className="property-tags">
         {items.length > 0 ? items.map((item) => <span key={item}>{item}</span>) : <em>未配置</em>}
       </div>
-    </section>
+    </PropertyDisclosure>
+  );
+}
+
+function PropertyDisclosure({
+  title,
+  summary,
+  children,
+  defaultOpen = false,
+}: {
+  title: string;
+  summary?: string;
+  children: ReactNode;
+  defaultOpen?: boolean;
+}) {
+  return (
+    <details className="property-section property-disclosure" open={defaultOpen}>
+      <summary>
+        <span>{title}</span>
+        {summary ? <em>{summary}</em> : null}
+      </summary>
+      <div className="property-disclosure-body">
+        {children}
+      </div>
+    </details>
   );
 }
 
@@ -192,8 +222,7 @@ function InputMappingEditor({
   };
   const sourceNodeFor = (sourceNodeId: string) => nodes.find((item): item is ActivityNode => item.id === sourceNodeId && item.type === 'activity');
   return (
-    <section className="property-section">
-      <h3>输入映射</h3>
+    <PropertyDisclosure title="输入映射" summary={`${inputs.length} 个输入`}>
       {inputs.length === 0 ? (
         <p className="property-empty">该节点没有输入变量。</p>
       ) : options.length === 0 && !hasMappedInputs ? (
@@ -315,7 +344,7 @@ function InputMappingEditor({
           })}
         </div>
       )}
-    </section>
+    </PropertyDisclosure>
   );
 }
 
@@ -465,8 +494,7 @@ function NodeConfigPreview({ schema }: { schema: WorkflowNodeConfigSchema }) {
     : schema.outputs.map((output) => output.key);
   const notes = schema.preview?.notes ?? [];
   return (
-    <section className="property-section">
-      <h3>配置预览</h3>
+    <PropertyDisclosure title="配置预览" summary={`${reads.length} 读 / ${writes.length} 写`}>
       <div className="node-config-preview">
         <div>
           <span>读取</span>
@@ -480,7 +508,7 @@ function NodeConfigPreview({ schema }: { schema: WorkflowNodeConfigSchema }) {
           <p>{notes.join(' ')}</p>
         ) : null}
       </div>
-    </section>
+    </PropertyDisclosure>
   );
 }
 
@@ -517,6 +545,167 @@ function NodeConfigForm({
         </div>
       ))}
     </div>
+  );
+}
+
+function safeJSONString(value: unknown): string {
+  if (value === undefined) return 'undefined';
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function syntaxHighlightJSON(value: unknown): ReactNode {
+  const text = safeJSONString(value);
+  const parts: ReactNode[] = [];
+  const pattern = /("(?:\\u[\da-fA-F]{4}|\\[^u]|[^\\"])*"(?=\s*:))|("(?:\\u[\da-fA-F]{4}|\\[^u]|[^\\"])*")|\b(true|false)\b|\b(null)\b|(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push(text.slice(lastIndex, match.index));
+    }
+    const token = match[0];
+    const className = match[1] ? 'json-key' : match[2] ? 'json-string' : match[3] ? 'json-boolean' : match[4] ? 'json-null' : 'json-number';
+    parts.push(<span key={`${match.index}-${token}`} className={className}>{token}</span>);
+    lastIndex = match.index + token.length;
+  }
+  if (lastIndex < text.length) parts.push(text.slice(lastIndex));
+  return parts;
+}
+
+function parseJSONConfig(value: string): unknown {
+  const trimmed = value.trim();
+  if (!trimmed) return {};
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return value;
+  }
+}
+
+function JsonBlock({ title, value, empty = '暂无数据' }: { title: string; value: unknown; empty?: string }) {
+  const hasValue = value !== undefined && value !== null && value !== '';
+  return (
+    <div className="node-run-json-block">
+      <span>{title}</span>
+      {hasValue ? <pre className="json-syntax">{syntaxHighlightJSON(value)}</pre> : <em>{empty}</em>}
+    </div>
+  );
+}
+
+function outputLogsFrom(value: unknown): string[] {
+  if (!value || typeof value !== 'object') return [];
+  const record = value as Record<string, unknown>;
+  const candidates = [record.logs, record.log, record.audit, record.events, record.trace];
+  const out: string[] = [];
+  candidates.forEach((candidate) => {
+    if (Array.isArray(candidate)) {
+      candidate.forEach((item) => out.push(typeof item === 'string' ? item : safeJSONString(item)));
+    } else if (typeof candidate === 'string') {
+      out.push(candidate);
+    } else if (candidate && typeof candidate === 'object') {
+      out.push(safeJSONString(candidate));
+    }
+  });
+  return out;
+}
+
+function NodeRunInspector({ node }: { node: ActivityNode }) {
+  const run = node.data.lastRun;
+  const logs = outputLogsFrom(run?.output);
+  return (
+    <div className="node-run-inspector">
+      {run ? (
+        <>
+          <div className={cx('node-run-status-card', `run-${run.status.toLowerCase()}`)}>
+            <b>{run.status}</b>
+            <span>{run.finishedAt ? new Date(run.finishedAt).toLocaleString() : '运行中'}</span>
+            <em>{run.errorMessage || `耗时 ${run.durationMs ?? 0}ms · retry ${run.retryCount ?? 0}`}</em>
+          </div>
+          <JsonBlock title="节点输入 Input" value={run.input} />
+          <JsonBlock title="节点输出 Output" value={run.output} />
+          <div className="node-run-log-block">
+            <span>输出日志</span>
+            {logs.length ? logs.map((line, index) => <code className={/error|failed|exception/i.test(line) ? 'log-error' : /warn|retry|skip/i.test(line) ? 'log-warn' : 'log-info'} key={`${index}-${line.slice(0, 16)}`}>{line}</code>) : <em>当前节点输出里没有 logs / audit / trace 字段。</em>}
+          </div>
+        </>
+      ) : (
+        <div className="run-summary empty">
+          <b>NONE</b>
+          <span>暂无运行记录</span>
+          <span>点击调试运行或调用 OpenAPI 后，这里会展示当前节点的输入、输出和日志。</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function isLuaCapableNode(node: ActivityNode): boolean {
+  return ['code', 'combine', 'split'].includes(node.data.id) || String(node.data.config?.language ?? '').toUpperCase() === 'LUA';
+}
+
+function LuaScriptEditor({
+  node,
+  onNodeConfigChange,
+}: {
+  node: ActivityNode;
+  onNodeConfigChange: (nodeId: string, key: string, value: unknown) => void;
+}) {
+  if (!isLuaCapableNode(node)) return null;
+  const source = stringifyConfigValue(node.data.config?.source ?? '');
+  const outputPath = stringifyConfigValue(node.data.config?.outputPath ?? (node.data.id === 'split' ? 'split_items' : node.data.id === 'combine' ? 'combined_result' : 'code_result'));
+  const publicParams = node.data.config?.publicParams ?? {};
+  const contextPatch = node.data.config?.contextPatch ?? {};
+  return (
+    <PropertyDisclosure title="Lua 脚本编辑器" summary={node.data.config?.language ? String(node.data.config.language) : 'LUA'} defaultOpen>
+      <div className="lua-editor-panel">
+        <label>
+          <span>输出路径</span>
+          <input value={outputPath} onChange={(event) => onNodeConfigChange(node.id, 'outputPath', event.target.value)} />
+        </label>
+        <label>
+          <span>Lua Source</span>
+          <textarea
+            value={source}
+            spellCheck={false}
+            placeholder="emit({ result = ctx.node.input })"
+            onChange={(event) => onNodeConfigChange(node.id, 'source', event.target.value)}
+          />
+        </label>
+        <div className="lua-context-help">
+          <b>可用上下文</b>
+          <code>ctx.event</code>
+          <code>ctx.activity</code>
+          <code>ctx.runtime</code>
+          <code>ctx.node.config</code>
+          <code>ctx.node.input</code>
+          <code>ctx.nodes</code>
+          <code>ctx.vars</code>
+          <span>使用 emit(&#123;...&#125;) 输出结果；公共参数通过 ctx.vars 读取。</span>
+        </div>
+        <label>
+          <span>流程公共参数 publicParams</span>
+          <textarea
+            value={safeJSONString(publicParams)}
+            spellCheck={false}
+            placeholder='{"timezone":"Asia/Shanghai","campaign":"daily-checkin"}'
+            onChange={(event) => onNodeConfigChange(node.id, 'publicParams', parseJSONConfig(event.target.value))}
+          />
+        </label>
+        <label>
+          <span>上下文写入 contextPatch</span>
+          <textarea
+            value={safeJSONString(contextPatch)}
+            spellCheck={false}
+            placeholder='{"vars.checkinRewardEnabled":true}'
+            onChange={(event) => onNodeConfigChange(node.id, 'contextPatch', parseJSONConfig(event.target.value))}
+          />
+        </label>
+      </div>
+    </PropertyDisclosure>
   );
 }
 
@@ -569,8 +758,7 @@ function EdgeRouteEditor({
     if (expression) updateRoute({ expression, conditionRef: undefined });
   };
   return (
-    <section className="property-section">
-      <h3>路由配置</h3>
+    <PropertyDisclosure title="路由配置" summary={route.type} defaultOpen>
       <div className="schema-config-grid edge-route-editor">
         <div className="route-type-panel">
           <div className="route-type-current">
@@ -638,7 +826,7 @@ function EdgeRouteEditor({
           <p>分支节点必须显式存在默认分支。默认分支会在条件未命中时作为兜底路径。</p>
         </div>
       </div>
-    </section>
+    </PropertyDisclosure>
   );
 }
 
@@ -653,10 +841,12 @@ type Props = {
   onLocateNode?: (nodeId: string) => void;
   onDeleteNodes: (ids: string[]) => void;
   onDeleteEdges: (ids: string[]) => void;
+  panelWidth: number;
+  onResizeStart: (event: ReactPointerEvent<HTMLButtonElement>) => void;
 };
 
-export function PropertyPanel({ nodes, edges, selectedNodeIds, selectedEdgeIds, nodeConfigSchemas, onNodeConfigChange, onEdgeRouteChange, onLocateNode, onDeleteNodes, onDeleteEdges }: Props) {
-  const [panelWidth, setPanelWidth] = useState(390);
+export function PropertyPanel({ nodes, edges, selectedNodeIds, selectedEdgeIds, nodeConfigSchemas, onNodeConfigChange, onEdgeRouteChange, onLocateNode, onDeleteNodes, onDeleteEdges, panelWidth, onResizeStart }: Props) {
+  const [activeTab, setActiveTab] = useState<PropertyPanelTab>(loadPropertyPanelTab);
   const selectedNode = nodes.find((node): node is ActivityNode => node.id === selectedNodeIds[0] && node.type === 'activity');
   const selectedGroup = nodes.find((node): node is GroupNode => node.id === selectedNodeIds[0] && node.type === 'group');
   const selectedNote = nodes.find((node): node is NoteNode => node.id === selectedNodeIds[0] && node.type === 'note');
@@ -664,25 +854,19 @@ export function PropertyPanel({ nodes, edges, selectedNodeIds, selectedEdgeIds, 
   const selectedEdgeRoute = selectedEdge ? edgeRouteFor(selectedEdge) : undefined;
   const selectedNodeSchema = selectedNode ? nodeConfigSchemas.find((schema) => schema.nodeType === selectedNode.data.id) : undefined;
   const hasSelection = Boolean(selectedNode || selectedGroup || selectedNote || selectedEdge);
-  const startResize = useCallback((event: ReactPointerEvent<HTMLButtonElement>) => {
-    event.preventDefault();
-    const updateWidth = (moveEvent: PointerEvent) => {
-      const nextWidth = Math.min(560, Math.max(320, window.innerWidth - moveEvent.clientX));
-      setPanelWidth(nextWidth);
-    };
-    const stopResize = () => {
-      document.body.classList.remove('property-panel-resizing');
-      window.removeEventListener('pointermove', updateWidth);
-      window.removeEventListener('pointerup', stopResize);
-    };
-    document.body.classList.add('property-panel-resizing');
-    window.addEventListener('pointermove', updateWidth);
-    window.addEventListener('pointerup', stopResize, { once: true });
-  }, []);
+  const changeActiveTab = (tab: PropertyPanelTab) => {
+    setActiveTab(tab);
+    window.localStorage.setItem(PROPERTY_PANEL_TAB_STORAGE_KEY, tab);
+  };
+  const setAllSettingPanelsOpen = (open: boolean) => {
+    document.querySelectorAll<HTMLDetailsElement>('.property-panel .property-body .property-disclosure').forEach((item) => {
+      item.open = open;
+    });
+  };
 
   return (
     <aside className={cx('property-panel', hasSelection && 'open')} style={{ width: panelWidth }}>
-      <button className="property-resize-handle" aria-label="调整属性面板宽度" onPointerDown={startResize} />
+      <button className="property-resize-handle right-panel-resize-handle" aria-label="调整属性面板宽度" onPointerDown={onResizeStart} />
       <div className="property-head">
         <div className="property-title-with-icon">
           {selectedNode ? <NodeKindIcon node={selectedNode.data} className="node-icon" /> : null}
@@ -692,13 +876,19 @@ export function PropertyPanel({ nodes, edges, selectedNodeIds, selectedEdgeIds, 
       </div>
       {selectedNode ? (
         <div className="property-tabs">
-          <button className="active">设置</button>
-          <button>上次运行</button>
+          <div className="property-tab-buttons">
+            <button className={activeTab === 'settings' ? 'active' : ''} onClick={() => changeActiveTab('settings')}>设置</button>
+            <button className={activeTab === 'run' ? 'active' : ''} onClick={() => changeActiveTab('run')}>上次运行</button>
+          </div>
+          <div className="property-tab-actions">
+            <button type="button" onClick={() => setAllSettingPanelsOpen(true)}>全部展开</button>
+            <button type="button" onClick={() => setAllSettingPanelsOpen(false)}>全部收起</button>
+          </div>
         </div>
       ) : null}
-      {selectedNode ? (
+      {selectedNode && activeTab === 'settings' ? (
         <div className="property-body">
-          <section className="property-card">
+          <PropertyDisclosure title="节点信息" summary={selectedNode.data.code}>
             <div className="property-title-row">
               <NodeKindIcon node={selectedNode.data} className="palette-dot" />
               <div>
@@ -706,21 +896,19 @@ export function PropertyPanel({ nodes, edges, selectedNodeIds, selectedEdgeIds, 
                 <p>{selectedNode.data.code}</p>
               </div>
             </div>
-            <dl>
+            <dl className="property-meta-list">
               <div><dt>节点 ID</dt><dd>{selectedNode.id}</dd></div>
               <div><dt>节点类型</dt><dd>{selectedNode.data.kind}</dd></div>
               <div><dt>位置</dt><dd>x {Math.round(selectedNode.position.x)} / y {Math.round(selectedNode.position.y)}</dd></div>
             </dl>
-          </section>
-          <section className="property-section">
-            <h3>说明</h3>
+          </PropertyDisclosure>
+          <PropertyDisclosure title="说明">
             <p>{selectedNode.data.desc}</p>
-          </section>
+          </PropertyDisclosure>
           <InputMappingEditor node={selectedNode} schema={selectedNodeSchema} nodes={nodes} edges={edges} schemas={nodeConfigSchemas} onNodeConfigChange={onNodeConfigChange} onLocateNode={onLocateNode} />
           {selectedNodeSchema ? <NodeConfigPreview schema={selectedNodeSchema} /> : null}
           <PropertyList title="输出变量" items={(selectedNodeSchema?.outputs ?? []).map((output) => output.key)} />
-          <section className="property-section">
-            <h3>下一步</h3>
+          <PropertyDisclosure title="下一步" summary={selectedNode.data.outputs[0] ?? '默认路径'}>
             <div className="next-step-card">
               <NodeKindIcon node={selectedNode.data} className="palette-dot" />
               <div>
@@ -728,13 +916,12 @@ export function PropertyPanel({ nodes, edges, selectedNodeIds, selectedEdgeIds, 
                 <p>连接下游活动节点，决定下一步执行链路。</p>
               </div>
             </div>
-          </section>
-          <section className="property-section">
-            <h3>配置参数</h3>
+          </PropertyDisclosure>
+          <PropertyDisclosure title="配置参数" summary={selectedNodeSchema ? `v${selectedNodeSchema.version}` : '未找到 schema'}>
             <NodeConfigForm node={selectedNode} schema={selectedNodeSchema} onNodeConfigChange={onNodeConfigChange} />
-          </section>
-          <section className="property-section">
-            <h3>失败时重试</h3>
+          </PropertyDisclosure>
+          <LuaScriptEditor node={selectedNode} onNodeConfigChange={onNodeConfigChange} />
+          <PropertyDisclosure title="失败时重试" summary={selectedNode.data.kind === 'reliable' || selectedNode.data.kind === 'dispatch' ? '启用' : '关闭'}>
             <label className="switch-row">
               <span>启用重试</span>
               <input type="checkbox" checked={selectedNode.data.kind === 'reliable' || selectedNode.data.kind === 'dispatch'} readOnly />
@@ -745,28 +932,31 @@ export function PropertyPanel({ nodes, edges, selectedNodeIds, selectedEdgeIds, 
               <span>退避</span>
               <b>指数退避</b>
             </div>
-          </section>
-          <section className="property-section">
-            <h3>异常处理</h3>
+          </PropertyDisclosure>
+          <PropertyDisclosure title="异常处理" summary="无">
             <button className="exception-select">无</button>
-          </section>
-          <section className="property-section">
-            <h3>上次运行</h3>
-            {selectedNode.data.lastRun ? (
-              <div className={cx('run-summary', `run-${selectedNode.data.lastRun.status.toLowerCase()}`)}>
-                <b>{selectedNode.data.lastRun.status}</b>
-                <span>{selectedNode.data.lastRun.finishedAt ? new Date(selectedNode.data.lastRun.finishedAt).toLocaleString() : '运行中'}</span>
-                <span>{selectedNode.data.lastRun.errorMessage || `耗时 ${selectedNode.data.lastRun.durationMs ?? 0}ms · retry ${selectedNode.data.lastRun.retryCount ?? 0}`}</span>
-                <pre>{JSON.stringify({ input: selectedNode.data.lastRun.input, output: selectedNode.data.lastRun.output }, null, 2)}</pre>
-              </div>
-            ) : (
-              <div className="run-summary empty">
-                <b>NONE</b>
-                <span>暂无运行记录</span>
-                <span>触发活动事件后刷新运行态</span>
-              </div>
-            )}
-          </section>
+          </PropertyDisclosure>
+        </div>
+      ) : null}
+      {selectedNode && activeTab === 'run' ? (
+        <div className="property-body">
+          <PropertyDisclosure title="运行概览" summary={selectedNode.data.lastRun?.status ?? 'NONE'} defaultOpen>
+            <NodeRunInspector node={selectedNode} />
+          </PropertyDisclosure>
+          <PropertyDisclosure title="节点配置快照" summary={selectedNode.data.id}>
+            <JsonBlock title="config" value={selectedNode.data.config ?? {}} />
+          </PropertyDisclosure>
+          <PropertyDisclosure title="流程上下文说明" summary="ctx">
+            <div className="lua-context-help">
+              <b>调试时可关注这些上下文</b>
+              <code>ctx.event 当前事件</code>
+              <code>ctx.node.input 当前节点输入</code>
+              <code>ctx.node.config 当前节点配置</code>
+              <code>ctx.nodes 上游节点输出</code>
+              <code>ctx.vars 流程公共参数</code>
+              <span>Lua 节点可以在设置页编辑脚本，并通过 emit 输出到当前节点 output。</span>
+            </div>
+          </PropertyDisclosure>
         </div>
       ) : null}
       {!selectedNode && selectedGroup ? (

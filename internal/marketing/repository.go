@@ -55,6 +55,8 @@ type Repository interface {
 	ListWorkflowNodeExecutions(ctx context.Context, query WorkflowNodeExecutionQuery) ([]WorkflowNodeExecution, error)
 	SaveFactProvider(ctx context.Context, provider FactProvider) (FactProvider, error)
 	FindEnabledFactProvider(ctx context.Context, tenantID string, factCode string) (FactProvider, error)
+	GetActivityState(ctx context.Context, key ActivityStateKey) (ActivityState, error)
+	UpsertActivityState(ctx context.Context, cmd UpsertActivityStateCommand) (ActivityState, error)
 
 	CreateInbox(ctx context.Context, inbox EventInbox) (EventInbox, bool, error)
 	GetInboxByEvent(ctx context.Context, tenantID string, eventID string) (EventInbox, error)

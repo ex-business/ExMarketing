@@ -1597,6 +1597,69 @@ func TestMatchWorkflowNodeHandlerEnforcesActivityMatchSemantics(t *testing.T) {
 	}
 }
 
+func TestActivityStateWorkflowNodeHandlerPersistsInternalState(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	runtime := testWorkflowHandlerRuntime(true)
+	readNode := marketing.WorkflowNode{
+		ID:     "state",
+		Type:   "activity-state",
+		Config: json.RawMessage(`{"storeType":"INTERNAL","operation":"READ","namespace":"checkin","stateKeyTemplate":"${activityId}:${subject.id}","missingPolicy":"EMPTY_STATE"}`),
+	}
+
+	read := service.activityStateWorkflowNodeHandler(ctx, readNode, runtime)
+	if read.Status != marketing.WorkflowNodeSuccess || read.Output["state_version"] != int64(0) {
+		t.Fatalf("expected empty state success, got %+v", read)
+	}
+	state := read.Output["activity_state"].(map[string]any)
+	if state["exists"] != false {
+		t.Fatalf("expected missing state marker, got %+v", state)
+	}
+
+	writeCtx := context.WithValue(ctx, workflowNodeExecutionContextKey{}, workflowNodeExecutionContext{
+		ResolvedInput: map[string]any{
+			"state_patch": map[string]any{"lastCheckinDate": "2026-06-14", "streakDays": 1},
+		},
+	})
+	upsertNode := marketing.WorkflowNode{
+		ID:     "state",
+		Type:   "activity-state",
+		Config: json.RawMessage(`{"storeType":"INTERNAL","operation":"UPSERT","namespace":"checkin","stateKeyTemplate":"${activityId}:${subject.id}"}`),
+	}
+	upsert := service.activityStateWorkflowNodeHandler(writeCtx, upsertNode, runtime)
+	if upsert.Status != marketing.WorkflowNodeSuccess || upsert.Output["state_version"] != int64(1) {
+		t.Fatalf("expected upsert success, got %+v", upsert)
+	}
+
+	read = service.activityStateWorkflowNodeHandler(ctx, readNode, runtime)
+	state = read.Output["activity_state"].(map[string]any)
+	data := state["data"].(map[string]any)
+	if state["exists"] != true || data["lastCheckinDate"] != "2026-06-14" || data["streakDays"] != float64(1) {
+		t.Fatalf("expected persisted state, got %+v", state)
+	}
+
+	casCtx := context.WithValue(ctx, workflowNodeExecutionContextKey{}, workflowNodeExecutionContext{
+		ResolvedInput: map[string]any{
+			"state_version": int64(1),
+			"state_patch":   map[string]any{"streakDays": 2},
+		},
+	})
+	casNode := marketing.WorkflowNode{
+		ID:     "state",
+		Type:   "activity-state",
+		Config: json.RawMessage(`{"storeType":"INTERNAL","operation":"CAS","namespace":"checkin","stateKeyTemplate":"${activityId}:${subject.id}","requireVersion":true}`),
+	}
+	cas := service.activityStateWorkflowNodeHandler(casCtx, casNode, runtime)
+	if cas.Status != marketing.WorkflowNodeSuccess || cas.Output["state_version"] != int64(2) {
+		t.Fatalf("expected cas success, got %+v", cas)
+	}
+	conflict := service.activityStateWorkflowNodeHandler(casCtx, casNode, runtime)
+	if conflict.Status != marketing.WorkflowNodeFailed || conflict.Output["errorCode"] != "ACTIVITY_STATE_VERSION_CONFLICT" {
+		t.Fatalf("expected cas conflict, got %+v", conflict)
+	}
+}
+
 func testWorkflowHandlerRuntime(qualified bool) workflowRuntime {
 	now := time.Date(2026, 6, 5, 8, 0, 0, 0, time.UTC)
 	decision := marketing.RuleDecisionPassed

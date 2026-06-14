@@ -660,6 +660,96 @@ func TestPostgresParticipationAndGrantIdempotencyUniqueConstraints(t *testing.T)
 	assertPostgresCount(t, repo, `SELECT COUNT(*) FROM marketing_grant_order WHERE idempotency_key = $1`, prefix+"_grant_idem", 1)
 }
 
+func TestPostgresActivityStateReadUpsertAndCAS(t *testing.T) {
+	ctx, repo := openPostgresIntegrationRepository(t)
+	prefix := "pg_activity_state"
+	cleanupPostgresAtomicTest(t, repo, prefix)
+	t.Cleanup(func() { cleanupPostgresAtomicTest(t, repo, prefix) })
+
+	now := time.Now().UTC()
+	activity := testPostgresActivity(prefix+"_act", "site_001", strings.ToUpper(prefix), now)
+	if _, err := repo.CreateActivity(ctx, activity); err != nil {
+		t.Fatalf("create activity: %v", err)
+	}
+	key := marketing.ActivityStateKey{
+		TenantID:   "site_001",
+		ActivityID: activity.ID,
+		Namespace:  "checkin",
+		StateKey:   activity.ID + ":user_1",
+	}
+	if _, err := repo.GetActivityState(ctx, key); !errors.Is(err, marketing.ErrNotFound) {
+		t.Fatalf("expected missing state, got %v", err)
+	}
+
+	created, err := repo.UpsertActivityState(ctx, marketing.UpsertActivityStateCommand{
+		State: marketing.ActivityState{
+			ID:          prefix + "_state",
+			TenantID:    key.TenantID,
+			ActivityID:  key.ActivityID,
+			Namespace:   key.Namespace,
+			StateKey:    key.StateKey,
+			Subject:     marketing.EventSubject{Type: "USER", ID: "user_1"},
+			Data:        json.RawMessage(`{"lastCheckinDate":"2026-06-14","streakDays":1}`),
+			LastEventID: prefix + "_evt_1",
+			CreatedAt:   now,
+			UpdatedAt:   now,
+		},
+		Merge: true,
+	})
+	if err != nil {
+		t.Fatalf("create state: %v", err)
+	}
+	if created.Version != 1 {
+		t.Fatalf("expected version 1, got %+v", created)
+	}
+
+	updated, err := repo.UpsertActivityState(ctx, marketing.UpsertActivityStateCommand{
+		State: marketing.ActivityState{
+			TenantID:    key.TenantID,
+			ActivityID:  key.ActivityID,
+			Namespace:   key.Namespace,
+			StateKey:    key.StateKey,
+			Subject:     marketing.EventSubject{Type: "USER", ID: "user_1"},
+			Data:        json.RawMessage(`{"streakDays":2}`),
+			LastEventID: prefix + "_evt_2",
+			UpdatedAt:   now.Add(time.Minute),
+		},
+		ExpectedVersion: 1,
+		RequireVersion:  true,
+		Merge:           true,
+	})
+	if err != nil {
+		t.Fatalf("cas update state: %v", err)
+	}
+	if updated.Version != 2 {
+		t.Fatalf("expected version 2, got %+v", updated)
+	}
+	var data map[string]any
+	if err := json.Unmarshal(updated.Data, &data); err != nil {
+		t.Fatalf("decode state data: %v", err)
+	}
+	if data["lastCheckinDate"] != "2026-06-14" || data["streakDays"] != float64(2) {
+		t.Fatalf("expected merged state data, got %+v", data)
+	}
+
+	_, err = repo.UpsertActivityState(ctx, marketing.UpsertActivityStateCommand{
+		State: marketing.ActivityState{
+			TenantID:   key.TenantID,
+			ActivityID: key.ActivityID,
+			Namespace:  key.Namespace,
+			StateKey:   key.StateKey,
+			Data:       json.RawMessage(`{"streakDays":3}`),
+			UpdatedAt:  now.Add(2 * time.Minute),
+		},
+		ExpectedVersion: 1,
+		RequireVersion:  true,
+		Merge:           true,
+	})
+	if !errors.Is(err, marketing.ErrActivityStateConflict) {
+		t.Fatalf("expected version conflict, got %v", err)
+	}
+}
+
 func TestPostgresReconciliationIncludesParticipationWithoutGrantOrder(t *testing.T) {
 	databaseURL := os.Getenv("EX_MARKETING_DATABASE_URL")
 	if databaseURL == "" {
@@ -1671,6 +1761,8 @@ func cleanupPostgresAtomicTest(t *testing.T, repo *Repository, prefix string) {
 		`DELETE FROM marketing_grant_order WHERE id LIKE $1`,
 		`DELETE FROM marketing_participation WHERE id LIKE $1`,
 		`DELETE FROM marketing_quota WHERE id LIKE $1`,
+		`DELETE FROM marketing_activity_state WHERE activity_id LIKE $1 OR id LIKE $1`,
+		`DELETE FROM marketing_activity WHERE id LIKE $1`,
 	} {
 		if _, err := repo.db.ExecContext(ctx, stmt, prefix+"_%"); err != nil {
 			t.Fatalf("cleanup %q: %v", stmt, err)

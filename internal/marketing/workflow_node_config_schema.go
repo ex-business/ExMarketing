@@ -465,6 +465,7 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 		)),
 		groupedSchema("activity-state", "活动状态", "读取或更新用户活动状态、任务进度、签到状态和插件状态。", groups(
 			fieldGroup("state-key", "状态 Key", "定义活动状态的主体、命名空间和 key。", fields(
+				enumField("storeType", "状态存储", true, "INTERNAL", []string{"INTERNAL", "CUSTOM"}),
 				enumField("operation", "操作", true, "READ", []string{"READ", "WRITE", "UPSERT", "CAS"}),
 				withDescription(stringField("namespace", "命名空间", true, "activity", rules(minLength(1), maxLength(128))), "状态命名空间，例如 checkin、task、lottery、red-envelope。"),
 				withDescription(stringField("stateKeyTemplate", "State Key 模板", true, "${activityId}:${subject.id}", rules(minLength(1), maxLength(256))), "必须稳定定位一个用户或业务维度的活动状态。"),
@@ -474,10 +475,16 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 				booleanField("requireVersion", "要求版本", false, true),
 				enumField("missingPolicy", "缺失策略", true, "EMPTY_STATE", []string{"EMPTY_STATE", "BLOCK", "CREATE"}),
 			)),
+			fieldGroup("custom-provider", "自定义 Provider", "storeType=CUSTOM 时使用；当前需要业务 adapter。", fields(
+				withDescription(stringField("providerCode", "Provider Code", false, "", rules(maxLength(128))), "自定义状态 provider 编码。"),
+				objectField("requestMapping", "请求映射", false, nil),
+				objectField("responseMapping", "响应映射", false, nil),
+				numberField("timeoutSeconds", "超时秒数", false, 3, rules(minValue(1), maxValue(30))),
+			)),
 		), preview(
 			[]string{"event_context", "facts", "plugin_state"},
 			[]string{"activity_state", "state_version"},
-			[]string{"当前 Executor 输出可运行状态快照；真实跨执行持久化权威应接 ActivityPlugin/StateStore。"},
+			[]string{"INTERNAL 使用 ExMarketing PG 权威状态；CUSTOM 需要显式状态 provider adapter。"},
 		)),
 		groupedSchema("quota-check", "次数频控校验", "对用户、设备、IP、活动或租户维度做次数和频率校验。", groups(
 			fieldGroup("counter", "计数维度", "定义频控 bucket、窗口和上限。", fields(

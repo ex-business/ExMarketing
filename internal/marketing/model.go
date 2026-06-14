@@ -256,6 +256,35 @@ type ActivityPluginSnapshot struct {
 	RollbackToken      string                    `json:"rollbackToken,omitempty"`
 }
 
+type ActivityState struct {
+	ID          string          `json:"id"`
+	TenantID    string          `json:"tenantId"`
+	ActivityID  string          `json:"activityId"`
+	Namespace   string          `json:"namespace"`
+	StateKey    string          `json:"stateKey"`
+	Subject     EventSubject    `json:"subject,omitempty"`
+	Data        json.RawMessage `json:"data"`
+	Version     int64           `json:"version"`
+	LastEventID string          `json:"lastEventId,omitempty"`
+	ExpiresAt   *time.Time      `json:"expiresAt,omitempty"`
+	CreatedAt   time.Time       `json:"createdAt"`
+	UpdatedAt   time.Time       `json:"updatedAt"`
+}
+
+type ActivityStateKey struct {
+	TenantID   string
+	ActivityID string
+	Namespace  string
+	StateKey   string
+}
+
+type UpsertActivityStateCommand struct {
+	State           ActivityState
+	ExpectedVersion int64
+	RequireVersion  bool
+	Merge           bool
+}
+
 func (r *Rule) UnmarshalJSON(data []byte) error {
 	type alias Rule
 	aux := struct {
@@ -1333,6 +1362,7 @@ var (
 	ErrQuotaReservationMissing   = errors.New("quota reservation missing")
 	ErrQuotaReservationConflict  = errors.New("quota reservation conflict")
 	ErrQuotaAggregateConflict    = errors.New("quota aggregate conflict")
+	ErrActivityStateConflict     = errors.New("activity state conflict")
 	ErrActivityConflict          = errors.New("activity conflict")
 	ErrWorkspaceConflict         = errors.New("workspace conflict")
 	ErrInvalidWorkspace          = errors.New("invalid workspace")

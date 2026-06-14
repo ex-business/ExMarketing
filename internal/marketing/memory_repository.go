@@ -32,6 +32,7 @@ type MemoryRepository struct {
 	workflowExecutions      []WorkflowExecution
 	nodeExecutions          []WorkflowNodeExecution
 	factProviders           map[string]FactProvider
+	activityStates          []ActivityState
 	inboxByIdempotency      map[string]EventInbox
 	inboxByEventIdentity    map[string]EventInbox
 	participations          []Participation
@@ -549,6 +550,100 @@ func (r *MemoryRepository) FindEnabledFactProvider(ctx context.Context, tenantID
 
 func factProviderKey(tenantID string, factCode string) string {
 	return strings.TrimSpace(tenantID) + "\x00" + strings.TrimSpace(factCode)
+}
+
+func sameActivityStateKey(state ActivityState, key ActivityStateKey) bool {
+	return strings.TrimSpace(state.TenantID) == strings.TrimSpace(key.TenantID) &&
+		strings.TrimSpace(state.ActivityID) == strings.TrimSpace(key.ActivityID) &&
+		strings.TrimSpace(state.Namespace) == strings.TrimSpace(key.Namespace) &&
+		strings.TrimSpace(state.StateKey) == strings.TrimSpace(key.StateKey)
+}
+
+func cloneActivityState(state ActivityState) ActivityState {
+	if len(state.Data) > 0 {
+		state.Data = append(json.RawMessage(nil), state.Data...)
+	}
+	return state
+}
+
+func mergeActivityStateData(existing json.RawMessage, patch json.RawMessage) json.RawMessage {
+	var existingMap map[string]any
+	var patchMap map[string]any
+	if json.Unmarshal(existing, &existingMap) != nil || json.Unmarshal(patch, &patchMap) != nil {
+		return append(json.RawMessage(nil), patch...)
+	}
+	if existingMap == nil {
+		existingMap = map[string]any{}
+	}
+	for key, value := range patchMap {
+		existingMap[key] = value
+	}
+	raw, err := json.Marshal(existingMap)
+	if err != nil {
+		return append(json.RawMessage(nil), patch...)
+	}
+	return raw
+}
+
+func (r *MemoryRepository) GetActivityState(ctx context.Context, key ActivityStateKey) (ActivityState, error) {
+	if err := ctx.Err(); err != nil {
+		return ActivityState{}, err
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, state := range r.activityStates {
+		if sameActivityStateKey(state, key) {
+			return cloneActivityState(state), nil
+		}
+	}
+	return ActivityState{}, ErrNotFound
+}
+
+func (r *MemoryRepository) UpsertActivityState(ctx context.Context, cmd UpsertActivityStateCommand) (ActivityState, error) {
+	if err := ctx.Err(); err != nil {
+		return ActivityState{}, err
+	}
+	state := cloneActivityState(cmd.State)
+	if state.ID == "" {
+		state.ID = NewID("actstate")
+	}
+	if len(state.Data) == 0 {
+		state.Data = json.RawMessage(`{}`)
+	}
+	if state.UpdatedAt.IsZero() {
+		state.UpdatedAt = time.Now().UTC()
+	}
+	if state.CreatedAt.IsZero() {
+		state.CreatedAt = state.UpdatedAt
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	key := ActivityStateKey{TenantID: state.TenantID, ActivityID: state.ActivityID, Namespace: state.Namespace, StateKey: state.StateKey}
+	for i := range r.activityStates {
+		if !sameActivityStateKey(r.activityStates[i], key) {
+			continue
+		}
+		if cmd.RequireVersion && r.activityStates[i].Version != cmd.ExpectedVersion {
+			return ActivityState{}, ErrActivityStateConflict
+		}
+		data := state.Data
+		if cmd.Merge {
+			data = mergeActivityStateData(r.activityStates[i].Data, state.Data)
+		}
+		r.activityStates[i].Data = data
+		r.activityStates[i].Subject = state.Subject
+		r.activityStates[i].LastEventID = state.LastEventID
+		r.activityStates[i].ExpiresAt = state.ExpiresAt
+		r.activityStates[i].Version++
+		r.activityStates[i].UpdatedAt = state.UpdatedAt
+		return cloneActivityState(r.activityStates[i]), nil
+	}
+	if cmd.RequireVersion && cmd.ExpectedVersion > 0 {
+		return ActivityState{}, ErrNotFound
+	}
+	state.Version = 1
+	r.activityStates = append(r.activityStates, state)
+	return cloneActivityState(state), nil
 }
 
 func (r *MemoryRepository) CreateInbox(ctx context.Context, inbox EventInbox) (EventInbox, bool, error) {

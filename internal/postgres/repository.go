@@ -732,6 +732,83 @@ func (r *Repository) FindEnabledFactProvider(ctx context.Context, tenantID strin
 	return provider, nil
 }
 
+func (r *Repository) GetActivityState(ctx context.Context, key marketing.ActivityStateKey) (marketing.ActivityState, error) {
+	row := r.db.QueryRowContext(ctx, `
+		SELECT id, tenant_id, activity_id, namespace, state_key, COALESCE(subject_type, ''), COALESCE(subject_id, ''),
+		       data_json, version, COALESCE(last_event_id, ''), expires_at, created_at, updated_at
+		FROM marketing_activity_state
+		WHERE tenant_id = $1 AND activity_id = $2 AND namespace = $3 AND state_key = $4
+	`, key.TenantID, key.ActivityID, key.Namespace, key.StateKey)
+	state, err := scanActivityState(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return marketing.ActivityState{}, marketing.ErrNotFound
+		}
+		return marketing.ActivityState{}, err
+	}
+	return state, nil
+}
+
+func (r *Repository) UpsertActivityState(ctx context.Context, cmd marketing.UpsertActivityStateCommand) (marketing.ActivityState, error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return marketing.ActivityState{}, err
+	}
+	defer rollback(tx)
+	state := cmd.State
+	if state.ID == "" {
+		state.ID = marketing.NewID("actstate")
+	}
+	if len(state.Data) == 0 {
+		state.Data = json.RawMessage(`{}`)
+	}
+	if state.UpdatedAt.IsZero() {
+		state.UpdatedAt = time.Now().UTC()
+	}
+	if state.CreatedAt.IsZero() {
+		state.CreatedAt = state.UpdatedAt
+	}
+	row := tx.QueryRowContext(ctx, `
+		SELECT id, tenant_id, activity_id, namespace, state_key, COALESCE(subject_type, ''), COALESCE(subject_id, ''),
+		       data_json, version, COALESCE(last_event_id, ''), expires_at, created_at, updated_at
+		FROM marketing_activity_state
+		WHERE tenant_id = $1 AND activity_id = $2 AND namespace = $3 AND state_key = $4
+		FOR UPDATE
+	`, state.TenantID, state.ActivityID, state.Namespace, state.StateKey)
+	existing, err := scanActivityState(row)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return marketing.ActivityState{}, err
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		if cmd.RequireVersion && cmd.ExpectedVersion > 0 {
+			return marketing.ActivityState{}, marketing.ErrNotFound
+		}
+		inserted, err := postgresInsertActivityState(ctx, tx, state)
+		if err != nil {
+			return marketing.ActivityState{}, mapPostgresActivityStateError(err)
+		}
+		if err := tx.Commit(); err != nil {
+			return marketing.ActivityState{}, err
+		}
+		return inserted, nil
+	}
+	if cmd.RequireVersion && existing.Version != cmd.ExpectedVersion {
+		return marketing.ActivityState{}, marketing.ErrActivityStateConflict
+	}
+	data := state.Data
+	if cmd.Merge {
+		data = mergeJSONObjects(existing.Data, state.Data)
+	}
+	updated, err := postgresUpdateActivityState(ctx, tx, existing.ID, state, data, existing.Version+1)
+	if err != nil {
+		return marketing.ActivityState{}, mapPostgresActivityStateError(err)
+	}
+	if err := tx.Commit(); err != nil {
+		return marketing.ActivityState{}, err
+	}
+	return updated, nil
+}
+
 func (r *Repository) CreateInbox(ctx context.Context, inbox marketing.EventInbox) (marketing.EventInbox, bool, error) {
 	inbox.Event = inbox.Event.Normalized()
 	existing, err := r.inboxByEventIdentity(ctx, inbox.Event.TenantID, inbox.Event.EventID)
@@ -2363,6 +2440,40 @@ type outboxScanner interface {
 	Scan(dest ...any) error
 }
 
+func scanActivityState(scanner outboxScanner) (marketing.ActivityState, error) {
+	var state marketing.ActivityState
+	var subjectType, subjectID string
+	var data []byte
+	var lastEventID string
+	var expiresAt sql.NullTime
+	err := scanner.Scan(
+		&state.ID,
+		&state.TenantID,
+		&state.ActivityID,
+		&state.Namespace,
+		&state.StateKey,
+		&subjectType,
+		&subjectID,
+		&data,
+		&state.Version,
+		&lastEventID,
+		&expiresAt,
+		&state.CreatedAt,
+		&state.UpdatedAt,
+	)
+	if err != nil {
+		return marketing.ActivityState{}, err
+	}
+	state.Subject = marketing.EventSubject{Type: subjectType, ID: subjectID}
+	state.Data = append(json.RawMessage(nil), data...)
+	state.LastEventID = lastEventID
+	if expiresAt.Valid {
+		value := expiresAt.Time
+		state.ExpiresAt = &value
+	}
+	return state, nil
+}
+
 func scanActivity(scanner activityScanner) (marketing.Activity, error) {
 	var activity marketing.Activity
 	var triggerEvents []byte
@@ -2682,6 +2793,68 @@ func nullString(value string) any {
 		return nil
 	}
 	return value
+}
+
+func postgresInsertActivityState(ctx context.Context, tx *sql.Tx, state marketing.ActivityState) (marketing.ActivityState, error) {
+	row := tx.QueryRowContext(ctx, `
+		INSERT INTO marketing_activity_state (
+			id, tenant_id, activity_id, namespace, state_key, subject_type, subject_id,
+			data_json, version, last_event_id, expires_at, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, NULLIF($6, ''), NULLIF($7, ''), $8, 1, NULLIF($9, ''), $10, $11, $12)
+		RETURNING id, tenant_id, activity_id, namespace, state_key, COALESCE(subject_type, ''), COALESCE(subject_id, ''),
+		          data_json, version, COALESCE(last_event_id, ''), expires_at, created_at, updated_at
+	`, state.ID, state.TenantID, state.ActivityID, state.Namespace, state.StateKey, state.Subject.Type, state.Subject.ID,
+		state.Data, state.LastEventID, state.ExpiresAt, state.CreatedAt, state.UpdatedAt)
+	return scanActivityState(row)
+}
+
+func postgresUpdateActivityState(ctx context.Context, tx *sql.Tx, id string, state marketing.ActivityState, data json.RawMessage, version int64) (marketing.ActivityState, error) {
+	row := tx.QueryRowContext(ctx, `
+		UPDATE marketing_activity_state
+		SET subject_type = NULLIF($2, ''),
+		    subject_id = NULLIF($3, ''),
+		    data_json = $4,
+		    version = $5,
+		    last_event_id = NULLIF($6, ''),
+		    expires_at = $7,
+		    updated_at = $8
+		WHERE id = $1
+		RETURNING id, tenant_id, activity_id, namespace, state_key, COALESCE(subject_type, ''), COALESCE(subject_id, ''),
+		          data_json, version, COALESCE(last_event_id, ''), expires_at, created_at, updated_at
+	`, id, state.Subject.Type, state.Subject.ID, data, version, state.LastEventID, state.ExpiresAt, state.UpdatedAt)
+	return scanActivityState(row)
+}
+
+func mergeJSONObjects(existing json.RawMessage, patch json.RawMessage) json.RawMessage {
+	var existingMap map[string]any
+	var patchMap map[string]any
+	if json.Unmarshal(existing, &existingMap) != nil || json.Unmarshal(patch, &patchMap) != nil {
+		return patch
+	}
+	if existingMap == nil {
+		existingMap = map[string]any{}
+	}
+	for key, value := range patchMap {
+		existingMap[key] = value
+	}
+	raw, err := json.Marshal(existingMap)
+	if err != nil {
+		return patch
+	}
+	return raw
+}
+
+func mapPostgresActivityStateError(err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		switch pgErr.Code {
+		case "23503":
+			return marketing.ErrNotFound
+		case "23505":
+			return marketing.ErrActivityStateConflict
+		}
+	}
+	return err
 }
 
 func jsonString(value any) string {

@@ -337,7 +337,7 @@ func (s *Service) workflowNodeHandlers() map[string]workflowNodeHandler {
 		"plugin-query":      factAdapterRequiredWorkflowNodeHandler("PLUGIN", "ActivityPlugin/FactProvider", false),
 		"custom-query":      factAdapterRequiredWorkflowNodeHandler("CUSTOM", "CustomFactProvider", false),
 		"lua-query":         luaFactQueryWorkflowNodeHandler,
-		"activity-state":    activityStateWorkflowNodeHandler,
+		"activity-state":    s.activityStateWorkflowNodeHandler,
 		"quota-check":       quotaCheckWorkflowNodeHandler,
 		"condition":         decisionWorkflowNodeHandler,
 		"qualify":           decisionWorkflowNodeHandler,
@@ -2685,7 +2685,7 @@ func luaFactQueryWorkflowNodeHandler(ctx context.Context, node marketing.Workflo
 	return nodeSuccess(workflowFactOutput(node, runtime, "LUA_QUERY", facts, []any{luaOutput}))
 }
 
-func activityStateWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
+func (s *Service) activityStateWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
 	if canceled := workflowHandlerContextCanceled(ctx, node, runtime); canceled.Status != "" {
 		return canceled
 	}
@@ -2694,37 +2694,237 @@ func activityStateWorkflowNodeHandler(ctx context.Context, node marketing.Workfl
 		failed.Output["audit"] = workflowHandlerAudit(node, runtime)
 		return failed
 	}
+	storeType := strings.ToUpper(firstWorkflowString(workflowConfigString(config, "storeType"), "INTERNAL"))
+	if storeType != "INTERNAL" {
+		return nodeFailed("STATE_PROVIDER_ADAPTER_REQUIRED: custom activity state provider is not registered", map[string]any{
+			"errorCode":          "STATE_PROVIDER_ADAPTER_REQUIRED",
+			"storeType":          storeType,
+			"providerCode":       workflowConfigString(config, "providerCode"),
+			"executionMode":      "CUSTOM_PROVIDER_REQUIRED",
+			"executionAuthority": "ActivityStateProvider",
+			"audit":              workflowHandlerAudit(node, runtime),
+		})
+	}
 	operation := strings.ToUpper(firstWorkflowString(workflowConfigString(config, "operation"), "READ"))
 	stateKey := workflowRenderTemplate(firstWorkflowString(workflowConfigString(config, "stateKeyTemplate"), "${activityId}:${subject.id}"), runtime)
 	namespace := firstWorkflowString(workflowConfigString(config, "namespace"), "activity")
-	state := map[string]any{
-		"namespace": namespace,
-		"stateKey":  stateKey,
-		"subject":   workflowJSONValue(runtime.Inbox.Event.Subject),
-		"activity": map[string]any{
-			"id":      runtime.Activity.ID,
-			"code":    runtime.Activity.Code,
-			"version": runtime.Activity.Version,
-			"status":  runtime.Activity.Status,
-		},
-		"eventId": runtime.Inbox.Event.EventID,
-		"version": 1,
-		"data":    map[string]any{},
+	key := marketing.ActivityStateKey{
+		TenantID:   runtime.Activity.TenantID,
+		ActivityID: runtime.Activity.ID,
+		Namespace:  namespace,
+		StateKey:   stateKey,
 	}
-	if value, ok := workflowResolvedInput(ctx, "state_patch"); ok {
-		state["data"] = workflowJSONValue(value)
-	} else if value, ok := workflowUpstreamOutput(ctx, "plugin_result"); ok {
-		state["data"] = workflowJSONValue(value)
+	switch operation {
+	case "READ":
+		state, err := s.repository.GetActivityState(ctx, key)
+		if err != nil {
+			if errors.Is(err, marketing.ErrNotFound) {
+				return workflowActivityStateMissing(node, runtime, config, key)
+			}
+			return nodeFailed("ACTIVITY_STATE_READ_FAILED: "+err.Error(), map[string]any{
+				"errorCode": "ACTIVITY_STATE_READ_FAILED",
+				"error":     err.Error(),
+				"audit":     workflowHandlerAudit(node, runtime),
+			})
+		}
+		return nodeSuccess(workflowActivityStateOutput(node, runtime, operation, state, true))
+	case "WRITE", "UPSERT", "CAS":
+		if operation == "WRITE" {
+			if _, err := s.repository.GetActivityState(ctx, key); err != nil {
+				if errors.Is(err, marketing.ErrNotFound) {
+					return nodeFailed("ACTIVITY_STATE_NOT_FOUND: state does not exist for WRITE", map[string]any{
+						"errorCode": "ACTIVITY_STATE_NOT_FOUND",
+						"audit":     workflowHandlerAudit(node, runtime),
+					})
+				}
+				return nodeFailed("ACTIVITY_STATE_READ_FAILED: "+err.Error(), map[string]any{"errorCode": "ACTIVITY_STATE_READ_FAILED", "error": err.Error(), "audit": workflowHandlerAudit(node, runtime)})
+			}
+		}
+		data := workflowActivityStatePatch(ctx, config, runtime)
+		now := time.Now().UTC()
+		requireVersion := operation == "CAS" || workflowConfigBool(config, "requireVersion", false)
+		expectedVersion := workflowActivityStateExpectedVersion(ctx)
+		state, err := s.repository.UpsertActivityState(ctx, marketing.UpsertActivityStateCommand{
+			State: marketing.ActivityState{
+				ID:          marketing.NewID("actstate"),
+				TenantID:    runtime.Activity.TenantID,
+				ActivityID:  runtime.Activity.ID,
+				Namespace:   namespace,
+				StateKey:    stateKey,
+				Subject:     runtime.Inbox.Event.Subject,
+				Data:        data,
+				LastEventID: runtime.Inbox.Event.EventID,
+				CreatedAt:   now,
+				UpdatedAt:   now,
+			},
+			ExpectedVersion: expectedVersion,
+			RequireVersion:  requireVersion && expectedVersion > 0,
+			Merge:           operation == "UPSERT" || operation == "CAS",
+		})
+		if err != nil {
+			code := "ACTIVITY_STATE_WRITE_FAILED"
+			if errors.Is(err, marketing.ErrActivityStateConflict) {
+				code = "ACTIVITY_STATE_VERSION_CONFLICT"
+			}
+			return nodeFailed(code+": "+err.Error(), map[string]any{
+				"errorCode":       code,
+				"expectedVersion": expectedVersion,
+				"error":           err.Error(),
+				"audit":           workflowHandlerAudit(node, runtime),
+			})
+		}
+		return nodeSuccess(workflowActivityStateOutput(node, runtime, operation, state, true))
+	default:
+		return nodeFailed("ACTIVITY_STATE_OPERATION_UNSUPPORTED: operation is not supported", map[string]any{
+			"errorCode": "ACTIVITY_STATE_OPERATION_UNSUPPORTED",
+			"operation": operation,
+			"audit":     workflowHandlerAudit(node, runtime),
+		})
 	}
-	return nodeSuccess(map[string]any{
-		"activity_state":     state,
-		"state_version":      1,
+}
+
+func workflowActivityStateMissing(node marketing.WorkflowNode, runtime workflowRuntime, config map[string]any, key marketing.ActivityStateKey) workflowNodeResult {
+	emptyState := marketing.ActivityState{
+		TenantID:    key.TenantID,
+		ActivityID:  key.ActivityID,
+		Namespace:   key.Namespace,
+		StateKey:    key.StateKey,
+		Subject:     runtime.Inbox.Event.Subject,
+		Data:        json.RawMessage(`{}`),
+		Version:     0,
+		LastEventID: runtime.Inbox.Event.EventID,
+	}
+	output := workflowActivityStateOutput(node, runtime, "READ", emptyState, false)
+	output["errorCode"] = "ACTIVITY_STATE_NOT_FOUND"
+	switch strings.ToUpper(firstWorkflowString(workflowConfigString(config, "missingPolicy"), "EMPTY_STATE")) {
+	case "BLOCK":
+		return nodeFailed("ACTIVITY_STATE_NOT_FOUND: state does not exist", output)
+	case "CREATE":
+		output["missingPolicy"] = "CREATE"
+		output["createRequired"] = true
+		return nodeSkipped("ACTIVITY_STATE_CREATE_REQUIRED: state does not exist", output)
+	default:
+		output["missingPolicy"] = "EMPTY_STATE"
+		return nodeSuccess(output)
+	}
+}
+
+func workflowActivityStateOutput(node marketing.WorkflowNode, runtime workflowRuntime, operation string, state marketing.ActivityState, exists bool) map[string]any {
+	var data any = map[string]any{}
+	if len(state.Data) > 0 {
+		if err := json.Unmarshal(state.Data, &data); err != nil {
+			data = string(state.Data)
+		}
+	}
+	activityState := map[string]any{
+		"id":          state.ID,
+		"tenantId":    state.TenantID,
+		"activityId":  state.ActivityID,
+		"namespace":   state.Namespace,
+		"stateKey":    state.StateKey,
+		"subject":     workflowJSONValue(state.Subject),
+		"exists":      exists,
+		"data":        data,
+		"version":     state.Version,
+		"lastEventId": state.LastEventID,
+	}
+	if !state.CreatedAt.IsZero() {
+		activityState["createdAt"] = state.CreatedAt
+	}
+	if !state.UpdatedAt.IsZero() {
+		activityState["updatedAt"] = state.UpdatedAt
+	}
+	if state.ExpiresAt != nil {
+		activityState["expiresAt"] = state.ExpiresAt
+	}
+	return map[string]any{
+		"activity_state":     activityState,
+		"state_version":      state.Version,
 		"operation":          operation,
+		"storeType":          "INTERNAL",
 		"executionMode":      "REAL_HANDLER",
-		"executionAuthority": "WorkflowExecutor",
-		"persistenceNote":    "cross-execution durable state should be owned by ActivityPlugin/StateStore",
+		"executionAuthority": "WorkflowExecutor/ActivityStateStore",
 		"audit":              workflowHandlerAudit(node, runtime),
-	})
+	}
+}
+
+func workflowActivityStatePatch(ctx context.Context, config map[string]any, runtime workflowRuntime) json.RawMessage {
+	if value, ok := workflowResolvedInput(ctx, "state_patch"); ok {
+		return workflowRawJSONObject(value)
+	}
+	valuePath := workflowConfigString(config, "valuePath")
+	if valuePath != "" && valuePath != "$.state" {
+		base := workflowFactQueryBaseContext(ctx, runtime)
+		if value, err := extractWorkflowJSONPath(base, valuePath); err == nil {
+			return workflowRawJSONObject(value)
+		}
+	}
+	if value, ok := workflowUpstreamOutput(ctx, "plugin_result"); ok {
+		return workflowRawJSONObject(value)
+	}
+	if value, ok := workflowResolvedInput(ctx, "state"); ok {
+		return workflowRawJSONObject(value)
+	}
+	return json.RawMessage(`{}`)
+}
+
+func workflowRawJSONObject(value any) json.RawMessage {
+	raw, err := json.Marshal(workflowJSONValue(value))
+	if err != nil || len(raw) == 0 || string(raw) == "null" {
+		return json.RawMessage(`{}`)
+	}
+	return raw
+}
+
+func workflowActivityStateExpectedVersion(ctx context.Context) int64 {
+	if value, ok := workflowResolvedInput(ctx, "state_version"); ok {
+		return workflowInt64(value)
+	}
+	if value, ok := workflowResolvedInput(ctx, "activity_state"); ok {
+		if version, ok := workflowActivityStateVersion(value); ok {
+			return version
+		}
+	}
+	if value, ok := workflowUpstreamOutput(ctx, "state_version"); ok {
+		return workflowInt64(value)
+	}
+	if value, ok := workflowUpstreamOutput(ctx, "activity_state"); ok {
+		if version, ok := workflowActivityStateVersion(value); ok {
+			return version
+		}
+	}
+	return 0
+}
+
+func workflowActivityStateVersion(value any) (int64, bool) {
+	mapped, ok := workflowJSONValue(value).(map[string]any)
+	if !ok {
+		return 0, false
+	}
+	version, ok := mapped["version"]
+	if !ok {
+		return 0, false
+	}
+	return workflowInt64(version), true
+}
+
+func workflowInt64(value any) int64 {
+	switch typed := value.(type) {
+	case int64:
+		return typed
+	case int:
+		return int64(typed)
+	case float64:
+		return int64(typed)
+	case json.Number:
+		number, _ := typed.Int64()
+		return number
+	case string:
+		number, _ := strconv.ParseInt(strings.TrimSpace(typed), 10, 64)
+		return number
+	default:
+		return 0
+	}
 }
 
 func quotaCheckWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {

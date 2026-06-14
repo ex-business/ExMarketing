@@ -7,10 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	exdecimal "github.com/ex-stack/ExMarketing/internal/decimal"
@@ -360,13 +363,13 @@ func (s *Service) workflowNodeHandlers() map[string]workflowNodeHandler {
 		"participation":     participationWorkflowNodeHandler,
 		"audit":             auditWorkflowNodeHandler,
 		"grant-order":       grantOrderWorkflowNodeHandler,
-		"outbox":            outboxWorkflowNodeHandler,
+		"outbox":            s.outboxWorkflowNodeHandler,
 		"retry":             retryWorkflowNodeHandler,
 		"dlq":               dlqWorkflowNodeHandler,
 		"http-call":         dispatchWorkflowNodeHandler("HTTP"),
 		"mq-publish":        s.mqPublishWorkflowNodeHandler,
 		"webhook":           dispatchWorkflowNodeHandler("WEBHOOK"),
-		"callback":          callbackWorkflowNodeHandler,
+		"callback":          s.callbackWorkflowNodeHandler,
 		"approval-gate":     approvalGateWorkflowNodeHandler,
 		"compensation":      compensationWorkflowNodeHandler,
 		"random-pick":       randomPickWorkflowNodeHandler,
@@ -2299,6 +2302,9 @@ func (s *Service) factQueryWorkflowNodeHandler(ctx context.Context, node marketi
 		failed.Output["audit"] = workflowHandlerAudit(node, runtime)
 		return failed
 	}
+	if strings.TrimSpace(workflowExplicitConfigString(node, "resourceRef")) != "" {
+		return s.factQueryResourceRefWorkflowNodeHandler(ctx, node, runtime, config)
+	}
 	if chain := workflowConfigStringList(config, "providerChain"); len(chain) > 0 {
 		return s.factQueryProviderChainWorkflowNodeHandler(ctx, node, runtime, config, chain)
 	}
@@ -2364,6 +2370,137 @@ func (s *Service) factQueryWorkflowNodeHandler(ctx context.Context, node marketi
 		"cacheTtlSeconds": workflowConfigNumber(config, "cacheTtlSeconds"),
 		"audit":           workflowHandlerAudit(node, runtime),
 	})
+}
+
+func (s *Service) factQueryResourceRefWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime, config map[string]any) workflowNodeResult {
+	resourceRef := strings.TrimSpace(workflowExplicitConfigString(node, "resourceRef"))
+	resource, err := s.GetResource(ctx, runtime.Activity.TenantID, resourceRef)
+	if err != nil {
+		return workflowFactQueryFailure(node, runtime, config, "", "RESOURCE_NOT_FOUND", err.Error(), map[string]any{}, nil)
+	}
+	refs := workflowFactQueryKeys(config, runtime)
+	if len(refs) == 0 {
+		return nodeSkipped("FACT_QUERY_NO_KEYS: no fact references", map[string]any{
+			"errorCode":   "FACT_QUERY_NO_KEYS",
+			"factCount":   0,
+			"facts":       map[string]any{},
+			"resourceRef": resourceRef,
+			"audit":       workflowHandlerAudit(node, runtime),
+		})
+	}
+	facts := map[string]any{}
+	responses := make([]any, 0, len(refs))
+	for _, factCode := range refs {
+		keyTemplate := firstWorkflowString(workflowConfigString(config, "keyTemplate"), workflowConfigString(resource.ConfigMap(), "keyTemplate"))
+		if keyTemplate == "" {
+			keyTemplate = "${tenantId}:${subject.id}:${factCode}"
+		}
+		key := workflowRenderFactQueryTemplate(keyTemplate, runtime, node, factCode)
+		operation := workflowFactQueryResourceOperation(resource, config)
+		valueType := firstWorkflowString(workflowConfigString(config, "valueType"), "OBJECT")
+		output, err := s.workflowExecuteResourceAPI(ctx, node, runtime, workflowResourceAPIRequest{
+			Operation:   operation,
+			ResourceRef: resourceRef,
+			Namespace:   firstWorkflowString(workflowConfigString(config, "namespace"), "facts"),
+			Key:         key,
+			Value:       workflowFactQueryResourcePayload(ctx, config, runtime, factCode),
+			ValueType:   valueType,
+			Options: map[string]any{
+				"factCode":       factCode,
+				"valueType":      valueType,
+				"timeoutSeconds": workflowConfigNumber(config, "timeoutSeconds"),
+			},
+		})
+		if err != nil {
+			responses = append(responses, output)
+			return workflowFactQueryFailure(node, runtime, config, factCode, workflowConfigString(output, "errorCode"), err.Error(), facts, responses)
+		}
+		responses = append(responses, output)
+		value, ok := workflowFactValueFromResourceOutput(output, factCode, workflowConfigString(config, "valuePath"))
+		if !ok {
+			return workflowFactQueryFailure(node, runtime, config, factCode, "FACT_QUERY_RESOURCE_VALUE_NOT_FOUND", "resource response did not contain requested fact", facts, responses)
+		}
+		facts[factCode] = value
+	}
+	return nodeSuccess(map[string]any{
+		"factCount":       len(facts),
+		"factKeys":        refs,
+		"facts":           facts,
+		"responses":       responses,
+		"source":          "RESOURCE",
+		"resourceRef":     resourceRef,
+		"resource":        map[string]any{"id": resource.ID, "code": resource.Code, "type": resource.Type, "driver": resource.Driver},
+		"subject":         workflowJSONValue(workflowFactQuerySubject(ctx, config, runtime)),
+		"cacheTtlSeconds": workflowConfigNumber(config, "cacheTtlSeconds"),
+		"audit":           workflowHandlerAudit(node, runtime),
+	})
+}
+
+func workflowFactQueryResourceOperation(resource marketing.Resource, config map[string]any) marketing.ResourceOperation {
+	if operation := strings.ToUpper(workflowConfigString(config, "operation")); operation != "" {
+		return workflowNormalizeResourceAPIOperation(marketing.ResourceOperation(operation))
+	}
+	switch resource.Type {
+	case marketing.ResourceHTTPProvider, marketing.ResourceGRPCProvider, marketing.ResourcePluginProvider, marketing.ResourceCustomProvider:
+		return marketing.ResourceCall
+	default:
+		return marketing.ResourceRead
+	}
+}
+
+func workflowRenderFactQueryTemplate(template string, runtime workflowRuntime, node marketing.WorkflowNode, factCode string) string {
+	rendered := workflowRenderNodeTemplate(template, runtime, node)
+	rendered = strings.ReplaceAll(rendered, "${factCode}", factCode)
+	rendered = strings.ReplaceAll(rendered, "${factCode.lower}", strings.ToLower(factCode))
+	return rendered
+}
+
+func workflowFactQueryResourcePayload(ctx context.Context, config map[string]any, runtime workflowRuntime, factCode string) map[string]any {
+	return map[string]any{
+		"tenantId":   runtime.Activity.TenantID,
+		"activityId": runtime.Activity.ID,
+		"eventId":    runtime.Inbox.Event.EventID,
+		"eventType":  runtime.Inbox.Event.EventType,
+		"factCode":   factCode,
+		"subject":    workflowJSONValue(workflowFactQuerySubject(ctx, config, runtime)),
+		"biz":        workflowJSONValue(runtime.Inbox.Event.Biz),
+		"attributes": workflowJSONValue(runtime.Inbox.Event.Attributes),
+	}
+}
+
+func workflowFactValueFromResourceOutput(output map[string]any, factCode string, valuePath string) (any, bool) {
+	if strings.TrimSpace(valuePath) != "" {
+		if value, err := extractWorkflowJSONPath(output, valuePath); err == nil {
+			return value, true
+		}
+	}
+	if facts, ok := workflowJSONValue(output["facts"]).(map[string]any); ok {
+		if value, ok := facts[factCode]; ok {
+			return value, true
+		}
+	}
+	for _, key := range []string{"stored_value", "value", "data"} {
+		if value, ok := output[key]; ok && value != nil {
+			normalized := workflowJSONValue(value)
+			if mapped, ok := normalized.(map[string]any); ok {
+				if facts, ok := mapped["facts"].(map[string]any); ok {
+					if factValue, ok := facts[factCode]; ok {
+						return factValue, true
+					}
+				}
+				if factValue, ok := mapped[factCode]; ok {
+					return factValue, true
+				}
+				if data, ok := mapped["data"].(map[string]any); ok {
+					if factValue, ok := data[factCode]; ok {
+						return factValue, true
+					}
+				}
+			}
+			return normalized, true
+		}
+	}
+	return nil, false
 }
 
 func (s *Service) factQueryProviderChainWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime, config map[string]any, chain []string) workflowNodeResult {
@@ -3459,6 +3596,13 @@ func (s *Service) workflowHTTPStateStore(ctx context.Context, node marketing.Wor
 		return nodeFailed("STATE_STORE_PROVIDER_REQUIRED: HTTP storage endpoint is required", map[string]any{"errorCode": "STATE_STORE_PROVIDER_REQUIRED", "storageType": "HTTP", "audit": workflowHandlerAudit(node, runtime)})
 	}
 	endpoint = workflowRenderNodeTemplate(endpoint, runtime, node)
+	if err := workflowValidateHTTPProviderEndpoint(endpoint, config); err != nil {
+		return nodeFailed("STATE_STORE_HTTP_ENDPOINT_DENIED: "+err.Error(), map[string]any{
+			"errorCode": "STATE_STORE_HTTP_ENDPOINT_DENIED",
+			"error":     err.Error(),
+			"audit":     workflowHandlerAudit(node, runtime),
+		})
+	}
 	value := workflowStateStoreValue(ctx, config, runtime, valueType)
 	expectedVersion := workflowInt64(workflowConfigString(config, "expectedVersion"))
 	if expectedVersion == 0 {
@@ -3500,7 +3644,8 @@ func (s *Service) workflowHTTPStateStore(ctx context.Context, node marketing.Wor
 			}
 		}
 	}
-	resp, err := http.DefaultClient.Do(req)
+	client := workflowHTTPProviderClient(config)
+	resp, err := client.Do(req)
 	if err != nil {
 		return nodeFailed("STATE_STORE_HTTP_FAILED: "+err.Error(), map[string]any{"errorCode": "STATE_STORE_HTTP_FAILED", "error": err.Error(), "audit": workflowHandlerAudit(node, runtime)})
 	}
@@ -3545,6 +3690,142 @@ func workflowHTTPStateStoreOutput(node marketing.WorkflowNode, runtime workflowR
 	output := workflowStateStoreOutput(node, runtime, "HTTP", operation, namespace, storageKey, valueType, value, version, exists)
 	output["provider_response"] = workflowJSONValue(decoded)
 	return output
+}
+
+func workflowValidateHTTPProviderEndpoint(endpoint string, config map[string]any) error {
+	parsed, err := url.Parse(endpoint)
+	if err != nil {
+		return fmt.Errorf("invalid endpoint: %w", err)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return errors.New("endpoint scheme must be http or https")
+	}
+	if parsed.User != nil {
+		return errors.New("endpoint must not contain userinfo")
+	}
+	host := strings.ToLower(strings.TrimSpace(parsed.Hostname()))
+	if host == "" {
+		return errors.New("endpoint host is required")
+	}
+	if blocked := workflowConfigStringList(config, "blockedHosts"); workflowHTTPHostBlocked(host, blocked) {
+		return fmt.Errorf("endpoint host %s is blocked", host)
+	}
+	allowedHosts := workflowConfigStringList(config, "allowedHosts")
+	allowedSuffixes := workflowConfigStringList(config, "allowedHostSuffixes")
+	if len(allowedHosts) > 0 || len(allowedSuffixes) > 0 {
+		if !workflowHTTPHostAllowed(host, allowedHosts, allowedSuffixes) {
+			return fmt.Errorf("endpoint host %s is not in allowlist", host)
+		}
+	}
+	if workflowConfigBool(config, "blockPrivateNetwork", false) {
+		private, err := workflowHTTPHostIsPrivate(host)
+		if err != nil {
+			return err
+		}
+		if private {
+			return fmt.Errorf("endpoint host %s is private or local", host)
+		}
+	}
+	return nil
+}
+
+func workflowHTTPProviderClient(config map[string]any) *http.Client {
+	client := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	if !workflowConfigBool(config, "blockPrivateNetwork", false) {
+		return client
+	}
+	dialer := &net.Dialer{
+		ControlContext: func(ctx context.Context, network string, address string, c syscall.RawConn) error {
+			host, _, err := net.SplitHostPort(address)
+			if err != nil {
+				host = address
+			}
+			ip := net.ParseIP(host)
+			if ip == nil {
+				private, privateErr := workflowHTTPHostIsPrivate(host)
+				if privateErr != nil {
+					return privateErr
+				}
+				if private {
+					return fmt.Errorf("endpoint dial address %s is private or local", host)
+				}
+				return nil
+			}
+			if workflowIPIsPrivateOrLocal(ip) {
+				return fmt.Errorf("endpoint dial address %s is private or local", host)
+			}
+			return nil
+		},
+	}
+	client.Transport = &http.Transport{DialContext: dialer.DialContext}
+	return client
+}
+
+func workflowHTTPHostBlocked(host string, blockedHosts []string) bool {
+	for _, blocked := range blockedHosts {
+		if strings.EqualFold(strings.TrimSpace(blocked), host) {
+			return true
+		}
+	}
+	return false
+}
+
+func workflowHTTPHostAllowed(host string, allowedHosts []string, allowedSuffixes []string) bool {
+	for _, allowed := range allowedHosts {
+		normalized := strings.ToLower(strings.TrimSpace(allowed))
+		if normalized != "" && host == normalized {
+			return true
+		}
+	}
+	for _, suffix := range allowedSuffixes {
+		normalized := strings.ToLower(strings.TrimSpace(suffix))
+		if normalized == "" {
+			continue
+		}
+		if strings.HasPrefix(normalized, ".") {
+			if strings.HasSuffix(host, normalized) || host == strings.TrimPrefix(normalized, ".") {
+				return true
+			}
+			continue
+		}
+		if host == normalized || strings.HasSuffix(host, "."+normalized) {
+			return true
+		}
+	}
+	return false
+}
+
+func workflowHTTPHostIsPrivate(host string) (bool, error) {
+	if host == "localhost" || strings.HasSuffix(host, ".localhost") {
+		return true, nil
+	}
+	ip := net.ParseIP(host)
+	if ip != nil {
+		return workflowIPIsPrivateOrLocal(ip), nil
+	}
+	lookupCtx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	addresses, err := net.DefaultResolver.LookupIPAddr(lookupCtx, host)
+	if err != nil {
+		return false, fmt.Errorf("endpoint host %s could not be resolved for private network validation: %w", host, err)
+	}
+	if len(addresses) == 0 {
+		return false, fmt.Errorf("endpoint host %s resolved no addresses", host)
+	}
+	for _, address := range addresses {
+		if workflowIPIsPrivateOrLocal(address.IP) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func workflowIPIsPrivateOrLocal(ip net.IP) bool {
+	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified()
 }
 
 func workflowMemoryStateStore(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime, config map[string]any, operation string, namespace string, storageKey string, valueType string) workflowNodeResult {
@@ -4886,6 +5167,117 @@ func outboxWorkflowNodeHandler(_ context.Context, node marketing.WorkflowNode, r
 	return nodeSuccess(output)
 }
 
+func (s *Service) outboxWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
+	if resourceRef := strings.TrimSpace(workflowExplicitConfigString(node, "resourceRef")); resourceRef != "" {
+		config, failed, ok := workflowRequireNodeConfig(node)
+		if !ok {
+			failed.Output["audit"] = workflowHandlerAudit(node, runtime)
+			return failed
+		}
+		result := outboxWorkflowNodeHandler(ctx, node, runtime)
+		if result.Status != marketing.WorkflowNodeSuccess {
+			return result
+		}
+		resource, err := s.GetResource(ctx, runtime.Activity.TenantID, resourceRef)
+		if err != nil {
+			return nodeFailed("RESOURCE_NOT_FOUND: "+err.Error(), map[string]any{"errorCode": "RESOURCE_NOT_FOUND", "resourceRef": resourceRef, "audit": workflowHandlerAudit(node, runtime)})
+		}
+		operation := workflowOutboxResourceOperation(resource)
+		channel := workflowOutboxResourceChannel(resource, config)
+		key := workflowRenderNodeTemplate(firstWorkflowString(workflowConfigString(config, "keyTemplate"), "${activityId}:${eventId}:${nodeId}"), runtime, node)
+		accessReq := marketing.ResourceAccessRequest{
+			TenantID:    runtime.Activity.TenantID,
+			WorkspaceID: runtime.Activity.WorkspaceID,
+			FolderID:    runtime.Activity.FolderID,
+			ActivityID:  runtime.Activity.ID,
+			NodeID:      node.ID,
+			NodeType:    nodeHandlerKey(node),
+			Operation:   workflowStateStoreResourceOperation(operation),
+			Namespace:   firstWorkflowString(workflowConfigString(config, "namespace"), "outbox"),
+			ResourceKey: key,
+		}
+		if err := s.ValidateResourceAccess(ctx, resource, accessReq); err != nil {
+			code := firstWorkflowString(strings.TrimSpace(err.Error()), "RESOURCE_PERMISSION_DENIED")
+			return nodeFailed(code+": resource access denied", map[string]any{"errorCode": code, "resourceRef": resourceRef, "resourceType": resource.Type, "audit": workflowHandlerAudit(node, runtime)})
+		}
+		if code := resourceAdapterConfigError(resource); code != "" {
+			return nodeFailed(code+": resource adapter config is invalid", map[string]any{"errorCode": code, "resourceRef": resourceRef, "resourceType": resource.Type, "audit": workflowHandlerAudit(node, runtime)})
+		}
+		if workflowResourceApprovalRequired(resource, operation, config) {
+			return nodeFailed("RESOURCE_APPROVAL_REQUIRED: high risk resource operation requires approval", map[string]any{
+				"errorCode":    "RESOURCE_APPROVAL_REQUIRED",
+				"resourceRef":  resourceRef,
+				"resourceType": resource.Type,
+				"operation":    operation,
+				"audit":        workflowHandlerAudit(node, runtime),
+			})
+		}
+		matched := workflowOutboxMessagesForChannel(runtime.OutboxMessages, channel)
+		if result.Output == nil {
+			result.Output = map[string]any{}
+		}
+		result.Output["resourceRef"] = resource.Code
+		result.Output["resource"] = map[string]any{"id": resource.ID, "code": resource.Code, "type": resource.Type, "driver": resource.Driver}
+		result.Output["resourceized"] = true
+		result.Output["resourceChannel"] = channel
+		result.Output["resourceMessageCount"] = len(matched)
+		result.Output["resourceDispatchPlan"] = map[string]any{
+			"operation":          operation,
+			"namespace":          accessReq.Namespace,
+			"key":                key,
+			"targetRef":          workflowResourceTargetRef(resource),
+			"executionMode":      "OUTBOX_INTENT_RESOURCE_BOUND",
+			"executionAuthority": "OutboxWorker",
+		}
+		_ = s.workflowRecordResourceAudit(ctx, resource, runtime, node, operation, result)
+		return result
+	}
+	return outboxWorkflowNodeHandler(ctx, node, runtime)
+}
+
+func workflowOutboxResourceOperation(resource marketing.Resource) marketing.ResourceOperation {
+	if resource.Type == marketing.ResourceMQTopic {
+		return marketing.ResourcePublish
+	}
+	return marketing.ResourceCall
+}
+
+func workflowOutboxResourceChannel(resource marketing.Resource, config map[string]any) marketing.GrantChannel {
+	if channel := strings.ToUpper(workflowConfigString(config, "channel")); channel != "" {
+		return marketing.GrantChannel(channel)
+	}
+	switch resource.Type {
+	case marketing.ResourceMQTopic:
+		return marketing.GrantMQ
+	case marketing.ResourceHTTPProvider:
+		return marketing.GrantHTTP
+	default:
+		return marketing.GrantWebhook
+	}
+}
+
+func workflowOutboxMessagesForChannel(messages []marketing.OutboxMessage, channel marketing.GrantChannel) []any {
+	items := make([]any, 0)
+	for _, message := range messages {
+		if message.TargetChannel == channel {
+			items = append(items, workflowJSONValue(message))
+		}
+	}
+	return items
+}
+
+func workflowResourceTargetRef(resource marketing.Resource) string {
+	config := resource.ConfigMap()
+	switch resource.Type {
+	case marketing.ResourceMQTopic:
+		return firstWorkflowString(resourceConfigString(config, "destination"), firstWorkflowString(resourceConfigString(config, "targetRef"), resourceConfigString(config, "topic")))
+	case marketing.ResourceHTTPProvider:
+		return firstWorkflowString(resourceConfigString(config, "endpoint"), resourceConfigString(config, "providerEndpoint"))
+	default:
+		return firstWorkflowString(resourceConfigString(config, "targetRef"), resource.Code)
+	}
+}
+
 func retryWorkflowNodeHandler(_ context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
 	if len(runtime.OutboxMessages) == 0 {
 		return nodeSkipped("no dispatch retry required", map[string]any{
@@ -5004,6 +5396,69 @@ func callbackWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNod
 		"terminalAuthority": "RewardCallback/Reconciliation",
 		"audit":             workflowHandlerAudit(node, runtime),
 	})
+}
+
+func (s *Service) callbackWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
+	if resourceRef := strings.TrimSpace(workflowExplicitConfigString(node, "resourceRef")); resourceRef != "" {
+		result := callbackWorkflowNodeHandler(ctx, node, runtime)
+		if result.Status != marketing.WorkflowNodeSuccess {
+			return result
+		}
+		config := workflowNodeConfigMap(node)
+		resource, err := s.GetResource(ctx, runtime.Activity.TenantID, resourceRef)
+		if err != nil {
+			return nodeFailed("RESOURCE_NOT_FOUND: "+err.Error(), map[string]any{"errorCode": "RESOURCE_NOT_FOUND", "resourceRef": resourceRef, "audit": workflowHandlerAudit(node, runtime)})
+		}
+		key := workflowRenderNodeTemplate(firstWorkflowString(workflowConfigString(config, "keyTemplate"), "${activityId}:${eventId}:${nodeId}"), runtime, node)
+		accessReq := marketing.ResourceAccessRequest{
+			TenantID:    runtime.Activity.TenantID,
+			WorkspaceID: runtime.Activity.WorkspaceID,
+			FolderID:    runtime.Activity.FolderID,
+			ActivityID:  runtime.Activity.ID,
+			NodeID:      node.ID,
+			NodeType:    nodeHandlerKey(node),
+			Operation:   marketing.ResourceCall,
+			Namespace:   firstWorkflowString(workflowConfigString(config, "namespace"), "callback"),
+			ResourceKey: key,
+		}
+		if err := s.ValidateResourceAccess(ctx, resource, accessReq); err != nil {
+			code := firstWorkflowString(strings.TrimSpace(err.Error()), "RESOURCE_PERMISSION_DENIED")
+			return nodeFailed(code+": resource access denied", map[string]any{"errorCode": code, "resourceRef": resourceRef, "resourceType": resource.Type, "audit": workflowHandlerAudit(node, runtime)})
+		}
+		if code := resourceAdapterConfigError(resource); code != "" {
+			return nodeFailed(code+": resource adapter config is invalid", map[string]any{"errorCode": code, "resourceRef": resourceRef, "resourceType": resource.Type, "audit": workflowHandlerAudit(node, runtime)})
+		}
+		if workflowResourceApprovalRequired(resource, marketing.ResourceCall, config) {
+			return nodeFailed("RESOURCE_APPROVAL_REQUIRED: high risk resource operation requires approval", map[string]any{
+				"errorCode":    "RESOURCE_APPROVAL_REQUIRED",
+				"resourceRef":  resourceRef,
+				"resourceType": resource.Type,
+				"operation":    marketing.ResourceCall,
+				"audit":        workflowHandlerAudit(node, runtime),
+			})
+		}
+		if result.Output == nil {
+			result.Output = map[string]any{}
+		}
+		result.Output["resourceRef"] = resource.Code
+		result.Output["resource"] = map[string]any{"id": resource.ID, "code": resource.Code, "type": resource.Type, "driver": resource.Driver}
+		result.Output["resourceized"] = true
+		result.Output["callbackResourcePlan"] = map[string]any{
+			"operation":          marketing.ResourceCall,
+			"namespace":          accessReq.Namespace,
+			"key":                key,
+			"targetRef":          workflowResourceTargetRef(resource),
+			"executionMode":      "EXTERNAL_ENDPOINT_RESOURCE_BOUND",
+			"executionAuthority": "RewardCallback/Reconciliation",
+		}
+		if callbackResult, ok := result.Output["callback_result"].(map[string]any); ok {
+			callbackResult["resourceRef"] = resource.Code
+			callbackResult["targetRef"] = workflowResourceTargetRef(resource)
+		}
+		_ = s.workflowRecordResourceAudit(ctx, resource, runtime, node, marketing.ResourceCall, result)
+		return result
+	}
+	return callbackWorkflowNodeHandler(ctx, node, runtime)
 }
 
 func approvalGateWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {

@@ -1151,43 +1151,50 @@ VIEWER 不能保存写资源节点
    - `endpoint/method/headers/timeoutSeconds` 从资源配置读取
    - 节点只需要引用 `resourceRef`、操作、namespace、keyTemplate、valueType
    - 资源配置优先于 schema 默认值，节点显式配置仍可覆盖
-3. 资源测试连接已增加 adapter 配置校验：
+   - 运行时已增加 URL scheme、userinfo、host allowlist、blockedHosts、private network 阻断开关和 redirect 防护第一版
+3. `fact-query + resourceRef` 已支持资源查询：
+   - 可读取 `DATABASE_KV/DATABASE_TABLE/REDIS_*` 语义资源
+   - 可通过 `HTTP_PROVIDER` 执行 `CALL` 查询，并从 `value/stored_value/data/facts` 或 `valuePath` 抽取事实
+   - 查询 key 支持 `${tenantId}`、`${activityId}`、`${eventId}`、`${subject.id}`、`${factCode}`
+4. `outbox/callback + resourceRef` 已支持资源绑定：
+   - `outbox` 可绑定 `HTTP_PROVIDER/MQ_TOPIC`，生成受控 dispatch plan、校验权限并记录资源审计
+   - `callback` 可绑定 `HTTP_PROVIDER`，明确回调入口或查询 provider 边界，最终状态仍由 `RewardCallback/Reconciliation` 权威
+5. 资源测试连接已增加 adapter 配置校验：
    - `DATABASE_TABLE` 必须配置表名和 `primaryKey`
    - `HTTP_PROVIDER` 必须配置 endpoint，method 只允许 `GET/POST/PUT`
-4. 默认能力已补齐：
+6. 默认能力已补齐：
    - `DATABASE_TABLE` 默认支持 `READ/WRITE/UPSERT/APPEND/DELETE/CAS`
    - `HTTP_PROVIDER` 默认支持 `READ/WRITE/UPSERT/DELETE/CALL/TEST_CONNECTION`
 
-任务：
+已完成：
 
-1. `DATABASE_TABLE` adapter：
-   - schema 校验
-   - keyMapping
-   - valueMapping
-   - READ/UPSERT/DELETE/CAS
-2. `HTTP_PROVIDER` adapter：
-   - endpoint 从资源配置读取
-   - headers 从 secretRef 读取
-   - request/response schema 校验
-   - allowlist/SSRF 防护
-3. `fact-query` 改造：
-   - 支持 `resourceRef`
-   - 查询配置从资源 schema 推导
-4. `outbox/callback` 改造：
-   - 支持 `resourceRef`
-   - endpoint/topic 从资源读取
-5. 测试连接增强：
-   - schema 测试
-   - 权限测试
-   - dry-run 调用
+| 项目 | 状态 | 说明 |
+| --- | --- | --- |
+| `DATABASE_TABLE` adapter | 已完成第一版 | 支持资源配置表名、主键、READ/WRITE/UPSERT/APPEND/DELETE/CAS；底层为受控虚拟公共表 |
+| `HTTP_PROVIDER` adapter | 已完成第一版 | `endpoint/method/httpMethod/headers/timeoutSeconds` 从资源读取，节点显式配置可覆盖 |
+| Adapter 配置校验 | 已完成第一版 | `TestResource` 和运行时都会校验公共表、HTTP Provider 的必要配置 |
+| HTTP Provider 安全治理 | 已完成第一版 | URL scheme、userinfo、allowlist、blockedHosts、private network 阻断开关、redirect 防护已接入运行时 |
+| `fact-query + resourceRef` | 已完成第一版 | 支持资源读和 HTTP Provider CALL 查询，统一输出 `facts` |
+| `outbox/callback + resourceRef` | 已完成第一版 | 核心节点可绑定资源、校验权限、生成计划并记录审计；真实投递/回调仍由 worker/API 权威 |
+| 资源审计 | 已完成第一版 | `state-store/fact-query/outbox/callback/mq-publish/Lua Resource API + resourceRef` 会记录资源调用审计 |
+
+仍需完善：
+
+| 项目 | 状态 | 说明 |
+| --- | --- | --- |
+| 公共表 schema / mapping | 未完成 | 目前只校验表名和主键；`schema`、`keyMapping`、`valueMapping` 还未成为强约束 |
+| HTTP Provider 密钥治理 | 未完成 | `secretRef` 仍未接入密钥服务；当前只能使用资源配置中的非敏感 headers |
+| HTTP Provider response schema | 未完成 | 当前只做通用 response 解析，没有按资源 schema 校验响应 |
+| 测试连接 dry-run | 未完成 | 当前 `TestResource` 是配置校验，不是真实外部探活或 dry-run 调用 |
 
 验收：
 
 ```text
-公共表资源可被 state-store/fact-query 使用
-HTTP Provider endpoint 不再出现在节点配置里
-节点 debug 能看到资源调用 trace
-资源调用失败有统一错误码
+state-store 可使用公共表资源：已完成
+fact-query 可使用公共表/Provider 资源：已完成第一版
+HTTP Provider endpoint 不再必须出现在节点配置里：已完成
+节点 debug 能看到资源调用 trace：部分完成，资源审计已写入，前端 trace 仍可增强
+资源调用失败有统一错误码：已完成第一版
 ```
 
 ### P3：Redis、MQ、Lua Resource API
@@ -1213,40 +1220,48 @@ HTTP Provider endpoint 不再出现在节点配置里
    - `resource_call(resourceRef, key, payload, options)`
    - `resource_publish(resourceRef, key, payload, options)`
    - 所有调用都复用 `ValidateResourceAccess`、resource adapter 配置校验和资源审计
+   - 支持 `maxResourceCalls` 和 `maxResourceResponseBytes`，防止脚本无限调用资源或拉取超大响应
 4. 高风险操作第一版支持资源级审批开关：
    - 资源配置 `requireApproval: true` 时，`DELETE/CALL/PUBLISH` 必须在 options 中传 `approved: true` 或 `approvalId`
    - 后续需要接入正式审批单和生产 debug 写入审批链路
 
-任务：
+已完成：
 
-1. `REDIS_KV` adapter
-2. `REDIS_HASH` adapter
-3. `REDIS_COUNTER` adapter
-4. `REDIS_LOCK` adapter
-5. `MQ_TOPIC` adapter
-6. Lua 受控资源 API：
-   - `resource_read`
-   - `resource_write`
-   - `resource_upsert`
-   - `resource_call`
-7. 对高风险操作增加审批策略：
-   - DELETE
-   - CALL 钱包
-   - PUBLISH 外部消息
-   - 生产 debug 写入
+| 项目 | 状态 | 说明 |
+| --- | --- | --- |
+| `REDIS_KV` | 已完成第一版 | 通过 `state-store + resourceRef` 读写 key/value 语义 |
+| `REDIS_HASH` | 已完成第一版 | 通过 `field/fieldTemplate` 表达 hash field 语义 |
+| `REDIS_COUNTER` | 已完成第一版 | 支持 `CHECK_AND_INCREMENT`、`delta`、`max` |
+| `REDIS_LOCK` | 已完成第一版 | 支持 ttl 锁占用、未过期锁阻断和释放 |
+| `MQ_TOPIC` | 已完成第一版 | `mq-publish + resourceRef` 生成受控 publish intent，并记录审计 |
+| Lua Resource API | 已完成第一版 | 支持 `resource_read/write/upsert/call/publish` |
+| Lua 资源调用限流 | 已完成第一版 | 支持每个脚本最大资源调用次数和单次响应大小限制 |
+| 高风险资源操作审批 | 已完成第一版 | `requireApproval=true` 时，`DELETE/CALL/PUBLISH` 要求 `approved` 或 `approvalId` |
+| CAS 语义 | 已完成第一版 | `CAS` 必须带 `expectedVersion` 或上游 `storage_version`，否则阻断 |
+
+仍需完善：
+
+| 项目 | 状态 | 说明 |
+| --- | --- | --- |
+| 真实 Redis client adapter | 未完成 | 当前 Redis 语义由 `marketing_storage_state` 承载，未来替换成真实 Redis client |
+| MQ broker ack | 未完成 | `MQ_TOPIC` 当前不直接发送 broker，只生成发布意图；真实 ack 仍由 OutboxWorker/MQ sender |
+| 正式审批单校验 | 未完成 | 当前只认 `approved/approvalId` 信号，还没校验审批单状态和权限 |
+| 生产 debug 写入审批 | 未完成 | 需要结合 Debug/Execution 权限和审批链路 |
 
 验收：
 
 ```text
-quota-check 可使用 REDIS_COUNTER
-lock 节点可使用 REDIS_LOCK
-outbox 可使用 MQ_TOPIC
-Lua 只能访问被 binding 授权的资源
+quota-check 可使用 REDIS_COUNTER：部分完成，REDIS_COUNTER resource 已可执行，quota-check 直接 resourceRef 还未改造
+lock 节点可使用 REDIS_LOCK：部分完成，REDIS_LOCK resource 已可执行，专用 lock 节点还未建立
+outbox 可使用 MQ_TOPIC/HTTP_PROVIDER：已完成第一版，核心 outbox 可绑定资源并生成 dispatch plan；真实 broker ack 仍由 OutboxWorker/MQ sender
+Lua 只能访问被 binding 授权的资源：已完成第一版
 ```
 
 ### P4：治理和运维
 
 目标：资源管理可维护、可审计、可迁移。
+
+当前状态：暂停。先完成 P2/P3 文档状态对齐、节点目录同步和入口 runtime 缺口收口后再启动。
 
 任务：
 
@@ -1301,13 +1316,12 @@ Lua 只能访问被 binding 授权的资源
 ```json
 {
   "resourceRef": "user_profile_provider",
-  "operation": "READ",
-  "queryMapping": {
-    "tenantId": "${tenantId}",
-    "userId": "${subject.id}"
-  },
-  "outputPath": "facts.userProfile",
-  "missingPolicy": "BLOCK"
+  "operation": "CALL",
+  "factKeys": ["USER_PROFILE"],
+  "namespace": "facts",
+  "keyTemplate": "${tenantId}:${subject.id}:${factCode}",
+  "valuePath": "$.stored_value.USER_PROFILE",
+  "failureAction": "BLOCK"
 }
 ```
 
@@ -1316,12 +1330,24 @@ Lua 只能访问被 binding 授权的资源
 ```json
 {
   "resourceRef": "notification_topic",
-  "operation": "PUBLISH",
-  "payloadMapping": {
-    "userId": "${subject.id}",
-    "template": "CHECKIN_SUCCESS",
-    "data": "$.outputs.grant_order"
-  }
+  "channel": "MQ",
+  "namespace": "outbox",
+  "keyTemplate": "${eventId}",
+  "maxAttempts": 3
+}
+```
+
+`callback`：
+
+```json
+{
+  "provider": "wallet",
+  "resourceRef": "wallet_callback_provider",
+  "namespace": "callback",
+  "keyTemplate": "${eventId}",
+  "callbackIdPath": "$.callbackId",
+  "statusPath": "$.status",
+  "requireSignature": true
 }
 ```
 

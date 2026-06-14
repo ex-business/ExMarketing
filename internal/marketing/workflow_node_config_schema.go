@@ -309,13 +309,17 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 				withDescription(stringField("cachePath", "本地缓存 Path", false, "$.vars.execution.facts.USER_PROFILE", rules(maxLength(200))), "读取 workflow 变量中的事实缓存。"),
 			)),
 			fieldGroup("provider-target", "Provider 目标", "当 source 或 providerChain 使用 HTTP、Redis、gRPC、Plugin、Custom 时描述查询目标。", fields(
+				withDescription(stringField("resourceRef", "资源 Ref", false, "", rules(maxLength(128))), "优先引用资源管理中的资源 Code。配置后，查询目标、endpoint、Redis key 前缀和权限从资源读取。"),
+				enumField("operation", "资源操作", false, "READ", []string{"READ", "CALL"}),
+				withDescription(stringField("namespace", "资源命名空间", false, "facts", rules(maxLength(128))), "资源审计和 key policy 使用的命名空间。"),
 				withDescription(stringField("providerCode", "Provider Code", false, "", rules(maxLength(128))), "可选：引用营销域已登记的 fact provider；为空时按节点内配置执行。"),
 				withDescription(stringField("endpoint", "HTTP Endpoint", false, "", rules(maxLength(2048))), "HTTP_PROVIDER 使用的完整 URL，例如 https://user-service/internal/facts/user-profile。"),
 				enumField("method", "HTTP Method", false, "POST", []string{"GET", "POST"}),
 				withDescription(stringField("authRef", "Auth Ref", false, "", rules(maxLength(128))), "HTTP 鉴权配置引用，不在节点里保存密钥。"),
 				objectField("mapping", "响应映射", false, nil),
 				withDescription(stringField("redisRef", "Redis Ref", false, "", rules(maxLength(128))), "REDIS 使用的连接引用，例如 marketing-fact-cache。"),
-				withDescription(stringField("keyTemplate", "Redis Key 模板", false, "marketing:fact:${tenantId}:USER_PROFILE:${subject.id}", rules(maxLength(256))), "REDIS 查询的 key 模板。"),
+				withDescription(stringField("keyTemplate", "Key 模板", false, "marketing:fact:${tenantId}:${factCode}:${subject.id}", rules(maxLength(256))), "资源或 Redis 查询 key 模板，支持 tenantId、activityId、eventId、subject.id、factCode。"),
+				withDescription(stringField("valuePath", "Value Path", false, "", rules(maxLength(160))), "可选：从资源响应中提取事实值，例如 $.stored_value.profile。"),
 				withDescription(stringField("grpcTarget", "gRPC Target", false, "", rules(maxLength(256))), "GRPC 使用的服务地址或服务发现名。"),
 				withDescription(stringField("pluginCode", "Plugin Code", false, "", rules(maxLength(128))), "PLUGIN 使用的插件编码。"),
 			)),
@@ -457,6 +461,8 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 			fieldGroup("runtime", "运行策略", "控制脚本失败行为。", fields(
 				enumField("failureAction", "失败动作", true, "BLOCK", []string{"BLOCK", "USE_EMPTY", "SKIP"}),
 				numberField("timeoutSeconds", "超时秒数", false, 2, rules(minValue(1), maxValue(10))),
+				numberField("maxResourceCalls", "最大资源调用次数", false, 20, rules(minValue(0), maxValue(100))),
+				numberField("maxResourceResponseBytes", "最大资源响应字节数", false, 131072, rules(minValue(1024), maxValue(1048576))),
 			)),
 		), preview(
 			[]string{"event", "input", "outputs", "vars"},
@@ -556,6 +562,8 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 				enumField("language", "语言", true, "LUA", []string{"LUA", "EXPRESSION"}),
 				numberField("timeoutSeconds", "超时秒数", true, 5, rules(minValue(1), maxValue(60))),
 				numberField("maxOutputBytes", "最大输出字节数", true, 65536, rules(minValue(1024), maxValue(1048576))),
+				numberField("maxResourceCalls", "最大资源调用次数", false, 20, rules(minValue(0), maxValue(100))),
+				numberField("maxResourceResponseBytes", "最大资源响应字节数", false, 131072, rules(minValue(1024), maxValue(1048576))),
 			)),
 			fieldGroup("script", "脚本和输出", "定义实际执行代码和输出路径。", fields(
 				withDescription(stringField("source", "代码", true, "", rules(minLength(1), maxLength(20000))), "节点执行的代码片段或表达式。"),
@@ -572,6 +580,8 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 				enumField("language", "语言", true, "LUA", []string{"LUA", "EXPRESSION"}),
 				numberField("timeoutSeconds", "超时秒数", true, 5, rules(minValue(1), maxValue(60))),
 				numberField("maxOutputBytes", "最大输出字节数", true, 65536, rules(minValue(1024), maxValue(1048576))),
+				numberField("maxResourceCalls", "最大资源调用次数", false, 20, rules(minValue(0), maxValue(100))),
+				numberField("maxResourceResponseBytes", "最大资源响应字节数", false, 131072, rules(minValue(1024), maxValue(1048576))),
 			)),
 			fieldGroup("script", "组合脚本", "从 input、ctx、node_output 读取多个来源并 emit 组合结果。", fields(
 				withDescription(stringField("source", "代码", true, "emit({combined = ctx.node.input})", rules(minLength(1), maxLength(20000))), "Lua 中使用 emit({...}) 输出组合结果。"),
@@ -588,6 +598,8 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 				enumField("language", "语言", true, "LUA", []string{"LUA", "EXPRESSION"}),
 				numberField("timeoutSeconds", "超时秒数", true, 5, rules(minValue(1), maxValue(60))),
 				numberField("maxOutputBytes", "最大输出字节数", true, 65536, rules(minValue(1024), maxValue(1048576))),
+				numberField("maxResourceCalls", "最大资源调用次数", false, 20, rules(minValue(0), maxValue(100))),
+				numberField("maxResourceResponseBytes", "最大资源响应字节数", false, 131072, rules(minValue(1024), maxValue(1048576))),
 			)),
 			fieldGroup("script", "拆分脚本", "从 input、ctx、node_output 读取对象并 emit 拆分结果。", fields(
 				withDescription(stringField("source", "代码", true, "emit({items = ctx.node.input.items})", rules(minLength(1), maxLength(20000))), "Lua 中建议输出 items 数组，例如 emit({items = {...}})。"),
@@ -683,7 +695,10 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 			numberField("expireSeconds", "过期秒数", false, 3600, rules(minValue(60), maxValue(604800))),
 		)),
 		schema("outbox", "消息发件箱", "写入 outbox", fields(
+			withDescription(stringField("resourceRef", "资源 Ref", false, "", rules(maxLength(128))), "可选：引用资源管理中的 MQ_TOPIC 或 HTTP_PROVIDER，绑定 outbox worker 的真实投递目标。"),
 			enumField("channel", "发送渠道", false, "HTTP", []string{"HTTP", "MQ", "WEBHOOK"}),
+			withDescription(stringField("namespace", "资源命名空间", false, "outbox", rules(maxLength(128))), "资源审计和 key policy 使用的命名空间。"),
+			stringField("keyTemplate", "消息 Key 模板", false, "${eventId}", rules(maxLength(256))),
 			numberField("maxAttempts", "最大尝试次数", false, 3, rules(minValue(1), maxValue(10))),
 		)),
 		schema("http-call", "HTTP 发奖", "调用外部 HTTP 接口", fields(
@@ -712,6 +727,9 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 		groupedSchema("callback", "结果回调", "处理发奖渠道、外部系统或活动平台的回调结果。", groups(
 			fieldGroup("provider", "回调来源", "定义允许哪个渠道回调以及如何识别回调事件。", fields(
 				withDescription(stringField("provider", "渠道编码", true, "default", rules(minLength(1), maxLength(128), pattern(`^[a-zA-Z0-9._-]+$`, "渠道编码只能包含字母、数字、点、下划线和短横线。"))), "外部渠道或内部 provider 编码。"),
+				withDescription(stringField("resourceRef", "资源 Ref", false, "", rules(maxLength(128))), "可选：引用资源管理中的 HTTP_PROVIDER，绑定回调入口或查询 provider 的真实 endpoint。"),
+				withDescription(stringField("namespace", "资源命名空间", false, "callback", rules(maxLength(128))), "资源审计和 key policy 使用的命名空间。"),
+				stringField("keyTemplate", "回调 Key 模板", false, "${eventId}", rules(maxLength(256))),
 				withDescription(stringField("callbackIdPath", "回调 ID Path", true, "$.callbackId", rules(minLength(1), maxLength(160))), "从 provider_callback 中读取回调唯一 ID 的路径。"),
 				withDescription(stringField("statusPath", "状态 Path", true, "$.status", rules(minLength(1), maxLength(160))), "从 provider_callback 中读取 SUCCESS / FAILED 等状态。"),
 			)),

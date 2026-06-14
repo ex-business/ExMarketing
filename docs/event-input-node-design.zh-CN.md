@@ -114,6 +114,11 @@ tenantId:sourceSystem:eventType:biz.bizType:biz.bizId
 | `manual-event` | 人工触发事件 | 管理台补偿、重放、手动执行 | 有 debug/replay 基础，生产补偿入口待收口 |
 | `internal-event` | 内部系统事件 | ExMarketing 内部状态变化触发 workflow | 部分能力存在，节点模型待建 |
 
+边界说明：
+
+- `MQ_TOPIC` 资源和 `mq-publish` 属于出站发布能力，用于发奖指令、通知或业务消息发布意图。
+- `mq-event` 属于入站 trigger runtime，需要 consumer、offset、ack、retry、DLQ 和 replay；不能因为出站 `MQ_TOPIC` 已实现就标记为入站可用。
+
 ### 幂等与标准化
 
 | 节点类型 | 中文名 | 责任 |
@@ -330,7 +335,7 @@ tenantId:sourceSystem:eventType:biz.bizType:biz.bizId
 5. 预留入口节点：
    - `HTTP 接口事件`：已支持接口，节点先作为解释/配置节点。
    - `Webhook 映射事件`：已支持接口，节点先作为解释/配置节点。
-   - `MQ Topic 事件`：待实现。
+   - `MQ Topic 事件`：待实现入站 consumer；当前已实现的是出站 `MQ_TOPIC` 资源。
    - `定时事件`：待实现或接入已有调度能力。
    - `状态监听事件`：待实现。
    - `人工触发事件`：待从 debug/replay 收口为生产补偿入口。
@@ -468,4 +473,3 @@ MQ Topic 事件 -> 标准事件入口 -> Inbox -> 后续奖励链路
 ```
 
 后续奖励节点不需要改，只替换事件输入层。
-

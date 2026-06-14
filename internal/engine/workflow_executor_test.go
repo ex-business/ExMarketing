@@ -2022,6 +2022,91 @@ func TestStateStoreWorkflowNodeHandlerUsesHTTPProviderResourceConfig(t *testing.
 	}
 }
 
+func TestStateStoreWorkflowNodeHandlerRejectsHTTPProviderOutsideAllowlist(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	runtime := testWorkflowHandlerRuntime(true)
+	if _, err := service.SaveResource(ctx, marketing.Resource{
+		TenantID:    runtime.Activity.TenantID,
+		WorkspaceID: runtime.Activity.WorkspaceID,
+		Code:        "restricted_http_provider",
+		Name:        "受限 HTTP Provider",
+		Type:        marketing.ResourceHTTPProvider,
+		Driver:      marketing.ResourceDriverREST,
+		Scope:       marketing.ResourceScopeWorkspace,
+		Status:      marketing.ResourceActive,
+		Config:      json.RawMessage(`{"endpoint":"https://evil.example/internal/state","method":"POST","allowedHosts":["provider.example"]}`),
+	}); err != nil {
+		t.Fatalf("save restricted http provider resource: %v", err)
+	}
+	node := marketing.WorkflowNode{
+		ID:     "restricted-http-store",
+		Type:   "state-store",
+		Config: json.RawMessage(`{"resourceRef":"restricted_http_provider","operation":"UPSERT","namespace":"checkin","keyTemplate":"${subject.id}","valueType":"OBJECT"}`),
+	}
+	result := service.stateStoreWorkflowNodeHandler(ctx, node, runtime)
+	if result.Status != marketing.WorkflowNodeFailed || result.Output["errorCode"] != "STATE_STORE_HTTP_ENDPOINT_DENIED" {
+		t.Fatalf("expected http allowlist rejection, got %+v", result)
+	}
+}
+
+func TestStateStoreWorkflowNodeHandlerRejectsHTTPProviderPrivateNetworkWhenConfigured(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	runtime := testWorkflowHandlerRuntime(true)
+	if _, err := service.SaveResource(ctx, marketing.Resource{
+		TenantID:    runtime.Activity.TenantID,
+		WorkspaceID: runtime.Activity.WorkspaceID,
+		Code:        "private_http_provider",
+		Name:        "内网 HTTP Provider",
+		Type:        marketing.ResourceHTTPProvider,
+		Driver:      marketing.ResourceDriverREST,
+		Scope:       marketing.ResourceScopeWorkspace,
+		Status:      marketing.ResourceActive,
+		Config:      json.RawMessage(`{"endpoint":"http://127.0.0.1/internal/state","method":"POST","blockPrivateNetwork":true}`),
+	}); err != nil {
+		t.Fatalf("save private http provider resource: %v", err)
+	}
+	node := marketing.WorkflowNode{
+		ID:     "private-http-store",
+		Type:   "state-store",
+		Config: json.RawMessage(`{"resourceRef":"private_http_provider","operation":"UPSERT","namespace":"checkin","keyTemplate":"${subject.id}","valueType":"OBJECT"}`),
+	}
+	result := service.stateStoreWorkflowNodeHandler(ctx, node, runtime)
+	if result.Status != marketing.WorkflowNodeFailed || result.Output["errorCode"] != "STATE_STORE_HTTP_ENDPOINT_DENIED" {
+		t.Fatalf("expected private network rejection, got %+v", result)
+	}
+}
+
+func TestWorkflowValidateHTTPProviderEndpointSecurityPolicy(t *testing.T) {
+	if err := workflowValidateHTTPProviderEndpoint("https://provider.example/internal/state", map[string]any{"allowedHostSuffixes": []any{"example"}}); err != nil {
+		t.Fatalf("expected provider.example to satisfy suffix allowlist: %v", err)
+	}
+	if err := workflowValidateHTTPProviderEndpoint("https://user:pass@provider.example/internal/state", map[string]any{}); err == nil {
+		t.Fatalf("expected userinfo endpoint to be rejected")
+	}
+	if err := workflowValidateHTTPProviderEndpoint("http://localhost/internal/state", map[string]any{"blockPrivateNetwork": true}); err == nil {
+		t.Fatalf("expected localhost endpoint to be rejected")
+	}
+	if err := workflowValidateHTTPProviderEndpoint("http://127.0.0.1/internal/state", map[string]any{"blockPrivateNetwork": true}); err == nil {
+		t.Fatalf("expected loopback endpoint to be rejected")
+	}
+	client := workflowHTTPProviderClient(map[string]any{"blockPrivateNetwork": true})
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok || transport.DialContext == nil {
+		t.Fatalf("expected guarded http transport, got %+v", client.Transport)
+	}
+	conn, err := transport.DialContext(context.Background(), "tcp", "127.0.0.1:80")
+	if conn != nil {
+		_ = conn.Close()
+	}
+	if err == nil {
+		t.Fatalf("expected guarded dial to reject loopback address")
+	}
+}
+
 func TestStateStoreWorkflowNodeHandlerUsesHTTPProviderHTTPMethodAlias(t *testing.T) {
 	ctx := context.Background()
 	repo := marketing.NewMemoryRepository()
@@ -2234,6 +2319,102 @@ func TestStateStoreWorkflowNodeHandlerUsesRedisKVResource(t *testing.T) {
 	}
 }
 
+func TestFactQueryWorkflowNodeHandlerReadsRedisKVResourceRef(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	runtime := testWorkflowHandlerRuntime(true)
+	if _, err := service.SaveResource(ctx, marketing.Resource{
+		TenantID:    runtime.Activity.TenantID,
+		WorkspaceID: runtime.Activity.WorkspaceID,
+		Code:        "user_fact_cache",
+		Name:        "用户事实缓存",
+		Type:        marketing.ResourceRedisKV,
+		Driver:      marketing.ResourceDriverInternal,
+		Scope:       marketing.ResourceScopeWorkspace,
+		Status:      marketing.ResourceActive,
+		Config:      json.RawMessage(`{"keyPrefix":"fact:user"}`),
+	}); err != nil {
+		t.Fatalf("save fact cache resource: %v", err)
+	}
+	storeNode := marketing.WorkflowNode{
+		ID:     "store-user-profile",
+		Type:   "state-store",
+		Config: json.RawMessage(`{"resourceRef":"user_fact_cache","operation":"UPSERT","namespace":"facts","keyTemplate":"${subject.id}:USER_PROFILE","valueType":"OBJECT"}`),
+	}
+	storeCtx := context.WithValue(ctx, workflowNodeExecutionContextKey{}, workflowNodeExecutionContext{
+		ResolvedInput: map[string]any{"value": map[string]any{"vipLevel": "VIP1", "country": "BR"}},
+	})
+	stored := service.stateStoreWorkflowNodeHandler(storeCtx, storeNode, runtime)
+	if stored.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected fact cache seed success, got %+v", stored)
+	}
+
+	node := marketing.WorkflowNode{
+		ID:     "fact-query",
+		Type:   "fact-query",
+		Config: json.RawMessage(`{"resourceRef":"user_fact_cache","factKeys":["USER_PROFILE"],"namespace":"facts","keyTemplate":"${subject.id}:${factCode}","failureAction":"BLOCK"}`),
+	}
+	result := service.factQueryWorkflowNodeHandler(ctx, node, runtime)
+	if result.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected resource fact query success, got %+v", result)
+	}
+	facts := result.Output["facts"].(map[string]any)
+	profile := facts["USER_PROFILE"].(map[string]any)
+	if profile["vipLevel"] != "VIP1" || result.Output["resourceRef"] != "user_fact_cache" || result.Output["source"] != "RESOURCE" {
+		t.Fatalf("expected profile facts from resource, got %+v", result.Output)
+	}
+}
+
+func TestFactQueryWorkflowNodeHandlerCallsHTTPProviderResourceRef(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	runtime := testWorkflowHandlerRuntime(true)
+	var received map[string]any
+	var receivedMethod string
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedMethod = r.Method
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Fatalf("decode provider request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"value":{"facts":{"USER_PROFILE":{"vipLevel":"VIP2","channel":"APP"}}},"version":3,"exists":true}`))
+	}))
+	defer provider.Close()
+	if _, err := service.SaveResource(ctx, marketing.Resource{
+		TenantID:    runtime.Activity.TenantID,
+		WorkspaceID: runtime.Activity.WorkspaceID,
+		Code:        "profile_http_provider",
+		Name:        "用户画像 HTTP Provider",
+		Type:        marketing.ResourceHTTPProvider,
+		Driver:      marketing.ResourceDriverREST,
+		Scope:       marketing.ResourceScopeWorkspace,
+		Status:      marketing.ResourceActive,
+		Config:      json.RawMessage(`{"endpoint":"` + provider.URL + `","method":"POST","timeoutSeconds":3}`),
+	}); err != nil {
+		t.Fatalf("save http fact provider resource: %v", err)
+	}
+
+	node := marketing.WorkflowNode{
+		ID:     "fact-query-http",
+		Type:   "fact-query",
+		Config: json.RawMessage(`{"resourceRef":"profile_http_provider","operation":"CALL","factKeys":["USER_PROFILE"],"namespace":"facts","keyTemplate":"${tenantId}:${subject.id}:${factCode}","failureAction":"BLOCK"}`),
+	}
+	result := service.factQueryWorkflowNodeHandler(ctx, node, runtime)
+	if result.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected http resource fact query success, got %+v", result)
+	}
+	if receivedMethod != http.MethodPost || received["operation"] != "CALL" || received["key"] != runtime.Activity.TenantID+":"+runtime.Inbox.Event.Subject.ID+":USER_PROFILE" {
+		t.Fatalf("expected normalized provider request, method=%s body=%+v", receivedMethod, received)
+	}
+	facts := result.Output["facts"].(map[string]any)
+	profile := facts["USER_PROFILE"].(map[string]any)
+	if profile["vipLevel"] != "VIP2" {
+		t.Fatalf("expected http profile fact, got %+v", result.Output)
+	}
+}
+
 func TestStateStoreWorkflowNodeHandlerUsesRedisCounterResource(t *testing.T) {
 	ctx := context.Background()
 	repo := marketing.NewMemoryRepository()
@@ -2339,6 +2520,157 @@ func TestMQPublishWorkflowNodeHandlerUsesTopicResource(t *testing.T) {
 	}
 }
 
+func TestOutboxWorkflowNodeHandlerBindsHTTPProviderResource(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	runtime := testWorkflowHandlerRuntime(true)
+	if _, err := service.SaveResource(ctx, marketing.Resource{
+		TenantID:    runtime.Activity.TenantID,
+		WorkspaceID: runtime.Activity.WorkspaceID,
+		Code:        "notification_http_provider",
+		Name:        "通知 HTTP Provider",
+		Type:        marketing.ResourceHTTPProvider,
+		Driver:      marketing.ResourceDriverREST,
+		Scope:       marketing.ResourceScopeWorkspace,
+		Status:      marketing.ResourceActive,
+		Config:      json.RawMessage(`{"endpoint":"https://notify.example/internal/outbox","method":"POST"}`),
+	}); err != nil {
+		t.Fatalf("save outbox http provider resource: %v", err)
+	}
+	node := marketing.WorkflowNode{
+		ID:     "outbox-resource",
+		Type:   "outbox",
+		Config: json.RawMessage(`{"resourceRef":"notification_http_provider","channel":"HTTP","namespace":"outbox","keyTemplate":"${eventId}"}`),
+	}
+	result := service.outboxWorkflowNodeHandler(ctx, node, runtime)
+	if result.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected resource outbox success, got %+v", result)
+	}
+	if result.Output["resourceRef"] != "notification_http_provider" || result.Output["resourceMessageCount"] != 1 {
+		t.Fatalf("expected resource-bound outbox output, got %+v", result.Output)
+	}
+	plan := result.Output["resourceDispatchPlan"].(map[string]any)
+	if plan["targetRef"] != "https://notify.example/internal/outbox" || plan["executionAuthority"] != "OutboxWorker" {
+		t.Fatalf("expected outbox resource dispatch plan, got %+v", plan)
+	}
+	logs, err := repo.ListResourceAuditLogs(ctx, marketing.ResourceAuditQuery{})
+	if err != nil {
+		t.Fatalf("list resource audit logs: %v", err)
+	}
+	if len(logs) != 1 || logs[0].NodeType != "outbox" || logs[0].Operation != marketing.ResourceCall {
+		t.Fatalf("expected outbox resource audit, got %+v", logs)
+	}
+}
+
+func TestOutboxWorkflowNodeHandlerRequiresApprovalForHighRiskResource(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	runtime := testWorkflowHandlerRuntime(true)
+	if _, err := service.SaveResource(ctx, marketing.Resource{
+		TenantID:    runtime.Activity.TenantID,
+		WorkspaceID: runtime.Activity.WorkspaceID,
+		Code:        "approval_notification_http_provider",
+		Name:        "审批通知 HTTP Provider",
+		Type:        marketing.ResourceHTTPProvider,
+		Driver:      marketing.ResourceDriverREST,
+		Scope:       marketing.ResourceScopeWorkspace,
+		Status:      marketing.ResourceActive,
+		Config:      json.RawMessage(`{"endpoint":"https://notify.example/internal/outbox","method":"POST","requireApproval":true}`),
+	}); err != nil {
+		t.Fatalf("save approval outbox provider resource: %v", err)
+	}
+	node := marketing.WorkflowNode{
+		ID:     "outbox-approval-resource",
+		Type:   "outbox",
+		Config: json.RawMessage(`{"resourceRef":"approval_notification_http_provider","channel":"HTTP","namespace":"outbox","keyTemplate":"${eventId}"}`),
+	}
+	blocked := service.outboxWorkflowNodeHandler(ctx, node, runtime)
+	if blocked.Status != marketing.WorkflowNodeFailed || blocked.Output["errorCode"] != "RESOURCE_APPROVAL_REQUIRED" {
+		t.Fatalf("expected outbox approval failure, got %+v", blocked)
+	}
+
+	approvedNode := node
+	approvedNode.Config = json.RawMessage(`{"resourceRef":"approval_notification_http_provider","channel":"HTTP","namespace":"outbox","keyTemplate":"${eventId}","approvalId":"approval_001"}`)
+	approved := service.outboxWorkflowNodeHandler(ctx, approvedNode, runtime)
+	if approved.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected approved outbox resource success, got %+v", approved)
+	}
+}
+
+func TestCallbackWorkflowNodeHandlerBindsHTTPProviderResource(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	runtime := testWorkflowHandlerRuntime(true)
+	if _, err := service.SaveResource(ctx, marketing.Resource{
+		TenantID:    runtime.Activity.TenantID,
+		WorkspaceID: runtime.Activity.WorkspaceID,
+		Code:        "wallet_callback_provider",
+		Name:        "钱包回调 Provider",
+		Type:        marketing.ResourceHTTPProvider,
+		Driver:      marketing.ResourceDriverREST,
+		Scope:       marketing.ResourceScopeWorkspace,
+		Status:      marketing.ResourceActive,
+		Config:      json.RawMessage(`{"endpoint":"https://wallet.example/internal/callback","method":"POST"}`),
+	}); err != nil {
+		t.Fatalf("save callback http provider resource: %v", err)
+	}
+	node := marketing.WorkflowNode{
+		ID:     "callback-resource",
+		Type:   "callback",
+		Config: json.RawMessage(`{"provider":"wallet","resourceRef":"wallet_callback_provider","requireSignature":true,"namespace":"callback","keyTemplate":"${eventId}"}`),
+	}
+	result := service.callbackWorkflowNodeHandler(ctx, node, runtime)
+	if result.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected resource callback success, got %+v", result)
+	}
+	if result.Output["resourceRef"] != "wallet_callback_provider" || result.Output["resourceized"] != true {
+		t.Fatalf("expected resource-bound callback output, got %+v", result.Output)
+	}
+	plan := result.Output["callbackResourcePlan"].(map[string]any)
+	if plan["targetRef"] != "https://wallet.example/internal/callback" || plan["executionAuthority"] != "RewardCallback/Reconciliation" {
+		t.Fatalf("expected callback resource plan, got %+v", plan)
+	}
+}
+
+func TestCallbackWorkflowNodeHandlerRequiresApprovalForHighRiskResource(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	runtime := testWorkflowHandlerRuntime(true)
+	if _, err := service.SaveResource(ctx, marketing.Resource{
+		TenantID:    runtime.Activity.TenantID,
+		WorkspaceID: runtime.Activity.WorkspaceID,
+		Code:        "approval_wallet_callback_provider",
+		Name:        "审批钱包回调 Provider",
+		Type:        marketing.ResourceHTTPProvider,
+		Driver:      marketing.ResourceDriverREST,
+		Scope:       marketing.ResourceScopeWorkspace,
+		Status:      marketing.ResourceActive,
+		Config:      json.RawMessage(`{"endpoint":"https://wallet.example/internal/callback","method":"POST","requireApproval":true}`),
+	}); err != nil {
+		t.Fatalf("save approval callback provider resource: %v", err)
+	}
+	node := marketing.WorkflowNode{
+		ID:     "callback-approval-resource",
+		Type:   "callback",
+		Config: json.RawMessage(`{"provider":"wallet","resourceRef":"approval_wallet_callback_provider","requireSignature":true,"namespace":"callback","keyTemplate":"${eventId}"}`),
+	}
+	blocked := service.callbackWorkflowNodeHandler(ctx, node, runtime)
+	if blocked.Status != marketing.WorkflowNodeFailed || blocked.Output["errorCode"] != "RESOURCE_APPROVAL_REQUIRED" {
+		t.Fatalf("expected callback approval failure, got %+v", blocked)
+	}
+
+	approvedNode := node
+	approvedNode.Config = json.RawMessage(`{"provider":"wallet","resourceRef":"approval_wallet_callback_provider","requireSignature":true,"namespace":"callback","keyTemplate":"${eventId}","approvalId":"approval_001"}`)
+	approved := service.callbackWorkflowNodeHandler(ctx, approvedNode, runtime)
+	if approved.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected approved callback resource success, got %+v", approved)
+	}
+}
+
 func TestLuaResourceAPIUpsertsAndReadsResource(t *testing.T) {
 	ctx := context.Background()
 	repo := marketing.NewMemoryRepository()
@@ -2373,6 +2705,39 @@ func TestLuaResourceAPIUpsertsAndReadsResource(t *testing.T) {
 	stored := codeResult["stored"].(map[string]any)
 	if stored["streakDays"] != float64(5) {
 		t.Fatalf("expected lua stored value, got %+v", stored)
+	}
+}
+
+func TestLuaResourceAPIEnforcesResourceCallLimit(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	runtime := testWorkflowHandlerRuntime(true)
+	if _, err := service.SaveResource(ctx, marketing.Resource{
+		TenantID:    runtime.Activity.TenantID,
+		WorkspaceID: runtime.Activity.WorkspaceID,
+		Code:        "lua_limited_state",
+		Name:        "Lua 限额状态",
+		Type:        marketing.ResourceRedisKV,
+		Driver:      marketing.ResourceDriverInternal,
+		Scope:       marketing.ResourceScopeWorkspace,
+		Status:      marketing.ResourceActive,
+		Config:      json.RawMessage(`{"keyPrefix":"lua:limited"}`),
+	}); err != nil {
+		t.Fatalf("save lua redis resource: %v", err)
+	}
+	node := marketing.WorkflowNode{
+		ID:   "lua-limited-code",
+		Type: "code",
+		Config: json.RawMessage(`{
+			"language":"LUA",
+			"maxResourceCalls":1,
+			"source":"resource_upsert('lua_limited_state', 'subject:' .. ctx.event.subject.id, {streakDays = 5}, {namespace = 'lua', valueType = 'OBJECT'}); resource_read('lua_limited_state', 'subject:' .. ctx.event.subject.id, {namespace = 'lua', valueType = 'OBJECT'}); emit({ok = true})"
+		}`),
+	}
+	result := service.codeWorkflowNodeHandler(ctx, node, runtime)
+	if result.Status != marketing.WorkflowNodeFailed || !strings.Contains(result.Error, "workflow resource api call limit exceeded") {
+		t.Fatalf("expected lua resource call limit failure, got %+v", result)
 	}
 }
 

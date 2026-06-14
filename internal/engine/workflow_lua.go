@@ -14,8 +14,12 @@ import (
 )
 
 const (
-	defaultLuaOutputMaxBytes = 64 * 1024
-	hardLuaOutputMaxBytes    = 1024 * 1024
+	defaultLuaOutputMaxBytes           = 64 * 1024
+	hardLuaOutputMaxBytes              = 1024 * 1024
+	defaultLuaResourceCallLimit        = 20
+	hardLuaResourceCallLimit           = 100
+	defaultLuaResourceResponseMaxBytes = 128 * 1024
+	hardLuaResourceResponseMaxBytes    = 1024 * 1024
 )
 
 func executeWorkflowLua(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime, source string) (map[string]any, error) {
@@ -258,9 +262,30 @@ func (s *Service) workflowLuaResourceAPI(ctx context.Context, node marketing.Wor
 }
 
 func registerLuaResourceFunctions(ctx context.Context, state *lua.LState, node marketing.WorkflowNode, runtime workflowRuntime, resourceAPI workflowLuaResourceAPI) {
+	config := workflowNodeConfigMap(node)
+	maxCalls := int(workflowConfigNumber(config, "maxResourceCalls"))
+	if maxCalls <= 0 {
+		maxCalls = defaultLuaResourceCallLimit
+	}
+	if maxCalls > hardLuaResourceCallLimit {
+		maxCalls = hardLuaResourceCallLimit
+	}
+	maxResponseBytes := int(workflowConfigNumber(config, "maxResourceResponseBytes"))
+	if maxResponseBytes <= 0 {
+		maxResponseBytes = defaultLuaResourceResponseMaxBytes
+	}
+	if maxResponseBytes > hardLuaResourceResponseMaxBytes {
+		maxResponseBytes = hardLuaResourceResponseMaxBytes
+	}
+	callCount := 0
 	call := func(l *lua.LState, operation marketing.ResourceOperation, valueIndex int) int {
 		if resourceAPI == nil {
 			l.RaiseError("workflow resource api is not available")
+			return 0
+		}
+		callCount++
+		if callCount > maxCalls {
+			l.RaiseError("workflow resource api call limit exceeded: %d > %d", callCount, maxCalls)
 			return 0
 		}
 		resourceRef := l.CheckString(1)
@@ -284,6 +309,10 @@ func registerLuaResourceFunctions(ctx context.Context, state *lua.LState, node m
 			l.RaiseError("%s", err.Error())
 			return 0
 		}
+		if err := enforceLuaResourceResponseLimit(output, maxResponseBytes); err != nil {
+			l.RaiseError("%s", err.Error())
+			return 0
+		}
 		l.Push(goValueToLua(state, output))
 		return 1
 	}
@@ -302,6 +331,17 @@ func registerLuaResourceFunctions(ctx context.Context, state *lua.LState, node m
 	state.SetGlobal("resource_publish", state.NewFunction(func(l *lua.LState) int {
 		return call(l, marketing.ResourcePublish, 3)
 	}))
+}
+
+func enforceLuaResourceResponseLimit(output map[string]any, limit int) error {
+	encoded, err := json.Marshal(workflowJSONValue(output))
+	if err != nil {
+		return err
+	}
+	if len(encoded) > limit {
+		return fmt.Errorf("lua resource response exceeds maxResourceResponseBytes: %d > %d", len(encoded), limit)
+	}
+	return nil
 }
 
 func registerLuaDecimalFunctions(state *lua.LState) {

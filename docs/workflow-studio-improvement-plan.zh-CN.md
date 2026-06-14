@@ -574,6 +574,35 @@ Executor 已经可以跑，但生产级还需要：
 - 并发策略已进入模型和日志，但 executor 仍按拓扑顺序串行执行，避免动态路由、幂等写和 handler 副作用被并行化破坏。
 - 真正并行执行需要后续引入 ready-queue、group semaphore、分支 barrier 和 handler 幂等审计。
 
+## 近期完成：资源管理底座和高级资源
+
+目标：把节点里的 endpoint、表、Redis、MQ、Provider 配置抽离到公共资源管理，并通过权限、审计和 adapter 统一执行。
+
+已完成：
+
+- 资源模型、资源列表、资源详情、资源绑定、资源审计和资源管理入口已接入。
+- `state-store + resourceRef` 支持内置 `default_workflow_state`、`workflow_memory`。
+- 资源 scope 支持 workspace、folder、activity、node 等边界，binding 支持 operation、namespace、key policy 和角色限制。
+- `DATABASE_TABLE` 和 `HTTP_PROVIDER` 已支持第一版执行。
+- `REDIS_KV`、`REDIS_HASH`、`REDIS_COUNTER`、`REDIS_LOCK` 已支持第一版资源语义。
+- `mq-publish + MQ_TOPIC resourceRef` 已支持出站发布意图和资源审计。
+- Lua Resource API 已支持 `resource_read/write/upsert/call/publish`。
+- 高风险资源操作已有第一版 `requireApproval` 信号校验。
+- CAS 已要求明确版本，避免退化成普通写入。
+
+当前边界：
+
+- Redis 资源当前由 `marketing_storage_state` 承载语义，还不是真实 Redis client。
+- `MQ_TOPIC` 当前生成 publish intent，真实 broker ack 仍由 OutboxWorker/MQ sender 负责。
+- `fact-query + resourceRef` 未完成。
+- 核心 `outbox/callback + resourceRef` 未完整资源化。
+- HTTP Provider 安全治理还缺 `secretRef`、allowlist、SSRF/redirect 防护和 response schema 校验。
+- 资源审批仍是第一版信号，未接正式审批单。
+
+暂停项：
+
+- 资源管理 P4 治理和运维暂不启动，包括资源版本、引用关系图、健康监控、迁移和停用保护。
+
 ## 阶段 14：测试覆盖
 
 目标：随着 workflow 能力变复杂，测试要能保护核心行为。

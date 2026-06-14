@@ -52,6 +52,7 @@ event-in -> inbox -> normalize -> match -> fact-query -> activity-state -> quota
 | `match` | 活动匹配 | 按租户、事件类型、活动状态、时间窗和优先级匹配活动 | `matched_activity` |
 | `fact-query` | 事实查询 | 查询用户、订单、交易、历史参与或外部事实数据 | `facts` |
 | `activity-state` | 活动状态 | 读取或更新用户活动状态、任务进度、签到状态和插件状态 | `activity_state`, `state_version` |
+| `state-store` | 通用存储 | 通过资源管理读写工作流状态、公共表、Redis 语义资源或 HTTP Provider | `stored_value`, `storage_entry`, `storage_version` |
 | `quota-check` | 次数频控校验 | 对用户、设备、IP、活动或租户维度做次数和频率校验 | `quota_check`, `limit_hold` |
 | `qualify` | 资格校验 | 执行资格、风控、名单、规则判断 | `stage_result`, `PASS`, `BLOCK`, `RISK`, `decision` |
 | `candidate-reward` | 候选奖励 | 生成待发奖励候选，不直接产生资金副作用 | `candidate_rewards`, `reward_items` |
@@ -69,11 +70,11 @@ event-in -> inbox -> normalize -> match -> fact-query -> activity-state -> quota
 
 | 节点类型 | 中文名 | 职责 | 当前状态 | 关键输出 |
 | --- | --- | --- | --- | --- |
-| `combine` | 组合节点 | 使用 Lua 或表达式把多个上游输入组合成一个结构化结果 | 已实现，Lua 沙箱 | `combined_result` |
-| `split` | 拆分节点 | 使用 Lua 或表达式把结构化输入拆成数组或多个分片 | 已实现，Lua 沙箱 | `split_items`, `split_result` |
+| `combine` | 组合节点 | 使用 Lua 或表达式把多个上游输入组合成一个结构化结果 | 已实现，Lua 沙箱，可调用授权 Resource API | `combined_result` |
+| `split` | 拆分节点 | 使用 Lua 或表达式把结构化输入拆成数组或多个分片 | 已实现，Lua 沙箱，可调用授权 Resource API | `split_items`, `split_result` |
 | `condition` | 条件判断 | 根据表达式输出 IF / ELSE 分支 | 已实现规则表达式/JSON Logic | `IF`, `ELSE`, `stage_result` |
 | `switch` | 条件分支 | 根据阶段结果选择多个业务分支 | 已实现解释/路由语义 | `PASS`, `BLOCK`, `SKIP`, `route` |
-| `code` | 代码执行 | 使用受控 Lua 或表达式处理上下文并输出中间变量 | 已实现 Lua/Expression | `code_result` |
+| `code` | 代码执行 | 使用受控 Lua 或表达式处理上下文并输出中间变量 | 已实现 Lua/Expression；Lua 可调用授权 Resource API | `code_result` |
 | `decimal` | 精度处理 | 将金额解析为固定 4 位小数字符串 | 已实现当前 Decimal 契约 | `decimal_amount` |
 | `approval-gate` | 审批网关 | 按金额、风险或策略决定自动通过、阻断或进入人工审批 | 外部审批权威 | `approval_decision` |
 | `compensation` | 业务补偿 | 生成发奖、预算、回调、通知失败后的补偿计划 | 解释型/后台任务边界 | `compensation_plan` |
@@ -84,7 +85,7 @@ event-in -> inbox -> normalize -> match -> fact-query -> activity-state -> quota
 | `settlement-window` | 结算窗口 | 限制发奖、对账或结算只能在指定窗口内执行 | 已实现窗口判定/调度边界 | `settlement_window` |
 | `manual-adjust` | 人工调整 | 记录人工补偿、修正、加减奖励或状态修复意图 | 外部 Admin API 权威 | `manual_adjustment` |
 | `http-call` | HTTP 发奖 | 描述 HTTP 投递意图，真实发送由 outbox worker 负责 | 解释型 | `channel`, `messageCount` |
-| `mq-publish` | MQ 发奖 | 描述 MQ 投递意图，真实发送由 outbox worker 负责 | 解释型 | `channel`, `messageCount` |
+| `mq-publish` | MQ 发奖 | 描述 MQ 投递意图；配置 `MQ_TOPIC resourceRef` 时生成受控发布意图并记录资源审计 | 部分资源化；真实 broker ack 仍由 OutboxWorker/MQ sender 负责 | `mq_result`, `MQ` |
 | `webhook` | Webhook 通知 | 描述 Webhook 通知投递意图，真实发送由 outbox worker 负责 | 解释型 | `channel`, `messageCount` |
 | `callback` | 结果回调 | 描述等待或处理外部发奖回调的边界 | 外部 endpoint 语义 | `callback_result` |
 
@@ -108,3 +109,21 @@ event-in -> inbox -> normalize -> match -> fact-query -> activity-state -> quota
 3. `ADVANCED` 用于扩展、转换、脚本和外部集成，不应默认强依赖。
 4. `OPS` 用于审计、恢复、对账和告警，不能伪装成同步业务执行。
 5. 解释型节点必须明确 `executionMode` 和 `executionAuthority`，不能让用户误以为 workflow 节点本身完成了外部投递、MQ 消费、回调处理或告警发送。
+
+## 资源化能力状态
+
+| 能力 | 当前状态 | 边界 |
+| --- | --- | --- |
+| `DATABASE_TABLE` | `state-store + resourceRef` 已支持 | 底层为受控虚拟公共表，不直接开放任意 SQL 表写入 |
+| `HTTP_PROVIDER` | `state-store/fact-query/outbox/callback + resourceRef` 已支持第一版 | 已有 URL/allowlist/private network/redirect 防护第一版；还缺 secretRef 和 response schema 强校验 |
+| `REDIS_KV/HASH/COUNTER/LOCK` | `state-store + resourceRef` 已支持第一版 | 当前由 `marketing_storage_state` 承载 Redis 语义，还不是真 Redis client |
+| `MQ_TOPIC` | `mq-publish/outbox + resourceRef` 已支持第一版 | 节点生成 publish intent 或 dispatch plan，真实 broker ack 仍由 OutboxWorker/MQ sender |
+| Lua Resource API | `code/combine/split/lua-query` 的 service 执行路径已支持 | 只能访问通过资源权限和 binding 授权的资源，并受调用次数/响应大小限制 |
+
+仍未完成：
+
+- 专用 `lock` 节点。
+- 真实 Redis client adapter。
+- HTTP Provider `secretRef` 和 response schema 强校验。
+- 正式审批单校验。
+- `mq-event` 入站 consumer、`schedule-event` trigger runtime、`state-event` watcher runtime。

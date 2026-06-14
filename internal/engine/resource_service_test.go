@@ -60,6 +60,34 @@ func TestResourceTestValidatesAdapterConfig(t *testing.T) {
 			},
 			errorCode: "RESOURCE_HTTP_ENDPOINT_REQUIRED",
 		},
+		{
+			name: "redis resource requires key prefix",
+			resource: marketing.Resource{
+				TenantID: "site_001",
+				Code:     "bad_redis",
+				Name:     "Bad Redis",
+				Type:     marketing.ResourceRedisKV,
+				Driver:   marketing.ResourceDriverInternal,
+				Scope:    marketing.ResourceScopeWorkspace,
+				Status:   marketing.ResourceActive,
+				Config:   json.RawMessage(`{}`),
+			},
+			errorCode: "RESOURCE_REDIS_KEY_PREFIX_REQUIRED",
+		},
+		{
+			name: "mq topic requires topic",
+			resource: marketing.Resource{
+				TenantID: "site_001",
+				Code:     "bad_mq",
+				Name:     "Bad MQ",
+				Type:     marketing.ResourceMQTopic,
+				Driver:   marketing.ResourceDriverInternal,
+				Scope:    marketing.ResourceScopeWorkspace,
+				Status:   marketing.ResourceActive,
+				Config:   json.RawMessage(`{"provider":"KAFKA"}`),
+			},
+			errorCode: "RESOURCE_MQ_TOPIC_REQUIRED",
+		},
 	}
 
 	for _, tt := range cases {
@@ -114,5 +142,39 @@ func TestResourceDefaultCapabilitiesIncludeAdapterOperations(t *testing.T) {
 	}
 	if !httpProvider.Supports(marketing.ResourceUpsert) || !httpProvider.Supports(marketing.ResourceCall) {
 		t.Fatalf("expected http provider upsert and call capabilities, got %+v", httpProvider.Capabilities)
+	}
+
+	redisCounter, err := service.SaveResource(ctx, marketing.Resource{
+		TenantID: "site_001",
+		Code:     "redis_counter",
+		Name:     "Redis Counter",
+		Type:     marketing.ResourceRedisCounter,
+		Driver:   marketing.ResourceDriverInternal,
+		Scope:    marketing.ResourceScopeWorkspace,
+		Status:   marketing.ResourceActive,
+		Config:   json.RawMessage(`{"keyPrefix":"counter"}`),
+	})
+	if err != nil {
+		t.Fatalf("save redis counter resource: %v", err)
+	}
+	if !redisCounter.Supports(marketing.ResourceCheckAndIncrement) || !redisCounter.Supports(marketing.ResourceRead) {
+		t.Fatalf("expected redis counter check-and-increment and read capabilities, got %+v", redisCounter.Capabilities)
+	}
+
+	mqTopic, err := service.SaveResource(ctx, marketing.Resource{
+		TenantID: "site_001",
+		Code:     "reward_topic",
+		Name:     "Reward Topic",
+		Type:     marketing.ResourceMQTopic,
+		Driver:   marketing.ResourceDriverInternal,
+		Scope:    marketing.ResourceScopeWorkspace,
+		Status:   marketing.ResourceActive,
+		Config:   json.RawMessage(`{"provider":"KAFKA","topic":"reward.commands"}`),
+	})
+	if err != nil {
+		t.Fatalf("save mq topic resource: %v", err)
+	}
+	if !mqTopic.Supports(marketing.ResourcePublish) || !mqTopic.Supports(marketing.ResourceCall) {
+		t.Fatalf("expected mq topic publish and call capabilities, got %+v", mqTopic.Capabilities)
 	}
 }

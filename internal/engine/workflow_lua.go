@@ -19,6 +19,16 @@ const (
 )
 
 func executeWorkflowLua(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime, source string) (map[string]any, error) {
+	return executeWorkflowLuaWithResourceAPI(ctx, node, runtime, source, nil)
+}
+
+func (s *Service) executeWorkflowLua(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime, source string) (map[string]any, error) {
+	return executeWorkflowLuaWithResourceAPI(ctx, node, runtime, source, s.workflowLuaResourceAPI)
+}
+
+type workflowLuaResourceAPI func(context.Context, marketing.WorkflowNode, workflowRuntime, marketing.ResourceOperation, string, string, any, map[string]any) (map[string]any, error)
+
+func executeWorkflowLuaWithResourceAPI(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime, source string, resourceAPI workflowLuaResourceAPI) (map[string]any, error) {
 	executionContext, _ := ctx.Value(workflowNodeExecutionContextKey{}).(workflowNodeExecutionContext)
 	state := lua.NewState(lua.Options{SkipOpenLibs: true})
 	defer state.Close()
@@ -212,6 +222,7 @@ func executeWorkflowLua(ctx context.Context, node marketing.WorkflowNode, runtim
 		}
 		return 1
 	}))
+	registerLuaResourceFunctions(ctx, state, node, runtime, resourceAPI)
 	registerLuaDecimalFunctions(state)
 	registerLuaTimeFunctions(state)
 	state.SetGlobal("ctx", goValueToLua(state, workflowLuaContext(ctx, node, runtime)))
@@ -232,6 +243,65 @@ func executeWorkflowLua(ctx context.Context, node marketing.WorkflowNode, runtim
 		return nil, err
 	}
 	return emitted, nil
+}
+
+func (s *Service) workflowLuaResourceAPI(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime, operation marketing.ResourceOperation, resourceRef string, key string, value any, options map[string]any) (map[string]any, error) {
+	return s.workflowExecuteResourceAPI(ctx, node, runtime, workflowResourceAPIRequest{
+		Operation:   operation,
+		ResourceRef: resourceRef,
+		Namespace:   workflowConfigString(options, "namespace"),
+		Key:         key,
+		Value:       value,
+		ValueType:   firstWorkflowString(workflowConfigString(options, "valueType"), "OBJECT"),
+		Options:     options,
+	})
+}
+
+func registerLuaResourceFunctions(ctx context.Context, state *lua.LState, node marketing.WorkflowNode, runtime workflowRuntime, resourceAPI workflowLuaResourceAPI) {
+	call := func(l *lua.LState, operation marketing.ResourceOperation, valueIndex int) int {
+		if resourceAPI == nil {
+			l.RaiseError("workflow resource api is not available")
+			return 0
+		}
+		resourceRef := l.CheckString(1)
+		key := l.OptString(2, "")
+		var value any
+		if valueIndex > 0 && l.GetTop() >= valueIndex {
+			value = luaValueToGo(l.CheckAny(valueIndex))
+		}
+		options := map[string]any{}
+		if valueIndex > 0 && l.GetTop() > valueIndex {
+			if mapped, ok := luaValueToGo(l.CheckAny(valueIndex + 1)).(map[string]any); ok {
+				options = mapped
+			}
+		} else if valueIndex == 0 && l.GetTop() >= 3 {
+			if mapped, ok := luaValueToGo(l.CheckAny(3)).(map[string]any); ok {
+				options = mapped
+			}
+		}
+		output, err := resourceAPI(ctx, node, runtime, operation, resourceRef, key, value, options)
+		if err != nil {
+			l.RaiseError("%s", err.Error())
+			return 0
+		}
+		l.Push(goValueToLua(state, output))
+		return 1
+	}
+	state.SetGlobal("resource_read", state.NewFunction(func(l *lua.LState) int {
+		return call(l, marketing.ResourceRead, 0)
+	}))
+	state.SetGlobal("resource_write", state.NewFunction(func(l *lua.LState) int {
+		return call(l, marketing.ResourceWrite, 3)
+	}))
+	state.SetGlobal("resource_upsert", state.NewFunction(func(l *lua.LState) int {
+		return call(l, marketing.ResourceUpsert, 3)
+	}))
+	state.SetGlobal("resource_call", state.NewFunction(func(l *lua.LState) int {
+		return call(l, marketing.ResourceCall, 3)
+	}))
+	state.SetGlobal("resource_publish", state.NewFunction(func(l *lua.LState) int {
+		return call(l, marketing.ResourcePublish, 3)
+	}))
 }
 
 func registerLuaDecimalFunctions(state *lua.LState) {

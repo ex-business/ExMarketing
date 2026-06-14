@@ -2131,6 +2131,251 @@ func TestStateStoreWorkflowNodeHandlerUsesResourceRefAndAudits(t *testing.T) {
 	}
 }
 
+func TestStateStoreWorkflowNodeHandlerCASRequiresVersion(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	runtime := testWorkflowHandlerRuntime(true)
+	node := marketing.WorkflowNode{
+		ID:     "cas-store",
+		Type:   "state-store",
+		Config: json.RawMessage(`{"resourceRef":"default_workflow_state","operation":"CAS","namespace":"checkin","keyTemplate":"${activityId}:${subject.id}:cas","valueType":"OBJECT"}`),
+	}
+	nodeCtx := context.WithValue(ctx, workflowNodeExecutionContextKey{}, workflowNodeExecutionContext{
+		ResolvedInput: map[string]any{"value": map[string]any{"streakDays": 1}},
+	})
+	result := service.stateStoreWorkflowNodeHandler(nodeCtx, node, runtime)
+	if result.Status != marketing.WorkflowNodeFailed || result.Output["errorCode"] != "STATE_STORE_VERSION_REQUIRED" {
+		t.Fatalf("expected cas version required, got %+v", result)
+	}
+	logs, err := repo.ListResourceAuditLogs(ctx, marketing.ResourceAuditQuery{ResourceID: "res_builtin_default_workflow_state"})
+	if err != nil {
+		t.Fatalf("list resource audit logs: %v", err)
+	}
+	if len(logs) != 1 || logs[0].Operation != marketing.ResourceCAS || logs[0].Status != marketing.ResourceAuditFailed {
+		t.Fatalf("expected failed CAS resource audit, got %+v", logs)
+	}
+}
+
+func TestStateStoreWorkflowNodeHandlerCASChecksVersion(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	runtime := testWorkflowHandlerRuntime(true)
+	upsertNode := marketing.WorkflowNode{
+		ID:     "cas-store",
+		Type:   "state-store",
+		Config: json.RawMessage(`{"resourceRef":"default_workflow_state","operation":"UPSERT","namespace":"checkin","keyTemplate":"${activityId}:${subject.id}:cas","valueType":"OBJECT"}`),
+	}
+	upsertCtx := context.WithValue(ctx, workflowNodeExecutionContextKey{}, workflowNodeExecutionContext{
+		ResolvedInput: map[string]any{"value": map[string]any{"streakDays": 1}},
+	})
+	created := service.stateStoreWorkflowNodeHandler(upsertCtx, upsertNode, runtime)
+	if created.Status != marketing.WorkflowNodeSuccess || created.Output["storage_version"] != int64(1) {
+		t.Fatalf("expected initial upsert, got %+v", created)
+	}
+
+	casNode := upsertNode
+	casNode.Config = json.RawMessage(`{"resourceRef":"default_workflow_state","operation":"CAS","namespace":"checkin","keyTemplate":"${activityId}:${subject.id}:cas","valueType":"OBJECT","expectedVersion":"1"}`)
+	casCtx := context.WithValue(ctx, workflowNodeExecutionContextKey{}, workflowNodeExecutionContext{
+		ResolvedInput: map[string]any{"value": map[string]any{"streakDays": 2}},
+	})
+	updated := service.stateStoreWorkflowNodeHandler(casCtx, casNode, runtime)
+	if updated.Status != marketing.WorkflowNodeSuccess || updated.Output["storage_version"] != int64(2) {
+		t.Fatalf("expected cas update, got %+v", updated)
+	}
+
+	conflict := service.stateStoreWorkflowNodeHandler(casCtx, casNode, runtime)
+	if conflict.Status != marketing.WorkflowNodeFailed || conflict.Output["errorCode"] != "STATE_STORE_VERSION_CONFLICT" {
+		t.Fatalf("expected cas version conflict, got %+v", conflict)
+	}
+}
+
+func TestStateStoreWorkflowNodeHandlerUsesRedisKVResource(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	runtime := testWorkflowHandlerRuntime(true)
+	if _, err := service.SaveResource(ctx, marketing.Resource{
+		TenantID:    runtime.Activity.TenantID,
+		WorkspaceID: runtime.Activity.WorkspaceID,
+		Code:        "redis_user_state",
+		Name:        "Redis 用户状态",
+		Type:        marketing.ResourceRedisKV,
+		Driver:      marketing.ResourceDriverInternal,
+		Scope:       marketing.ResourceScopeWorkspace,
+		Status:      marketing.ResourceActive,
+		Config:      json.RawMessage(`{"keyPrefix":"marketing:user"}`),
+	}); err != nil {
+		t.Fatalf("save redis resource: %v", err)
+	}
+	node := marketing.WorkflowNode{
+		ID:     "redis-store",
+		Type:   "state-store",
+		Config: json.RawMessage(`{"resourceRef":"redis_user_state","operation":"UPSERT","namespace":"checkin","keyTemplate":"${subject.id}","valueType":"OBJECT"}`),
+	}
+	nodeCtx := context.WithValue(ctx, workflowNodeExecutionContextKey{}, workflowNodeExecutionContext{
+		ResolvedInput: map[string]any{"value": map[string]any{"streakDays": 4}},
+	})
+	result := service.stateStoreWorkflowNodeHandler(nodeCtx, node, runtime)
+	if result.Status != marketing.WorkflowNodeSuccess || result.Output["storageType"] != "REDIS" || result.Output["redisKey"] != "marketing:user:"+runtime.Inbox.Event.Subject.ID {
+		t.Fatalf("expected redis kv success, got %+v", result)
+	}
+
+	readNode := node
+	readNode.Config = json.RawMessage(`{"resourceRef":"redis_user_state","operation":"READ","namespace":"checkin","keyTemplate":"${subject.id}","valueType":"OBJECT","missingPolicy":"BLOCK"}`)
+	read := service.stateStoreWorkflowNodeHandler(ctx, readNode, runtime)
+	if read.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected redis read success, got %+v", read)
+	}
+	value := read.Output["stored_value"].(map[string]any)
+	if value["streakDays"] != float64(4) {
+		t.Fatalf("expected redis value, got %+v", value)
+	}
+}
+
+func TestStateStoreWorkflowNodeHandlerUsesRedisCounterResource(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	runtime := testWorkflowHandlerRuntime(true)
+	if _, err := service.SaveResource(ctx, marketing.Resource{
+		TenantID:    runtime.Activity.TenantID,
+		WorkspaceID: runtime.Activity.WorkspaceID,
+		Code:        "redis_checkin_counter",
+		Name:        "Redis 签到计数器",
+		Type:        marketing.ResourceRedisCounter,
+		Driver:      marketing.ResourceDriverInternal,
+		Scope:       marketing.ResourceScopeWorkspace,
+		Status:      marketing.ResourceActive,
+		Config:      json.RawMessage(`{"keyPrefix":"marketing:counter"}`),
+	}); err != nil {
+		t.Fatalf("save redis counter resource: %v", err)
+	}
+	node := marketing.WorkflowNode{
+		ID:     "redis-counter",
+		Type:   "state-store",
+		Config: json.RawMessage(`{"resourceRef":"redis_checkin_counter","operation":"CHECK_AND_INCREMENT","namespace":"checkin","keyTemplate":"${subject.id}","delta":2,"max":3,"valueType":"NUMBER"}`),
+	}
+	first := service.stateStoreWorkflowNodeHandler(ctx, node, runtime)
+	if first.Status != marketing.WorkflowNodeSuccess || first.Output["counter"] != float64(2) {
+		t.Fatalf("expected counter increment, got %+v", first)
+	}
+	second := service.stateStoreWorkflowNodeHandler(ctx, node, runtime)
+	if second.Status != marketing.WorkflowNodeFailed || second.Output["errorCode"] != "REDIS_COUNTER_LIMIT_EXCEEDED" {
+		t.Fatalf("expected counter limit failure, got %+v", second)
+	}
+}
+
+func TestStateStoreWorkflowNodeHandlerRequiresApprovalForHighRiskResourceOperation(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	runtime := testWorkflowHandlerRuntime(true)
+	if _, err := service.SaveResource(ctx, marketing.Resource{
+		TenantID:    runtime.Activity.TenantID,
+		WorkspaceID: runtime.Activity.WorkspaceID,
+		Code:        "approval_redis_state",
+		Name:        "审批 Redis 状态",
+		Type:        marketing.ResourceRedisKV,
+		Driver:      marketing.ResourceDriverInternal,
+		Scope:       marketing.ResourceScopeWorkspace,
+		Status:      marketing.ResourceActive,
+		Config:      json.RawMessage(`{"keyPrefix":"approval:state","requireApproval":true}`),
+	}); err != nil {
+		t.Fatalf("save redis resource: %v", err)
+	}
+	node := marketing.WorkflowNode{
+		ID:     "approval-delete",
+		Type:   "state-store",
+		Config: json.RawMessage(`{"resourceRef":"approval_redis_state","operation":"DELETE","namespace":"checkin","keyTemplate":"${subject.id}","valueType":"OBJECT"}`),
+	}
+	blocked := service.stateStoreWorkflowNodeHandler(ctx, node, runtime)
+	if blocked.Status != marketing.WorkflowNodeFailed || blocked.Output["errorCode"] != "RESOURCE_APPROVAL_REQUIRED" {
+		t.Fatalf("expected approval failure, got %+v", blocked)
+	}
+
+	approvedNode := node
+	approvedNode.Config = json.RawMessage(`{"resourceRef":"approval_redis_state","operation":"DELETE","namespace":"checkin","keyTemplate":"${subject.id}","valueType":"OBJECT","approvalId":"approval_001"}`)
+	approved := service.stateStoreWorkflowNodeHandler(ctx, approvedNode, runtime)
+	if approved.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected approved delete success, got %+v", approved)
+	}
+}
+
+func TestMQPublishWorkflowNodeHandlerUsesTopicResource(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	runtime := testWorkflowHandlerRuntime(true)
+	if _, err := service.SaveResource(ctx, marketing.Resource{
+		TenantID:    runtime.Activity.TenantID,
+		WorkspaceID: runtime.Activity.WorkspaceID,
+		Code:        "reward_commands_topic",
+		Name:        "奖励命令 Topic",
+		Type:        marketing.ResourceMQTopic,
+		Driver:      marketing.ResourceDriverInternal,
+		Scope:       marketing.ResourceScopeWorkspace,
+		Status:      marketing.ResourceActive,
+		Config:      json.RawMessage(`{"provider":"KAFKA","topic":"reward.commands"}`),
+	}); err != nil {
+		t.Fatalf("save mq topic resource: %v", err)
+	}
+	node := marketing.WorkflowNode{
+		ID:     "mq-publish",
+		Type:   "mq-publish",
+		Config: json.RawMessage(`{"resourceRef":"reward_commands_topic","namespace":"reward","keyTemplate":"${eventId}"}`),
+	}
+	nodeCtx := context.WithValue(ctx, workflowNodeExecutionContextKey{}, workflowNodeExecutionContext{
+		ResolvedInput: map[string]any{"payload": map[string]any{"commandId": "cmd_001"}},
+	})
+	result := service.mqPublishWorkflowNodeHandler(nodeCtx, node, runtime)
+	if result.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected mq publish success, got %+v", result)
+	}
+	mqResult := result.Output["mq_result"].(map[string]any)
+	if mqResult["destination"] != "reward.commands" || mqResult["status"] != "PUBLISH_ACCEPTED" {
+		t.Fatalf("expected mq publish result, got %+v", mqResult)
+	}
+}
+
+func TestLuaResourceAPIUpsertsAndReadsResource(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	runtime := testWorkflowHandlerRuntime(true)
+	if _, err := service.SaveResource(ctx, marketing.Resource{
+		TenantID:    runtime.Activity.TenantID,
+		WorkspaceID: runtime.Activity.WorkspaceID,
+		Code:        "lua_redis_state",
+		Name:        "Lua Redis 状态",
+		Type:        marketing.ResourceRedisKV,
+		Driver:      marketing.ResourceDriverInternal,
+		Scope:       marketing.ResourceScopeWorkspace,
+		Status:      marketing.ResourceActive,
+		Config:      json.RawMessage(`{"keyPrefix":"lua:state"}`),
+	}); err != nil {
+		t.Fatalf("save lua redis resource: %v", err)
+	}
+	node := marketing.WorkflowNode{
+		ID:   "lua-code",
+		Type: "code",
+		Config: json.RawMessage(`{
+			"language":"LUA",
+			"source":"resource_upsert('lua_redis_state', 'subject:' .. ctx.event.subject.id, {streakDays = 5}, {namespace = 'lua', valueType = 'OBJECT'}); local stored = resource_read('lua_redis_state', 'subject:' .. ctx.event.subject.id, {namespace = 'lua', valueType = 'OBJECT'}); emit({stored = stored.stored_value})"
+		}`),
+	}
+	result := service.codeWorkflowNodeHandler(ctx, node, runtime)
+	if result.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected lua resource api success, got %+v", result)
+	}
+	codeResult := result.Output["code_result"].(map[string]any)
+	stored := codeResult["stored"].(map[string]any)
+	if stored["streakDays"] != float64(5) {
+		t.Fatalf("expected lua stored value, got %+v", stored)
+	}
+}
+
 func TestStateStoreWorkflowNodeHandlerDeniesResourceKeyPolicy(t *testing.T) {
 	ctx := context.Background()
 	repo := marketing.NewMemoryRepository()

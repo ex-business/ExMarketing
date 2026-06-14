@@ -1194,6 +1194,29 @@ HTTP Provider endpoint 不再出现在节点配置里
 
 目标：让高级资源类型进入生产执行。
 
+当前实现：
+
+1. `state-store + resourceRef` 已支持 Redis 资源：
+   - `REDIS_KV`：按 `keyPrefix + keyTemplate` 读写对象、数组、字符串、数字等状态
+   - `REDIS_HASH`：按 `keyPrefix + keyTemplate + field` 读写 hash field 语义
+   - `REDIS_COUNTER`：支持 `READ/WRITE/UPSERT/DELETE/CHECK_AND_INCREMENT`，可配置 `delta/max`
+   - `REDIS_LOCK`：支持 `READ/UPSERT/DELETE`，写入时按 `ttlSeconds` 建立受控锁，锁未过期会返回 `REDIS_LOCK_HELD`
+   - 当前底层使用统一 `marketing_storage_state` 承载 Redis 语义，后续可替换为真实 Redis client adapter，节点和 Lua API 不需要改变
+2. `mq-publish + resourceRef` 已支持 `MQ_TOPIC`：
+   - topic/provider/destination 从资源配置读取
+   - 节点负责生成受控 `PUBLISH_ACCEPTED` 意图、资源权限校验和审计
+   - 真正 broker ack 仍由 OutboxWorker/MQ sender 边界负责，不在流程节点里伪造发送成功
+3. Lua 已暴露受控 Resource API：
+   - `resource_read(resourceRef, key, options)`
+   - `resource_write(resourceRef, key, value, options)`
+   - `resource_upsert(resourceRef, key, value, options)`
+   - `resource_call(resourceRef, key, payload, options)`
+   - `resource_publish(resourceRef, key, payload, options)`
+   - 所有调用都复用 `ValidateResourceAccess`、resource adapter 配置校验和资源审计
+4. 高风险操作第一版支持资源级审批开关：
+   - 资源配置 `requireApproval: true` 时，`DELETE/CALL/PUBLISH` 必须在 options 中传 `approved: true` 或 `approvalId`
+   - 后续需要接入正式审批单和生产 debug 写入审批链路
+
 任务：
 
 1. `REDIS_KV` adapter

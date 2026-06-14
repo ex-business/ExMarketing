@@ -461,7 +461,7 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 		), preview(
 			[]string{"event", "input", "outputs", "vars"},
 			[]string{"facts"},
-			[]string{"真实执行受控 Lua；仅做上下文加工，不做网络查询。"},
+			[]string{"真实执行受控 Lua；可通过 resource_read/write/upsert/call 访问已授权资源，不直接访问网络或文件。"},
 		)),
 		groupedSchema("activity-state", "活动状态", "读取或更新用户活动状态、任务进度、签到状态和插件状态。", groups(
 			fieldGroup("state-key", "状态 Key", "定义活动状态的主体、命名空间和 key。", fields(
@@ -489,7 +489,7 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 		groupedSchema("state-store", "通用存储", "定义、读取和写入工作流通用数据，支持变量、字符串、数组、对象和表格。", groups(
 			fieldGroup("resource", "资源引用", "优先使用资源管理中的 resourceRef；存储介质、endpoint、表结构和密钥不应放在节点中。", fields(
 				withDescription(stringField("resourceRef", "资源 Ref", false, "default_workflow_state", rules(maxLength(128))), "引用资源管理中的资源 Code，例如 default_workflow_state、workflow_memory、user_profile_provider。"),
-				enumField("operation", "操作", true, "DEFINE", []string{"DEFINE", "READ", "WRITE", "UPSERT", "APPEND", "DELETE"}),
+				enumField("operation", "操作", true, "DEFINE", []string{"DEFINE", "READ", "WRITE", "UPSERT", "APPEND", "DELETE", "CAS", "INCREMENT", "CHECK_AND_INCREMENT"}),
 				withDescription(stringField("namespace", "命名空间", true, "workflow", rules(minLength(1), maxLength(128))), "例如 workflow、debug、checkin、temporary。"),
 				withDescription(stringField("keyTemplate", "Key 模板", true, "${activityId}:${eventId}:${nodeId}", rules(minLength(1), maxLength(512))), "支持 tenantId、activityId、eventId、subject.id、nodeId 等模板变量。"),
 			)),
@@ -506,7 +506,7 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 				withDescription(stringField("providerCode", "Provider Code", false, "", rules(maxLength(128))), "REDIS/CUSTOM adapter 编码。"),
 			)),
 			fieldGroup("compat", "兼容字段", "过渡期兼容旧节点配置；新流程应只使用 resourceRef。", fields(
-				enumField("storageType", "存储类型", false, "MEMORY", []string{"MEMORY", "WORKFLOW_CONTEXT", "LOCAL_CACHE", "DATABASE", "DATABASE_TABLE", "HTTP", "REST", "EXTERNAL", "REDIS", "GRPC", "PLUGIN", "CUSTOM"}),
+				enumField("storageType", "存储类型", false, "MEMORY", []string{"MEMORY", "WORKFLOW_CONTEXT", "LOCAL_CACHE", "DATABASE", "DATABASE_TABLE", "HTTP", "REST", "EXTERNAL", "REDIS", "REDIS_KV", "REDIS_HASH", "REDIS_COUNTER", "REDIS_LOCK", "GRPC", "PLUGIN", "CUSTOM"}),
 				withDescription(stringField("providerEndpoint", "Provider Endpoint", false, "", rules(maxLength(512))), "HTTP provider 地址；请求体包含 operation、tenantId、namespace、key、value 和版本信息。"),
 				enumField("httpMethod", "HTTP Method", false, "POST", []string{"POST", "PUT"}),
 				objectField("requestHeaders", "请求 Headers", false, nil),
@@ -695,11 +695,13 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 			executionAuthorityField("OutboxWorker"),
 		)),
 		schema("mq-publish", "MQ 发奖", "发布消息到队列", fields(
-			withDescription(stringField("topic", "Topic", true, "", rules(minLength(1), maxLength(256))), "消息队列 topic 或 routing key。"),
+			withDescription(stringField("resourceRef", "资源 Ref", false, "", rules(maxLength(128))), "引用资源管理中的 MQ_TOPIC，例如 reward_commands_topic。配置后 topic/provider 从资源读取。"),
+			withDescription(stringField("topic", "Topic", false, "", rules(maxLength(256))), "兼容旧节点；使用 resourceRef 时 topic/provider 从资源读取。"),
+			withDescription(stringField("namespace", "命名空间", false, "mq", rules(maxLength(128))), "资源审计和 key policy 使用的命名空间。"),
 			stringField("keyTemplate", "消息 Key 模板", false, "${eventId}", rules(maxLength(256))),
 			objectField("headers", "消息头", false, nil),
 			executionModeField("EXPLAIN_ONLY"),
-			executionAuthorityField("OutboxWorker"),
+			executionAuthorityField("MQTopicResourceAdapter/OutboxWorker"),
 		)),
 		schema("webhook", "Webhook 通知", "推送业务通知", fields(
 			withDescription(stringField("receiverCode", "接收方编码", true, "", rules(pattern(`^[a-zA-Z0-9._-]+$`, "接收方编码只能包含字母、数字、点、下划线和短横线。"), maxLength(128))), "后端 Webhook receiver 配置中的业务编码。"),

@@ -205,6 +205,18 @@ func resourceAdapterConfigError(resource marketing.Resource) string {
 		if method != http.MethodGet && method != http.MethodPost && method != http.MethodPut {
 			return "RESOURCE_HTTP_METHOD_UNSUPPORTED"
 		}
+	case marketing.ResourceRedisKV, marketing.ResourceRedisHash, marketing.ResourceRedisCounter, marketing.ResourceRedisLock:
+		if firstNonEmpty(resourceConfigString(config, "keyPrefix"), resourceConfigString(config, "prefix")) == "" {
+			return "RESOURCE_REDIS_KEY_PREFIX_REQUIRED"
+		}
+	case marketing.ResourceMQTopic:
+		if firstNonEmpty(resourceConfigString(config, "topic"), resourceConfigString(config, "destination"), resourceConfigString(config, "targetRef")) == "" {
+			return "RESOURCE_MQ_TOPIC_REQUIRED"
+		}
+		provider := strings.ToUpper(firstNonEmpty(resourceConfigString(config, "provider"), resourceConfigString(config, "broker"), "KAFKA"))
+		if provider != "KAFKA" && provider != "RABBITMQ" && provider != "PULSAR" {
+			return "RESOURCE_MQ_PROVIDER_UNSUPPORTED"
+		}
 	}
 	return ""
 }
@@ -334,6 +346,14 @@ func defaultResourceCapabilities(resourceType marketing.ResourceType) []marketin
 		return []marketing.ResourceOperation{marketing.ResourceRead, marketing.ResourceWrite, marketing.ResourceUpsert, marketing.ResourceAppend, marketing.ResourceDelete, marketing.ResourceCAS}
 	case marketing.ResourceHTTPProvider:
 		return []marketing.ResourceOperation{marketing.ResourceRead, marketing.ResourceWrite, marketing.ResourceUpsert, marketing.ResourceDelete, marketing.ResourceCall, marketing.ResourceTestConnection}
+	case marketing.ResourceRedisKV, marketing.ResourceRedisHash:
+		return []marketing.ResourceOperation{marketing.ResourceRead, marketing.ResourceWrite, marketing.ResourceUpsert, marketing.ResourceDelete, marketing.ResourceCAS, marketing.ResourceTestConnection}
+	case marketing.ResourceRedisCounter:
+		return []marketing.ResourceOperation{marketing.ResourceRead, marketing.ResourceWrite, marketing.ResourceUpsert, marketing.ResourceDelete, marketing.ResourceCheckAndIncrement, marketing.ResourceTestConnection}
+	case marketing.ResourceRedisLock:
+		return []marketing.ResourceOperation{marketing.ResourceRead, marketing.ResourceWrite, marketing.ResourceUpsert, marketing.ResourceDelete, marketing.ResourceTestConnection}
+	case marketing.ResourceMQTopic:
+		return []marketing.ResourceOperation{marketing.ResourcePublish, marketing.ResourceCall, marketing.ResourceTestConnection}
 	default:
 		return []marketing.ResourceOperation{marketing.ResourceRead}
 	}

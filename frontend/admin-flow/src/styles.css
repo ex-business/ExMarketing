@@ -383,6 +383,10 @@ input:focus-visible {
   overflow: hidden;
 }
 
+.property-disclosure:has(.node-lua-code-shell) {
+  overflow: visible;
+}
+
 .property-disclosure > summary {
   display: flex;
   align-items: center;
@@ -21233,6 +21237,45 @@ input:focus-visible {
 
 .node-lua-code-shell .cm-tooltip-autocomplete {
   z-index: 50;
+}
+
+.node-lua-syntax-status {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 10px;
+  border-top: 1px solid #e7edf5;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.node-lua-syntax-status span {
+  flex: 0 0 auto;
+}
+
+.node-lua-syntax-status em {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: #64748b;
+  font-style: normal;
+  font-weight: 700;
+  text-align: right;
+}
+
+.node-lua-syntax-status.ok span {
+  color: #047857;
+}
+
+.node-lua-syntax-status.error {
+  background: #fff7f7;
+}
+
+.node-lua-syntax-status.error span,
+.node-lua-syntax-status.error em {
+  color: #b42318;
 }
 
 .node-lua-code-fallback {

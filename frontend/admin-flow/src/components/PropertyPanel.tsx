@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import type { ReactNode } from 'react';
-import type { ActivityEdge, ActivityNode, FlowNode, GroupNode, NoteNode, ResourceSummary, WorkflowEdgeRoute, WorkflowEdgeRouteType, WorkflowNodeConfigField, WorkflowNodeConfigSchema, WorkflowNodeConfigValidationRule } from '../types';
+import type { ActivityEdge, ActivityNode, FlowNode, GroupNode, NoteNode, ResourceSummary, WorkflowEdgeRoute, WorkflowEdgeRouteType, WorkflowNodeConfigField, WorkflowNodeConfigSchema, WorkflowNodeConfigValidationRule, WorkflowValidationIssue } from '../types';
 import { cx } from '../utils/flow';
 import { NodeKindIcon } from './NodeKindIcon';
 
@@ -514,21 +514,32 @@ function ConfigFieldInput({
 function ConfigFieldRow({
   node,
   field,
+  issues,
   resourceOptions,
   onNodeConfigChange,
 }: {
   node: ActivityNode;
   field: WorkflowNodeConfigField;
+  issues?: WorkflowValidationIssue[];
   resourceOptions: ResourceSummary[];
   onNodeConfigChange: (nodeId: string, key: string, value: unknown) => void;
 }) {
+  const hasBlockIssue = issues?.some((issue) => issue.severity === 'BLOCK');
+  const hasWarningIssue = issues?.some((issue) => issue.severity === 'WARNING');
   return (
-    <label className="schema-config-row">
+    <label className={cx('schema-config-row', hasBlockIssue && 'has-error', !hasBlockIssue && hasWarningIssue && 'has-warning')} data-config-field={field.key}>
       <span>
         <b>{field.label}</b>
         {field.required ? <em>必填</em> : null}
       </span>
       <ConfigFieldInput node={node} field={field} resourceOptions={resourceOptions} onNodeConfigChange={onNodeConfigChange} />
+      {issues?.length ? (
+        <div className="schema-field-issues">
+          {issues.map((issue) => (
+            <i key={`${issue.code}-${issue.path ?? issue.message}`}>{issue.message}</i>
+          ))}
+        </div>
+      ) : null}
       {field.description ? <small>{field.description}</small> : null}
       {field.validationRules?.length ? (
         <div className="schema-rule-list">
@@ -569,11 +580,13 @@ function NodeConfigPreview({ schema }: { schema: WorkflowNodeConfigSchema }) {
 function NodeConfigForm({
   node,
   schema,
+  validationIssues,
   resourceOptions,
   onNodeConfigChange,
 }: {
   node: ActivityNode;
   schema?: WorkflowNodeConfigSchema;
+  validationIssues?: WorkflowValidationIssue[];
   resourceOptions: ResourceSummary[];
   onNodeConfigChange: (nodeId: string, key: string, value: unknown) => void;
 }) {
@@ -581,6 +594,14 @@ function NodeConfigForm({
   const groups = schema.fieldGroups?.length
     ? schema.fieldGroups
     : [{ key: 'base', title: schema.title, description: schema.description, fields: schema.fields }];
+  const issuesByField = nodeConfigIssuesByField(validationIssues ?? []);
+  const nodeLevelIssues = (validationIssues ?? []).filter((issue) => !nodeConfigIssueFieldKey(issue));
+  const focusConfigField = (fieldKey: string) => {
+    const row = Array.from(document.querySelectorAll<HTMLElement>('.property-panel [data-config-field]'))
+      .find((item) => item.dataset.configField === fieldKey);
+    row?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    row?.querySelector<HTMLElement>('input, select, textarea, button')?.focus();
+  };
   return (
     <div className="schema-config-grid">
       <div className="schema-config-head">
@@ -588,6 +609,31 @@ function NodeConfigForm({
         <span>v{schema.version}</span>
       </div>
       {schema.description ? <p className="schema-config-desc">{schema.description}</p> : null}
+      {validationIssues?.length ? (
+        <div className="schema-validation-panel">
+          <div>
+            <b>配置检查</b>
+            <span>{validationIssues.length} 项</span>
+          </div>
+          {validationIssues.map((issue) => {
+            const fieldKey = nodeConfigIssueFieldKey(issue);
+            return (
+              <button
+                key={`${issue.code}-${issue.path ?? issue.message}`}
+                type="button"
+                className={issue.severity.toLowerCase()}
+                onClick={() => fieldKey && focusConfigField(fieldKey)}
+                disabled={!fieldKey}
+              >
+                <i>{issue.severity === 'BLOCK' ? '阻塞' : '警告'}</i>
+                <span>{issue.message}</span>
+                {fieldKey ? <em>{fieldKey}</em> : null}
+              </button>
+            );
+          })}
+          {nodeLevelIssues.length ? <p>节点级问题请结合画布连线、输入映射或配置预览处理。</p> : null}
+        </div>
+      ) : null}
       {groups.map((group) => (
         <div key={group.key} className="schema-config-group">
           <div className="schema-config-group-head">
@@ -596,12 +642,30 @@ function NodeConfigForm({
           </div>
           {group.description ? <p>{group.description}</p> : null}
           {group.fields.map((field) => (
-            <ConfigFieldRow key={field.key} node={node} field={field} resourceOptions={resourceOptions} onNodeConfigChange={onNodeConfigChange} />
+            <ConfigFieldRow key={field.key} node={node} field={field} issues={issuesByField.get(field.key)} resourceOptions={resourceOptions} onNodeConfigChange={onNodeConfigChange} />
           ))}
         </div>
       ))}
     </div>
   );
+}
+
+function nodeConfigIssueFieldKey(issue: WorkflowValidationIssue): string {
+  const path = issue.path ?? '';
+  const marker = '.config.';
+  const index = path.indexOf(marker);
+  if (index < 0) return '';
+  return path.slice(index + marker.length).split(/[.[\]]/)[0] ?? '';
+}
+
+function nodeConfigIssuesByField(issues: WorkflowValidationIssue[]): Map<string, WorkflowValidationIssue[]> {
+  const out = new Map<string, WorkflowValidationIssue[]>();
+  issues.forEach((issue) => {
+    const fieldKey = nodeConfigIssueFieldKey(issue);
+    if (!fieldKey) return;
+    out.set(fieldKey, [...(out.get(fieldKey) ?? []), issue]);
+  });
+  return out;
 }
 
 function safeJSONString(value: unknown): string {
@@ -1058,9 +1122,10 @@ type Props = {
   panelWidth: number;
   onResizeStart: (event: ReactPointerEvent<HTMLButtonElement>) => void;
   resourceOptions: ResourceSummary[];
+  validationIssues?: WorkflowValidationIssue[];
 };
 
-export function PropertyPanel({ nodes, edges, selectedNodeIds, selectedEdgeIds, nodeConfigSchemas, onNodeConfigChange, onEdgeRouteChange, onLocateNode, onDeleteNodes, onDeleteEdges, panelWidth, onResizeStart, resourceOptions }: Props) {
+export function PropertyPanel({ nodes, edges, selectedNodeIds, selectedEdgeIds, nodeConfigSchemas, onNodeConfigChange, onEdgeRouteChange, onLocateNode, onDeleteNodes, onDeleteEdges, panelWidth, onResizeStart, resourceOptions, validationIssues = [] }: Props) {
   const [activeTab, setActiveTab] = useState<PropertyPanelTab>(loadPropertyPanelTab);
   const selectedNode = nodes.find((node): node is ActivityNode => node.id === selectedNodeIds[0] && node.type === 'activity');
   const selectedGroup = nodes.find((node): node is GroupNode => node.id === selectedNodeIds[0] && node.type === 'group');
@@ -1118,7 +1183,7 @@ export function PropertyPanel({ nodes, edges, selectedNodeIds, selectedEdgeIds, 
             </div>
           </PropertyDisclosure>
           <PropertyDisclosure title="配置参数" summary={selectedNodeSchema ? `v${selectedNodeSchema.version}` : '未找到 schema'}>
-            <NodeConfigForm node={selectedNode} schema={selectedNodeSchema} resourceOptions={resourceOptions} onNodeConfigChange={onNodeConfigChange} />
+            <NodeConfigForm node={selectedNode} schema={selectedNodeSchema} validationIssues={validationIssues} resourceOptions={resourceOptions} onNodeConfigChange={onNodeConfigChange} />
           </PropertyDisclosure>
           <LuaScriptEditor node={selectedNode} onNodeConfigChange={onNodeConfigChange} />
           <InputMappingEditor node={selectedNode} schema={selectedNodeSchema} nodes={nodes} edges={edges} schemas={nodeConfigSchemas} onNodeConfigChange={onNodeConfigChange} onLocateNode={onLocateNode} />

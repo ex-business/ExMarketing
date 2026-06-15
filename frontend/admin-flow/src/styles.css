@@ -671,6 +671,18 @@ input:focus-visible {
   background: #fff;
 }
 
+.schema-config-row.has-error {
+  border-color: #fda29b;
+  background: #fffafa;
+  box-shadow: inset 3px 0 0 #f04438;
+}
+
+.schema-config-row.has-warning {
+  border-color: #fedf89;
+  background: #fffcf5;
+  box-shadow: inset 3px 0 0 #f79009;
+}
+
 .schema-config-row > span {
   display: flex;
   align-items: center;
@@ -833,6 +845,111 @@ input:focus-visible {
   color: #667085;
   font-size: 11px;
   line-height: 1.45;
+}
+
+.schema-validation-panel {
+  display: grid;
+  gap: 7px;
+  border: 1px solid #fedf89;
+  border-radius: 9px;
+  background: #fffcf5;
+  padding: 9px;
+}
+
+.schema-validation-panel > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.schema-validation-panel b {
+  color: #344054;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.schema-validation-panel > div span {
+  border-radius: 999px;
+  background: #fff7e6;
+  color: #b54708;
+  padding: 2px 7px;
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.schema-validation-panel button {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  border: 1px solid #fedf89;
+  border-radius: 7px;
+  background: #fff;
+  color: #344054;
+  padding: 7px 8px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.schema-validation-panel button:disabled {
+  cursor: default;
+}
+
+.schema-validation-panel button.block {
+  border-color: #fda29b;
+}
+
+.schema-validation-panel button i {
+  border-radius: 999px;
+  background: #fff1f3;
+  color: #d92d20;
+  padding: 2px 6px;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 900;
+}
+
+.schema-validation-panel button.warning i {
+  background: #fff7e6;
+  color: #b54708;
+}
+
+.schema-validation-panel button span {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 11px;
+  font-weight: 750;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.schema-validation-panel button em {
+  color: #667085;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.schema-validation-panel p,
+.schema-field-issues {
+  margin: 0;
+  color: #b54708;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.schema-field-issues {
+  display: grid;
+  gap: 3px;
+}
+
+.schema-field-issues i {
+  color: #d92d20;
+  font-style: normal;
+  font-weight: 750;
 }
 
 .route-type-panel {

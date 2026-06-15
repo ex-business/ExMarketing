@@ -335,7 +335,7 @@ func TestAdvancedAndOpsSchemasExposeExecutionSemantics(t *testing.T) {
 
 func TestProductizedCoreNodeConfigSchemasIncludeGroupsAndPreview(t *testing.T) {
 	registry := DefaultWorkflowNodeConfigSchemas()
-	for _, nodeType := range []string{"event-in", "inbox", "match", "condition", "qualify", "switch", "fact-query", "code", "combine", "split", "reward", "limit", "quota", "callback", "audit"} {
+	for _, nodeType := range []string{"event-in", "inbox", "normalize", "match", "condition", "qualify", "switch", "fact-query", "code", "combine", "split", "reward", "limit", "quota", "callback", "audit"} {
 		schema, ok := registry.Get(nodeType)
 		if !ok {
 			t.Fatalf("expected schema for %s", nodeType)

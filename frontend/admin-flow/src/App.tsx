@@ -7096,7 +7096,7 @@ export function App() {
           </section>
         </div>
       ) : null}
-      {propertyPanelVisible ? <PropertyPanel nodes={nodes} edges={edges} selectedNodeIds={selectedNodeIds} selectedEdgeIds={selectedEdgeIds} nodeConfigSchemas={nodeConfigSchemas} resourceOptions={canvasResources} onNodeConfigChange={updateNodeConfig} onEdgeRouteChange={updateEdgeRoute} onLocateNode={(nodeId) => focusNodeById(nodeId, '已定位变量来源')} onDeleteNodes={deleteNodes} onDeleteEdges={deleteEdges} panelWidth={rightPanelWidth} onResizeStart={beginRightPanelResize} /> : null}
+      {propertyPanelVisible ? <PropertyPanel nodes={nodes} edges={edges} selectedNodeIds={selectedNodeIds} selectedEdgeIds={selectedEdgeIds} nodeConfigSchemas={nodeConfigSchemas} validationIssues={validationHighlights.nodeIssues.get(selectedNodeIds[0] ?? '') ?? []} resourceOptions={canvasResources} onNodeConfigChange={updateNodeConfig} onEdgeRouteChange={updateEdgeRoute} onLocateNode={(nodeId) => focusNodeById(nodeId, '已定位变量来源')} onDeleteNodes={deleteNodes} onDeleteEdges={deleteEdges} panelWidth={rightPanelWidth} onResizeStart={beginRightPanelResize} /> : null}
     </div>
   );
 }

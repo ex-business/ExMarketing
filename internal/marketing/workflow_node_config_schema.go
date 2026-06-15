@@ -239,9 +239,31 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 			[]string{"event_context"},
 			[]string{"重复事件默认直接返回首次处理结果，不继续重复执行下游。"},
 		)),
-		schema("normalize", "事件标准化", "标准化事件字段", fields(
-			objectField("mapping", "字段映射", false, nil),
-			objectField("defaults", "默认值", false, nil),
+		groupedSchema("normalize", "事件标准化", "把入口 raw_event 映射成后续节点稳定读取的 normalized_event。", groups(
+			fieldGroup("input-contract", "输入契约", "定义读取哪个上游载荷，以及缺失关键字段时如何处理。", fields(
+				withDescription(stringField("sourcePath", "事件来源 Path", false, "$.raw_event", rules(maxLength(160))), "默认读取入口节点输出 raw_event；也可指向 $.event 或上游 input。"),
+				withDefault(arrayField("requiredFields", "必需字段", false, "标准事件必须具备的字段。", rules(maxItems(30))), []string{"eventId", "eventType", "tenantId", "sourceSystem"}),
+				enumField("missingFieldPolicy", "缺失字段策略", true, "BLOCK", []string{"BLOCK", "USE_DEFAULT", "SKIP"}),
+			)),
+			fieldGroup("mapping", "字段映射", "把第三方或上游字段映射为标准事件字段。", fields(
+				enumField("mappingMode", "映射模式", true, "MERGE", []string{"MERGE", "REPLACE", "PASSTHROUGH"}),
+				objectField("mapping", "字段映射表", false, nil),
+				withDescription(stringField("eventIdPath", "Event ID Path", false, "$.eventId", rules(maxLength(160))), "从 raw_event 中读取 eventId。"),
+				withDescription(stringField("eventTypePath", "Event Type Path", false, "$.eventType", rules(maxLength(160))), "从 raw_event 中读取 eventType。"),
+				withDescription(stringField("subjectIdPath", "Subject ID Path", false, "$.subject.id", rules(maxLength(160))), "从 raw_event 中读取 subject.id。"),
+			)),
+			fieldGroup("defaults", "默认值和输出", "补齐后续节点依赖的默认字段。", fields(
+				objectField("defaults", "默认值", false, nil),
+				withDescription(stringField("outputPath", "输出 Path", true, "normalized_event", rules(minLength(1), maxLength(128))), "Executor 当前输出 normalized_event；此字段用于 UI 和后续 DSL 约定。"),
+			)),
+			fieldGroup("runtime", "运行语义", "Normalize 是纯转换节点，不产生业务副作用。", fields(
+				executionModeField("REAL_HANDLER"),
+				executionAuthorityField("WorkflowExecutor"),
+			)),
+		), preview(
+			[]string{"raw_event", "mapping", "defaults"},
+			[]string{"normalized_event", "normalized"},
+			[]string{"只做字段标准化和默认值补齐，不做活动资格、额度、发奖等业务判断。"},
 		)),
 		groupedSchema("match", "活动匹配", "根据事件上下文匹配可参与的活动。", groups(
 			fieldGroup("strategy", "匹配策略", "控制匹配数量、优先级和活动状态约束。", fields(

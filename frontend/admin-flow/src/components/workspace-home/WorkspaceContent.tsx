@@ -4,6 +4,7 @@ import {
   CheckSquare,
   ChevronLeft,
   ChevronRight,
+  Clock3,
   Copy,
   Folder,
   Grid3X3,
@@ -16,6 +17,7 @@ import {
   Share2,
   SlidersHorizontal,
   Star,
+  StarOff,
   UserRoundCog,
   Workflow,
 } from 'lucide-react';
@@ -80,8 +82,10 @@ type WorkspaceContentProps = {
   folderName: string;
   folderVisibility: string;
   folderUpdatedLabel: string;
+  homeView: 'workspace' | 'recent' | 'favorites' | 'archived';
   folders: WorkspaceContentFolder[];
   workflows: WorkspaceContentWorkflow[];
+  overviewWorkflows: WorkspaceContentWorkflow[];
   templates: TemplateItem[];
   workflowCountByFolder: Record<string, number>;
   searchValue: string;
@@ -106,6 +110,7 @@ type WorkspaceContentProps = {
   onTemplateOpen: (templateId: string) => void;
   onToggleFavorite: (workflowId: string) => void;
   onToggleArchived: (workflowId: string) => void;
+  onNavigateHomeView: (view: 'workspace' | 'recent' | 'favorites' | 'archived') => void;
   onItemAction: (action: WorkspaceItemAction, item: { id: string; type: ItemType; name: string; visibility: string; status?: string; version?: string; owner?: string }) => void;
   onBulkAction: (action: 'move' | 'permission' | 'copyLink', items: Array<{ id: string; type: ItemType; name: string; visibility: string; status?: string; version?: string; owner?: string }>) => void;
   onBulkArchive: (items: Array<{ id: string; type: ItemType; name: string; visibility: string; status?: string; version?: string; owner?: string }>) => void;
@@ -213,8 +218,10 @@ export function WorkspaceContent({
   folderName,
   folderVisibility,
   folderUpdatedLabel,
+  homeView,
   folders,
   workflows,
+  overviewWorkflows,
   templates,
   workflowCountByFolder,
   searchValue,
@@ -239,6 +246,7 @@ export function WorkspaceContent({
   onTemplateOpen,
   onToggleFavorite,
   onToggleArchived,
+  onNavigateHomeView,
   onItemAction,
   onBulkAction,
   onBulkArchive,
@@ -311,6 +319,27 @@ export function WorkspaceContent({
     });
     return folderItems.concat(workflowItems);
   }, [archivedWorkflowIds, favoriteWorkflowIds, folderVisibility, folders, workflowCountByFolder, workflows]);
+  const overviewWorkflowItems = useMemo<ContentItem[]>(() => (
+    overviewWorkflows.map((workflow) => {
+      const archived = archivedWorkflowIds.has(workflow.id) || workflow.status === 'ARCHIVED';
+      const status = archived ? 'ARCHIVED' : workflow.status || 'ACTIVE';
+      const updatedValue = workflow.updatedAt || workflow.createdAt;
+      return {
+        id: workflow.id,
+        type: 'Workflow' as ItemType,
+        name: workflow.activityName || workflow.activityCode,
+        code: workflow.activityCode,
+        status,
+        version: `v${workflow.version ?? 1}`,
+        updated: formatDateLabel(updatedValue),
+        updatedAt: updatedValue ? new Date(updatedValue).getTime() || 0 : 0,
+        owner: ownerFor(workflow.id),
+        visibility: workflow.visibility === 'PUBLIC' ? 'Public' : workflow.visibility === 'PRIVATE' ? 'Private' : 'Workspace',
+        favorite: favoriteWorkflowIds.has(workflow.id),
+        archived,
+      };
+    })
+  ), [archivedWorkflowIds, favoriteWorkflowIds, overviewWorkflows]);
 
   const filteredItems = useMemo(() => {
     const keyword = searchValue.trim().toLowerCase();
@@ -354,6 +383,25 @@ export function WorkspaceContent({
   const checkedItems = useMemo(() => items.filter((item) => checkedItemIds.has(item.id)), [checkedItemIds, items]);
   const allPageChecked = pageItems.length > 0 && pageItems.every((item) => checkedItemIds.has(item.id));
   const isEmptyPage = !isLoading && ((tab === 'template' && pageTemplates.length === 0) || (tab !== 'template' && pageItems.length === 0));
+  const activeWorkflowCount = useMemo(() => overviewWorkflowItems.filter((item) => item.status === 'ACTIVE').length, [overviewWorkflowItems]);
+  const draftWorkflowCount = useMemo(() => overviewWorkflowItems.filter((item) => item.status === 'DRAFT').length, [overviewWorkflowItems]);
+  const archivedWorkflowItems = useMemo(() => overviewWorkflowItems.filter((item) => item.archived), [overviewWorkflowItems]);
+  const favoriteWorkflowItems = useMemo(() => overviewWorkflowItems.filter((item) => item.favorite && !item.archived), [overviewWorkflowItems]);
+  const recentWorkflowItems = useMemo(() => (
+    overviewWorkflowItems
+      .filter((item) => !item.archived)
+      .sort((a, b) => b.updatedAt - a.updatedAt || a.name.localeCompare(b.name))
+      .slice(0, 4)
+  ), [overviewWorkflowItems]);
+  const showWorkbenchOverview = !isLoading && !searchValue.trim() && tab === 'all';
+  const homeViewTitle = homeView === 'recent' ? '最近编辑'
+    : homeView === 'favorites' ? '收藏'
+      : homeView === 'archived' ? '归档'
+        : '工作区';
+  const homeViewDescription = homeView === 'recent' ? '按更新时间组织当前目录的流程。'
+    : homeView === 'favorites' ? '只看已收藏的重点活动流程。'
+      : homeView === 'archived' ? '集中查看已归档的流程，必要时可以恢复。'
+        : '按 workspace、folder、workflow 组织活动资产。';
   const emptyState = useMemo<EmptyState>(() => {
     const hasSearch = searchValue.trim().length > 0;
     const hasAdvancedFilter = typeFilter !== 'ALL' || statusFilter !== 'ALL' || visibilityFilter !== 'ALL' || ownerFilter !== 'ALL';
@@ -611,6 +659,79 @@ export function WorkspaceContent({
           <TaButton size="sm" tone="primary" data-testid="workspace-new-workflow" disabled={!capabilities.canEditWorkspace} title={!capabilities.canEditWorkspace ? disabledReason('新建流程') : '新建流程'} onClick={onCreateWorkflow}>新建流程</TaButton>
         </div>
       </nav>
+
+      {showWorkbenchOverview ? (
+        <section className="exm-workbench-overview ta-card" data-testid="workspace-workbench-overview">
+          <div className="exm-workbench-overview-head">
+            <div>
+              <span>{homeViewTitle}</span>
+              <h2>{folderName} 工作台</h2>
+              <p>{homeViewDescription}</p>
+            </div>
+            <div className="exm-workbench-quick-actions">
+              <TaButton size="sm" onClick={() => onNavigateHomeView('recent')}><Clock3 size={14} />最近</TaButton>
+              <TaButton size="sm" onClick={() => onNavigateHomeView('favorites')}><Star size={14} />收藏</TaButton>
+              <TaButton size="sm" onClick={() => onNavigateHomeView('archived')}><Archive size={14} />归档</TaButton>
+            </div>
+          </div>
+          <div className="exm-workbench-stats">
+            <button type="button" onClick={() => onNavigateHomeView('workspace')}>
+              <span>流程</span>
+              <strong>{overviewWorkflowItems.length}</strong>
+              <em>{activeWorkflowCount} 启用 · {draftWorkflowCount} 草稿</em>
+            </button>
+            <button type="button" onClick={() => setTab('folder')}>
+              <span>文件夹</span>
+              <strong>{folders.length}</strong>
+              <em>{visibilityLabel(folderVisibility)} 可见</em>
+            </button>
+            <button type="button" onClick={() => onNavigateHomeView('favorites')}>
+              <span>收藏</span>
+              <strong>{favoriteWorkflowItems.length}</strong>
+              <em>重点流程快速定位</em>
+            </button>
+            <button type="button" onClick={() => onNavigateHomeView('archived')}>
+              <span>归档</span>
+              <strong>{archivedWorkflowItems.length}</strong>
+              <em>历史流程集中管理</em>
+            </button>
+          </div>
+          <div className="exm-workbench-lanes">
+            <div>
+              <header><Clock3 size={14} />最近编辑</header>
+              {recentWorkflowItems.length ? recentWorkflowItems.slice(0, 3).map((item) => (
+                <button key={item.id} type="button" onClick={() => selectAndOpen(item)}>
+                  <b>{item.name}</b>
+                  <span>{item.updated} · {item.version}</span>
+                </button>
+              )) : <p>暂无最近编辑流程</p>}
+            </div>
+            <div>
+              <header><Star size={14} />收藏</header>
+              {favoriteWorkflowItems.length ? favoriteWorkflowItems.slice(0, 3).map((item) => (
+                <button key={item.id} type="button" onClick={() => selectAndOpen(item)}>
+                  <b>{item.name}</b>
+                  <span>{item.owner} · {statusLabel(item.status)}</span>
+                </button>
+              )) : (
+                <button type="button" className="empty-action" onClick={() => onNavigateHomeView('workspace')}>
+                  <StarOff size={14} />
+                  <span>从列表星标重点流程</span>
+                </button>
+              )}
+            </div>
+            <div>
+              <header><Archive size={14} />归档</header>
+              {archivedWorkflowItems.length ? archivedWorkflowItems.slice(0, 3).map((item) => (
+                <button key={item.id} type="button" onClick={() => selectAndOpen(item)}>
+                  <b>{item.name}</b>
+                  <span>{item.code}</span>
+                </button>
+              )) : <p>当前目录没有归档流程</p>}
+            </div>
+          </div>
+        </section>
+      ) : null}
 
       <TaTabs className="exm-content-tabs">
         {([

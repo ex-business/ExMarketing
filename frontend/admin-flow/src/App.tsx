@@ -2910,6 +2910,7 @@ function StudioActivityStart({
   const [statusFilter, setStatusFilter] = useState<'ACTIVE' | 'DRAFT' | 'ARCHIVED' | 'ALL'>('ALL');
   const [sortMode, setSortMode] = useState<WorkspaceSortMode>('recent');
   const [showFavoritesOnly, setShowFavoritesOnly] = useState(false);
+  const [workspaceHomeNav, setWorkspaceHomeNav] = useState<'workspace' | 'recent' | 'shared' | 'favorites' | 'archived'>('workspace');
   const [favoriteActivityIds, setFavoriteActivityIds] = useState<Set<string>>(() => loadStudioStringSet('exmarketing.studio.favoriteActivities'));
   const [archivedActivityIds, setArchivedActivityIds] = useState<Set<string>>(() => loadStudioStringSet('exmarketing.studio.archivedActivities'));
   const [draggingFolderId, setDraggingFolderId] = useState('');
@@ -3196,9 +3197,18 @@ function StudioActivityStart({
     const parentId = selectedFolder?.id ?? '';
     return selectedWorkspaceFolders.filter((folder) => (folder.parentId ?? '') === parentId);
   }, [selectedFolder?.id, selectedWorkspace, selectedWorkspaceFolders]);
+  const selectedFolderWorkflows = useMemo(() => (
+    activities.filter((activity) => {
+      if (!selectedWorkspace) return true;
+      const placement = placements[activity.id];
+      if (!placement || placement.workspaceId !== selectedWorkspace.id) return false;
+      if (selectedFolder && placement.folderId !== selectedFolder.id) return false;
+      return true;
+    })
+  ), [activities, placements, selectedFolder, selectedWorkspace]);
   const selectedWorkflows = useMemo(() => {
     const keyword = search.trim().toLowerCase();
-    return activities
+    return selectedFolderWorkflows
       .filter((activity) => {
         const archived = archivedActivityIds.has(activity.id) || activity.status === 'ARCHIVED';
         if (statusFilter === 'ARCHIVED') {
@@ -3209,11 +3219,6 @@ function StudioActivityStart({
         if (statusFilter === 'ACTIVE' && activity.status && activity.status !== 'ACTIVE') return false;
         if (statusFilter === 'DRAFT' && activity.status !== 'DRAFT') return false;
         if (showFavoritesOnly && !favoriteActivityIds.has(activity.id)) return false;
-        if (selectedWorkspace) {
-          const placement = placements[activity.id];
-          if (!placement || placement.workspaceId !== selectedWorkspace.id) return false;
-          if (selectedFolder && placement.folderId !== selectedFolder.id) return false;
-        }
         if (!keyword) return true;
         const folder = placements[activity.id]?.folderId ? folders.find((item) => item.id === placements[activity.id]?.folderId) : undefined;
         return `${activity.activityName} ${activity.activityCode} ${activity.tenantId} ${selectedWorkspace?.name ?? ''} ${folder?.name ?? ''}`.toLowerCase().includes(keyword);
@@ -3224,7 +3229,7 @@ function StudioActivityStart({
         if (sortMode === 'version') return (b.version ?? 0) - (a.version ?? 0);
         return activityTimestamp(b) - activityTimestamp(a);
       });
-  }, [activities, archivedActivityIds, favoriteActivityIds, folders, placements, search, selectedFolder, selectedWorkspace, showFavoritesOnly, sortMode, statusFilter]);
+  }, [archivedActivityIds, favoriteActivityIds, folders, placements, search, selectedFolderWorkflows, selectedWorkspace?.name, showFavoritesOnly, sortMode, statusFilter]);
   const recentWorkflows = useMemo(() => (
     activities
       .filter((activity) => {
@@ -4033,6 +4038,7 @@ function StudioActivityStart({
               folders={selectedWorkspaceFolders}
               selectedWorkspaceId={selectedWorkspace?.id}
               selectedFolderId={selectedFolder?.id}
+              activeNav={workspaceHomeNav}
               workflowCountByFolder={workflowCountByFolder}
               recentCount={recentWorkflows.length}
               sharedCount={sharedWorkflowCount}
@@ -4046,27 +4052,38 @@ function StudioActivityStart({
               onWorkspaceChange={(workspaceId) => {
                 setSelectedWorkspaceId(workspaceId);
                 setSelectedFolderId('');
+                setWorkspaceHomeNav('workspace');
               }}
-              onFolderSelect={setSelectedFolderId}
+              onFolderSelect={(folderId) => {
+                setSelectedFolderId(folderId);
+                setWorkspaceHomeNav('workspace');
+              }}
               onCreateWorkspace={() => {
                 setWorkspaceError('');
                 setShowWorkspaceDialog(true);
               }}
               onNavRecent={() => {
+                setWorkspaceHomeNav('recent');
                 setSortMode('recent');
                 setStatusFilter('ALL');
                 setShowFavoritesOnly(false);
               }}
               onNavWorkspace={() => {
+                setWorkspaceHomeNav('workspace');
                 setStatusFilter('ACTIVE');
                 setShowFavoritesOnly(false);
               }}
-              onNavShared={() => setHomeUtilityDialog('share')}
+              onNavShared={() => {
+                setWorkspaceHomeNav('shared');
+                setHomeUtilityDialog('share');
+              }}
               onNavFavorites={() => {
+                setWorkspaceHomeNav('favorites');
                 setShowFavoritesOnly(true);
                 setStatusFilter('ALL');
               }}
               onNavArchived={() => {
+                setWorkspaceHomeNav('archived');
                 setStatusFilter('ARCHIVED');
                 setShowFavoritesOnly(false);
               }}
@@ -4083,8 +4100,10 @@ function StudioActivityStart({
               folderName={selectedFolder?.name ?? '风控活动'}
               folderVisibility={selectedFolder?.visibility ?? selectedWorkspace?.visibility ?? 'Private'}
               folderUpdatedLabel={workflowStatus.includes('失败') || workflowStatus.includes('不可用') ? workflowStatus : '2 小时前更新'}
+              homeView={workspaceHomeNav === 'shared' ? 'workspace' : workspaceHomeNav}
               folders={selectedChildFolders}
               workflows={selectedWorkflows}
+              overviewWorkflows={selectedFolderWorkflows}
               templates={templates}
               workflowCountByFolder={workflowCountByFolder}
               searchValue={search}
@@ -4135,6 +4154,27 @@ function StudioActivityStart({
               }}
               onToggleFavorite={toggleFavorite}
               onToggleArchived={toggleArchived}
+              onNavigateHomeView={(view) => {
+                setWorkspaceHomeNav(view);
+                if (view === 'recent') {
+                  setSortMode('recent');
+                  setStatusFilter('ALL');
+                  setShowFavoritesOnly(false);
+                  return;
+                }
+                if (view === 'favorites') {
+                  setStatusFilter('ALL');
+                  setShowFavoritesOnly(true);
+                  return;
+                }
+                if (view === 'archived') {
+                  setStatusFilter('ARCHIVED');
+                  setShowFavoritesOnly(false);
+                  return;
+                }
+                setStatusFilter('ACTIVE');
+                setShowFavoritesOnly(false);
+              }}
               onItemAction={openDetailActionFor}
               onBulkAction={openBatchAction}
               onBulkArchive={archiveItems}

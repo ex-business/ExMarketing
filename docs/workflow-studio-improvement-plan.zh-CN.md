@@ -119,13 +119,16 @@ Debug run / rerun 已完成第一轮增强：
 
 ### 8. Workspace Studio 首页设计
 
-Workspace / Folder / Workflow 的 Studio 首页仍是体验短板，需要继续设计成真正的工作台：
+Workspace / Folder / Workflow 的 Studio 首页已经从简单列表升级为工作台底座：
 
-- workspace / folder / workflow 的文件管理视图。
-- folder 拖拽移动。
-- activity 搜索、过滤、排序。
-- 最近编辑、收藏、归档。
-- 更像项目工作台，而不是简单列表。
+- workspace / folder / workflow 以文件管理视图组织，支持列表、网格和紧凑模式。
+- 侧栏支持 workspace 切换、folder 树、最近编辑、收藏、归档、成员、资源、审计和存储入口。
+- 主内容区支持 activity 搜索、状态/类型/可见性/负责人筛选、排序、分页、批量移动、批量归档和批量权限。
+- 首页增加工作台概览，集中展示流程、文件夹、收藏、归档统计，以及最近编辑、收藏、归档快捷列表。
+- 最近编辑、收藏、归档入口会同步侧栏 active 状态和内容区说明，不再只是隐式过滤。
+- 空画布入口已支持添加入口节点、从模板开始、导入 JSON，并区分未保存草稿和空 draft 状态。
+
+后续如果要继续增强，重点是 folder 拖拽移动的手感、跨 workspace 移动确认，以及真实多人协作下的最近访问记录。
 
 ### 9. Executor 生产能力
 

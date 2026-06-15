@@ -36,6 +36,7 @@ type WorkspaceSidebarProps = {
   folders: WorkspaceSidebarFolder[];
   selectedWorkspaceId?: string;
   selectedFolderId?: string;
+  activeNav: 'workspace' | 'recent' | 'shared' | 'favorites' | 'archived';
   workflowCountByFolder: Record<string, number>;
   recentCount: number;
   sharedCount: number;
@@ -77,6 +78,7 @@ export function WorkspaceSidebar({
   folders,
   selectedWorkspaceId,
   selectedFolderId,
+  activeNav,
   workflowCountByFolder,
   recentCount,
   sharedCount,
@@ -220,11 +222,11 @@ export function WorkspaceSidebar({
           <TaNavButton key={index} className="skeleton-row" disabled aria-label="导航加载中"><i className="exm-skeleton" /><span className="exm-skeleton" /><strong className="exm-skeleton" /></TaNavButton>
         )) : (
           <>
-            <TaNavButton onClick={onNavRecent}><Clock3 size={16} /><span>最近编辑</span><strong>{recentCount}</strong></TaNavButton>
-            <TaNavButton active onClick={onNavWorkspace}><Folder size={16} /><span>工作区</span></TaNavButton>
-            <TaNavButton onClick={onNavShared}><Users size={16} /><span>与我共享</span><strong>{sharedCount}</strong></TaNavButton>
-            <TaNavButton onClick={onNavFavorites}><Star size={16} /><span>收藏</span><strong>{favoriteCount}</strong></TaNavButton>
-            <TaNavButton onClick={onNavArchived}><Archive size={16} /><span>归档</span><strong>{archivedCount}</strong></TaNavButton>
+            <TaNavButton active={activeNav === 'recent'} onClick={onNavRecent}><Clock3 size={16} /><span>最近编辑</span><strong>{recentCount}</strong></TaNavButton>
+            <TaNavButton active={activeNav === 'workspace'} onClick={onNavWorkspace}><Folder size={16} /><span>工作区</span></TaNavButton>
+            <TaNavButton active={activeNav === 'shared'} onClick={onNavShared}><Users size={16} /><span>与我共享</span><strong>{sharedCount}</strong></TaNavButton>
+            <TaNavButton active={activeNav === 'favorites'} onClick={onNavFavorites}><Star size={16} /><span>收藏</span><strong>{favoriteCount}</strong></TaNavButton>
+            <TaNavButton active={activeNav === 'archived'} onClick={onNavArchived}><Archive size={16} /><span>归档</span><strong>{archivedCount}</strong></TaNavButton>
           </>
         )}
       </nav>

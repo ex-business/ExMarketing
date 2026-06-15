@@ -810,6 +810,14 @@ test('renders Workspace Studio home as a file manager with search, favorites, an
   await expect(page.locator('.exm-sidebar-folders')).toContainText('Archive');
   await expect(page.locator('.exm-table-view')).toContainText('Retention Workflow');
   await expect(page.locator('.exm-detail-panel')).toContainText('Campaigns');
+  const workbenchOverview = page.getByTestId('workspace-workbench-overview');
+  await expect(workbenchOverview).toContainText('Campaigns 工作台');
+  await expect(workbenchOverview).toContainText('最近编辑');
+  await expect(workbenchOverview).toContainText('收藏');
+  await expect(workbenchOverview).toContainText('归档');
+
+  await workbenchOverview.locator('.exm-workbench-quick-actions button').filter({ hasText: '最近' }).click();
+  await expect(page.locator('.exm-sidebar-nav button.active')).toContainText('最近编辑');
 
   await page.locator('.exm-workspace-switcher-trigger').click();
   await page.locator('.exm-workspace-switcher-search input').fill('missing');

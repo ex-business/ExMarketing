@@ -1172,9 +1172,9 @@ input:focus-visible {
 }
 
 .input-map-actions {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
   align-items: center;
-  justify-content: space-between;
   gap: 8px;
   border: 1px solid #dbeafe;
   border-radius: 8px;
@@ -1183,9 +1183,13 @@ input:focus-visible {
 }
 
 .input-map-actions span {
+  min-width: 0;
+  overflow: hidden;
   color: #475467;
   font-size: 11px;
   font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .input-map-actions button {
@@ -1203,6 +1207,62 @@ input:focus-visible {
   border-color: #e4e7ec;
   color: #98a2b3;
   cursor: not-allowed;
+}
+
+.variable-filter-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 108px auto;
+  align-items: end;
+  gap: 8px;
+  border: 1px solid #edf1f5;
+  border-radius: 8px;
+  background: #fff;
+  padding: 8px;
+}
+
+.variable-filter-bar label {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.variable-filter-bar span {
+  color: #667085;
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.variable-filter-bar input,
+.variable-filter-bar select {
+  min-width: 0;
+  width: 100%;
+  height: 30px;
+  border: 1px solid #dbe3ee;
+  border-radius: 7px;
+  background: #f8fafc;
+  color: #172033;
+  padding: 0 8px;
+  font-size: 12px;
+  font-weight: 750;
+  outline: none;
+}
+
+.variable-filter-bar input:focus,
+.variable-filter-bar select:focus {
+  border-color: #155eef;
+  background: #fff;
+  box-shadow: 0 0 0 3px rgba(21, 94, 239, 0.08);
+}
+
+.variable-filter-bar em {
+  align-self: center;
+  border-radius: 999px;
+  background: #eef4ff;
+  color: #155eef;
+  padding: 3px 7px;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 900;
 }
 
 .input-map-row {
@@ -1383,6 +1443,51 @@ input:focus-visible {
   border-color: #f97066;
   background: #fff5f4;
   color: #912018;
+}
+
+.jsonpath-preset-row {
+  display: grid;
+  gap: 5px;
+  border: 1px solid #edf1f5;
+  border-radius: 8px;
+  background: #fcfcfd;
+  padding: 8px;
+}
+
+.jsonpath-preset-row > span {
+  color: #667085;
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.jsonpath-preset-row > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.jsonpath-preset-row button {
+  min-width: 0;
+  height: 26px;
+  border: 1px solid #dbe3ee;
+  border-radius: 7px;
+  background: #fff;
+  color: #344054;
+  padding: 0 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 10px;
+  font-weight: 850;
+}
+
+.jsonpath-preset-row button:hover {
+  border-color: #b9c8ff;
+  color: #155eef;
+}
+
+.jsonpath-preset-row button.active {
+  border-color: #155eef;
+  background: #eef4ff;
+  color: #155eef;
 }
 
 .variable-picker {

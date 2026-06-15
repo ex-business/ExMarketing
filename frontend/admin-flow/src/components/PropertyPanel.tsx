@@ -94,6 +94,66 @@ type UpstreamOutputGroup = {
   options: UpstreamOutputOption[];
 };
 
+function normalizedVarType(value?: string): string {
+  return (value || 'unknown').trim().toLowerCase();
+}
+
+function variableOptionMatchesSearch(option: UpstreamOutputOption, keyword: string): boolean {
+  const query = keyword.trim().toLowerCase();
+  if (!query) return true;
+  return [
+    option.output,
+    option.nodeTitle,
+    option.nodeCode,
+    option.type,
+    option.description,
+  ].some((item) => (item ?? '').toLowerCase().includes(query));
+}
+
+function filterVariableOptions(options: UpstreamOutputOption[], search: string, typeFilter: string): UpstreamOutputOption[] {
+  return options.filter((option) => {
+    if (!variableOptionMatchesSearch(option, search)) return false;
+    if (typeFilter === 'ALL') return true;
+    return normalizedVarType(option.type) === typeFilter;
+  });
+}
+
+function outputTypeFilters(options: UpstreamOutputOption[]): string[] {
+  return Array.from(new Set(options.map((option) => normalizedVarType(option.type)))).sort();
+}
+
+function jsonPathPresets(inputKey: string, option?: UpstreamOutputOption): string[] {
+  const presets = new Set<string>(['$']);
+  const key = inputKey.toLowerCase();
+  const output = option?.output.toLowerCase() ?? '';
+  const type = normalizedVarType(option?.type);
+  if (type === 'object' || type === 'any' || type === 'unknown') {
+    presets.add('$.id');
+    presets.add('$.status');
+  }
+  if (key.includes('event') || output.includes('event')) {
+    presets.add('$.eventId');
+    presets.add('$.eventType');
+    presets.add('$.subject');
+    presets.add('$.attributes');
+  }
+  if (key.includes('subject') || output.includes('subject')) {
+    presets.add('$.id');
+    presets.add('$.type');
+  }
+  if (key.includes('reward') || output.includes('reward')) {
+    presets.add('$[0]');
+    presets.add('$[0].amount');
+    presets.add('$[0].rewardCode');
+  }
+  if (key.includes('fact') || output.includes('fact')) {
+    presets.add('$.USER_PROFILE');
+    presets.add('$.VIP_LEVEL');
+    presets.add('$.riskScore');
+  }
+  return Array.from(presets).slice(0, 8);
+}
+
 function inputMappingFor(node: ActivityNode): Record<string, InputMappingValue> {
   const value = node.data.config?.inputMapping;
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
@@ -182,8 +242,12 @@ function InputMappingEditor({
   onNodeConfigChange: (nodeId: string, key: string, value: unknown) => void;
   onLocateNode?: (nodeId: string) => void;
 }) {
+  const [variableSearch, setVariableSearch] = useState('');
+  const [typeFilter, setTypeFilter] = useState('ALL');
   const options = upstreamOutputOptions(node, nodes, edges, schemas);
-  const optionGroups = upstreamOutputGroups(options);
+  const filteredOptions = filterVariableOptions(options, variableSearch, typeFilter);
+  const optionGroups = upstreamOutputGroups(filteredOptions);
+  const typeFilters = outputTypeFilters(options);
   const mapping = inputMappingFor(node);
   const hasMappedInputs = Object.keys(mapping).length > 0;
   const inputs = schema?.inputs?.length
@@ -199,6 +263,35 @@ function InputMappingEditor({
       if (selected) {
         next[input.key] = { sourceNodeId: selected.nodeId, outputKey: selected.output };
       }
+    });
+    onNodeConfigChange(node.id, 'inputMapping', next);
+  };
+  const repairInvalidMappings = () => {
+    const next: Record<string, InputMappingValue> = {};
+    inputs.forEach((input) => {
+      const current = mapping[input.key];
+      const currentOption = current ? options.find((option) => option.nodeId === current.sourceNodeId && option.output === current.outputKey) : undefined;
+      const replacement = options.find((option) => option.output === input.key)
+        ?? options.find((option) => option.output.toLowerCase() === input.key.toLowerCase());
+      if (current && currentOption) {
+        next[input.key] = {
+          ...current,
+          path: current.path && current.path.trim().startsWith('$') ? current.path.trim() : undefined,
+        };
+        return;
+      }
+      if (replacement) {
+        next[input.key] = { sourceNodeId: replacement.nodeId, outputKey: replacement.output };
+      }
+    });
+    onNodeConfigChange(node.id, 'inputMapping', next);
+  };
+  const clearInvalidMappings = () => {
+    const next: Record<string, InputMappingValue> = {};
+    Object.entries(mapping).forEach(([inputName, ref]) => {
+      const valid = options.some((option) => option.nodeId === ref.sourceNodeId && option.output === ref.outputKey);
+      const validPath = !ref.path || ref.path.trim().startsWith('$');
+      if (valid && validPath) next[inputName] = ref;
     });
     onNodeConfigChange(node.id, 'inputMapping', next);
   };
@@ -228,6 +321,12 @@ function InputMappingEditor({
     return options.find((option) => option.nodeId === selected.sourceNodeId && option.output === selected.outputKey);
   };
   const sourceNodeFor = (sourceNodeId: string) => nodes.find((item): item is ActivityNode => item.id === sourceNodeId && item.type === 'activity');
+  const invalidMappingCount = inputs.filter((input) => {
+    const selected = mapping[input.key];
+    if (!selected) return false;
+    const selectedOption = selectedOptionFor(input.key);
+    return !selectedOption || Boolean(selected.path && !selected.path.trim().startsWith('$'));
+  }).length;
   return (
     <PropertyDisclosure title="输入映射" summary={`${inputs.length} 个输入`}>
       {inputs.length === 0 ? (
@@ -239,6 +338,22 @@ function InputMappingEditor({
           <div className="input-map-actions">
             <span>{autoMappingCandidates.length ? `可自动匹配 ${autoMappingCandidates.length} 个输入` : '没有可自动匹配的未映射输入'}</span>
             <button type="button" disabled={autoMappingCandidates.length === 0} onClick={applyAutoMapping}>自动映射</button>
+            <button type="button" disabled={invalidMappingCount === 0 && autoMappingCandidates.length === 0} onClick={repairInvalidMappings}>批量修复</button>
+            <button type="button" disabled={invalidMappingCount === 0} onClick={clearInvalidMappings}>清空失效</button>
+          </div>
+          <div className="variable-filter-bar">
+            <label>
+              <span>搜索变量</span>
+              <input value={variableSearch} placeholder="节点名 / code / output key" onChange={(event) => setVariableSearch(event.target.value)} />
+            </label>
+            <label>
+              <span>类型</span>
+              <select value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)}>
+                <option value="ALL">全部类型</option>
+                {typeFilters.map((type) => <option key={type} value={type}>{type}</option>)}
+              </select>
+            </label>
+            <em>{filteredOptions.length} / {options.length}</em>
           </div>
           {inputs.map((input) => {
             const selected = mapping[input.key];
@@ -323,7 +438,7 @@ function InputMappingEditor({
                     ))}
                   </div>
                 ) : (
-                  <p className="property-empty">当前没有可用的上游输出。</p>
+                  <p className="property-empty">没有匹配当前搜索或类型过滤的上游输出。</p>
                 )}
                 {selected ? (
                   <div className="input-map-ref-tools">
@@ -339,6 +454,23 @@ function InputMappingEditor({
                     <button type="button" className="input-map-clear" onClick={() => updateMapping(input.key, '')}>
                       清除引用
                     </button>
+                  </div>
+                ) : null}
+                {selected ? (
+                  <div className="jsonpath-preset-row">
+                    <span>Path 快捷选择</span>
+                    <div>
+                      {jsonPathPresets(input.key, selectedOption).map((preset) => (
+                        <button
+                          key={`${input.key}-${selectedValue}-${preset}`}
+                          type="button"
+                          className={cx((selected.path?.trim() || '$') === preset && 'active')}
+                          onClick={() => updatePath(input.key, preset)}
+                        >
+                          {preset}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 ) : null}
                 {invalidPath ? (

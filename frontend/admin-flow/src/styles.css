@@ -990,6 +990,82 @@ input:focus-visible {
   font-weight: 900;
 }
 
+.route-health-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid #dbeafe;
+  border-radius: 9px;
+  background: #f8fbff;
+  padding: 8px;
+}
+
+.route-health-card.pass {
+  border-color: #abefc6;
+  background: #f6fef9;
+}
+
+.route-health-card.block {
+  border-color: #fecdca;
+  background: #fffbfa;
+}
+
+.route-health-card > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.route-health-card b {
+  color: #344054;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.route-health-card span {
+  overflow: hidden;
+  color: #667085;
+  font-size: 10px;
+  font-weight: 750;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.route-health-card button {
+  height: 28px;
+  border: 1px solid #b9c8ff;
+  border-radius: 7px;
+  background: #fff;
+  color: #155eef;
+  padding: 0 9px;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.route-issue-list {
+  display: grid;
+  gap: 5px;
+}
+
+.route-issue-list span {
+  border: 1px solid #fedf89;
+  border-radius: 7px;
+  background: #fffcf5;
+  color: #b54708;
+  padding: 6px 8px;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.35;
+}
+
+.route-issue-list span.block {
+  border-color: #fecdca;
+  background: #fffbfa;
+  color: #b42318;
+}
+
 .route-type-group {
   display: grid;
   gap: 7px;
@@ -1061,6 +1137,60 @@ input:focus-visible {
 
 .route-expression-action:hover {
   background: #eef4ff;
+}
+
+.route-expression-hints {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.route-expression-hints button {
+  min-height: 26px;
+  border: 1px solid #dbe3ee;
+  border-radius: 7px;
+  background: #fff;
+  color: #344054;
+  padding: 0 8px;
+  font-size: 10px;
+  font-weight: 850;
+}
+
+.route-expression-hints button:hover {
+  border-color: #b9c8ff;
+  color: #155eef;
+}
+
+.route-expression-preview {
+  display: grid;
+  gap: 2px;
+  border: 1px solid #dbeafe;
+  border-radius: 8px;
+  background: #f8fbff;
+  padding: 7px 8px;
+}
+
+.route-expression-preview.pass {
+  border-color: #abefc6;
+  background: #f6fef9;
+}
+
+.route-expression-preview.fail {
+  border-color: #fedf89;
+  background: #fffcf5;
+}
+
+.route-expression-preview b {
+  color: #344054;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.route-expression-preview span {
+  color: #667085;
+  font-size: 10px;
+  font-weight: 750;
+  line-height: 1.35;
 }
 
 .route-default-card {

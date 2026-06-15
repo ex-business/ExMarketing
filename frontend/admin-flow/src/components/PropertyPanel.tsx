@@ -26,6 +26,14 @@ const DEFAULT_ROUTE_TYPES = new Set<WorkflowEdgeRouteType>(['DEFAULT', 'ELSE', '
 const PROPERTY_PANEL_TAB_STORAGE_KEY = 'exmarketing.studio.propertyPanelTab';
 type PropertyPanelTab = 'settings' | 'run';
 
+const ROUTE_EXPRESSION_HINTS = [
+  { label: '决策等于 PASS', expression: 'decision == "PASS"' },
+  { label: '决策等于 BLOCK', expression: 'decision == "BLOCK"' },
+  { label: '状态成功', expression: 'status == "SUCCESS"' },
+  { label: '风险命中', expression: 'risk == true' },
+  { label: '金额达标', expression: '$.fact.amount >= 100' },
+];
+
 function loadPropertyPanelTab(): PropertyPanelTab {
   return window.localStorage.getItem(PROPERTY_PANEL_TAB_STORAGE_KEY) === 'run' ? 'run' : 'settings';
 }
@@ -1141,15 +1149,69 @@ function compactRoute(route: WorkflowEdgeRoute): WorkflowEdgeRoute {
   };
 }
 
+function routeHealthIssues(route: WorkflowEdgeRoute): Array<{ severity: 'BLOCK' | 'WARNING'; message: string }> {
+  const issues: Array<{ severity: 'BLOCK' | 'WARNING'; message: string }> = [];
+  const needsCondition = ['IF', 'ELIF', 'PASS', 'BLOCK', 'RISK', 'SKIP'].includes(route.type);
+  if ((route.type === 'OUTPUT' || needsCondition) && !route.key?.trim()) {
+    issues.push({ severity: 'BLOCK', message: 'Route Key 不能为空。' });
+  }
+  if (needsCondition && !route.expression?.trim() && !route.conditionRef?.trim()) {
+    issues.push({ severity: 'BLOCK', message: '条件分支需要 expression 或 conditionRef。' });
+  }
+  if (route.type === 'DEFAULT' && !route.default) {
+    issues.push({ severity: 'WARNING', message: '默认路径建议勾选默认分支。' });
+  }
+  if (route.expression?.trim() && route.conditionRef?.trim()) {
+    issues.push({ severity: 'WARNING', message: 'expression 和 conditionRef 同时存在时，建议只保留一种条件来源。' });
+  }
+  return issues;
+}
+
+function routeExpressionPreview(route: WorkflowEdgeRoute): { label: string; detail: string; result: 'pass' | 'fail' | 'unknown' } {
+  if (route.default) return { label: '兜底命中', detail: '没有其它条件命中时选择该分支。', result: 'pass' };
+  if (route.conditionRef?.trim()) return { label: '引用条件', detail: `${route.conditionRef.trim()} 为 truthy 时命中。`, result: 'unknown' };
+  const expression = route.expression?.trim();
+  if (!expression) return { label: '缺少条件', detail: '填写 expression 或 conditionRef 后可预览。', result: 'unknown' };
+  const key = route.key?.trim() || route.type;
+  const sample: Record<string, unknown> = {
+    condition: true,
+    decision: key,
+    route: key,
+    routeKey: key,
+    status: key,
+    risk: key === 'RISK',
+    fact: { amount: 100 },
+  };
+  const match = expression.match(/^\$?\.?([a-zA-Z0-9_.]+)\s*(==|!=|>=|<=|>|<)\s*("?[^"]+"?|\d+(?:\.\d+)?|true|false)$/);
+  if (!match) return { label: '语法未解析', detail: '支持常见 field == value / $.field >= number 预览；复杂表达式以运行时为准。', result: 'unknown' };
+  const [, rawPath, operator, rawExpected] = match;
+  const actual = rawPath.split('.').reduce<unknown>((current, part) => (current && typeof current === 'object' ? (current as Record<string, unknown>)[part] : undefined), sample);
+  const expected = rawExpected.replace(/^"|"$/g, '');
+  const actualNumber = typeof actual === 'number' ? actual : Number(actual);
+  const expectedNumber = Number(expected);
+  let passed = false;
+  if (!Number.isNaN(actualNumber) && !Number.isNaN(expectedNumber) && ['>=', '<=', '>', '<'].includes(operator)) {
+    passed = operator === '>=' ? actualNumber >= expectedNumber : operator === '<=' ? actualNumber <= expectedNumber : operator === '>' ? actualNumber > expectedNumber : actualNumber < expectedNumber;
+  } else {
+    const left = String(actual);
+    passed = operator === '==' ? left === expected : operator === '!=' ? left !== expected : false;
+  }
+  return { label: passed ? '样例命中' : '样例不命中', detail: `样例 ${rawPath}=${String(actual)}，表达式 ${passed ? '为 true' : '为 false'}。`, result: passed ? 'pass' : 'fail' };
+}
+
 function EdgeRouteEditor({
   edge,
+  validationIssues,
   onEdgeRouteChange,
 }: {
   edge: ActivityEdge;
+  validationIssues?: WorkflowValidationIssue[];
   onEdgeRouteChange: (edgeId: string, route: WorkflowEdgeRoute) => void;
 }) {
   const route = edgeRouteFor(edge);
   const routeNeedsCondition = ['IF', 'ELIF', 'PASS', 'BLOCK', 'RISK', 'SKIP'].includes(route.type);
+  const healthIssues = routeHealthIssues(route);
+  const preview = routeExpressionPreview(route);
   const updateRoute = (patch: Partial<WorkflowEdgeRoute>) => {
     onEdgeRouteChange(edge.id, compactRoute({ ...route, ...patch }));
   };
@@ -1176,6 +1238,19 @@ function EdgeRouteEditor({
             <b>{route.type}</b>
             <em>{route.default ? 'Default branch' : routeNeedsCondition ? 'Conditional' : 'Output'}</em>
           </div>
+          <div className={cx('route-health-card', healthIssues.some((issue) => issue.severity === 'BLOCK') && 'block', healthIssues.length === 0 && 'pass')}>
+            <div>
+              <b>{healthIssues.length ? '需要处理' : 'Route 配置完整'}</b>
+              <span>{preview.label} · {preview.detail}</span>
+            </div>
+            {!route.default ? <button type="button" onClick={() => updateRoute({ type: 'DEFAULT', key: 'DEFAULT', label: '默认路径', expression: undefined, conditionRef: undefined, default: true })}>设为默认</button> : null}
+          </div>
+          {validationIssues?.length || healthIssues.length ? (
+            <div className="route-issue-list">
+              {healthIssues.map((issue) => <span key={issue.message} className={issue.severity.toLowerCase()}>{issue.message}</span>)}
+              {(validationIssues ?? []).map((issue) => <span key={`${issue.code}-${issue.path ?? issue.message}`} className={issue.severity.toLowerCase()}>{issue.message}</span>)}
+            </div>
+          ) : null}
           {ROUTE_TYPE_GROUPS.map((group) => (
             <div key={group.title} className="route-type-group">
               <div>
@@ -1217,6 +1292,17 @@ function EdgeRouteEditor({
           {DEFAULT_ROUTE_EXPRESSIONS[route.type] ? (
             <button type="button" className="route-expression-action" onClick={applyDefaultExpression}>使用默认表达式</button>
           ) : null}
+          <div className="route-expression-hints">
+            {ROUTE_EXPRESSION_HINTS.map((hint) => (
+              <button key={hint.label} type="button" onClick={() => updateRoute({ expression: hint.expression, conditionRef: undefined })}>
+                {hint.label}
+              </button>
+            ))}
+          </div>
+          <div className={cx('route-expression-preview', preview.result)}>
+            <b>{preview.label}</b>
+            <span>{preview.detail}</span>
+          </div>
           <small>Executor 会按该表达式或 Condition Ref 判断是否选择这条边。</small>
         </label>
         <label className="schema-config-row">
@@ -1255,9 +1341,10 @@ type Props = {
   onResizeStart: (event: ReactPointerEvent<HTMLButtonElement>) => void;
   resourceOptions: ResourceSummary[];
   validationIssues?: WorkflowValidationIssue[];
+  edgeValidationIssues?: WorkflowValidationIssue[];
 };
 
-export function PropertyPanel({ nodes, edges, selectedNodeIds, selectedEdgeIds, nodeConfigSchemas, onNodeConfigChange, onEdgeRouteChange, onLocateNode, onDeleteNodes, onDeleteEdges, panelWidth, onResizeStart, resourceOptions, validationIssues = [] }: Props) {
+export function PropertyPanel({ nodes, edges, selectedNodeIds, selectedEdgeIds, nodeConfigSchemas, onNodeConfigChange, onEdgeRouteChange, onLocateNode, onDeleteNodes, onDeleteEdges, panelWidth, onResizeStart, resourceOptions, validationIssues = [], edgeValidationIssues = [] }: Props) {
   const [activeTab, setActiveTab] = useState<PropertyPanelTab>(loadPropertyPanelTab);
   const selectedNode = nodes.find((node): node is ActivityNode => node.id === selectedNodeIds[0] && node.type === 'activity');
   const selectedGroup = nodes.find((node): node is GroupNode => node.id === selectedNodeIds[0] && node.type === 'group');
@@ -1414,7 +1501,7 @@ export function PropertyPanel({ nodes, edges, selectedNodeIds, selectedEdgeIds, 
             </dl>
             <button className="property-danger" onClick={() => onDeleteEdges([selectedEdge.id])}>删除连线</button>
           </section>
-          <EdgeRouteEditor edge={selectedEdge} onEdgeRouteChange={onEdgeRouteChange} />
+          <EdgeRouteEditor edge={selectedEdge} validationIssues={edgeValidationIssues} onEdgeRouteChange={onEdgeRouteChange} />
         </div>
       ) : null}
       {!hasSelection ? (

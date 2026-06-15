@@ -195,14 +195,27 @@ export function WorkspaceDetailPanel({
   return (
     <section className="exm-detail-panel">
       <header className="exm-detail-head">
-        <div>
+        <div className="exm-detail-title-block">
           <span>{targetTypeLabel(target.type)}</span>
           <h2><TargetIcon size={21} fill={target.type === 'Folder' ? 'currentColor' : 'none'} />{target.name}</h2>
           <p>{target.status ? `${statusLabel(target.status)} · ` : ''}{target.version ? `${target.version} · ` : ''}{target.updatedLabel ?? '2 小时前更新'}</p>
         </div>
-        <TaIconButton aria-label="收藏"><Star size={17} /></TaIconButton>
-        <TaIconButton aria-label="更多"><MoreHorizontal size={17} /></TaIconButton>
-        <TaIconButton aria-label="关闭详情" onClick={onClose}><X size={17} /></TaIconButton>
+        <div className="exm-detail-head-actions">
+          <TaIconButton aria-label="收藏"><Star size={17} /></TaIconButton>
+          <TaIconButton aria-label="更多"><MoreHorizontal size={17} /></TaIconButton>
+          <TaIconButton aria-label="关闭详情" onClick={onClose}><X size={17} /></TaIconButton>
+        </div>
+        {canEditTarget ? (
+          <div className="exm-detail-quick-actions">
+            <TaButton size="sm" title="重命名" onClick={onRename}><Pencil size={14} />重命名</TaButton>
+            <TaButton size="sm" disabled={target.type === 'Workspace'} title={target.type === 'Workspace' ? '工作区不支持移动' : '移动'} onClick={onMove}><Move size={14} />移动</TaButton>
+            <TaButton size="sm" className="danger" tone="danger" title="归档" onClick={onArchive}><Archive size={14} />归档</TaButton>
+          </div>
+        ) : (
+          <div className="exm-detail-quick-actions readonly">
+            <span title={disabledReason}>{capabilities.role} · 只读浏览</span>
+          </div>
+        )}
       </header>
 
       <TaTabs className="exm-detail-tabs">
@@ -304,8 +317,9 @@ export function WorkspaceDetailPanel({
         ) : null}
 
         {tab === 'permission' && target.type !== 'Workflow' ? (
-          <section className="exm-detail-section">
-            <p className="exm-detail-empty">单独 ACL 只作用于流程。文件夹和工作区使用可见性、成员角色和分享权限控制。</p>
+          <section className="exm-detail-section exm-permission-note">
+            <h3>权限继承</h3>
+            <p>文件夹使用可见性和工作区成员角色控制访问。流程级 ACL 只在具体流程上配置。</p>
           </section>
         ) : null}
 
@@ -397,17 +411,6 @@ export function WorkspaceDetailPanel({
         ) : null}
       </div>
 
-      {canEditTarget ? (
-        <footer className="exm-detail-actions">
-          <TaButton title="重命名" onClick={onRename}><Pencil size={15} />重命名</TaButton>
-          <TaButton disabled={target.type === 'Workspace'} title={target.type === 'Workspace' ? '工作区不支持移动' : '移动'} onClick={onMove}><Move size={15} />移动</TaButton>
-          <TaButton className="danger" tone="danger" title="归档" onClick={onArchive}><Archive size={15} />归档</TaButton>
-        </footer>
-      ) : (
-        <footer className="exm-detail-actions readonly">
-          <span title={disabledReason}>{capabilities.role} · 只读浏览</span>
-        </footer>
-      )}
     </section>
   );
 }

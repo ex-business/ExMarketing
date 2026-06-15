@@ -12,6 +12,8 @@ import {
 import type { Connection, ReactFlowInstance } from '@xyflow/react';
 import type { EdgeChange, NodeChange } from '@xyflow/react';
 import { ActivityNodeView } from './components/ActivityNodeView';
+import { ActivitySettingsModal } from './components/ActivitySettingsModal';
+import type { ActivitySettingsInput } from './components/ActivitySettingsModal';
 import { ContextMenu } from './components/ContextMenu';
 import { GroupNodeView, NoteNodeView } from './components/FlowExtraNodes';
 import { NodePalette } from './components/NodePalette';
@@ -23,10 +25,14 @@ import type { GlobalSearchResult, WorkspaceDetailTarget, WorkspaceItemAction, Wo
 import { baseEdges, baseNodes, simpleTemplate } from './data/initialFlow';
 import { catalogFromSchemas, getDef } from './data/nodeCatalog';
 import type {
+  ActivityPlacement,
   ActivityEdge,
   ActivityNode,
   ActivityNodeData,
+  ActivitySummary,
   AlignmentGuide,
+  CreateStudioActivityInput,
+  CreateStudioWorkspaceInput,
   FlowContextMenu,
   FlowNode,
   GroupNode,
@@ -47,168 +53,54 @@ import type {
   ResourceAuditLogSummary,
   ResourceBindingSummary,
   ResourceSummary,
+  StudioFolderPatch,
+  WorkspaceActivityGrantSummary,
+  WorkspaceAuditLogSummary,
+  WorkspaceBatchResult,
+  WorkspaceFileObjectSummary,
+  WorkspaceFolderSummary,
+  WorkspaceHomeSearchResult,
+  WorkspaceHomeStorageSummary,
+  WorkspaceMemberSummary,
+  WorkspaceRole,
+  WorkspaceShareLinkSummary,
+  WorkspaceSummary,
   WorkflowValidationIssue,
   WorkflowValidationResult,
   WorkflowVersion,
 } from './types';
 import { ACTIVITY_NODE_NORMAL_HEIGHT, ACTIVITY_NODE_WIDTH, activityNodeHeight, cx, edge, flowNode, layoutFlowNodes } from './utils/flow';
-
-type ActivitySummary = {
-  id: string;
-  workspaceId?: string;
-  folderId?: string;
-  activityCode: string;
-  activityName: string;
-  tenantId: string;
-  triggerEvents?: string[];
-  status?: string;
-  visibility?: 'PRIVATE' | 'TEAM' | 'PUBLIC';
-  version?: number;
-  createdAt?: string;
-  updatedAt?: string;
-};
-
-type WorkspaceSummary = {
-  id: string;
-  tenantId: string;
-  name: string;
-  slug: string;
-  description?: string;
-  icon?: string;
-  color?: string;
-  visibility: 'PRIVATE' | 'TEAM' | 'PUBLIC';
-  defaultRole?: WorkspaceRole;
-  ownerId?: string;
-  status: string;
-};
-
-type WorkspaceRole = 'OWNER' | 'ADMIN' | 'EDITOR' | 'VIEWER' | 'GUEST';
-
-type WorkspaceFolderSummary = {
-  id: string;
-  workspaceId: string;
-  parentId?: string;
-  name: string;
-  color?: string;
-  visibility: string;
-  sortOrder: number;
-  status: string;
-};
-
-type WorkspaceShareLinkSummary = {
-  id: string;
-  workspaceId: string;
-  folderId?: string;
-  activityId?: string;
-  scope: 'WORKSPACE' | 'FOLDER' | 'ACTIVITY';
-  permission?: 'VIEW' | 'EDIT';
-  expiresAt?: string;
-  maxAccessCount?: number;
-  accessCount?: number;
-  lastAccessedAt?: string;
-  disabledReason?: string;
-  enabled: boolean;
-  token?: string;
-  createdBy?: string;
-  createdAt?: string;
-};
-
-type WorkspaceBatchResult = {
-  committed?: boolean;
-  count?: number;
-  items?: Array<{
-    id: string;
-    type: string;
-    status: string;
-    error?: string;
-  }>;
-};
-
-type WorkspaceFileObjectSummary = {
-  id: string;
-  workspaceId: string;
-  folderId?: string;
-  activityId?: string;
-  workflowVersionId?: string;
-  executionId?: string;
-  kind: string;
-  fileName: string;
-  contentType?: string;
-  sizeBytes: number;
-  storageProvider: string;
-  storageKey: string;
-  checksumSha256: string;
-  createdBy?: string;
-  createdAt: string;
-};
-
-type WorkspaceMemberSummary = {
-  id: string;
-  workspaceId: string;
-  userId?: string;
-  email?: string;
-  displayName?: string;
-  role: WorkspaceRole;
-  status: 'ACTIVE' | 'INVITED' | 'SUSPENDED' | 'REMOVED';
-};
-
-type WorkspaceAuditLogSummary = {
-  id: string;
-  workspaceId: string;
-  actorId?: string;
-  action: string;
-  targetType: string;
-  targetId: string;
-  createdAt: string;
-};
-
-type WorkspaceActivityGrantSummary = {
-  id: string;
-  workspaceId: string;
-  activityId: string;
-  principalType: 'USER' | 'MEMBER' | 'ROLE';
-  principalId: string;
-  role: Exclude<WorkspaceRole, 'OWNER'>;
-  createdBy?: string;
-  updatedBy?: string;
-  createdAt: string;
-  updatedAt: string;
-};
-
-type WorkspaceHomeSearchResult = {
-  id: string;
-  type: 'workspace' | 'workflow' | 'folder' | 'member';
-  title: string;
-  subtitle: string;
-  workspaceId?: string;
-  folderId?: string;
-  highlights?: {
-    title?: string;
-    subtitle?: string;
-  };
-  permission?: string;
-  permissionReason?: string;
-  permissionSources?: string[];
-  score?: number;
-};
-
-type WorkspaceHomeStorageSummary = {
-  usedBytes: number;
-  totalBytes: number;
-  workspaces: number;
-  folders: number;
-  workflows: number;
-  members: number;
-  shareLinks: number;
-  auditLogs: number;
-  drafts?: number;
-  versions?: number;
-  executions?: number;
-  nodeExecutions?: number;
-  activityGrants?: number;
-  fileObjects?: number;
-  fileBytes?: number;
-};
+import {
+  WORKSPACE_FILE_UPLOAD_MAX_BYTES,
+  buildStudioActivityPayload,
+  formatBytes,
+  isTestActivity,
+  loadInitialWorkspaceSelectionFromLocation,
+  loadStoredWorkspaceSelection,
+  normalizeActivityCode,
+  persistWorkspaceSelection,
+  shouldSeedDemoWorkspace,
+  studioActorId,
+  workspaceRoleAllows,
+  workspaceRoleForActor,
+} from './utils/workspaceHome';
+import {
+  classifyWorkflowError,
+  compactDuration,
+  diffJsonValues,
+  downloadJSON,
+  elapsedMs,
+  fallbackCopyText,
+  jsonPreview,
+  jsonValueLabel,
+  sideEffectKindLabel,
+  timestampMs,
+  validateWorkflowTrace,
+  workflowAttemptCount,
+  workflowExecutionModeLabel,
+  workflowRouteTrace,
+} from './utils/runHistory';
+import type { JsonDiffRow, WorkflowErrorClass, WorkflowRouteTraceItem } from './utils/runHistory';
 
 type OpsToast = {
   id: number;
@@ -273,41 +165,6 @@ type WorkflowDraftResponse = {
   definition: WorkflowDefinition;
 };
 
-type ActivityPlacement = {
-  workspaceId: string;
-  folderId: string;
-  shareLinkId?: string;
-};
-
-type CreateStudioWorkspaceInput = {
-  name: string;
-  tenantId: string;
-};
-
-type CreateStudioActivityInput = {
-  tenantId: string;
-  activityName: string;
-  activityCode: string;
-  workspaceId: string;
-  folderId: string;
-  definition?: WorkflowDefinition;
-  visibility?: 'PRIVATE' | 'TEAM' | 'PUBLIC';
-};
-
-type StudioFolderPatch = {
-  parentId?: string;
-  name?: string;
-  visibility?: string;
-  sortOrder?: number;
-  status?: string;
-};
-
-type ActivitySettingsInput = {
-  activityName: string;
-  workspaceId: string;
-  folderId: string;
-};
-
 type UnsavedDraftNavigation =
   | { kind: 'activity'; activityId: string }
   | { kind: 'workspace'; workspaceId: string; folderId: string };
@@ -316,45 +173,6 @@ type EdgeRouteVisual = {
   className: string;
   color: string;
 };
-
-const WORKSPACE_ROLE_RANK: Record<WorkspaceRole, number> = {
-  GUEST: 0,
-  VIEWER: 1,
-  EDITOR: 2,
-  ADMIN: 3,
-  OWNER: 4,
-};
-
-const WORKSPACE_FILE_UPLOAD_MAX_BYTES = 64 * 1024 * 1024;
-
-function studioActorId(): string {
-  return window.localStorage.getItem('exmarketing.studio.actorId') || 'admin-flow';
-}
-
-function shouldSeedDemoWorkspace(): boolean {
-  const params = new URLSearchParams(window.location.search);
-  const queryValue = params.get('seedDemo');
-  if (queryValue != null) {
-    return ['1', 'true', 'yes'].includes(queryValue.trim().toLowerCase());
-  }
-  return String(import.meta.env.VITE_EXMARKETING_SEED_DEMO ?? '').trim().toLowerCase() === 'true';
-}
-
-function workspaceRoleAllows(role: WorkspaceRole, required: WorkspaceRole): boolean {
-  return WORKSPACE_ROLE_RANK[role] >= WORKSPACE_ROLE_RANK[required];
-}
-
-function formatBytes(value: number): string {
-  if (!Number.isFinite(value) || value <= 0) return '0 B';
-  const units = ['B', 'KB', 'MB', 'GB'];
-  let size = value;
-  let unitIndex = 0;
-  while (size >= 1024 && unitIndex < units.length - 1) {
-    size /= 1024;
-    unitIndex += 1;
-  }
-  return `${size.toFixed(unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
-}
 
 function replaceUrlParams(patch: Record<string, string | number | undefined | null>) {
   const params = new URLSearchParams(window.location.search);
@@ -368,21 +186,6 @@ function replaceUrlParams(patch: Record<string, string | number | undefined | nu
   const query = params.toString();
   window.history.replaceState(null, '', query ? `${window.location.pathname}?${query}` : window.location.pathname);
 }
-
-type WorkflowRouteTraceItem = {
-  edgeId?: string;
-  source?: string;
-  target?: string;
-  label?: string;
-  routeType?: string;
-  routeKey?: string;
-  routeLabel?: string;
-  expression?: string;
-  conditionRef?: string;
-  default?: boolean;
-  decision?: string;
-  route?: string;
-};
 
 type RunHistoryState = {
   open: boolean;
@@ -404,8 +207,6 @@ type RunHistoryState = {
   compareResult?: WorkflowExecutionCompareResult;
   compareLoading: boolean;
 };
-
-type JsonDiffRow = WorkflowExecutionJSONDiff;
 
 type DebugPanelState = {
   open: boolean;
@@ -457,7 +258,7 @@ type DebugPayloadTemplate = {
 
 const DEBUG_PAYLOAD_TEMPLATE_STORAGE_KEY = 'exmarketing.studio.debugPayloadTemplates';
 const RIGHT_PANEL_WIDTH_STORAGE_KEY = 'exmarketing.studio.rightPanelWidth';
-const DEFAULT_RIGHT_PANEL_WIDTH = 432;
+const DEFAULT_RIGHT_PANEL_WIDTH = 480;
 const MIN_RIGHT_PANEL_WIDTH = 340;
 const MAX_RIGHT_PANEL_WIDTH = 760;
 
@@ -488,15 +289,6 @@ function edgeRouteVisual(edgeItem: ActivityEdge): EdgeRouteVisual {
   return { className: 'edge-route-output', color: '#c4ccd8' };
 }
 
-function jsonPreview(value: unknown): string {
-  if (value === undefined || value === null || value === '') return '-';
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value);
-  }
-}
-
 function highlightedJsonText(text: string, query: string): React.ReactNode {
   const normalizedQuery = query.trim();
   if (!normalizedQuery) return text;
@@ -516,190 +308,6 @@ function highlightedJsonText(text: string, query: string): React.ReactNode {
   return parts;
 }
 
-function fallbackCopyText(text: string): boolean {
-  const textarea = document.createElement('textarea');
-  textarea.value = text;
-  textarea.style.position = 'fixed';
-  textarea.style.opacity = '0';
-  document.body.appendChild(textarea);
-  textarea.select();
-  const copied = document.execCommand('copy');
-  textarea.remove();
-  return copied;
-}
-
-function jsonValueLabel(value: unknown): string {
-  if (value === undefined) return 'undefined';
-  if (typeof value === 'string') return JSON.stringify(value);
-  if (value === null || typeof value === 'number' || typeof value === 'boolean') return String(value);
-  return jsonPreview(value).replace(/\s+/g, ' ').slice(0, 180);
-}
-
-function sideEffectKindLabel(kind: string): string {
-  const labels: Record<string, string> = {
-    participation: '参与记录',
-    grantOrders: '发奖订单',
-    outboxMessages: 'Outbox',
-    quotaReservations: '额度预留',
-    rule: '规则结果',
-    scope: '副作用范围',
-  };
-  return labels[kind] ?? kind;
-}
-
-function jsonPathChild(path: string, key: string | number): string {
-  if (typeof key === 'number') return `${path}[${key}]`;
-  return path === '$' ? `$.${key}` : `${path}.${key}`;
-}
-
-function diffJsonValues(current: unknown, baseline: unknown, path = '$'): JsonDiffRow[] {
-  if (jsonPreview(current) === jsonPreview(baseline)) return [];
-  if (current === undefined) return [{ path, type: 'removed', baseline }];
-  if (baseline === undefined) return [{ path, type: 'added', current }];
-  if (Array.isArray(current) && Array.isArray(baseline)) {
-    const length = Math.max(current.length, baseline.length);
-    return Array.from({ length }).flatMap((_, index) => diffJsonValues(current[index], baseline[index], jsonPathChild(path, index)));
-  }
-  if (isRecord(current) && isRecord(baseline)) {
-    const keys = new Set([...Object.keys(current), ...Object.keys(baseline)]);
-    return [...keys].sort().flatMap((key) => diffJsonValues(current[key], baseline[key], jsonPathChild(path, key)));
-  }
-  return [{ path, type: 'changed', current, baseline }];
-}
-
-function elapsedMs(startedAt?: string, finishedAt?: string): number | undefined {
-  if (!startedAt || !finishedAt) return undefined;
-  const started = new Date(startedAt).getTime();
-  const finished = new Date(finishedAt).getTime();
-  if (!Number.isFinite(started) || !Number.isFinite(finished) || finished < started) return undefined;
-  return finished - started;
-}
-
-function timestampMs(value?: string): number | undefined {
-  if (!value) return undefined;
-  const parsed = new Date(value).getTime();
-  return Number.isFinite(parsed) ? parsed : undefined;
-}
-
-function compactDuration(ms: number | undefined): string {
-  if (ms === undefined) return 'running';
-  if (ms < 1000) return `${ms}ms`;
-  return `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)}s`;
-}
-
-type WorkflowErrorClass = {
-  code: string;
-  category: string;
-  tone: 'neutral' | 'warning' | 'danger';
-  suggestion: string;
-};
-
-const WORKFLOW_ERROR_DICTIONARY: Array<Omit<WorkflowErrorClass, 'code'> & { patterns: RegExp[] }> = [
-  {
-    category: '超时',
-    tone: 'danger',
-    suggestion: '检查节点超时配置、外部接口耗时和重试退避策略。',
-    patterns: [/TIMEOUT/i, /DEADLINE/i],
-  },
-  {
-    category: '配置错误',
-    tone: 'danger',
-    suggestion: '回到节点设置，检查必填配置、Schema 默认值和变量引用是否完整。',
-    patterns: [/CONFIG/i, /MISSING/i, /REQUIRED/i, /SCHEMA/i],
-  },
-  {
-    category: '路由错误',
-    tone: 'danger',
-    suggestion: '检查上一节点输出、连线路由表达式、默认分支和 handle 是否匹配。',
-    patterns: [/ROUTE/i, /BRANCH/i, /CONDITION/i, /DEFAULT/i],
-  },
-  {
-    category: '风控限制',
-    tone: 'warning',
-    suggestion: '确认资格、额度、幂等、限流或风险策略是否按预期拦截。',
-    patterns: [/QUOTA/i, /LIMIT/i, /RISK/i, /QUALIFY/i],
-  },
-  {
-    category: '外部依赖',
-    tone: 'danger',
-    suggestion: '检查 HTTP、Webhook、MQ、Kafka、Redis 或 Provider 资源是否可用。',
-    patterns: [/HTTP/i, /WEBHOOK/i, /CALLBACK/i, /\bMQ\b/i, /KAFKA/i, /REDIS/i, /PROVIDER/i],
-  },
-  {
-    category: '事件接入',
-    tone: 'danger',
-    suggestion: '检查 eventId、eventType、sourceSystem、tenantId 和幂等收件箱记录。',
-    patterns: [/INBOX/i, /EVENT/i, /IDEMPOTEN/i],
-  },
-];
-
-function classifyWorkflowError(message?: string): WorkflowErrorClass {
-  const text = (message || '').trim();
-  if (!text) return { code: 'NONE', category: '无错误', tone: 'neutral', suggestion: '当前 execution 或节点没有错误信息。' };
-  const upper = text.toUpperCase();
-  const codeMatch = upper.match(/\b([A-Z][A-Z0-9_]{2,})\b/);
-  const code = codeMatch?.[1] ?? 'UNCLASSIFIED_ERROR';
-  const matched = WORKFLOW_ERROR_DICTIONARY.find((item) => item.patterns.some((pattern) => pattern.test(text)));
-  if (matched) return { code, category: matched.category, tone: matched.tone, suggestion: matched.suggestion };
-  return { code, category: '业务执行错误', tone: 'danger', suggestion: '查看节点 input/output，确认业务 handler 返回值、异常和副作用写入是否符合预期。' };
-}
-
-function workflowRouteTrace(execution?: WorkflowExecution): WorkflowRouteTraceItem[] {
-  const output = execution?.output;
-  if (!output || typeof output !== 'object') return [];
-  const routeTrace = (output as Record<string, unknown>).routeTrace;
-  return Array.isArray(routeTrace) ? routeTrace.filter((item): item is WorkflowRouteTraceItem => Boolean(item && typeof item === 'object')) : [];
-}
-
-function workflowAttemptCount(output: unknown): number | undefined {
-  if (!output || typeof output !== 'object') return undefined;
-  const attempt = (output as Record<string, unknown>).attempt;
-  if (typeof attempt === 'number') return attempt;
-  if (typeof attempt === 'string') {
-    const parsed = Number(attempt);
-    return Number.isFinite(parsed) ? parsed : undefined;
-  }
-  return undefined;
-}
-
-function workflowExecutionModeLabel(execution?: WorkflowExecution): 'DEBUG_DRAFT' | 'PRODUCTION' {
-  if (!execution) return 'PRODUCTION';
-  if (execution.workflowVersionId?.startsWith('debug-draft')) return 'DEBUG_DRAFT';
-  const output = execution.output;
-  if (output && typeof output === 'object' && (output as Record<string, unknown>).debug === true) return 'DEBUG_DRAFT';
-  return 'PRODUCTION';
-}
-
-const WORKFLOW_EXECUTION_STATUSES = new Set(['RUNNING', 'SUCCESS', 'FAILED', 'CANCELED']);
-const WORKFLOW_NODE_EXECUTION_STATUSES = new Set(['RUNNING', 'SUCCESS', 'FAILED', 'SKIPPED']);
-
-function validateWorkflowTrace(trace: WorkflowExecutionTrace): string {
-  if (!trace || typeof trace !== 'object') return '文件不是 trace JSON 对象';
-  if (!trace.execution || typeof trace.execution !== 'object') return '缺少 execution';
-  if (!Array.isArray(trace.nodeExecutions)) return '缺少 nodeExecutions';
-  const execution = trace.execution as Partial<WorkflowExecution>;
-  if (!execution.id || typeof execution.id !== 'string') return 'execution 缺少 id';
-  if (!execution.tenantId || typeof execution.tenantId !== 'string') return 'execution 缺少 tenantId';
-  if (!execution.activityId || typeof execution.activityId !== 'string') return 'execution 缺少 activityId';
-  if (!execution.workflowVersionId || typeof execution.workflowVersionId !== 'string') return 'execution 缺少 workflowVersionId';
-  if (typeof execution.workflowVersion !== 'number' || !Number.isFinite(execution.workflowVersion)) return 'execution 缺少有效 workflowVersion';
-  if (!execution.status || !WORKFLOW_EXECUTION_STATUSES.has(execution.status)) return 'execution 缺少有效 status';
-  if (!execution.startedAt || typeof execution.startedAt !== 'string') return 'execution 缺少 startedAt';
-  const invalidNode = trace.nodeExecutions.find((item) => (
-    !item ||
-    typeof item !== 'object' ||
-    !item.id ||
-    !item.executionId ||
-    !item.nodeId ||
-    !item.nodeType ||
-    !item.status ||
-    !WORKFLOW_NODE_EXECUTION_STATUSES.has(item.status) ||
-    !item.startedAt
-  ));
-  if (invalidNode) return 'nodeExecutions 存在缺少 id/executionId/nodeId/nodeType/status/startedAt 的节点';
-  return '';
-}
-
 function traceToRunState(trace: WorkflowExecutionTrace): Pick<RunHistoryState, 'executions' | 'selectedExecutionId' | 'nodeExecutions' | 'nodeSummaries' | 'selectedNodeExecutionId'> {
   const failed = trace.nodeExecutions.find((item) => item.status === 'FAILED');
   const selectedNode = failed ?? trace.nodeExecutions[0];
@@ -710,18 +318,6 @@ function traceToRunState(trace: WorkflowExecutionTrace): Pick<RunHistoryState, '
     nodeSummaries: trace.nodeSummaries ?? [],
     selectedNodeExecutionId: selectedNode?.id ?? '',
   };
-}
-
-function downloadJSON(filename: string, value: unknown) {
-  const blob = new Blob([JSON.stringify(value, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  URL.revokeObjectURL(url);
 }
 
 function builtinDebugPayloadTemplate(activity?: ActivitySummary): string {
@@ -1218,100 +814,6 @@ function DebugRunPanel({
       </div>
       {state.message ? <p>{state.message}</p> : null}
     </aside>
-  );
-}
-
-function ActivitySettingsModal({
-  activity,
-  workspaces,
-  folders,
-  placement,
-  saving,
-  error,
-  onClose,
-  onSubmit,
-}: {
-  activity: ActivitySummary;
-  workspaces: WorkspaceSummary[];
-  folders: WorkspaceFolderSummary[];
-  placement?: { workspaceId: string; folderId: string };
-  saving: boolean;
-  error: string;
-  onClose: () => void;
-  onSubmit: (input: ActivitySettingsInput) => void;
-}) {
-  const [activityName, setActivityName] = useState(activity.activityName);
-  const [workspaceId, setWorkspaceId] = useState(activity.workspaceId || placement?.workspaceId || workspaces[0]?.id || '');
-  const availableFolders = useMemo(() => folders.filter((folder) => folder.workspaceId === workspaceId && folder.status !== 'DELETED'), [folders, workspaceId]);
-  const [folderId, setFolderId] = useState(activity.folderId || placement?.folderId || availableFolders[0]?.id || '');
-
-  useEffect(() => {
-    const nextWorkspaceId = activity.workspaceId || placement?.workspaceId || workspaces[0]?.id || '';
-    const nextFolders = folders.filter((folder) => folder.workspaceId === nextWorkspaceId && folder.status !== 'DELETED');
-    setActivityName(activity.activityName);
-    setWorkspaceId(nextWorkspaceId);
-    setFolderId(activity.folderId || placement?.folderId || nextFolders[0]?.id || '');
-  }, [activity.activityName, activity.folderId, activity.workspaceId, folders, placement?.folderId, placement?.workspaceId, workspaces]);
-
-  useEffect(() => {
-    if (!folderId || availableFolders.some((folder) => folder.id === folderId)) return;
-    setFolderId(availableFolders[0]?.id || '');
-  }, [availableFolders, folderId]);
-
-  return (
-    <div className="publish-confirm-backdrop" role="presentation">
-      <section className="activity-settings-modal" role="dialog" aria-modal="true" aria-labelledby="activity-settings-title">
-        <header>
-          <span>
-            <b id="activity-settings-title">活动基础信息</b>
-            <em>用于 Studio 工作区、文件夹和画布上下文。</em>
-          </span>
-          <button type="button" onClick={onClose}>x</button>
-        </header>
-        <div className="activity-settings-grid">
-          <label>
-            <span>名称</span>
-            <input value={activityName} onChange={(event) => setActivityName(event.target.value)} />
-          </label>
-          <label>
-            <span>Code</span>
-            <input value={activity.activityCode} disabled />
-          </label>
-          <label>
-            <span>Tenant</span>
-            <input value={activity.tenantId} disabled />
-          </label>
-          <label>
-            <span>Workspace</span>
-            <select value={workspaceId} onChange={(event) => setWorkspaceId(event.target.value)}>
-              {workspaces.filter((workspace) => workspace.status !== 'DELETED').map((workspace) => (
-                <option key={workspace.id} value={workspace.id}>{workspace.name}</option>
-              ))}
-            </select>
-          </label>
-          <label className="wide">
-            <span>Folder</span>
-            <select value={folderId} onChange={(event) => setFolderId(event.target.value)}>
-              {availableFolders.map((folder) => (
-                <option key={folder.id} value={folder.id}>{folder.name} · {folder.visibility}</option>
-              ))}
-            </select>
-          </label>
-        </div>
-        {error ? <p>{error}</p> : <p>Code 和 tenant 属于活动身份字段，当前只展示不修改。</p>}
-        <footer>
-          <button type="button" onClick={onClose}>取消</button>
-          <button
-            className="publish-confirm-primary"
-            type="button"
-            disabled={saving || !activityName.trim() || !workspaceId || !folderId}
-            onClick={() => onSubmit({ activityName, workspaceId, folderId })}
-          >
-            {saving ? '保存中...' : '保存信息'}
-          </button>
-        </footer>
-      </section>
-    </div>
   );
 }
 
@@ -2500,122 +2002,6 @@ function workflowDiffDetail(left: WorkflowDefinition | undefined, right: Workflo
   };
 }
 
-function isTestActivity(activity: ActivitySummary): boolean {
-  const text = `${activity.activityName} ${activity.activityCode} ${activity.id}`.toLowerCase();
-  return [
-    'postgresql e2e',
-    'load fault',
-    'smoke',
-    'e2e_',
-    'load_fault',
-    'pg_smoke',
-  ].some((marker) => text.includes(marker));
-}
-
-function workspaceRoleForActor(workspace: WorkspaceSummary | undefined, members: WorkspaceMemberSummary[], actorId: string): WorkspaceRole {
-  if (!workspace || !actorId) return 'GUEST';
-  if (workspace.ownerId && workspace.ownerId === actorId) return 'OWNER';
-  const member = members.find((item) => (
-    item.status === 'ACTIVE' &&
-    ((item.userId && item.userId === actorId) || (item.email && item.email.toLowerCase() === actorId.toLowerCase()))
-  ));
-  if (member) return member.role;
-  if (workspace.visibility === 'PUBLIC') return 'VIEWER';
-  if (workspace.visibility === 'TEAM' && workspace.defaultRole === 'VIEWER') return 'VIEWER';
-  return 'GUEST';
-}
-
-function normalizeActivityCode(value: string): string {
-  const code = value
-    .trim()
-    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
-    .replace(/[^A-Za-z0-9]+/g, '_')
-    .replace(/^_+|_+$/g, '')
-    .toUpperCase();
-  return code || `ACTIVITY_${Date.now().toString(36).toUpperCase()}`;
-}
-
-function buildStudioActivityPayload(input: CreateStudioActivityInput) {
-  const now = new Date();
-  const start = new Date(now.getTime() - 60_000).toISOString();
-  const end = new Date(now.getTime() + 365 * 24 * 60 * 60 * 1000).toISOString();
-  const activityName = input.activityName.trim();
-  const activityCode = normalizeActivityCode(input.activityCode || activityName);
-  return {
-    operator: 'studio',
-    tenantId: input.tenantId.trim() || 'site_001',
-    workspaceId: input.workspaceId,
-    folderId: input.folderId,
-    activityCode,
-    activityName: activityName || activityCode,
-    activityType: 'STUDIO_WORKFLOW',
-    status: 'DRAFT',
-    visibility: input.visibility || 'TEAM',
-    triggerEvents: ['STUDIO_EVENT'],
-    startTime: start,
-    endTime: end,
-    timezone: 'UTC',
-    priority: 100,
-    exclusiveGroup: '',
-    stackable: true,
-    version: 1,
-    config: {
-      entry: {
-        channels: ['APP', 'WEB'],
-        entranceCodes: ['studio'],
-        landingUrl: 'https://example.com/studio',
-      },
-      display: {
-        title: activityName || activityCode,
-        visibleFrom: start,
-        visibleTo: end,
-        sort: 100,
-      },
-      audience: {
-        segmentCodes: ['all_users'],
-      },
-      metadata: {
-        owner: 'studio',
-        workspaceId: input.workspaceId,
-        folderId: input.folderId,
-      },
-    },
-    rules: [
-      {
-        ruleCode: 'STUDIO_DEFAULT_RULE',
-        rulePhase: 'QUALIFY',
-        ruleType: 'CONDITION',
-        ruleConfig: {
-          logic: 'AND',
-          conditions: [
-            { field: 'attributes.eventMatched', op: '=', value: true },
-          ],
-        },
-        sort: 1,
-        enabled: true,
-        version: 1,
-      },
-    ],
-    rewards: [
-      {
-        rewardCode: 'STUDIO_DEFAULT_REWARD',
-        rewardType: 'POINT',
-        calculateType: 'FIXED',
-        rewardConfig: {
-          points: 1,
-          unit: 'POINT',
-          pointType: 'DEFAULT',
-          targetRef: 'https://wallet.example.com/reward',
-        },
-        grantMode: 'AUTO',
-        grantChannel: 'HTTP',
-        enabled: true,
-        version: 1,
-      },
-    ],
-  };
-}
-
 function serializeWorkflowDefinition(
   nodes: FlowNode[],
   edges: ActivityEdge[],
@@ -2851,6 +2237,7 @@ function StudioActivityStart({
   workspaceDataReady,
   initialWorkspaceId,
   initialFolderId,
+  onWorkspaceSelectionChange,
   onSelectActivity,
   onCreateWorkspace,
   onCreateActivity,
@@ -2886,6 +2273,7 @@ function StudioActivityStart({
   workspaceDataReady: boolean;
   initialWorkspaceId: string;
   initialFolderId: string;
+  onWorkspaceSelectionChange: (workspaceId: string, folderId: string) => void;
   onSelectActivity: (activityId: string) => void;
   onCreateWorkspace: (input: CreateStudioWorkspaceInput) => Promise<WorkspaceSummary>;
   onCreateActivity: (input: CreateStudioActivityInput) => Promise<ActivitySummary>;
@@ -2933,8 +2321,8 @@ function StudioActivityStart({
   const [createError, setCreateError] = useState('');
   const [creating, setCreating] = useState(false);
   const [showCreateDialog, setShowCreateDialog] = useState(false);
-  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState('');
-  const [selectedFolderId, setSelectedFolderId] = useState('');
+  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState(() => initialWorkspaceId || loadStoredWorkspaceSelection().workspaceId);
+  const [selectedFolderId, setSelectedFolderId] = useState(() => initialFolderId || (initialWorkspaceId ? '' : loadStoredWorkspaceSelection().folderId));
   const [memberUserId, setMemberUserId] = useState('');
   const [memberEmail, setMemberEmail] = useState('');
   const [memberRole, setMemberRole] = useState<WorkspaceRole>('EDITOR');
@@ -2979,6 +2367,7 @@ function StudioActivityStart({
     ownerId: '',
   });
   const demoSeedStartedRef = useRef(false);
+  const appliedInitialWorkspaceSelectionRef = useRef(false);
   const importWorkflowInputRef = useRef<HTMLInputElement | null>(null);
   const storageFileInputRef = useRef<HTMLInputElement | null>(null);
   const foldersByWorkspace = useMemo(() => {
@@ -3026,6 +2415,7 @@ function StudioActivityStart({
         }
         setSelectedWorkspaceId(workspace.id);
         setSelectedFolderId(root.id);
+        persistWorkspaceSelection(workspace.id, root.id);
         await onRefreshWorkspaceOps(workspace.id);
         setOpsMessage('已初始化本地 demo 工作台');
       } catch (error) {
@@ -3034,9 +2424,38 @@ function StudioActivityStart({
     })();
   }, [activeWorkspaces.length, activities.length, folders.length, onCreateActivity, onCreateFolder, onCreateWorkspace, onRefreshWorkspaceOps, onUpdateFolder, workspaceDataReady]);
   useEffect(() => {
-    if (initialWorkspaceId) setSelectedWorkspaceId(initialWorkspaceId);
-    if (initialFolderId) setSelectedFolderId(initialFolderId);
-  }, [initialFolderId, initialWorkspaceId]);
+    if (!activeWorkspaces.length) return;
+    const stored = loadStoredWorkspaceSelection();
+    const allowInitialSelection = !appliedInitialWorkspaceSelectionRef.current;
+    const initialWorkspaceIsValid = Boolean(initialWorkspaceId && activeWorkspaces.some((workspace) => workspace.id === initialWorkspaceId));
+    const storedWorkspaceIsValid = Boolean(stored.workspaceId && activeWorkspaces.some((workspace) => workspace.id === stored.workspaceId));
+    const currentWorkspaceIsValid = Boolean(selectedWorkspaceId && activeWorkspaces.some((workspace) => workspace.id === selectedWorkspaceId));
+    const nextWorkspaceId = initialWorkspaceIsValid
+      ? initialWorkspaceId
+      : currentWorkspaceIsValid
+        ? selectedWorkspaceId
+        : storedWorkspaceIsValid
+          ? stored.workspaceId
+          : activeWorkspaces[0]?.id ?? '';
+    if (nextWorkspaceId && nextWorkspaceId !== selectedWorkspaceId) {
+      setSelectedWorkspaceId(nextWorkspaceId);
+    }
+    appliedInitialWorkspaceSelectionRef.current = true;
+    const folderWorkspaceId = nextWorkspaceId || selectedWorkspaceId;
+    const initialFolderIsValid = Boolean(allowInitialSelection && initialFolderId && folders.some((folder) => folder.id === initialFolderId && folder.workspaceId === folderWorkspaceId && folder.status !== 'DELETED'));
+    const storedFolderIsValid = Boolean(stored.folderId && folders.some((folder) => folder.id === stored.folderId && folder.workspaceId === folderWorkspaceId && folder.status !== 'DELETED'));
+    if (initialFolderIsValid) {
+      if (selectedFolderId !== initialFolderId) setSelectedFolderId(initialFolderId);
+    } else if (!selectedFolderId && storedFolderIsValid) {
+      setSelectedFolderId(stored.folderId);
+    } else if (selectedFolderId && !folders.some((folder) => folder.id === selectedFolderId && folder.workspaceId === folderWorkspaceId && folder.status !== 'DELETED')) {
+      setSelectedFolderId('');
+    }
+  }, [activeWorkspaces, folders, initialFolderId, initialWorkspaceId, selectedFolderId, selectedWorkspaceId]);
+  useEffect(() => {
+    if (!selectedWorkspaceId || !activeWorkspaces.some((workspace) => workspace.id === selectedWorkspaceId)) return;
+    persistWorkspaceSelection(selectedWorkspaceId, selectedFolderId);
+  }, [activeWorkspaces, selectedFolderId, selectedWorkspaceId]);
   useEffect(() => {
     const closeWorkspaceDialogs = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
@@ -3102,7 +2521,10 @@ function StudioActivityStart({
     });
     return next;
   }, [activities, placements]);
-  const selectedWorkspace = activeWorkspaces.find((workspace) => workspace.id === selectedWorkspaceId) ?? activeWorkspaces[0];
+  const storedWorkspaceSelection = loadStoredWorkspaceSelection();
+  const selectedWorkspace = activeWorkspaces.find((workspace) => workspace.id === selectedWorkspaceId)
+    ?? activeWorkspaces.find((workspace) => workspace.id === storedWorkspaceSelection.workspaceId)
+    ?? activeWorkspaces[0];
   const selectedWorkspaceFolders = selectedWorkspace ? foldersByWorkspace[selectedWorkspace.id] ?? [] : [];
   const selectedFolder = selectedWorkspaceFolders.find((folder) => folder.id === selectedFolderId);
   const selectedMembers = selectedWorkspace ? membersByWorkspace[selectedWorkspace.id] ?? [] : [];
@@ -3178,6 +2600,7 @@ function StudioActivityStart({
     if (!selectedWorkspace && selectedWorkspaceId) {
       setSelectedWorkspaceId('');
       setSelectedFolderId('');
+      persistWorkspaceSelection('', '');
       return;
     }
     if (selectedWorkspace && selectedWorkspace.id !== selectedWorkspaceId) {
@@ -3771,23 +3194,6 @@ function StudioActivityStart({
     setDetailActionFolderId(selectedFolder?.id || selectedWorkspaceFolders.find((folder) => folder.id !== item.id)?.id || '');
     setDetailActionError('');
   };
-  const handleCurrentAction = (action: WorkspaceItemAction) => {
-    if (action === 'copyLink') {
-      void navigator.clipboard?.writeText(detailShareUrl);
-      setOpsMessage(`已复制链接：${detailTarget.name}`);
-      return;
-    }
-    if (action === 'permission') {
-      setOpsMessage(`已打开权限：${detailTarget.name}`);
-      return;
-    }
-    if (action === 'share') {
-      if (selectedWorkspace) void createFolderShare();
-      else setOpsMessage('先选择 workspace。');
-      return;
-    }
-    openDetailAction(action);
-  };
   const archiveItems = async (items: Array<{ id: string; type: 'Folder' | 'Workflow'; name: string; visibility: string; status?: string; version?: string; owner?: string }>) => {
     if (!selectedWorkspace) {
       setOpsMessage('先选择 workspace。');
@@ -4050,11 +3456,16 @@ function StudioActivityStart({
               storageTotalGb={storageTotalGb}
               isLoading={!workspaceDataReady}
               onWorkspaceChange={(workspaceId) => {
+                persistWorkspaceSelection(workspaceId, '');
+                onWorkspaceSelectionChange(workspaceId, '');
                 setSelectedWorkspaceId(workspaceId);
                 setSelectedFolderId('');
                 setWorkspaceHomeNav('workspace');
               }}
               onFolderSelect={(folderId) => {
+                const workspaceId = selectedWorkspace?.id ?? selectedWorkspaceId;
+                persistWorkspaceSelection(workspaceId, folderId);
+                onWorkspaceSelectionChange(workspaceId, folderId);
                 setSelectedFolderId(folderId);
                 setWorkspaceHomeNav('workspace');
               }}
@@ -4103,7 +3514,6 @@ function StudioActivityStart({
               homeView={workspaceHomeNav === 'shared' ? 'workspace' : workspaceHomeNav}
               folders={selectedChildFolders}
               workflows={selectedWorkflows}
-              overviewWorkflows={selectedFolderWorkflows}
               templates={templates}
               workflowCountByFolder={workflowCountByFolder}
               searchValue={search}
@@ -4129,7 +3539,6 @@ function StudioActivityStart({
               }}
               onCreateWorkflow={() => openCreateDialog(search || '新 workflow', { workspaceId: selectedWorkspace?.id, folderId: selectedFolder?.id })}
               onImportWorkflow={importWorkflowFromHome}
-              onCurrentAction={handleCurrentAction}
               onItemSelect={(item) => setSelectedDetail(item)}
               onFolderOpen={setSelectedFolderId}
               onWorkflowOpen={onSelectActivity}
@@ -4154,27 +3563,6 @@ function StudioActivityStart({
               }}
               onToggleFavorite={toggleFavorite}
               onToggleArchived={toggleArchived}
-              onNavigateHomeView={(view) => {
-                setWorkspaceHomeNav(view);
-                if (view === 'recent') {
-                  setSortMode('recent');
-                  setStatusFilter('ALL');
-                  setShowFavoritesOnly(false);
-                  return;
-                }
-                if (view === 'favorites') {
-                  setStatusFilter('ALL');
-                  setShowFavoritesOnly(true);
-                  return;
-                }
-                if (view === 'archived') {
-                  setStatusFilter('ARCHIVED');
-                  setShowFavoritesOnly(false);
-                  return;
-                }
-                setStatusFilter('ACTIVE');
-                setShowFavoritesOnly(false);
-              }}
               onItemAction={openDetailActionFor}
               onBulkAction={openBatchAction}
               onBulkArchive={archiveItems}
@@ -4758,6 +4146,8 @@ export function App() {
   const [lastAdded, setLastAdded] = useState('');
   const [selectedNodeIds, setSelectedNodeIds] = useState<string[]>([]);
   const [selectedEdgeIds, setSelectedEdgeIds] = useState<string[]>([]);
+  const [inspectedNodeIds, setInspectedNodeIds] = useState<string[]>([]);
+  const [inspectedEdgeIds, setInspectedEdgeIds] = useState<string[]>([]);
   const [contextMenu, setContextMenu] = useState<FlowContextMenu | null>(null);
   const [nodePicker, setNodePicker] = useState<NodePickerState | null>(null);
   const [nodeSearch, setNodeSearch] = useState('');
@@ -4819,6 +4209,7 @@ export function App() {
   })());
   const restoredRunQueryRef = useRef(false);
   const importFileInputRef = useRef<HTMLInputElement | null>(null);
+  const loadedFolderActivityKeysRef = useRef(new Set<string>());
   const [runHistory, setRunHistory] = useState<RunHistoryState>({
     open: false,
     loading: false,
@@ -4853,14 +4244,56 @@ export function App() {
     message: '',
   });
   const [debugPayloadTemplates, setDebugPayloadTemplates] = useState<DebugPayloadTemplate[]>(() => loadDebugPayloadTemplates());
-  const [homeWorkspaceId, setHomeWorkspaceId] = useState('');
-  const [homeFolderId, setHomeFolderId] = useState('');
+  const [homeWorkspaceId, setHomeWorkspaceId] = useState(() => loadInitialWorkspaceSelectionFromLocation().workspaceId);
+  const [homeFolderId, setHomeFolderId] = useState(() => loadInitialWorkspaceSelectionFromLocation().folderId);
   const [workspaceDataReady, setWorkspaceDataReady] = useState(false);
 
   const nodeTypes = useMemo(() => ({ activity: ActivityNodeView, group: GroupNodeView, note: NoteNodeView }), []);
   const selectedCount = selectedNodeIds.length + selectedEdgeIds.length;
   const visibleStudioActivities = useMemo(() => activities.filter((activity) => !isTestActivity(activity)), [activities]);
   const hiddenTestActivityCount = activities.length - visibleStudioActivities.length;
+  const mergeActivitySummaries = useCallback((activityItems: ActivitySummary[], replace = false) => {
+    const nextPlacements: Record<string, ActivityPlacement> = {};
+    activityItems.forEach((activity) => {
+      if (!activity.workspaceId || !activity.folderId) return;
+      nextPlacements[activity.id] = {
+        workspaceId: activity.workspaceId,
+        folderId: activity.folderId,
+      };
+    });
+    setActivities((items) => {
+      if (replace) return activityItems;
+      const incomingIds = new Set(activityItems.map((activity) => activity.id));
+      return [...activityItems, ...items.filter((activity) => !incomingIds.has(activity.id))];
+    });
+    setActivityPlacements((items) => ({ ...items, ...nextPlacements }));
+  }, []);
+  useEffect(() => {
+    if (!workspaceDataReady || activityId || !workspaces.length) return;
+    const activeWorkspaces = workspaces.filter((workspace) => workspace.status !== 'DELETED');
+    if (!activeWorkspaces.length) return;
+    const homeWorkspaceIsValid = Boolean(homeWorkspaceId && activeWorkspaces.some((workspace) => workspace.id === homeWorkspaceId));
+    const stored = loadStoredWorkspaceSelection();
+    const storedWorkspaceIsValid = Boolean(stored.workspaceId && activeWorkspaces.some((workspace) => workspace.id === stored.workspaceId));
+    const nextWorkspaceId = homeWorkspaceIsValid ? homeWorkspaceId : storedWorkspaceIsValid ? stored.workspaceId : activeWorkspaces[0]?.id ?? '';
+    if (nextWorkspaceId && nextWorkspaceId !== homeWorkspaceId) {
+      setHomeWorkspaceId(nextWorkspaceId);
+    }
+    const nextFolderId = nextWorkspaceId === stored.workspaceId ? stored.folderId : homeFolderId;
+    const nextFolderIsValid = Boolean(nextFolderId && workspaceFolders.some((folder) => (
+      folder.id === nextFolderId &&
+      folder.workspaceId === nextWorkspaceId &&
+      folder.status !== 'DELETED'
+    )));
+    if (!nextFolderIsValid && homeFolderId) {
+      setHomeFolderId('');
+    } else if (nextFolderIsValid && nextFolderId !== homeFolderId) {
+      setHomeFolderId(nextFolderId);
+    }
+    if (nextWorkspaceId) {
+      persistWorkspaceSelection(nextWorkspaceId, nextFolderIsValid ? nextFolderId : '');
+    }
+  }, [activityId, homeFolderId, homeWorkspaceId, workspaceDataReady, workspaceFolders, workspaces]);
   const activePlacement = activityId ? activityPlacements[activityId] : undefined;
   const activeWorkspace = activePlacement ? workspaces.find((workspace) => workspace.id === activePlacement.workspaceId) : undefined;
   const activeFolder = activePlacement ? workspaceFolders.find((folder) => folder.id === activePlacement.folderId) : undefined;
@@ -4907,13 +4340,16 @@ export function App() {
     let cancelled = false;
     const params = new URLSearchParams(window.location.search);
     const requestedActivityId = params.get('activityId') ?? '';
-    Promise.all([
-      fetchJSON<{ items: ActivitySummary[] }>('/admin/v1/activities'),
-      fetchJSON<{ items: WorkspaceSummary[] }>('/admin/v1/workspaces?status=ACTIVE&limit=100'),
-    ])
-      .then(async ([activityBody, workspaceBody]) => {
+    const storedSelection = loadStoredWorkspaceSelection();
+    const activityListParams = new URLSearchParams();
+    if (storedSelection.workspaceId) activityListParams.set('workspaceId', storedSelection.workspaceId);
+    if (storedSelection.folderId) activityListParams.set('folderId', storedSelection.folderId);
+    if (storedSelection.workspaceId || storedSelection.folderId) activityListParams.set('limit', '100');
+    const activityListURL = activityListParams.toString() ? `/admin/v1/activities?${activityListParams.toString()}` : '/admin/v1/activities';
+    const activityRequest = fetchJSON<{ items: ActivitySummary[] }>(activityListURL);
+    fetchJSON<{ items: WorkspaceSummary[] }>('/admin/v1/workspaces?status=ACTIVE&limit=100')
+      .then(async (workspaceBody) => {
         if (cancelled) return;
-        const activityItems = activityBody.items ?? [];
         const workspaceItems = workspaceBody.items ?? [];
         const activeWorkspaces = workspaceItems.filter((workspace) => workspace.status !== 'DELETED');
         const folderResults = await Promise.all(activeWorkspaces.map((workspace) => (
@@ -4921,57 +4357,77 @@ export function App() {
             .then((body) => body.items ?? [])
             .catch(() => [])
         )));
-        const shareResults = await Promise.all(activeWorkspaces.map((workspace) => (
-          fetchJSON<{ items: WorkspaceShareLinkSummary[] }>(`/admin/v1/workspaces/${workspace.id}/share-links?limit=500`)
-            .then((body) => body.items ?? [])
-            .catch(() => [])
-        )));
-        const memberResults = await Promise.all(activeWorkspaces.map((workspace) => (
-          fetchJSON<{ items: WorkspaceMemberSummary[] }>(`/admin/v1/workspaces/${workspace.id}/members`)
-            .then((body) => body.items ?? [])
-            .catch(() => [])
-        )));
-        const auditResults = await Promise.all(activeWorkspaces.map((workspace) => (
-          fetchJSON<{ items: WorkspaceAuditLogSummary[] }>(`/admin/v1/workspaces/${workspace.id}/audit-logs?limit=40`)
-            .then((body) => body.items ?? [])
-            .catch(() => [])
-        )));
         if (cancelled) return;
         const nextFolders = folderResults.flat();
-        const nextPlacements: Record<string, ActivityPlacement> = {};
-        activityItems.forEach((activity) => {
-          if (!activity.workspaceId || !activity.folderId) return;
-          nextPlacements[activity.id] = {
-            workspaceId: activity.workspaceId,
-            folderId: activity.folderId,
-          };
-        });
-        const nextShareLinks: Record<string, WorkspaceShareLinkSummary[]> = {};
-        const nextMembers: Record<string, WorkspaceMemberSummary[]> = {};
-        const nextAudits: Record<string, WorkspaceAuditLogSummary[]> = {};
-        activeWorkspaces.forEach((workspace, index) => {
-          nextShareLinks[workspace.id] = shareResults[index] ?? [];
-          nextMembers[workspace.id] = memberResults[index] ?? [];
-          nextAudits[workspace.id] = auditResults[index] ?? [];
-        });
-        shareResults.flat().forEach((share) => {
-          if (!share.activityId || !share.folderId || !share.enabled) return;
-          if (nextPlacements[share.activityId]) return;
-          nextPlacements[share.activityId] = {
-            workspaceId: share.workspaceId,
-            folderId: share.folderId,
-            shareLinkId: share.id,
-          };
-        });
-        setActivities(activityItems);
         setWorkspaces(activeWorkspaces);
         setWorkspaceFolders(nextFolders);
-        setWorkspaceShareLinks(nextShareLinks);
-        setWorkspaceMembers(nextMembers);
-        setWorkspaceAuditLogs(nextAudits);
-        setActivityPlacements(nextPlacements);
         setWorkspaceDataReady(true);
+        setWorkflowStatus((status) => (
+          status === '连接后端中...' || status.startsWith('后端未连接')
+            ? '工作区已加载 · workflow 加载中...'
+            : status
+        ));
+        void Promise.all(activeWorkspaces.map(async (workspace) => {
+          const [shares, members, audits] = await Promise.all([
+            fetchJSON<{ items: WorkspaceShareLinkSummary[] }>(`/admin/v1/workspaces/${workspace.id}/share-links?limit=500`)
+              .then((body) => body.items ?? [])
+              .catch(() => []),
+            fetchJSON<{ items: WorkspaceMemberSummary[] }>(`/admin/v1/workspaces/${workspace.id}/members`)
+              .then((body) => body.items ?? [])
+              .catch(() => []),
+            fetchJSON<{ items: WorkspaceAuditLogSummary[] }>(`/admin/v1/workspaces/${workspace.id}/audit-logs?limit=40`)
+              .then((body) => body.items ?? [])
+              .catch(() => []),
+          ]);
+          return { workspaceId: workspace.id, shares, members, audits };
+        })).then((results) => {
+          if (cancelled) return;
+          const nextShareLinks: Record<string, WorkspaceShareLinkSummary[]> = {};
+          const nextMembers: Record<string, WorkspaceMemberSummary[]> = {};
+          const nextAudits: Record<string, WorkspaceAuditLogSummary[]> = {};
+          const sharedPlacements: Record<string, ActivityPlacement> = {};
+          results.forEach((result) => {
+            nextShareLinks[result.workspaceId] = result.shares;
+            nextMembers[result.workspaceId] = result.members;
+            nextAudits[result.workspaceId] = result.audits;
+            result.shares.forEach((share) => {
+              if (!share.activityId || !share.folderId || !share.enabled) return;
+              sharedPlacements[share.activityId] = {
+                workspaceId: share.workspaceId,
+                folderId: share.folderId,
+                shareLinkId: share.id,
+              };
+            });
+          });
+          setWorkspaceShareLinks(nextShareLinks);
+          setWorkspaceMembers(nextMembers);
+          setWorkspaceAuditLogs(nextAudits);
+          if (Object.keys(sharedPlacements).length) {
+            setActivityPlacements((items) => {
+              const merged = { ...items };
+              Object.entries(sharedPlacements).forEach(([activityId, placement]) => {
+                if (!merged[activityId]) merged[activityId] = placement;
+              });
+              return merged;
+            });
+          }
+        });
+      })
+      .catch((error: Error) => {
+        if (cancelled) return;
+        setWorkflowStatus(`后端未连接：${error.message}`);
+        setWorkspaceDataReady(true);
+      });
+    activityRequest
+      .then((activityBody) => {
+        if (cancelled) return;
+        const activityItems = activityBody.items ?? [];
+        mergeActivitySummaries(activityItems, activityListURL === '/admin/v1/activities');
         if (!activityItems.length) {
+          if (requestedActivityId && activityListURL !== '/admin/v1/activities') {
+            setWorkflowStatus('当前目录未命中 URL 活动 · 正在同步完整列表...');
+            return;
+          }
           setWorkflowStatus('后端已连接 · 暂无 workflow');
           return;
         }
@@ -4981,6 +4437,10 @@ export function App() {
         }
         const activity = activityItems.find((item) => item.id === requestedActivityId);
         if (!activity) {
+          if (activityListURL !== '/admin/v1/activities') {
+            setWorkflowStatus('正在同步完整 workflow 列表...');
+            return;
+          }
           setWorkflowStatus('URL 中的活动不存在，请重新选择');
           return;
         }
@@ -4990,13 +4450,50 @@ export function App() {
       })
       .catch((error: Error) => {
         if (cancelled) return;
-        setWorkflowStatus(`后端未连接：${error.message}`);
-        setWorkspaceDataReady(true);
+        setWorkflowStatus(`workflow 加载失败：${error.message}`);
+      });
+    if (activityListURL !== '/admin/v1/activities') {
+      fetchJSON<{ items: ActivitySummary[] }>('/admin/v1/activities')
+        .then((activityBody) => {
+          if (cancelled) return;
+          const activityItems = activityBody.items ?? [];
+          mergeActivitySummaries(activityItems, true);
+          if (requestedActivityId && !activityItems.some((item) => item.id === requestedActivityId)) {
+            setWorkflowStatus('URL 中的活动不存在，请重新选择');
+          }
+        })
+        .catch(() => {
+          // The scoped request already populated the current folder; full-list refresh can retry later.
+        });
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [mergeActivitySummaries]);
+
+  useEffect(() => {
+    if (!workspaceDataReady || activityId || !homeWorkspaceId || !homeFolderId) return;
+    const key = `${homeWorkspaceId}:${homeFolderId}`;
+    if (loadedFolderActivityKeysRef.current.has(key)) return;
+    loadedFolderActivityKeysRef.current.add(key);
+    const query = new URLSearchParams({
+      workspaceId: homeWorkspaceId,
+      folderId: homeFolderId,
+      limit: '100',
+    });
+    let cancelled = false;
+    fetchJSON<{ items: ActivitySummary[] }>(`/admin/v1/activities?${query.toString()}`)
+      .then((body) => {
+        if (cancelled) return;
+        mergeActivitySummaries(body.items ?? []);
+      })
+      .catch(() => {
+        loadedFolderActivityKeysRef.current.delete(key);
       });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [activityId, homeFolderId, homeWorkspaceId, mergeActivitySummaries, workspaceDataReady]);
 
   useEffect(() => {
     let cancelled = false;
@@ -5122,6 +4619,8 @@ export function App() {
     closeFloatingUi();
     setSelectedNodeIds([]);
     setSelectedEdgeIds([]);
+    setInspectedNodeIds([]);
+    setInspectedEdgeIds([]);
     setNodes((items) => items.map((node) => (node.selected ? { ...node, selected: false } : node)));
     setEdges((items) => items.map((edgeItem) => (edgeItem.selected ? { ...edgeItem, selected: false } : edgeItem)));
   }, [closeFloatingUi, setEdges, setNodes]);
@@ -5149,6 +4648,7 @@ export function App() {
     const hasUserChange = changes.some((change) => (
       change.type === 'remove'
       || change.type === 'add'
+      || (change.type === 'position' && change.dragging === false)
     ));
     if (hasUserChange) invalidateWorkflowValidation();
     onNodesChange(changes);
@@ -5262,6 +4762,7 @@ export function App() {
     });
     setEdges((items) => items.filter((item) => !nodeIdSet.has(item.source) && !nodeIdSet.has(item.target)));
     setSelectedNodeIds((items) => items.filter((item) => !nodeIdSet.has(item)));
+    setInspectedNodeIds((items) => items.filter((item) => !nodeIdSet.has(item)));
     closeFloatingUi();
   }, [closeFloatingUi, invalidateWorkflowValidation, setEdges, setNodes]);
 
@@ -5271,6 +4772,7 @@ export function App() {
     const edgeIdSet = new Set(edgeIds);
     setEdges((items) => items.filter((item) => !edgeIdSet.has(item.id)));
     setSelectedEdgeIds((items) => items.filter((item) => !edgeIdSet.has(item)));
+    setInspectedEdgeIds((items) => items.filter((item) => !edgeIdSet.has(item)));
     closeFloatingUi();
   }, [closeFloatingUi, invalidateWorkflowValidation, setEdges]);
 
@@ -5323,6 +4825,8 @@ export function App() {
     setEdges((items) => items.filter((item) => !edgeIdSet.has(item.id) && !nodeIdSet.has(item.source) && !nodeIdSet.has(item.target)));
     setSelectedNodeIds([]);
     setSelectedEdgeIds([]);
+    setInspectedNodeIds([]);
+    setInspectedEdgeIds([]);
     closeFloatingUi();
   }, [closeFloatingUi, invalidateWorkflowValidation, selectedEdgeIds, selectedNodeIds, setEdges, setNodes]);
 
@@ -5334,6 +4838,8 @@ export function App() {
     setLastAdded('');
     setSelectedNodeIds([]);
     setSelectedEdgeIds([]);
+    setInspectedNodeIds([]);
+    setInspectedEdgeIds([]);
     closeFloatingUi();
   }, [closeFloatingUi, invalidateWorkflowValidation, setEdges, setNodes]);
 
@@ -5349,6 +4855,8 @@ export function App() {
       setEdges(hydrated.edges);
       setSelectedNodeIds([]);
       setSelectedEdgeIds([]);
+      setInspectedNodeIds([]);
+      setInspectedEdgeIds([]);
       setSelectedTemplate('default');
       setDraftDirty(true);
       setDraftSaveState('dirty');
@@ -5658,6 +5166,32 @@ export function App() {
     reactFlowInstance?.setViewport({ x: 24, y: 36, zoom }, { duration: 180 });
     setZoomPercent(Math.round(zoom * 100));
   }, [reactFlowInstance]);
+
+  const keepNodeClearOfPropertyPanel = useCallback((node: FlowNode) => {
+    if (!reactFlowInstance) return;
+    window.requestAnimationFrame(() => {
+      const viewport = reactFlowInstance.getViewport();
+      const zoom = viewport.zoom || 1;
+      const nodeWidth = node.type === 'activity' ? ACTIVITY_NODE_WIDTH : (node.width ?? 180);
+      const nodeHeight = node.type === 'activity' ? activityNodeHeight(node) : (node.height ?? 120);
+      const topLeft = reactFlowInstance.flowToScreenPosition(node.position);
+      const bottomRight = reactFlowInstance.flowToScreenPosition({
+        x: node.position.x + nodeWidth,
+        y: node.position.y + nodeHeight,
+      });
+      const panelLeft = window.innerWidth - rightPanelWidth;
+      const margin = 24;
+      const overflowRight = bottomRight.x + margin - panelLeft;
+      const overflowLeft = margin - topLeft.x;
+      if (overflowRight <= 0) return;
+      reactFlowInstance.setViewport({
+        ...viewport,
+        x: viewport.x - overflowRight + Math.max(0, overflowLeft),
+        zoom,
+      }, { duration: 220 });
+      setZoomPercent(Math.round(zoom * 100));
+    });
+  }, [reactFlowInstance, rightPanelWidth]);
 
   const focusNodeById = useCallback((nodeId: string, statusPrefix = '已定位节点') => {
     const node = nodes.find((candidate) => candidate.id === nodeId);
@@ -5993,6 +5527,7 @@ export function App() {
   }, []);
 
   const executeWorkspaceNavigation = useCallback((workspaceId: string, folderId = '') => {
+    persistWorkspaceSelection(workspaceId, folderId);
     setHomeWorkspaceId(workspaceId);
     setHomeFolderId(folderId);
     setActivityId('');
@@ -6019,6 +5554,19 @@ export function App() {
     }
     executeWorkspaceNavigation(workspaceId, folderId);
   }, [draftHasUnsavedChanges, executeWorkspaceNavigation]);
+  const syncWorkspaceHomeSelection = useCallback((workspaceId: string, folderId = '') => {
+    persistWorkspaceSelection(workspaceId, folderId);
+    setHomeWorkspaceId(workspaceId);
+    setHomeFolderId(folderId);
+    replaceUrlParams({
+      workspaceId,
+      folderId: folderId || undefined,
+      activityId: undefined,
+      executionId: undefined,
+      replayStep: undefined,
+      compareExecutionId: undefined,
+    });
+  }, []);
 
   const confirmUnsavedDraftNavigation = useCallback(() => {
     if (!unsavedDraftNavigation) return;
@@ -7029,7 +6577,8 @@ export function App() {
     window.addEventListener('pointerup', stopResize, { once: true });
   }, [rightPanelWidth]);
   const rightPanelStyle = useMemo(() => ({ '--diagnostic-panel-width': `${rightPanelWidth}px` } as React.CSSProperties), [rightPanelWidth]);
-  const propertyPanelVisible = Boolean(activityId && selectedCount > 0 && !runHistory.open && !showChecklist && !debugPanel.open);
+  const inspectedCount = inspectedNodeIds.length + inspectedEdgeIds.length;
+  const propertyPanelVisible = Boolean(activityId && inspectedCount > 0 && !runHistory.open && !showChecklist && !debugPanel.open);
 
   return (
     <div className={cx('flow-shell', propertyPanelVisible && 'property-panel-visible')} style={rightPanelStyle}>
@@ -7156,11 +6705,18 @@ export function App() {
                 closeFloatingUi();
                 closeGlobalPanelsForNodeInspect();
                 if (event.shiftKey || event.metaKey || event.ctrlKey) {
-                  setSelectedNodeIds((items) => (items.includes(node.id) ? items.filter((item) => item !== node.id) : items.concat(node.id)));
+                  setSelectedNodeIds((items) => {
+                    const next = items.includes(node.id) ? items.filter((item) => item !== node.id) : items.concat(node.id);
+                    setInspectedNodeIds(next);
+                    return next;
+                  });
                 } else {
                   setSelectedNodeIds([node.id]);
+                  setInspectedNodeIds([node.id]);
                 }
                 setSelectedEdgeIds([]);
+                setInspectedEdgeIds([]);
+                keepNodeClearOfPropertyPanel(node);
               }}
               onNodeContextMenu={canEditActiveWorkflow ? openNodeMenu : undefined}
               onNodeMouseEnter={(_, node) => setHoveredNodeId(node.id)}
@@ -7168,6 +6724,8 @@ export function App() {
               onEdgeClick={(event, edgeItem) => {
                 event.stopPropagation();
                 setSelectedEdgeIds([edgeItem.id]);
+                setInspectedEdgeIds([edgeItem.id]);
+                setInspectedNodeIds([]);
                 setContextMenu({ type: 'edge', x: event.clientX, y: event.clientY, edgeId: edgeItem.id });
               }}
               onEdgeContextMenu={canEditActiveWorkflow ? openEdgeMenu : undefined}
@@ -7187,7 +6745,7 @@ export function App() {
               maxZoom={1.6}
               panOnScroll
               panOnDrag={interactionMode === 'hand'}
-              nodesDraggable={canEditActiveWorkflow && interactionMode === 'pointer'}
+              nodesDraggable={canEditActiveWorkflow}
               nodesConnectable={canEditActiveWorkflow && interactionMode === 'pointer'}
               edgesReconnectable={canEditActiveWorkflow && interactionMode === 'pointer'}
               elementsSelectable
@@ -7278,6 +6836,7 @@ export function App() {
                 workspaceDataReady={workspaceDataReady}
                 initialWorkspaceId={homeWorkspaceId}
                 initialFolderId={homeFolderId}
+                onWorkspaceSelectionChange={syncWorkspaceHomeSelection}
                 onSelectActivity={changeActivity}
                 onCreateWorkspace={createStudioWorkspace}
                 onCreateActivity={createStudioActivity}
@@ -7431,7 +6990,7 @@ export function App() {
           </section>
         </div>
       ) : null}
-      {propertyPanelVisible ? <PropertyPanel nodes={nodes} edges={edges} selectedNodeIds={selectedNodeIds} selectedEdgeIds={selectedEdgeIds} nodeConfigSchemas={nodeConfigSchemas} validationIssues={validationHighlights.nodeIssues.get(selectedNodeIds[0] ?? '') ?? []} edgeValidationIssues={validationHighlights.edgeIssues.get(selectedEdgeIds[0] ?? '') ?? []} resourceOptions={canvasResources} onNodeConfigChange={updateNodeConfig} onEdgeRouteChange={updateEdgeRoute} onLocateNode={(nodeId) => focusNodeById(nodeId, '已定位变量来源')} onDeleteNodes={deleteNodes} onDeleteEdges={deleteEdges} panelWidth={rightPanelWidth} onResizeStart={beginRightPanelResize} /> : null}
+      {propertyPanelVisible ? <PropertyPanel nodes={nodes} edges={edges} selectedNodeIds={inspectedNodeIds} selectedEdgeIds={inspectedEdgeIds} nodeConfigSchemas={nodeConfigSchemas} validationIssues={validationHighlights.nodeIssues.get(inspectedNodeIds[0] ?? '') ?? []} edgeValidationIssues={validationHighlights.edgeIssues.get(inspectedEdgeIds[0] ?? '') ?? []} resourceOptions={canvasResources} onNodeConfigChange={updateNodeConfig} onEdgeRouteChange={updateEdgeRoute} onLocateNode={(nodeId) => focusNodeById(nodeId, '已定位变量来源')} onDeleteNodes={deleteNodes} onDeleteEdges={deleteEdges} panelWidth={rightPanelWidth} onResizeStart={beginRightPanelResize} /> : null}
     </div>
   );
 }

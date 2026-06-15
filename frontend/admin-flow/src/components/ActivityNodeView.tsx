@@ -129,7 +129,7 @@ export function ActivityNodeView({ id, data, selected }: NodeProps<ActivityNode>
           </span>
         ) : null}
         <button
-          className="node-delete"
+          className="node-delete nodrag"
           title="删除节点"
           onClick={(event) => {
             event.stopPropagation();
@@ -141,7 +141,7 @@ export function ActivityNodeView({ id, data, selected }: NodeProps<ActivityNode>
       </div>
       {isBranchNode ? (
         <>
-          <div className="field-section branch-input-section node-selectable nodrag">
+          <div className="field-section branch-input-section node-selectable">
             <b>INPUT VARIABLE</b>
             <div className="variable-row">
               <span className="variable-source">↳</span>
@@ -149,7 +149,7 @@ export function ActivityNodeView({ id, data, selected }: NodeProps<ActivityNode>
               <em>{outputs[0] ?? 'output'}</em>
             </div>
           </div>
-          <div className="branch-list node-selectable nodrag">
+          <div className="branch-list node-selectable">
             {branchRows.map((item, index) => (
               <div key={`${item.output}-${index}`} className="branch-row">
                 <div className="branch-case-main">
@@ -168,7 +168,7 @@ export function ActivityNodeView({ id, data, selected }: NodeProps<ActivityNode>
             ))}
           </div>
           {data.routeIssues && data.routeIssues.length > 0 ? (
-            <div className="branch-route-check node-selectable nodrag">
+            <div className="branch-route-check node-selectable">
               <b>Route Check</b>
               {data.routeIssues.slice(0, 3).map((issue) => (
                 <span key={`${issue.code}-${issue.path ?? issue.message}`}>
@@ -178,7 +178,7 @@ export function ActivityNodeView({ id, data, selected }: NodeProps<ActivityNode>
               {data.routeIssues.length > 3 ? <em>+{data.routeIssues.length - 3}</em> : null}
             </div>
           ) : data.routeIssues ? (
-            <div className="branch-route-check ok node-selectable nodrag">
+            <div className="branch-route-check ok node-selectable">
               <b>Route Check</b>
               <span>覆盖完整</span>
             </div>
@@ -186,7 +186,7 @@ export function ActivityNodeView({ id, data, selected }: NodeProps<ActivityNode>
         </>
       ) : (
         <>
-          <div className="field-section node-selectable nodrag">
+          <div className="field-section node-selectable">
             <b>{sectionTitleFor(data.kind)}</b>
             <div className="variable-row">
               <span className="variable-source">{data.kind === 'entry' ? '{x}' : '↳'}</span>
@@ -196,7 +196,7 @@ export function ActivityNodeView({ id, data, selected }: NodeProps<ActivityNode>
               {data.kind === 'reliable' ? <em>RETRY</em> : null}
             </div>
           </div>
-          <p className="node-selectable nodrag">{data.desc}</p>
+          <p className="node-selectable">{data.desc}</p>
         </>
       )}
       <div className="node-drag-hint">

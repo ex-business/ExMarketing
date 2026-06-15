@@ -97,6 +97,38 @@ func (r *MemoryRepository) ListActivities(ctx context.Context) ([]Activity, erro
 	return out, nil
 }
 
+func (r *MemoryRepository) ListActivitiesByQuery(ctx context.Context, query ActivityQuery) ([]Activity, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	limit := query.Limit
+	if limit <= 0 {
+		limit = len(r.activities)
+	}
+	out := make([]Activity, 0, min(limit, len(r.activities)))
+	for _, activity := range r.activities {
+		if query.TenantID != "" && activity.TenantID != query.TenantID {
+			continue
+		}
+		if query.WorkspaceID != "" && activity.WorkspaceID != query.WorkspaceID {
+			continue
+		}
+		if query.FolderID != "" && activity.FolderID != query.FolderID {
+			continue
+		}
+		if query.Status != "" && string(activity.Status) != query.Status {
+			continue
+		}
+		out = append(out, activity)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
+}
+
 func (r *MemoryRepository) UpdateActivity(ctx context.Context, activity Activity) (Activity, error) {
 	if err := ctx.Err(); err != nil {
 		return Activity{}, err

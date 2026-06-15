@@ -64,6 +64,141 @@ event-in -> inbox -> normalize -> match -> fact-query -> activity-state -> quota
 | `grant-order` | 发奖订单 | 生成发奖订单和状态机记录 | `grant_order`, `grant_orders` |
 | `outbox` | 消息发件箱 | 生成可重试投递消息，由 outbox worker 发送 | `HTTP`, `MQ`, `Webhook`, `Failed` |
 
+### `quota-check` 次数频控校验
+
+`quota-check` 用来判断某个主体在某个限制范围和时间窗口内是否还能继续参加活动。它不负责发奖，也不负责资格规则判断；它只负责频控计数、超限决策和输出可路由的校验结果。
+
+常见用法：
+
+- 每日签到：同一个用户、同一个活动、每天最多成功 1 次。
+- 首存活动：同一个用户、同一个活动生命周期内最多参加 1 次。
+- 风控活动：同一个设备、IP 或业务单号在指定窗口内最多触发 N 次。
+- 自定义活动期：通过模板或 Lua 生成活动期时间段，例如 `promo-june`、`2026Q2`、`round-3`。
+
+关键配置：
+
+| 字段 | 含义 | 示例 |
+| --- | --- | --- |
+| `resourceRef` | 可选，引用资源管理里的 `REDIS_COUNTER` 计数器；配置后会走真实资源计数器 | `daily_checkin_counter` |
+| `namespace` | 计数命名空间，用来隔离不同业务计数 | `checkin` |
+| `scope` | 限制范围，说明按用户、活动、租户、业务、IP 或设备限制 | `USER` |
+| `scopeKeyTemplate` | 逻辑主体 key 模板，决定“谁”被限制 | `${subject.id}:${activityId}` |
+| `window` | 时间窗口，支持 `ACTIVITY`、`DAY`、`WEEK`、`MONTH`、`ROLLING_WINDOW`、`CUSTOM_RANGE` | `DAY` |
+| `maxCount` | 窗口内最大允许次数 | `1` |
+| `consumeMode` | 占用模式，决定只检查还是检查并消耗次数 | `ATOMIC` |
+| `exceedAction` | 超限动作，决定超限后阻断、打风险或跳过 | `BLOCK` |
+
+`计数维度` 决定“按谁、在哪个时间段、最多允许几次”。它由 `scope`、`scopeKeyTemplate`、`window` 和 `maxCount` 共同组成。
+
+`限制范围 scope`：
+
+- `USER`：按用户限制。最常见，例如“每个用户每天签到 1 次”。
+- `ACTIVITY`：按活动整体限制。例如“整个活动每天最多发放 1000 次奖励”。
+- `TENANT`：按租户限制。例如“每个站点每天最多触发 10000 次”。
+- `BIZ`：按业务单号或业务对象限制。例如“同一笔存款只能参加一次首存活动”。
+- `IP`：按 IP 限制。适合风控类频控，例如同一 IP 每小时最多 N 次。
+- `DEVICE`：按设备限制。适合防刷或设备维度活动限制。
+
+`Scope Key 模板 scopeKeyTemplate`：
+
+- 这是频控的逻辑主体 key，决定具体限制对象。
+- 模板可以使用事件、活动和上下文变量，例如 `${subject.id}`、`${activityId}`、`${tenantId}`、`${eventId}`。
+- 推荐把活动维度放进去，避免不同活动之间互相影响。
+- 推荐格式：`${subject.id}:${activityId}`、`${tenantId}:${activityId}:${subject.id}`、`${biz.bizId}:${activityId}`。
+- 不建议只写 `${subject.id}`，除非明确希望同一个用户跨多个活动共享次数。
+
+`窗口 window`：
+
+- `DAY`：自然日窗口。适合每日签到、每日任务。
+- `WEEK`：自然周窗口。适合每周任务。
+- `MONTH`：自然月窗口。适合月度活动。
+- `ACTIVITY`：活动生命周期窗口。适合首存、一次性报名、整个活动最多参加一次。
+- `ROLLING_WINDOW`：滚动窗口。适合“最近 1 小时最多 N 次”这类风控频率限制。
+- `CUSTOM_RANGE`：自定义时间段。适合活动期、赛季、轮次、运营配置周期；可以通过模板或 Lua 输出 `segmentKey`。
+
+`最大次数 maxCount`：
+
+- 表示同一个 `scopeKeyTemplate + window segment` 下允许通过的最大次数。
+- `maxCount=1` 是“只允许一次”的语义。
+- `maxCount=3` 是“该窗口内最多三次”的语义。
+- 当 `consumeMode=ATOMIC` 时，每次通过都会立即占用一次；达到上限后按 `exceedAction` 处理。
+
+逻辑 key 生成规则：
+
+```text
+logicalKey = scopeKeyTemplate 渲染结果 + ":" + windowSegment
+```
+
+示例：
+
+| 场景 | scope | scopeKeyTemplate | window | maxCount | logicalKey 示例 |
+| --- | --- | --- | --- | --- | --- |
+| 每日签到一次 | `USER` | `${subject.id}:${activityId}` | `DAY` | `1` | `u_001:act_checkin:20260615` |
+| 首存活动一次 | `BIZ` | `${biz.bizId}:${activityId}` | `ACTIVITY` | `1` | `dep_001:act_first_deposit:activity` |
+| 用户每周 3 次 | `USER` | `${subject.id}:${activityId}` | `WEEK` | `3` | `u_001:act_weekly:2026W25` |
+| 同 IP 每小时 10 次 | `IP` | `${attributes.ip}:${activityId}` | `ROLLING_WINDOW` | `10` | `1.2.3.4:act_risk:rolling:3600s:494444` |
+| 活动轮次最多 2 次 | `USER` | `${subject.id}:${activityId}` | `CUSTOM_RANGE` | `2` | `u_001:act_promo:round-3` |
+
+`处理策略` 是节点拿到频控结果之后的动作配置，主要由 `consumeMode` 和 `exceedAction` 组成。
+
+`consumeMode`：
+
+- `CHECK_ONLY`：只检查，不增加次数。适合预检查，例如“用户今天是否还可以签到”。
+- `ATOMIC`：检查并立即加次数。适合真实执行，例如“签到成功后占用今天 1 次机会”。生产发奖链路通常优先使用该模式。
+- `RESERVE_ONLY`：预占用，适合先锁住名额再由后续确认或释放。当前如果没有完整 confirm/release 链路，需要谨慎使用。
+
+`exceedAction`：
+
+- `BLOCK`：超过次数后直接阻断流程，节点失败。适合每日签到、首存奖励这类不能重复发奖的场景。
+- `RISK`：不阻断流程，但输出风险标记，后续可以进入风控、人工审核或降级分支。
+- `SKIP`：跳过后续奖励或业务动作，流程本身不视为异常。适合“已参加过则不重复发”的轻量场景。
+
+每日签到奖励推荐配置：
+
+```json
+{
+  "resourceRef": "daily_checkin_counter",
+  "namespace": "checkin",
+  "scope": "USER",
+  "scopeKeyTemplate": "${subject.id}:${activityId}",
+  "window": "DAY",
+  "maxCount": 1,
+  "consumeMode": "ATOMIC",
+  "exceedAction": "BLOCK"
+}
+```
+
+这表示：同一个 `subject.id + activityId + DAY` 下，第一次签到会原子加 1 并通过；当天第二次再进入时会超限并阻断，不继续发奖励。
+
+自定义时间段可以用 `CUSTOM_RANGE`：
+
+```json
+{
+  "resourceRef": "promo_counter",
+  "namespace": "promo",
+  "scope": "USER",
+  "scopeKeyTemplate": "${subject.id}:${activityId}",
+  "window": "CUSTOM_RANGE",
+  "windowSegmentTemplate": "promo-2026Q2",
+  "windowStartTemplate": "2026-04-01T00:00:00Z",
+  "windowEndTemplate": "2026-06-30T23:59:59Z",
+  "maxCount": 3,
+  "consumeMode": "ATOMIC",
+  "exceedAction": "BLOCK"
+}
+```
+
+也可以用 Lua 动态生成时间段：
+
+```json
+{
+  "window": "CUSTOM_RANGE",
+  "windowLuaSource": "emit({segmentKey = 'promo-june', windowStart = '2026-06-01T00:00:00Z', windowEnd = '2026-06-30T23:59:59Z'})"
+}
+```
+
+节点输出中的 `quota_check.logicalKey` 会把主体 key 和时间段拼起来，例如 `user_001:activity_001:20260615` 或 `user_001:activity_001:promo-june`。资源适配器再根据 `namespace`、资源配置和 `logicalKey` 生成物理存储 key。
+
 ## ADVANCED 高级集成
 
 高级节点用于扩展主链路，不应该成为默认生产模板的必需节点。

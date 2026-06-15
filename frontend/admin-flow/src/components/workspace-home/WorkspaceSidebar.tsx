@@ -11,8 +11,9 @@ import {
   Star,
   Users,
 } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { type CSSProperties, useEffect, useState } from 'react';
 import { TaButton, TaIconButton, TaInput, TaMenu, TaMenuItem, TaNavButton } from './TailAdminPrimitives';
+import { persistWorkspaceSelection } from '../../utils/workspaceHome';
 
 export type WorkspaceSidebarWorkspace = {
   id: string;
@@ -144,7 +145,10 @@ export function WorkspaceSidebar({
         <TaNavButton
           active={active}
           style={{ paddingLeft: 10 + level * 14 }}
-          onClick={() => onFolderSelect(folder.id)}
+          onClick={() => {
+            persistWorkspaceSelection(folder.workspaceId, folder.id);
+            onFolderSelect(folder.id);
+          }}
         >
           {active ? <FolderOpen size={15} /> : <Folder size={15} />}
           <span>{folder.name}</span>
@@ -167,7 +171,7 @@ export function WorkspaceSidebar({
           <i className="exm-skeleton" />
         </div>
       ) : (
-        <div className="exm-workspace-switcher">
+        <div className="exm-workspace-switcher" style={{ '--workspace-color': selectedWorkspace?.color || '#465fff' } as CSSProperties}>
           <span>{(selectedWorkspace?.name || 'H').slice(0, 1).toUpperCase()}</span>
           <TaButton
             className="exm-workspace-switcher-trigger"
@@ -176,7 +180,10 @@ export function WorkspaceSidebar({
             aria-expanded={workspaceMenuOpen}
             onClick={() => setWorkspaceMenuOpen((value) => !value)}
           >
-            <strong>{selectedWorkspace?.name ?? 'hello'}</strong>
+            <span className="exm-workspace-switcher-label">
+              <strong>{selectedWorkspace?.name ?? 'hello'}</strong>
+              <small>{selectedWorkspace?.slug || selectedWorkspace?.visibility || 'workspace'}</small>
+            </span>
             <ChevronDown size={15} />
           </TaButton>
           {workspaceMenuOpen ? (
@@ -196,13 +203,17 @@ export function WorkspaceSidebar({
                   className={workspace.id === selectedWorkspace?.id ? 'active' : ''}
                   role="menuitem"
                   onClick={() => {
+                    persistWorkspaceSelection(workspace.id, '');
                     onWorkspaceChange(workspace.id);
                     setWorkspaceMenuOpen(false);
                     setWorkspaceQuery('');
                   }}
                 >
-                  <i>{workspace.name.slice(0, 1).toUpperCase()}</i>
-                  <span>{workspace.name}</span>
+                  <i style={{ '--workspace-color': workspace.color || '#465fff' } as CSSProperties}>{workspace.name.slice(0, 1).toUpperCase()}</i>
+                  <span>
+                    <b>{workspace.name}</b>
+                    <em>{workspace.slug || workspace.visibility}</em>
+                  </span>
                 </TaMenuItem>
               )) : workspaces.length ? (
                 <p className="exm-workspace-switcher-empty">没有匹配的 workspace</p>

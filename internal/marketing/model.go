@@ -916,6 +916,14 @@ type AuditQuery struct {
 	Limit      int
 }
 
+type ActivityQuery struct {
+	TenantID    string
+	WorkspaceID string
+	FolderID    string
+	Status      string
+	Limit       int
+}
+
 type FactProvider struct {
 	TenantID        string                 `json:"tenantId"`
 	FactCode        string                 `json:"factCode"`

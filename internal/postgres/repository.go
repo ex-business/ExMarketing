@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -163,6 +164,7 @@ func (r *Repository) ListActivities(ctx context.Context) ([]marketing.Activity, 
 	if err != nil {
 		return nil, err
 	}
+	defer rows.Close()
 
 	var activities []marketing.Activity
 	for rows.Next() {
@@ -175,7 +177,66 @@ func (r *Repository) ListActivities(ctx context.Context) ([]marketing.Activity, 
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	if err := rows.Close(); err != nil {
+	for i := range activities {
+		activity := &activities[i]
+		activity.Rules, err = r.rulesForActivity(ctx, activity.ID)
+		if err != nil {
+			return nil, err
+		}
+		activity.Rewards, err = r.rewardsForActivity(ctx, activity.ID)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return activities, nil
+}
+
+func (r *Repository) ListActivitiesByQuery(ctx context.Context, query marketing.ActivityQuery) ([]marketing.Activity, error) {
+	limit := query.Limit
+	if limit <= 0 || limit > 1000 {
+		limit = 1000
+	}
+	args := []any{}
+	conditions := []string{"1 = 1"}
+	if strings.TrimSpace(query.TenantID) != "" {
+		args = append(args, query.TenantID)
+		conditions = append(conditions, "tenant_id = $"+strconv.Itoa(len(args)))
+	}
+	if strings.TrimSpace(query.WorkspaceID) != "" {
+		args = append(args, query.WorkspaceID)
+		conditions = append(conditions, "COALESCE(workspace_id, '') = $"+strconv.Itoa(len(args)))
+	}
+	if strings.TrimSpace(query.FolderID) != "" {
+		args = append(args, query.FolderID)
+		conditions = append(conditions, "COALESCE(folder_id, '') = $"+strconv.Itoa(len(args)))
+	}
+	if strings.TrimSpace(query.Status) != "" {
+		args = append(args, query.Status)
+		conditions = append(conditions, "status = $"+strconv.Itoa(len(args)))
+	}
+	args = append(args, limit)
+	rows, err := r.db.QueryContext(ctx, `
+			SELECT id, tenant_id, COALESCE(workspace_id, ''), COALESCE(folder_id, ''), activity_code, activity_name, activity_type, status, COALESCE(visibility, 'TEAM'),
+			       trigger_events, start_time, end_time, timezone, priority, exclusive_group,
+			       stackable, plugin_code, version, config_json, created_at, updated_at
+		FROM marketing_activity
+		WHERE `+strings.Join(conditions, " AND ")+`
+		ORDER BY created_at DESC
+		LIMIT $`+strconv.Itoa(len(args))+`
+	`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var activities []marketing.Activity
+	for rows.Next() {
+		activity, err := scanActivity(rows)
+		if err != nil {
+			return nil, err
+		}
+		activities = append(activities, activity)
+	}
+	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	for i := range activities {

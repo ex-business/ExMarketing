@@ -85,6 +85,15 @@ type InputMappingValue = {
   path?: string;
 };
 
+type FieldBindingValue = {
+  mode?: 'EXPRESSION' | 'SCRIPT';
+  language?: 'LUA';
+  source?: string;
+  onError?: 'FAIL' | 'USE_DEFAULT' | 'USE_FALLBACK' | 'NULL';
+  fallback?: unknown;
+  valueType?: 'ANY' | 'STRING' | 'NUMBER' | 'BOOLEAN' | 'OBJECT' | 'ARRAY';
+};
+
 type UpstreamOutputOption = {
   value: string;
   nodeId: string;
@@ -502,6 +511,29 @@ function configValue(node: ActivityNode, field: WorkflowNodeConfigField): unknow
   return field.default ?? '';
 }
 
+function fieldBindingsFor(node: ActivityNode): Record<string, FieldBindingValue> {
+  const value = node.data.config?.fieldBindings;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+  const out: Record<string, FieldBindingValue> = {};
+  Object.entries(value as Record<string, unknown>).forEach(([key, item]) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) return;
+    out[key] = item as FieldBindingValue;
+  });
+  return out;
+}
+
+function updateFieldBinding(
+  node: ActivityNode,
+  fieldKey: string,
+  binding: FieldBindingValue | undefined,
+  onNodeConfigChange: (nodeId: string, key: string, value: unknown) => void,
+) {
+  const next = { ...fieldBindingsFor(node) };
+  if (!binding) delete next[fieldKey];
+  else next[fieldKey] = binding;
+  onNodeConfigChange(node.id, 'fieldBindings', Object.keys(next).length ? next : undefined);
+}
+
 function stringifyConfigValue(value: unknown): string {
   if (value === undefined || value === null) return '';
   if (typeof value === 'string') return value;
@@ -666,13 +698,78 @@ function ConfigFieldRow({
 }) {
   const hasBlockIssue = issues?.some((issue) => issue.severity === 'BLOCK');
   const hasWarningIssue = issues?.some((issue) => issue.severity === 'WARNING');
+  const binding = fieldBindingsFor(node)[field.key];
+  const bindingEnabled = Boolean(binding);
   return (
     <label className={cx('schema-config-row', hasBlockIssue && 'has-error', !hasBlockIssue && hasWarningIssue && 'has-warning')} data-config-field={field.key}>
       <span>
         <b>{field.label}</b>
         {field.required ? <em>必填</em> : null}
+        <button
+          type="button"
+          className={cx('field-fx-button', bindingEnabled && 'active')}
+          title="字段表达式"
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            updateFieldBinding(
+              node,
+              field.key,
+              bindingEnabled ? undefined : { mode: 'EXPRESSION', language: 'LUA', source: '', onError: 'FAIL', valueType: 'ANY' },
+              onNodeConfigChange,
+            );
+          }}
+        >
+          fx
+        </button>
       </span>
       <ConfigFieldInput node={node} field={field} resourceOptions={resourceOptions} onNodeConfigChange={onNodeConfigChange} />
+      {bindingEnabled ? (
+        <div className="field-binding-editor" onClick={(event) => event.stopPropagation()}>
+          <div className="field-binding-toolbar">
+            <select
+              value={binding?.mode ?? 'EXPRESSION'}
+              onChange={(event) => updateFieldBinding(node, field.key, { ...binding, mode: event.target.value as FieldBindingValue['mode'] }, onNodeConfigChange)}
+            >
+              <option value="EXPRESSION">表达式</option>
+              <option value="SCRIPT">Lua 脚本</option>
+            </select>
+            <select
+              value={binding?.onError ?? 'FAIL'}
+              onChange={(event) => updateFieldBinding(node, field.key, { ...binding, onError: event.target.value as FieldBindingValue['onError'] }, onNodeConfigChange)}
+            >
+              <option value="FAIL">失败即阻断</option>
+              <option value="USE_DEFAULT">使用固定值</option>
+              <option value="USE_FALLBACK">使用 fallback</option>
+              <option value="NULL">置空</option>
+            </select>
+            <select
+              value={binding?.valueType ?? 'ANY'}
+              onChange={(event) => updateFieldBinding(node, field.key, { ...binding, valueType: event.target.value as FieldBindingValue['valueType'] }, onNodeConfigChange)}
+            >
+              <option value="ANY">ANY</option>
+              <option value="STRING">STRING</option>
+              <option value="NUMBER">NUMBER</option>
+              <option value="BOOLEAN">BOOLEAN</option>
+              <option value="OBJECT">OBJECT</option>
+              <option value="ARRAY">ARRAY</option>
+            </select>
+          </div>
+          <textarea
+            value={binding?.source ?? ''}
+            placeholder={binding?.mode === 'SCRIPT'
+              ? 'local vip = Resource.userProfile.get(Context.get("event.subject.id"))\nif vip.level >= 5 then return 5 end\nreturn 1'
+              : 'Resource.activityConfig.get("daily_checkin_max_count")'}
+            onChange={(event) => updateFieldBinding(node, field.key, { ...binding, mode: binding?.mode ?? 'EXPRESSION', language: 'LUA', source: event.target.value }, onNodeConfigChange)}
+          />
+          <input
+            value={stringifyConfigValue(binding?.fallback ?? '')}
+            placeholder="fallback，可选"
+            onChange={(event) => updateFieldBinding(node, field.key, { ...binding, fallback: parseObjectInput(event.target.value) }, onNodeConfigChange)}
+          />
+          <p>表达式不需要 return；Lua 脚本需要 return。可用 Context、Resource、ResourceRef、Node、Template、Time。</p>
+        </div>
+      ) : null}
       {issues?.length ? (
         <div className="schema-field-issues">
           {issues.map((issue) => (
@@ -744,11 +841,6 @@ function NodeConfigForm({
   };
   return (
     <div className="schema-config-grid">
-      <div className="schema-config-head">
-        <b>{schema.title}</b>
-        <span>v{schema.version}</span>
-      </div>
-      {schema.description ? <p className="schema-config-desc">{schema.description}</p> : null}
       {validationIssues?.length ? (
         <div className="schema-validation-panel">
           <div>
@@ -786,6 +878,46 @@ function NodeConfigForm({
           ))}
         </div>
       ))}
+    </div>
+  );
+}
+
+function requiredConfigCount(schema?: WorkflowNodeConfigSchema): number {
+  if (!schema) return 0;
+  return schema.fields.filter((field) => field.required).length;
+}
+
+function nodeInfoMeta(node: ActivityNode, schema?: WorkflowNodeConfigSchema): Array<{ label: string; value: string }> {
+  const inputCount = schema?.inputs.length ?? node.data.inputs.length;
+  const outputCount = schema?.outputs.length ?? node.data.outputs.length;
+  return [
+    { label: 'ID', value: node.id },
+    { label: '类型', value: `${node.data.code} / ${node.data.kind}` },
+    { label: '坐标', value: `x ${Math.round(node.position.x)} / y ${Math.round(node.position.y)}` },
+    { label: 'I/O', value: `${inputCount} 入 / ${outputCount} 出` },
+    { label: '配置', value: schema ? `v${schema.version} · ${requiredConfigCount(schema)} 必填` : '无 schema' },
+  ];
+}
+
+function NodeInfoSummary({ node, schema }: { node: ActivityNode; schema?: WorkflowNodeConfigSchema }) {
+  const meta = nodeInfoMeta(node, schema);
+  return (
+    <div className="property-node-summary">
+      <div className="property-node-summary-main">
+        <NodeKindIcon node={node.data} className="property-node-summary-icon" />
+        <div>
+          <h2>{node.data.title}</h2>
+          <p>{node.data.desc || schema?.description || '暂无说明'}</p>
+        </div>
+      </div>
+      <div className="property-node-summary-meta">
+        {meta.map((item) => (
+          <span key={item.label}>
+            <em>{item.label}</em>
+            <b>{item.value}</b>
+          </span>
+        ))}
+      </div>
     </div>
   );
 }
@@ -1390,18 +1522,13 @@ export function PropertyPanel({ nodes, edges, selectedNodeIds, selectedEdgeIds, 
           <PropertyDisclosure
             title="节点信息"
             titleMeta={`x ${Math.round(selectedNode.position.x)} / y ${Math.round(selectedNode.position.y)}`}
-            summary={`${selectedNode.data.code} · ${selectedNode.data.kind}`}
+            summary={`${selectedNode.data.code} · ${selectedNodeSchema ? `v${selectedNodeSchema.version}` : selectedNode.data.kind}`}
             compact
+            defaultOpen
           >
-            <div className="property-node-compact">
-              <div>
-                <h2>{selectedNode.data.title}</h2>
-                <p>{selectedNode.data.code} · {selectedNode.data.kind}</p>
-              </div>
-              <p title={selectedNode.data.desc}>{selectedNode.data.desc}</p>
-            </div>
+            <NodeInfoSummary node={selectedNode} schema={selectedNodeSchema} />
           </PropertyDisclosure>
-          <PropertyDisclosure title="配置参数" summary={selectedNodeSchema ? `v${selectedNodeSchema.version}` : '未找到 schema'}>
+          <PropertyDisclosure title="配置参数" summary={selectedNodeSchema ? `${selectedNodeSchema.fields.length} 项 / ${requiredConfigCount(selectedNodeSchema)} 必填` : '未找到 schema'}>
             <NodeConfigForm node={selectedNode} schema={selectedNodeSchema} validationIssues={validationIssues} resourceOptions={resourceOptions} onNodeConfigChange={onNodeConfigChange} />
           </PropertyDisclosure>
           <LuaScriptEditor node={selectedNode} onNodeConfigChange={onNodeConfigChange} />

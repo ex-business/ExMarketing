@@ -2904,9 +2904,135 @@ func TestQuotaCheckWorkflowNodeHandlerUsesRedisCounterResource(t *testing.T) {
 	if quotaCheck["allowed"] != true || quotaCheck["counter"] != float64(1) {
 		t.Fatalf("expected quota counter allowed, got %+v", quotaCheck)
 	}
+	if quotaCheck["scopeKey"] != "user_001:activity_handler" || quotaCheck["logicalKey"] != "user_001:activity_handler:20260605" {
+		t.Fatalf("expected day-window logical key, got %+v", quotaCheck)
+	}
+	windowSegment := quotaCheck["windowSegment"].(map[string]any)
+	if windowSegment["segmentKey"] != "20260605" || windowSegment["source"] != "BUILTIN" {
+		t.Fatalf("expected builtin day window segment, got %+v", windowSegment)
+	}
 	second := service.quotaCheckWorkflowNodeHandler(ctx, node, runtime)
 	if second.Status != marketing.WorkflowNodeFailed || second.Output["errorCode"] != "REDIS_COUNTER_LIMIT_EXCEEDED" {
 		t.Fatalf("expected quota counter limit failure, got %+v", second)
+	}
+}
+
+func TestQuotaCheckWorkflowNodeHandlerSupportsCustomLuaWindow(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	runtime := testWorkflowHandlerRuntime(true)
+	if _, err := service.SaveResource(ctx, marketing.Resource{
+		TenantID:    runtime.Activity.TenantID,
+		WorkspaceID: runtime.Activity.WorkspaceID,
+		Code:        "quota_counter",
+		Name:        "次数频控计数器",
+		Type:        marketing.ResourceRedisCounter,
+		Driver:      marketing.ResourceDriverInternal,
+		Scope:       marketing.ResourceScopeWorkspace,
+		Status:      marketing.ResourceActive,
+		Config:      json.RawMessage(`{"keyPrefix":"quota:counter"}`),
+	}); err != nil {
+		t.Fatalf("save quota counter resource: %v", err)
+	}
+	node := marketing.WorkflowNode{
+		ID:   "quota-check",
+		Type: "quota-check",
+		Config: json.RawMessage(`{
+			"resourceRef":"quota_counter",
+			"namespace":"checkin",
+			"scope":"USER",
+			"scopeKeyTemplate":"${subject.id}:${activityId}",
+			"window":"CUSTOM_RANGE",
+			"windowLuaSource":"emit({segmentKey = 'promo-june', windowStart = '2026-06-01T00:00:00Z', windowEnd = '2026-06-30T23:59:59Z'})",
+			"maxCount":1,
+			"consumeMode":"ATOMIC",
+			"exceedAction":"BLOCK"
+		}`),
+	}
+	first := service.quotaCheckWorkflowNodeHandler(ctx, node, runtime)
+	if first.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected first quota check success, got %+v", first)
+	}
+	quotaCheck := first.Output["quota_check"].(map[string]any)
+	if quotaCheck["logicalKey"] != "user_001:activity_handler:promo-june" || quotaCheck["window"] != "CUSTOM_RANGE" {
+		t.Fatalf("expected custom-window logical key, got %+v", quotaCheck)
+	}
+	windowSegment := quotaCheck["windowSegment"].(map[string]any)
+	if windowSegment["segmentKey"] != "promo-june" || windowSegment["source"] != "LUA" {
+		t.Fatalf("expected lua custom window segment, got %+v", windowSegment)
+	}
+	if windowSegment["start"] != "2026-06-01T00:00:00Z" || windowSegment["end"] != "2026-06-30T23:59:59Z" {
+		t.Fatalf("expected lua custom window bounds, got %+v", windowSegment)
+	}
+	second := service.quotaCheckWorkflowNodeHandler(ctx, node, runtime)
+	if second.Status != marketing.WorkflowNodeFailed || second.Output["errorCode"] != "REDIS_COUNTER_LIMIT_EXCEEDED" {
+		t.Fatalf("expected custom-window quota limit failure, got %+v", second)
+	}
+}
+
+func TestWorkflowFieldBindingsResolveConfigFromContextAndResource(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	runtime := testWorkflowHandlerRuntime(true)
+	if _, err := service.SaveResource(ctx, marketing.Resource{
+		TenantID:    runtime.Activity.TenantID,
+		WorkspaceID: runtime.Activity.WorkspaceID,
+		Code:        "activity_config_kv",
+		Name:        "活动配置 KV",
+		Type:        marketing.ResourceDatabaseKV,
+		Driver:      marketing.ResourceDriverInternal,
+		Scope:       marketing.ResourceScopeWorkspace,
+		Status:      marketing.ResourceActive,
+		Config:      json.RawMessage(`{"keyPrefix":"activity-config"}`),
+	}); err != nil {
+		t.Fatalf("save activity config resource: %v", err)
+	}
+	node := marketing.WorkflowNode{
+		ID:   "quota-check",
+		Type: "quota-check",
+		Config: json.RawMessage(`{
+			"resourceBindings":{"activityConfig":"activity_config_kv"},
+			"scope":"USER",
+			"scopeKeyTemplate":"${subject.id}:${activityId}",
+			"window":"DAY",
+			"maxCount":1,
+			"fieldBindings":{
+				"maxCount":{"mode":"EXPRESSION","language":"LUA","valueType":"NUMBER","source":"Resource.activityConfig.get('daily_checkin_max_count', {namespace = 'config'})"},
+				"scopeKeyTemplate":{"mode":"EXPRESSION","language":"LUA","source":"Context.get('event.subject.id') .. ':' .. Context.get('activityId')"}
+			}
+		}`),
+	}
+	execCtx := workflowNodeExecutionContext{
+		ResolvedInput:   map[string]any{"eventId": runtime.Inbox.Event.EventID, "activityId": runtime.Activity.ID},
+		NodeOutputs:     map[string]map[string]any{},
+		NodeDefinitions: map[string]marketing.WorkflowNode{node.ID: node},
+		Variables:       map[string]any{},
+	}
+	nodeCtx := context.WithValue(ctx, workflowNodeExecutionContextKey{}, execCtx)
+	if _, err := service.workflowExecuteResourceAPI(nodeCtx, node, runtime, workflowResourceAPIRequest{
+		Operation:   marketing.ResourceUpsert,
+		ResourceRef: "activity_config_kv",
+		Namespace:   "config",
+		Key:         "daily_checkin_max_count",
+		Value:       3,
+		ValueType:   "NUMBER",
+	}); err != nil {
+		t.Fatalf("seed resource config: %v", err)
+	}
+	resolvedNode, resolvedConfig, trace, err := service.resolveWorkflowNodeConfig(nodeCtx, node, runtime)
+	if err != nil {
+		t.Fatalf("resolve field bindings: %v", err)
+	}
+	if resolvedConfig["maxCount"] != float64(3) || resolvedConfig["scopeKeyTemplate"] != "user_001:activity_handler" {
+		t.Fatalf("unexpected resolved config: %+v", resolvedConfig)
+	}
+	if len(trace) != 2 {
+		t.Fatalf("expected two field binding trace items, got %+v", trace)
+	}
+	if _, ok := workflowNodeConfigMap(resolvedNode)["fieldBindings"]; ok {
+		t.Fatalf("resolved node config must not expose fieldBindings to handler: %+v", workflowNodeConfigMap(resolvedNode))
 	}
 }
 

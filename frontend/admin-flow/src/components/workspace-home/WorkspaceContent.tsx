@@ -1,10 +1,8 @@
 import { type ReactNode, useEffect, useMemo, useState } from 'react';
 import {
   Archive,
-  CheckSquare,
   ChevronLeft,
   ChevronRight,
-  Clock3,
   Copy,
   Folder,
   Grid3X3,
@@ -16,15 +14,12 @@ import {
   Search,
   Share2,
   SlidersHorizontal,
-  Star,
-  StarOff,
   UserRoundCog,
   Workflow,
 } from 'lucide-react';
 import {
   TaButton,
   TaCheckbox,
-  TaEmptyState,
   TaIconButton,
   TaInput,
   TaMenu,
@@ -85,7 +80,6 @@ type WorkspaceContentProps = {
   homeView: 'workspace' | 'recent' | 'favorites' | 'archived';
   folders: WorkspaceContentFolder[];
   workflows: WorkspaceContentWorkflow[];
-  overviewWorkflows: WorkspaceContentWorkflow[];
   templates: TemplateItem[];
   workflowCountByFolder: Record<string, number>;
   searchValue: string;
@@ -103,14 +97,12 @@ type WorkspaceContentProps = {
   onCreateFolder: () => void;
   onCreateWorkflow: () => void;
   onImportWorkflow: () => void;
-  onCurrentAction: (action: WorkspaceItemAction) => void;
   onItemSelect: (item: { id: string; type: ItemType; name: string; visibility: string; status?: string; version?: string; owner?: string }) => void;
   onFolderOpen: (folderId: string) => void;
   onWorkflowOpen: (workflowId: string) => void;
   onTemplateOpen: (templateId: string) => void;
   onToggleFavorite: (workflowId: string) => void;
   onToggleArchived: (workflowId: string) => void;
-  onNavigateHomeView: (view: 'workspace' | 'recent' | 'favorites' | 'archived') => void;
   onItemAction: (action: WorkspaceItemAction, item: { id: string; type: ItemType; name: string; visibility: string; status?: string; version?: string; owner?: string }) => void;
   onBulkAction: (action: 'move' | 'permission' | 'copyLink', items: Array<{ id: string; type: ItemType; name: string; visibility: string; status?: string; version?: string; owner?: string }>) => void;
   onBulkArchive: (items: Array<{ id: string; type: ItemType; name: string; visibility: string; status?: string; version?: string; owner?: string }>) => void;
@@ -130,18 +122,6 @@ type ContentItem = {
   favorite?: boolean;
   archived?: boolean;
   folderCount?: number;
-};
-
-type EmptyStateAction = {
-  label: string;
-  tone?: 'primary' | 'secondary';
-};
-
-type EmptyState = {
-  kind: string;
-  title: string;
-  description: string;
-  actions: EmptyStateAction[];
 };
 
 const OWNER_NAMES = ['Alice', 'Bob', 'Carol', 'David', 'Eve', 'Frank', 'Grace', 'Henry'];
@@ -221,7 +201,6 @@ export function WorkspaceContent({
   homeView,
   folders,
   workflows,
-  overviewWorkflows,
   templates,
   workflowCountByFolder,
   searchValue,
@@ -239,14 +218,12 @@ export function WorkspaceContent({
   onCreateFolder,
   onCreateWorkflow,
   onImportWorkflow,
-  onCurrentAction,
   onItemSelect,
   onFolderOpen,
   onWorkflowOpen,
   onTemplateOpen,
   onToggleFavorite,
   onToggleArchived,
-  onNavigateHomeView,
   onItemAction,
   onBulkAction,
   onBulkArchive,
@@ -256,7 +233,6 @@ export function WorkspaceContent({
   const [selectedItemId, setSelectedItemId] = useState('');
   const [checkedItemIds, setCheckedItemIds] = useState<Set<string>>(() => new Set());
   const [openMenuItemId, setOpenMenuItemId] = useState('');
-  const [showCurrentMenu, setShowCurrentMenu] = useState(false);
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
   const [typeFilter, setTypeFilter] = useState<'ALL' | ItemType>('ALL');
   const [visibilityFilter, setVisibilityFilter] = useState<'ALL' | 'Private' | 'Workspace' | 'Public'>('ALL');
@@ -265,16 +241,14 @@ export function WorkspaceContent({
   const [pageSize, setPageSize] = useState(10);
 
   useEffect(() => {
-    if (!openMenuItemId && !showCurrentMenu) return undefined;
+    if (!openMenuItemId) return undefined;
     const closeMenus = (event: PointerEvent) => {
       if (event.target instanceof Element && event.target.closest('.exm-menu-scope')) return;
       setOpenMenuItemId('');
-      setShowCurrentMenu(false);
     };
     const closeWithKeyboard = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
       setOpenMenuItemId('');
-      setShowCurrentMenu(false);
     };
     document.addEventListener('pointerdown', closeMenus);
     document.addEventListener('keydown', closeWithKeyboard);
@@ -282,7 +256,7 @@ export function WorkspaceContent({
       document.removeEventListener('pointerdown', closeMenus);
       document.removeEventListener('keydown', closeWithKeyboard);
     };
-  }, [openMenuItemId, showCurrentMenu]);
+  }, [openMenuItemId]);
 
   const items = useMemo<ContentItem[]>(() => {
     const folderItems: ContentItem[] = folders.map((folder) => ({
@@ -319,28 +293,6 @@ export function WorkspaceContent({
     });
     return folderItems.concat(workflowItems);
   }, [archivedWorkflowIds, favoriteWorkflowIds, folderVisibility, folders, workflowCountByFolder, workflows]);
-  const overviewWorkflowItems = useMemo<ContentItem[]>(() => (
-    overviewWorkflows.map((workflow) => {
-      const archived = archivedWorkflowIds.has(workflow.id) || workflow.status === 'ARCHIVED';
-      const status = archived ? 'ARCHIVED' : workflow.status || 'ACTIVE';
-      const updatedValue = workflow.updatedAt || workflow.createdAt;
-      return {
-        id: workflow.id,
-        type: 'Workflow' as ItemType,
-        name: workflow.activityName || workflow.activityCode,
-        code: workflow.activityCode,
-        status,
-        version: `v${workflow.version ?? 1}`,
-        updated: formatDateLabel(updatedValue),
-        updatedAt: updatedValue ? new Date(updatedValue).getTime() || 0 : 0,
-        owner: ownerFor(workflow.id),
-        visibility: workflow.visibility === 'PUBLIC' ? 'Public' : workflow.visibility === 'PRIVATE' ? 'Private' : 'Workspace',
-        favorite: favoriteWorkflowIds.has(workflow.id),
-        archived,
-      };
-    })
-  ), [archivedWorkflowIds, favoriteWorkflowIds, overviewWorkflows]);
-
   const filteredItems = useMemo(() => {
     const keyword = searchValue.trim().toLowerCase();
     return items
@@ -375,6 +327,10 @@ export function WorkspaceContent({
   }, [searchValue, sortMode, tab, templates]);
 
   const totalCount = tab === 'template' ? filteredTemplates.length : filteredItems.length;
+  const workflowTotal = workflows.length;
+  const folderTotal = folders.length;
+  const templateTotal = templates.length;
+  const activeWorkflowTotal = workflows.filter((workflow) => workflow.status !== 'ARCHIVED').length;
   const pageCount = Math.max(1, Math.ceil(totalCount / pageSize));
   const safePage = Math.min(page, pageCount);
   const pageItems = filteredItems.slice((safePage - 1) * pageSize, safePage * pageSize);
@@ -383,96 +339,6 @@ export function WorkspaceContent({
   const checkedItems = useMemo(() => items.filter((item) => checkedItemIds.has(item.id)), [checkedItemIds, items]);
   const allPageChecked = pageItems.length > 0 && pageItems.every((item) => checkedItemIds.has(item.id));
   const isEmptyPage = !isLoading && ((tab === 'template' && pageTemplates.length === 0) || (tab !== 'template' && pageItems.length === 0));
-  const activeWorkflowCount = useMemo(() => overviewWorkflowItems.filter((item) => item.status === 'ACTIVE').length, [overviewWorkflowItems]);
-  const draftWorkflowCount = useMemo(() => overviewWorkflowItems.filter((item) => item.status === 'DRAFT').length, [overviewWorkflowItems]);
-  const archivedWorkflowItems = useMemo(() => overviewWorkflowItems.filter((item) => item.archived), [overviewWorkflowItems]);
-  const favoriteWorkflowItems = useMemo(() => overviewWorkflowItems.filter((item) => item.favorite && !item.archived), [overviewWorkflowItems]);
-  const recentWorkflowItems = useMemo(() => (
-    overviewWorkflowItems
-      .filter((item) => !item.archived)
-      .sort((a, b) => b.updatedAt - a.updatedAt || a.name.localeCompare(b.name))
-      .slice(0, 4)
-  ), [overviewWorkflowItems]);
-  const showWorkbenchOverview = !isLoading && !searchValue.trim() && tab === 'all';
-  const homeViewTitle = homeView === 'recent' ? '最近编辑'
-    : homeView === 'favorites' ? '收藏'
-      : homeView === 'archived' ? '归档'
-        : '工作区';
-  const homeViewDescription = homeView === 'recent' ? '按更新时间组织当前目录的流程。'
-    : homeView === 'favorites' ? '只看已收藏的重点活动流程。'
-      : homeView === 'archived' ? '集中查看已归档的流程，必要时可以恢复。'
-        : '按 workspace、folder、workflow 组织活动资产。';
-  const emptyState = useMemo<EmptyState>(() => {
-    const hasSearch = searchValue.trim().length > 0;
-    const hasAdvancedFilter = typeFilter !== 'ALL' || statusFilter !== 'ALL' || visibilityFilter !== 'ALL' || ownerFilter !== 'ALL';
-    const searchTerm = searchValue.trim();
-    if (hasSearch) {
-      return {
-        kind: 'search',
-        title: `没有找到 "${searchTerm}"`,
-        description: hasAdvancedFilter ? '当前搜索和筛选没有匹配项。' : '换个关键词，或直接创建新的流程。',
-        actions: [
-          { label: hasAdvancedFilter ? '清除筛选' : '清空搜索', tone: 'primary' },
-          { label: '新建流程', tone: 'secondary' },
-          { label: '查看归档', tone: 'secondary' },
-        ],
-      };
-    }
-    if (visibilityFilter === 'Private') {
-      return {
-        kind: 'permission',
-        title: '没有可见的私有内容',
-        description: '当前筛选下没有你可见的私有项目，可以切换可见性筛选或联系管理员授权。',
-        actions: [
-          { label: '重置筛选', tone: 'primary' },
-          { label: '管理权限', tone: 'secondary' },
-        ],
-      };
-    }
-    if (statusFilter === 'ARCHIVED' || tab === 'all' && hasAdvancedFilter && archivedWorkflowIds.size === 0) {
-      return {
-        kind: 'archived',
-        title: '归档为空',
-        description: '当前 workspace 下还没有归档的 workflow。归档后的项目会在这里集中查看。',
-        actions: [
-          { label: '查看全部', tone: 'primary' },
-          { label: '新建流程', tone: 'secondary' },
-        ],
-      };
-    }
-    if (tab === 'template') {
-      return {
-        kind: 'template',
-        title: '暂无模板',
-        description: '还没有可用模板。你可以先创建流程，再保存为模板复用。',
-        actions: [
-          { label: '新建流程', tone: 'primary' },
-          { label: '查看全部', tone: 'secondary' },
-        ],
-      };
-    }
-    if (hasAdvancedFilter) {
-      return {
-        kind: 'filter',
-        title: '没有符合筛选的内容',
-        description: '当前筛选组合没有匹配项目，重置筛选后可以查看完整目录。',
-        actions: [
-          { label: '重置筛选', tone: 'primary' },
-          { label: '新建流程', tone: 'secondary' },
-        ],
-      };
-    }
-    return {
-      kind: 'folder',
-      title: '当前 folder 为空',
-      description: '从新建文件夹、新建流程或导入流程开始组织活动。',
-      actions: [
-        { label: '新建流程', tone: 'primary' },
-        { label: '新建文件夹', tone: 'secondary' },
-      ],
-    };
-  }, [archivedWorkflowIds.size, ownerFilter, searchValue, statusFilter, tab, typeFilter, visibilityFilter]);
-
   const actionPayload = (item: ContentItem) => ({
     id: item.id,
     type: item.type,
@@ -545,59 +411,6 @@ export function WorkspaceContent({
     </TaMenu>
   );
 
-  const resetFilters = () => {
-    onSearchChange('');
-    setTypeFilter('ALL');
-    onStatusFilterChange('ALL');
-    setVisibilityFilter('ALL');
-    setOwnerFilter('ALL');
-    setPage(1);
-  };
-
-  const clearAdvancedFilters = () => {
-    setTypeFilter('ALL');
-    onStatusFilterChange('ALL');
-    setVisibilityFilter('ALL');
-    setOwnerFilter('ALL');
-    setPage(1);
-  };
-
-  const runEmptyAction = (action: string) => {
-    if (action === '清空搜索') {
-      onSearchChange('');
-      setPage(1);
-      return;
-    }
-    if (action === '清除筛选') {
-      clearAdvancedFilters();
-      return;
-    }
-    if (action === '查看归档') {
-      onSearchChange('');
-      setTab('all');
-      setTypeFilter('ALL');
-      onStatusFilterChange('ARCHIVED');
-      setVisibilityFilter('ALL');
-      setOwnerFilter('ALL');
-      setPage(1);
-      return;
-    }
-    if (action === '重置筛选' || action === '查看全部') {
-      resetFilters();
-      setTab('all');
-      return;
-    }
-    if (action === '新建文件夹') {
-      onCreateFolder();
-      return;
-    }
-    if (action === '管理权限') {
-      onCurrentAction('permission');
-      return;
-    }
-    onCreateWorkflow();
-  };
-
   return (
     <section className="exm-content">
       {errorMessage ? (
@@ -607,147 +420,43 @@ export function WorkspaceContent({
           {onRetryLoad ? <TaButton size="sm" onClick={onRetryLoad}>重试</TaButton> : null}
         </div>
       ) : null}
-      <header className="exm-folder-head ta-card">
-        <div className="exm-folder-title">
-          <span className="exm-folder-icon"><Folder size={24} fill="currentColor" /></span>
+      <header className="exm-workspace-hero">
+        <div className="exm-workspace-hero-main">
+          <span className="exm-folder-icon"><Folder size={22} fill="currentColor" /></span>
           <div>
+            <p>{workspaceName}</p>
             <h1>{folderName}</h1>
-            <p>
-              <span>{workflows.length} 个流程 · {folders.length} 个文件夹 · {visibilityLabel(folderVisibility)} · {folderUpdatedLabel}</span>
-              {!capabilities.canEditWorkspace ? (
-                <span className="exm-permission-inline" title={`${capabilities.reason}。当前仍可浏览有权限的内容。`}>
-                  {capabilities.role} · 只读浏览
-                </span>
-              ) : null}
-            </p>
-          </div>
-          <TaIconButton className="icon" aria-label="收藏"><Star size={18} /></TaIconButton>
-          <div className="exm-current-menu-wrap exm-menu-scope">
-            <TaIconButton className="icon" aria-label="更多" onClick={() => setShowCurrentMenu((value) => !value)}><MoreHorizontal size={18} /></TaIconButton>
-            {showCurrentMenu ? (
-              <TaMenu className="exm-item-menu current exm-menu-scope">
-                {MENU_ACTIONS.map(({ action, label, icon: Icon, danger }) => (
-                  <TaMenuItem key={action} danger={danger} disabled={!canRunAction(action)} title={!canRunAction(action) ? disabledReason(label) : label} onClick={() => {
-                    setShowCurrentMenu(false);
-                    onCurrentAction(action);
-                  }}>
-                    <Icon size={14} />{label}
-                  </TaMenuItem>
-                ))}
-              </TaMenu>
-            ) : null}
+            <span>{visibilityLabel(folderVisibility)} · {folderUpdatedLabel}</span>
           </div>
         </div>
+        <div className="exm-workspace-hero-stats">
+          <div><b>{workflowTotal}</b><span>流程</span></div>
+          <div><b>{folderTotal}</b><span>文件夹</span></div>
+          <div><b>{templateTotal}</b><span>模板</span></div>
+          <div><b>{activeWorkflowTotal}</b><span>可用</span></div>
+        </div>
         <div className="exm-folder-actions">
-          {!capabilities.canEditWorkspace ? <span className="exm-action-note">{capabilities.role} 只能查看内容</span> : null}
+          {!capabilities.canEditWorkspace ? <span className="exm-action-note">{capabilities.role} 只读</span> : null}
           <TaButton data-testid="workspace-new-folder" disabled={!capabilities.canManageFolders} title={!capabilities.canManageFolders ? disabledReason('新建文件夹') : '新建文件夹'} onClick={onCreateFolder}>新建文件夹</TaButton>
           <TaButton disabled={!capabilities.canEditWorkspace} title={!capabilities.canEditWorkspace ? disabledReason('导入流程') : '导入流程'} onClick={onImportWorkflow}>导入流程</TaButton>
           <TaButton className="primary" tone="primary" data-testid="workspace-new-workflow" disabled={!capabilities.canEditWorkspace} title={!capabilities.canEditWorkspace ? disabledReason('新建流程') : '新建流程'} onClick={onCreateWorkflow}>新建流程</TaButton>
         </div>
       </header>
 
-      <nav className="exm-content-breadcrumb">
-        <div className="exm-breadcrumb-path">
-          <TaButton tone="ghost" size="sm">{workspaceName}</TaButton>
-          <span>/</span>
-          <TaButton tone="ghost" size="sm">{folderName}</TaButton>
-        </div>
-        <div className="exm-breadcrumb-actions">
-          {!capabilities.canEditWorkspace ? <span className="exm-action-note">{capabilities.role} 只能查看内容</span> : null}
-          <TaButton size="sm" data-testid="workspace-new-folder" disabled={!capabilities.canManageFolders} title={!capabilities.canManageFolders ? disabledReason('新建文件夹') : '新建文件夹'} onClick={onCreateFolder}>新建文件夹</TaButton>
-          <TaButton size="sm" disabled={!capabilities.canEditWorkspace} title={!capabilities.canEditWorkspace ? disabledReason('导入流程') : '导入流程'} onClick={onImportWorkflow}>导入流程</TaButton>
-          <TaButton size="sm" tone="primary" data-testid="workspace-new-workflow" disabled={!capabilities.canEditWorkspace} title={!capabilities.canEditWorkspace ? disabledReason('新建流程') : '新建流程'} onClick={onCreateWorkflow}>新建流程</TaButton>
-        </div>
-      </nav>
-
-      {showWorkbenchOverview ? (
-        <section className="exm-workbench-overview ta-card" data-testid="workspace-workbench-overview">
-          <div className="exm-workbench-overview-head">
-            <div>
-              <span>{homeViewTitle}</span>
-              <h2>{folderName} 工作台</h2>
-              <p>{homeViewDescription}</p>
-            </div>
-            <div className="exm-workbench-quick-actions">
-              <TaButton size="sm" onClick={() => onNavigateHomeView('recent')}><Clock3 size={14} />最近</TaButton>
-              <TaButton size="sm" onClick={() => onNavigateHomeView('favorites')}><Star size={14} />收藏</TaButton>
-              <TaButton size="sm" onClick={() => onNavigateHomeView('archived')}><Archive size={14} />归档</TaButton>
-            </div>
-          </div>
-          <div className="exm-workbench-stats">
-            <button type="button" onClick={() => onNavigateHomeView('workspace')}>
-              <span>流程</span>
-              <strong>{overviewWorkflowItems.length}</strong>
-              <em>{activeWorkflowCount} 启用 · {draftWorkflowCount} 草稿</em>
-            </button>
-            <button type="button" onClick={() => setTab('folder')}>
-              <span>文件夹</span>
-              <strong>{folders.length}</strong>
-              <em>{visibilityLabel(folderVisibility)} 可见</em>
-            </button>
-            <button type="button" onClick={() => onNavigateHomeView('favorites')}>
-              <span>收藏</span>
-              <strong>{favoriteWorkflowItems.length}</strong>
-              <em>重点流程快速定位</em>
-            </button>
-            <button type="button" onClick={() => onNavigateHomeView('archived')}>
-              <span>归档</span>
-              <strong>{archivedWorkflowItems.length}</strong>
-              <em>历史流程集中管理</em>
-            </button>
-          </div>
-          <div className="exm-workbench-lanes">
-            <div>
-              <header><Clock3 size={14} />最近编辑</header>
-              {recentWorkflowItems.length ? recentWorkflowItems.slice(0, 3).map((item) => (
-                <button key={item.id} type="button" onClick={() => selectAndOpen(item)}>
-                  <b>{item.name}</b>
-                  <span>{item.updated} · {item.version}</span>
-                </button>
-              )) : <p>暂无最近编辑流程</p>}
-            </div>
-            <div>
-              <header><Star size={14} />收藏</header>
-              {favoriteWorkflowItems.length ? favoriteWorkflowItems.slice(0, 3).map((item) => (
-                <button key={item.id} type="button" onClick={() => selectAndOpen(item)}>
-                  <b>{item.name}</b>
-                  <span>{item.owner} · {statusLabel(item.status)}</span>
-                </button>
-              )) : (
-                <button type="button" className="empty-action" onClick={() => onNavigateHomeView('workspace')}>
-                  <StarOff size={14} />
-                  <span>从列表星标重点流程</span>
-                </button>
-              )}
-            </div>
-            <div>
-              <header><Archive size={14} />归档</header>
-              {archivedWorkflowItems.length ? archivedWorkflowItems.slice(0, 3).map((item) => (
-                <button key={item.id} type="button" onClick={() => selectAndOpen(item)}>
-                  <b>{item.name}</b>
-                  <span>{item.code}</span>
-                </button>
-              )) : <p>当前目录没有归档流程</p>}
-            </div>
-          </div>
-        </section>
-      ) : null}
-
-      <TaTabs className="exm-content-tabs">
-        {([
-          ['all', '全部'],
-          ['workflow', '流程'],
-          ['folder', '文件夹'],
-          ['template', '模板'],
-        ] as Array<[TabMode, string]>).map(([value, label]) => (
-          <TaTab key={value} active={tab === value} onClick={() => {
-            setTab(value);
-            setPage(1);
-          }}>{label}</TaTab>
-        ))}
-      </TaTabs>
-
       <div className="exm-content-tools ta-card">
+        <TaTabs className="exm-content-tabs">
+          {([
+            ['all', '全部'],
+            ['workflow', '流程'],
+            ['folder', '文件夹'],
+            ['template', '模板'],
+          ] as Array<[TabMode, string]>).map(([value, label]) => (
+            <TaTab key={value} active={tab === value} onClick={() => {
+              setTab(value);
+              setPage(1);
+            }}>{label}</TaTab>
+          ))}
+        </TaTabs>
         <label className="exm-folder-search">
           <Search size={15} />
           <TaInput value={searchValue} placeholder="搜索当前文件夹" onChange={(event) => {
@@ -841,15 +550,11 @@ export function WorkspaceContent({
       {isLoading ? (
         <div className="exm-content-loading" aria-label="工作台加载中" />
       ) : isEmptyPage ? (
-        <TaEmptyState className={`exm-content-empty ${emptyState.kind}`}>
-          <b>{emptyState.title}</b>
-          <span>{emptyState.description}</span>
-          <div>
-            {emptyState.actions.map((action, index) => (
-              <TaButton key={action.label} tone={index === 0 && action.tone !== 'secondary' ? 'primary' : 'outline'} className={index === 0 && action.tone !== 'secondary' ? '' : 'secondary'} onClick={() => runEmptyAction(action.label)}>{action.label}</TaButton>
-            ))}
-          </div>
-        </TaEmptyState>
+        <div className="exm-common-empty" role="status" aria-label="当前列表为空">
+          <span><Folder size={22} /></span>
+          <b>暂无内容</b>
+          <p>当前目录没有可显示的流程、文件夹或模板。</p>
+        </div>
       ) : tab === 'template' ? (
         <div className="exm-grid-view exm-template-grid">
           {pageTemplates.map((template) => (
@@ -933,7 +638,7 @@ export function WorkspaceContent({
 
       {totalCount > 0 ? (
         <TaPagination className="exm-pagination">
-          <span>共 {totalCount} 项</span>
+          <span>共 {totalCount} 个项目</span>
           <div>
             <TaIconButton aria-label="上一页" disabled={safePage <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))}><ChevronLeft size={15} /></TaIconButton>
             <strong>{safePage}</strong>

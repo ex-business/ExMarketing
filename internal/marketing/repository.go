@@ -35,6 +35,7 @@ type Repository interface {
 	CreateActivity(ctx context.Context, activity Activity) (Activity, error)
 	GetActivity(ctx context.Context, id string) (Activity, error)
 	ListActivities(ctx context.Context) ([]Activity, error)
+	ListActivitiesByQuery(ctx context.Context, query ActivityQuery) ([]Activity, error)
 	UpdateActivity(ctx context.Context, activity Activity) (Activity, error)
 	FindMatchingActivities(ctx context.Context, tenantID string, eventType string) ([]Activity, error)
 	SaveWorkflowDraft(ctx context.Context, draft WorkflowDraft) (WorkflowDraft, error)

@@ -217,14 +217,32 @@ func (s *Service) executeWorkflowDefinition(ctx context.Context, runtime workflo
 			handler = genericWorkflowNodeHandler
 		}
 		resolvedInput, inputErr := resolveWorkflowNodeInputs(node, runtime, nodeOutputs)
+		workflowApplyNodeContextConfig(workflowVars, node)
+		nodeCtx := context.WithValue(ctx, workflowNodeExecutionContextKey{}, workflowNodeExecutionContext{
+			ResolvedInput:   resolvedInput,
+			NodeOutputs:     cloneWorkflowNodeOutputs(nodeOutputs),
+			NodeDefinitions: plan.NodeByID,
+			Variables:       workflowVars,
+		})
+		resolvedNode := node
+		resolvedConfig := workflowNodeConfigMap(node)
+		var fieldBindingTrace []map[string]any
+		var configErr error
+		if inputErr == nil {
+			resolvedNode, resolvedConfig, fieldBindingTrace, configErr = s.resolveWorkflowNodeConfig(nodeCtx, node, runtime)
+			if len(fieldBindingTrace) > 0 {
+				resolvedInput["fieldBindingTrace"] = fieldBindingTrace
+				resolvedInput["resolvedConfig"] = workflowJSONValue(resolvedConfig)
+			}
+		}
 		nodeStartedAt := s.now()
 		nodeExecution := marketing.WorkflowNodeExecution{
 			ID:          marketingID("wfnode"),
 			TenantID:    runtime.Activity.TenantID,
 			ExecutionID: execution.ID,
-			NodeID:      node.ID,
-			NodeType:    nodeHandlerKey(node),
-			NodeTitle:   node.Title,
+			NodeID:      resolvedNode.ID,
+			NodeType:    nodeHandlerKey(resolvedNode),
+			NodeTitle:   resolvedNode.Title,
 			Status:      marketing.WorkflowNodeRunning,
 			Input:       marshalWorkflowPayload(resolvedInput),
 			StartedAt:   nodeStartedAt,
@@ -238,15 +256,19 @@ func (s *Service) executeWorkflowDefinition(ctx context.Context, runtime workflo
 		var result workflowNodeResult
 		if inputErr != nil {
 			result = nodeFailed(inputErr.Error(), map[string]any{"inputMappingError": inputErr.Error()})
+		} else if configErr != nil {
+			result = nodeFailed(configErr.Error(), map[string]any{
+				"fieldBindingError": configErr.Error(),
+				"fieldBindingTrace": fieldBindingTrace,
+			})
 		} else {
-			workflowApplyNodeContextConfig(workflowVars, node)
-			nodeCtx := context.WithValue(ctx, workflowNodeExecutionContextKey{}, workflowNodeExecutionContext{
+			nodeCtx = context.WithValue(ctx, workflowNodeExecutionContextKey{}, workflowNodeExecutionContext{
 				ResolvedInput:   resolvedInput,
 				NodeOutputs:     cloneWorkflowNodeOutputs(nodeOutputs),
 				NodeDefinitions: plan.NodeByID,
 				Variables:       workflowVars,
 			})
-			result = executeWorkflowNodeWithPolicy(nodeCtx, node, runtime, handler)
+			result = executeWorkflowNodeWithPolicy(nodeCtx, resolvedNode, runtime, handler)
 		}
 		finishedAt := s.now()
 		nodeExecution.Status = result.Status
@@ -5035,6 +5057,17 @@ func (s *Service) quotaCheckWorkflowNodeHandler(ctx context.Context, node market
 		return failed
 	}
 	scopeKey := workflowRenderNodeTemplate(firstWorkflowString(workflowConfigString(config, "scopeKeyTemplate"), "${subject.id}:${activityId}"), runtime, node)
+	windowSegment, err := s.workflowQuotaWindowSegment(ctx, node, runtime, config)
+	if err != nil {
+		return nodeFailed(err.Error(), map[string]any{
+			"errorCode":          "QUOTA_WINDOW_SEGMENT_FAILED",
+			"scopeKey":           scopeKey,
+			"executionMode":      "REAL_HANDLER",
+			"executionAuthority": "WorkflowExecutor/RedisCounterResource",
+			"audit":              workflowHandlerAudit(node, runtime),
+		})
+	}
+	logicalKey := workflowQuotaLogicalKey(scopeKey, windowSegment.SegmentKey)
 	namespace := firstWorkflowString(workflowConfigString(config, "namespace"), "quota")
 	operation := marketing.ResourceCheckAndIncrement
 	if strings.EqualFold(workflowConfigString(config, "consumeMode"), "CHECK_ONLY") {
@@ -5044,23 +5077,30 @@ func (s *Service) quotaCheckWorkflowNodeHandler(ctx context.Context, node market
 		Operation:   operation,
 		ResourceRef: workflowExplicitConfigString(node, "resourceRef"),
 		Namespace:   namespace,
-		Key:         scopeKey,
+		Key:         logicalKey,
 		ValueType:   "NUMBER",
 		Options: map[string]any{
 			"delta": workflowQuotaCheckDelta(config),
 			"max":   workflowConfigNumber(config, "maxCount"),
+			"window": map[string]any{
+				"type":       windowSegment.Window,
+				"segmentKey": windowSegment.SegmentKey,
+				"start":      windowSegment.Start,
+				"end":        windowSegment.End,
+				"source":     windowSegment.Source,
+			},
 		},
 	})
 	if err != nil {
 		if output == nil {
 			output = map[string]any{}
 		}
-		output["quota_check"] = workflowQuotaCheckResult(config, runtime, scopeKey, output, false)
+		output["quota_check"] = workflowQuotaCheckResult(config, runtime, scopeKey, logicalKey, windowSegment, output, false)
 		output["executionMode"] = "REAL_HANDLER"
 		output["executionAuthority"] = "WorkflowExecutor/RedisCounterResource"
 		return nodeFailed(err.Error(), output)
 	}
-	quotaCheck := workflowQuotaCheckResult(config, runtime, scopeKey, output, true)
+	quotaCheck := workflowQuotaCheckResult(config, runtime, scopeKey, logicalKey, windowSegment, output, true)
 	return nodeSuccess(map[string]any{
 		"quota_check":        quotaCheck,
 		"limit_hold":         quotaCheck,
@@ -5081,12 +5121,94 @@ func workflowQuotaCheckDelta(config map[string]any) float64 {
 	}
 }
 
-func workflowQuotaCheckResult(config map[string]any, runtime workflowRuntime, scopeKey string, resourceOutput map[string]any, allowed bool) map[string]any {
+type workflowQuotaWindowSegment struct {
+	Window     string
+	SegmentKey string
+	Start      string
+	End        string
+	Source     string
+	LuaOutput  map[string]any
+}
+
+func (s *Service) workflowQuotaWindowSegment(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime, config map[string]any) (workflowQuotaWindowSegment, error) {
+	window := strings.ToUpper(firstWorkflowString(workflowConfigString(config, "window"), "DAY"))
+	occurredAt := runtime.Inbox.Event.OccurredAt
+	if occurredAt.IsZero() {
+		occurredAt = time.Now().UTC()
+	}
+	segment := workflowQuotaWindowSegment{Window: window}
+	if window == "CUSTOM_RANGE" {
+		if source := workflowConfigString(config, "windowLuaSource"); source != "" {
+			output, err := s.executeWorkflowLua(ctx, node, runtime, source)
+			if err != nil {
+				return segment, fmt.Errorf("QUOTA_WINDOW_LUA_FAILED: %w", err)
+			}
+			segment.LuaOutput = output
+			segment.SegmentKey = firstWorkflowString(workflowOutputString(output["segmentKey"]), workflowOutputString(output["bucket"]))
+			segment.Start = firstWorkflowString(workflowOutputString(output["windowStart"]), workflowOutputString(output["start"]))
+			segment.End = firstWorkflowString(workflowOutputString(output["windowEnd"]), workflowOutputString(output["end"]))
+			segment.Source = "LUA"
+		}
+		if segment.SegmentKey == "" {
+			segment.SegmentKey = workflowRenderNodeTemplate(firstWorkflowString(workflowConfigString(config, "windowSegmentTemplate"), "${date}"), runtime, node)
+			segment.Start = workflowRenderNodeTemplate(workflowConfigString(config, "windowStartTemplate"), runtime, node)
+			segment.End = workflowRenderNodeTemplate(workflowConfigString(config, "windowEndTemplate"), runtime, node)
+			segment.Source = "TEMPLATE"
+		}
+		if strings.TrimSpace(segment.SegmentKey) == "" {
+			return segment, fmt.Errorf("QUOTA_WINDOW_SEGMENT_REQUIRED: windowSegmentTemplate or windowLuaSource must produce segmentKey")
+		}
+		return segment, nil
+	}
+	segment.Source = "BUILTIN"
+	switch window {
+	case "ACTIVITY":
+		segment.SegmentKey = "activity"
+	case "WEEK":
+		year, week := occurredAt.ISOWeek()
+		segment.SegmentKey = fmt.Sprintf("%04dW%02d", year, week)
+	case "MONTH":
+		segment.SegmentKey = occurredAt.UTC().Format("200601")
+	case "ROLLING_WINDOW":
+		sizeSeconds := int(workflowConfigNumber(config, "windowSizeSeconds"))
+		if sizeSeconds <= 0 {
+			sizeSeconds = 3600
+		}
+		bucket := occurredAt.UTC().Unix() / int64(sizeSeconds)
+		segment.SegmentKey = fmt.Sprintf("rolling:%ds:%d", sizeSeconds, bucket)
+	default:
+		segment.Window = "DAY"
+		segment.SegmentKey = occurredAt.UTC().Format("20060102")
+	}
+	return segment, nil
+}
+
+func workflowQuotaLogicalKey(scopeKey string, segmentKey string) string {
+	scopeKey = strings.TrimSpace(scopeKey)
+	segmentKey = strings.TrimSpace(segmentKey)
+	if segmentKey == "" {
+		return scopeKey
+	}
+	if scopeKey == "" {
+		return segmentKey
+	}
+	return scopeKey + ":" + segmentKey
+}
+
+func workflowQuotaCheckResult(config map[string]any, runtime workflowRuntime, scopeKey string, logicalKey string, windowSegment workflowQuotaWindowSegment, resourceOutput map[string]any, allowed bool) map[string]any {
 	counter := firstWorkflowAny(resourceOutput["counter"], resourceOutput["stored_value"])
 	return map[string]any{
-		"scope":        firstWorkflowString(workflowConfigString(config, "scope"), "USER"),
-		"scopeKey":     scopeKey,
-		"window":       firstWorkflowString(workflowConfigString(config, "window"), "DAY"),
+		"scope":      firstWorkflowString(workflowConfigString(config, "scope"), "USER"),
+		"scopeKey":   scopeKey,
+		"logicalKey": logicalKey,
+		"window":     windowSegment.Window,
+		"windowSegment": map[string]any{
+			"segmentKey": windowSegment.SegmentKey,
+			"start":      windowSegment.Start,
+			"end":        windowSegment.End,
+			"source":     windowSegment.Source,
+			"luaOutput":  windowSegment.LuaOutput,
+		},
 		"maxCount":     workflowConfigNumber(config, "maxCount"),
 		"consumeMode":  firstWorkflowString(workflowConfigString(config, "consumeMode"), "CHECK_ONLY"),
 		"exceedAction": firstWorkflowString(workflowConfigString(config, "exceedAction"), "BLOCK"),

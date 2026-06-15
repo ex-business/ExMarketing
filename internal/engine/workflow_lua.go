@@ -226,10 +226,13 @@ func executeWorkflowLuaWithResourceAPI(ctx context.Context, node marketing.Workf
 		}
 		return 1
 	}))
-	registerLuaResourceFunctions(ctx, state, node, runtime, resourceAPI)
+	resourceCall := registerLuaResourceFunctions(ctx, state, node, runtime, resourceAPI)
 	registerLuaDecimalFunctions(state)
 	registerLuaTimeFunctions(state)
-	state.SetGlobal("ctx", goValueToLua(state, workflowLuaContext(ctx, node, runtime)))
+	ctxValue := workflowLuaContext(ctx, node, runtime)
+	ctxTable := goValueToLua(state, ctxValue)
+	state.SetGlobal("ctx", ctxTable)
+	registerLuaConvenienceObjects(ctx, state, node, runtime, ctxTable, resourceCall)
 
 	if err := state.DoString(source); err != nil {
 		return nil, err
@@ -261,7 +264,9 @@ func (s *Service) workflowLuaResourceAPI(ctx context.Context, node marketing.Wor
 	})
 }
 
-func registerLuaResourceFunctions(ctx context.Context, state *lua.LState, node marketing.WorkflowNode, runtime workflowRuntime, resourceAPI workflowLuaResourceAPI) {
+type workflowLuaResourceCall func(*lua.LState, marketing.ResourceOperation, string, string, any, map[string]any) lua.LValue
+
+func registerLuaResourceFunctions(ctx context.Context, state *lua.LState, node marketing.WorkflowNode, runtime workflowRuntime, resourceAPI workflowLuaResourceAPI) workflowLuaResourceCall {
 	config := workflowNodeConfigMap(node)
 	maxCalls := int(workflowConfigNumber(config, "maxResourceCalls"))
 	if maxCalls <= 0 {
@@ -278,16 +283,28 @@ func registerLuaResourceFunctions(ctx context.Context, state *lua.LState, node m
 		maxResponseBytes = hardLuaResourceResponseMaxBytes
 	}
 	callCount := 0
-	call := func(l *lua.LState, operation marketing.ResourceOperation, valueIndex int) int {
+	callResource := func(l *lua.LState, operation marketing.ResourceOperation, resourceRef string, key string, value any, options map[string]any) lua.LValue {
 		if resourceAPI == nil {
 			l.RaiseError("workflow resource api is not available")
-			return 0
+			return lua.LNil
 		}
 		callCount++
 		if callCount > maxCalls {
 			l.RaiseError("workflow resource api call limit exceeded: %d > %d", callCount, maxCalls)
-			return 0
+			return lua.LNil
 		}
+		output, err := resourceAPI(ctx, node, runtime, operation, resourceRef, key, value, options)
+		if err != nil {
+			l.RaiseError("%s", err.Error())
+			return lua.LNil
+		}
+		if err := enforceLuaResourceResponseLimit(output, maxResponseBytes); err != nil {
+			l.RaiseError("%s", err.Error())
+			return lua.LNil
+		}
+		return goValueToLua(state, output)
+	}
+	call := func(l *lua.LState, operation marketing.ResourceOperation, valueIndex int) int {
 		resourceRef := l.CheckString(1)
 		key := l.OptString(2, "")
 		var value any
@@ -304,16 +321,7 @@ func registerLuaResourceFunctions(ctx context.Context, state *lua.LState, node m
 				options = mapped
 			}
 		}
-		output, err := resourceAPI(ctx, node, runtime, operation, resourceRef, key, value, options)
-		if err != nil {
-			l.RaiseError("%s", err.Error())
-			return 0
-		}
-		if err := enforceLuaResourceResponseLimit(output, maxResponseBytes); err != nil {
-			l.RaiseError("%s", err.Error())
-			return 0
-		}
-		l.Push(goValueToLua(state, output))
+		l.Push(callResource(l, operation, resourceRef, key, value, options))
 		return 1
 	}
 	state.SetGlobal("resource_read", state.NewFunction(func(l *lua.LState) int {
@@ -331,6 +339,177 @@ func registerLuaResourceFunctions(ctx context.Context, state *lua.LState, node m
 	state.SetGlobal("resource_publish", state.NewFunction(func(l *lua.LState) int {
 		return call(l, marketing.ResourcePublish, 3)
 	}))
+	return callResource
+}
+
+func registerLuaConvenienceObjects(ctx context.Context, state *lua.LState, node marketing.WorkflowNode, runtime workflowRuntime, ctxTable lua.LValue, resourceCall workflowLuaResourceCall) {
+	contextTable := state.NewTable()
+	state.SetField(contextTable, "get", state.NewFunction(func(l *lua.LState) int {
+		path := luaNormalizeContextPath(l.CheckString(1))
+		l.Push(luaGetPath(ctxTable, path))
+		return 1
+	}))
+	state.SetField(contextTable, "set", state.NewFunction(func(l *lua.LState) int {
+		key := l.CheckString(1)
+		value := luaValueToGo(l.CheckAny(2))
+		execCtx := workflowNodeContext(ctx)
+		if execCtx.Variables == nil {
+			l.RaiseError("workflow variable table is not available")
+			return 0
+		}
+		workflowSetVar(execCtx.Variables, "execution", key, value)
+		return 0
+	}))
+	state.SetGlobal("Context", contextTable)
+
+	nodeTable := state.NewTable()
+	state.SetField(nodeTable, "get", state.NewFunction(func(l *lua.LState) int {
+		nodeID := l.CheckString(1)
+		outputKey := l.OptString(2, "")
+		path := l.OptString(3, "")
+		execCtx := workflowNodeContext(ctx)
+		output, ok := execCtx.NodeOutputs[nodeID]
+		if !ok {
+			l.Push(lua.LNil)
+			return 1
+		}
+		var value any = output
+		if outputKey != "" {
+			value = output[outputKey]
+		}
+		luaValue := goValueToLua(state, value)
+		if path != "" {
+			luaValue = luaGetPath(luaValue, path)
+		}
+		l.Push(luaValue)
+		return 1
+	}))
+	state.SetGlobal("Node", nodeTable)
+
+	templateTable := state.NewTable()
+	state.SetField(templateTable, "render", state.NewFunction(func(l *lua.LState) int {
+		l.Push(lua.LString(workflowRenderNodeTemplate(l.CheckString(1), runtime, node)))
+		return 1
+	}))
+	state.SetGlobal("Template", templateTable)
+
+	timeTable := state.NewTable()
+	state.SetField(timeTable, "now", state.NewFunction(func(l *lua.LState) int {
+		l.Push(lua.LNumber(time.Now().UTC().UnixMilli()))
+		return 1
+	}))
+	state.SetField(timeTable, "date", state.NewFunction(func(l *lua.LState) int {
+		location := l.OptString(1, "UTC")
+		layout := l.OptString(2, "20060102")
+		loc, err := time.LoadLocation(location)
+		if err != nil {
+			loc = time.UTC
+		}
+		t := runtime.Inbox.Event.OccurredAt
+		if t.IsZero() {
+			t = time.Now().UTC()
+		}
+		l.Push(lua.LString(t.In(loc).Format(layout)))
+		return 1
+	}))
+	state.SetGlobal("Time", timeTable)
+
+	resourceTable := state.NewTable()
+	bindings := workflowResourceBindings(node)
+	for alias, resourceRef := range bindings {
+		state.SetField(resourceTable, alias, luaResourceProxy(state, resourceCall, resourceRef))
+	}
+	state.SetGlobal("Resource", resourceTable)
+	state.SetGlobal("ResourceRef", state.NewFunction(func(l *lua.LState) int {
+		resourceRef := l.CheckString(1)
+		l.Push(luaResourceProxy(state, resourceCall, resourceRef))
+		return 1
+	}))
+}
+
+func luaNormalizeContextPath(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" || strings.HasPrefix(path, "$") {
+		return path
+	}
+	return "$." + path
+}
+
+func workflowResourceBindings(node marketing.WorkflowNode) map[string]string {
+	config := workflowNodeConfigMap(node)
+	out := map[string]string{}
+	if mapped, ok := config["resourceBindings"].(map[string]any); ok {
+		for alias, value := range mapped {
+			if resourceRef := strings.TrimSpace(fmt.Sprint(value)); alias != "" && resourceRef != "" {
+				out[alias] = resourceRef
+			}
+		}
+	}
+	if resourceRef := workflowConfigString(config, "resourceRef"); resourceRef != "" {
+		out["default"] = resourceRef
+	}
+	return out
+}
+
+func luaResourceProxy(state *lua.LState, resourceCall workflowLuaResourceCall, resourceRef string) *lua.LTable {
+	proxy := state.NewTable()
+	call := func(l *lua.LState, operation marketing.ResourceOperation, valueIndex int, unwrap bool) int {
+		key := l.OptString(1, "")
+		var value any
+		if valueIndex > 0 && l.GetTop() >= valueIndex {
+			value = luaValueToGo(l.CheckAny(valueIndex))
+		}
+		options := map[string]any{}
+		if valueIndex > 0 && l.GetTop() > valueIndex {
+			if mapped, ok := luaValueToGo(l.CheckAny(valueIndex + 1)).(map[string]any); ok {
+				options = mapped
+			}
+		} else if valueIndex == 0 && l.GetTop() >= 2 {
+			if mapped, ok := luaValueToGo(l.CheckAny(2)).(map[string]any); ok {
+				options = mapped
+			}
+		}
+		output := resourceCall(l, operation, resourceRef, key, value, options)
+		if unwrap {
+			output = luaUnwrapResourceOutput(output)
+		}
+		l.Push(output)
+		return 1
+	}
+	state.SetField(proxy, "get", state.NewFunction(func(l *lua.LState) int {
+		return call(l, marketing.ResourceRead, 0, true)
+	}))
+	state.SetField(proxy, "set", state.NewFunction(func(l *lua.LState) int {
+		return call(l, marketing.ResourceWrite, 2, false)
+	}))
+	state.SetField(proxy, "upsert", state.NewFunction(func(l *lua.LState) int {
+		return call(l, marketing.ResourceUpsert, 2, false)
+	}))
+	state.SetField(proxy, "incr", state.NewFunction(func(l *lua.LState) int {
+		return call(l, marketing.ResourceCheckAndIncrement, 2, false)
+	}))
+	state.SetField(proxy, "exists", state.NewFunction(func(l *lua.LState) int {
+		output := resourceCall(l, marketing.ResourceRead, resourceRef, l.OptString(1, ""), nil, map[string]any{})
+		l.Push(lua.LBool(luaUnwrapResourceOutput(output) != lua.LNil))
+		return 1
+	}))
+	state.SetField(proxy, "delete", state.NewFunction(func(l *lua.LState) int {
+		return call(l, marketing.ResourceDelete, 0, false)
+	}))
+	return proxy
+}
+
+func luaUnwrapResourceOutput(output lua.LValue) lua.LValue {
+	table, ok := output.(*lua.LTable)
+	if !ok {
+		return output
+	}
+	for _, key := range []string{"stored_value", "value", "result", "data"} {
+		if value := table.RawGetString(key); value != lua.LNil {
+			return value
+		}
+	}
+	return output
 }
 
 func enforceLuaResourceResponseLimit(output map[string]any, limit int) error {
@@ -494,8 +673,11 @@ func luaValueIsEmpty(value lua.LValue) bool {
 func workflowLuaContext(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime) map[string]any {
 	executionContext, _ := ctx.Value(workflowNodeExecutionContextKey{}).(workflowNodeExecutionContext)
 	return map[string]any{
-		"event":    workflowJSONValue(runtime.Inbox.Event),
-		"activity": workflowJSONValue(runtime.Activity),
+		"event":      workflowJSONValue(runtime.Inbox.Event),
+		"eventId":    runtime.Inbox.Event.EventID,
+		"activity":   workflowJSONValue(runtime.Activity),
+		"activityId": runtime.Activity.ID,
+		"tenantId":   runtime.Activity.TenantID,
 		"runtime": map[string]any{
 			"qualified":      runtime.Qualified,
 			"reason":         runtime.Reason,

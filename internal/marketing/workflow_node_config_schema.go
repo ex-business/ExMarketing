@@ -564,8 +564,14 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 			fieldGroup("counter", "计数维度", "定义频控 bucket、窗口和上限。", fields(
 				enumField("scope", "限制范围", true, "USER", []string{"USER", "ACTIVITY", "TENANT", "BIZ", "IP", "DEVICE"}),
 				withDescription(stringField("scopeKeyTemplate", "Scope Key 模板", true, "${subject.id}:${activityId}", rules(minLength(1), maxLength(256))), "用于组成频控 key。"),
-				enumField("window", "窗口", true, "DAY", []string{"ACTIVITY", "DAY", "WEEK", "MONTH", "ROLLING_WINDOW"}),
+				enumField("window", "窗口", true, "DAY", []string{"ACTIVITY", "DAY", "WEEK", "MONTH", "ROLLING_WINDOW", "CUSTOM_RANGE"}),
 				numberField("maxCount", "最大次数", true, 1, rules(minValue(1), maxValue(1000000))),
+			)),
+			fieldGroup("custom-window", "自定义时间段", "当窗口为 CUSTOM_RANGE 时，可用固定模板或 Lua 生成时间段。", fields(
+				withDescription(stringField("windowSegmentTemplate", "时间段 Key 模板", false, "${date}", rules(maxLength(256))), "逻辑 key 的时间段部分，例如 20260615、promo-2026Q2 或活动轮次。"),
+				withDescription(stringField("windowStartTemplate", "开始时间模板", false, "", rules(maxLength(128))), "可选，ISO 时间或模板值，仅用于输出和审计。"),
+				withDescription(stringField("windowEndTemplate", "结束时间模板", false, "", rules(maxLength(128))), "可选，ISO 时间或模板值，仅用于输出和审计。"),
+				withDescription(stringField("windowLuaSource", "Lua 时间段脚本", false, "", rules(maxLength(8000))), "可 emit({segmentKey='20260615', windowStart='...', windowEnd='...'}) 动态生成时间段。"),
 			)),
 			fieldGroup("policy", "处理策略", "控制校验、占用和超限分支。", fields(
 				enumField("consumeMode", "占用模式", true, "CHECK_ONLY", []string{"CHECK_ONLY", "ATOMIC", "RESERVE_ONLY"}),

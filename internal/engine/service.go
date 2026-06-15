@@ -237,6 +237,17 @@ func (s *Service) ListActivities(ctx context.Context) ([]marketing.Activity, err
 	return activities, nil
 }
 
+func (s *Service) ListActivitiesByQuery(ctx context.Context, query marketing.ActivityQuery) ([]marketing.Activity, error) {
+	activities, err := s.repository.ListActivitiesByQuery(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	for i := range activities {
+		activities[i] = s.hydrateApproval(ctx, activities[i])
+	}
+	return activities, nil
+}
+
 func (s *Service) ensureActivityWorkspacePlacement(ctx context.Context, workspaceID string, folderID string) error {
 	workspaceID = strings.TrimSpace(workspaceID)
 	folderID = strings.TrimSpace(folderID)

@@ -306,7 +306,30 @@ func (h *Handler) health(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) listActivities(w http.ResponseWriter, r *http.Request) {
-	activities, err := h.engine.ListActivities(r.Context())
+	query := marketing.ActivityQuery{
+		TenantID:    strings.TrimSpace(r.URL.Query().Get("tenantId")),
+		WorkspaceID: strings.TrimSpace(r.URL.Query().Get("workspaceId")),
+		FolderID:    strings.TrimSpace(r.URL.Query().Get("folderId")),
+		Status:      strings.TrimSpace(r.URL.Query().Get("status")),
+	}
+	if rawLimit := strings.TrimSpace(r.URL.Query().Get("limit")); rawLimit != "" {
+		limit, err := strconv.Atoi(rawLimit)
+		if err != nil || limit < 0 {
+			writeError(w, http.StatusBadRequest, "invalid limit")
+			return
+		}
+		query.Limit = limit
+	}
+	filteredQuery := query.TenantID != "" || query.WorkspaceID != "" || query.FolderID != "" || query.Status != "" || query.Limit > 0
+	var (
+		activities []marketing.Activity
+		err        error
+	)
+	if filteredQuery {
+		activities, err = h.engine.ListActivitiesByQuery(r.Context(), query)
+	} else {
+		activities, err = h.engine.ListActivities(r.Context())
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

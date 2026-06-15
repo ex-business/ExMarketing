@@ -559,19 +559,89 @@ CREATE TABLE marketing_resource_audit (
 
 ### quota-check
 
-频控节点引用计数器资源。
+频控节点引用计数器资源。`resourceRef` 指向资源管理里的 `REDIS_COUNTER`，节点负责生成逻辑计数 key，资源适配器负责把 `namespace + logicalKey` 落到具体存储。
 
 ```json
 {
   "type": "quota-check",
   "resourceRef": "daily_checkin_counter",
-  "operation": "CHECK_AND_INCREMENT",
+  "namespace": "checkin",
+  "scope": "USER",
   "scopeKeyTemplate": "${tenantId}:${activityId}:${subject.id}",
   "window": "DAY",
   "maxCount": 1,
+  "consumeMode": "ATOMIC",
   "exceedAction": "BLOCK"
 }
 ```
+
+处理策略说明：
+
+- `consumeMode=CHECK_ONLY`：只检查，不增加次数，适合调试、预检查或只读判断。
+- `consumeMode=ATOMIC`：检查并立即增加次数，适合真实发奖链路里的每日签到、首存、抽奖次数消费。
+- `consumeMode=RESERVE_ONLY`：预占用名额，适合后续有确认/释放链路的场景；没有完整补偿链路时不建议默认使用。
+- `exceedAction=BLOCK`：超限直接阻断流程。
+- `exceedAction=RISK`：超限不阻断，但输出风险标记给后续节点。
+- `exceedAction=SKIP`：超限时跳过奖励或后续动作，流程不作为异常失败。
+
+每日签到推荐使用 `ATOMIC + BLOCK`：第一次签到会原子增加次数并继续发奖；同一用户、同一活动、同一天第二次进入时会被计数器拒绝，不会继续发奖。
+
+自定义时间段可以使用 `CUSTOM_RANGE`。例如一个季度活动最多参加 3 次：
+
+```json
+{
+  "type": "quota-check",
+  "resourceRef": "promo_counter",
+  "namespace": "promo",
+  "scope": "USER",
+  "scopeKeyTemplate": "${subject.id}:${activityId}",
+  "window": "CUSTOM_RANGE",
+  "windowSegmentTemplate": "promo-2026Q2",
+  "windowStartTemplate": "2026-04-01T00:00:00Z",
+  "windowEndTemplate": "2026-06-30T23:59:59Z",
+  "maxCount": 3,
+  "consumeMode": "ATOMIC",
+  "exceedAction": "BLOCK"
+}
+```
+
+如果时间段需要动态计算，也可以通过 Lua 输出：
+
+```json
+{
+  "window": "CUSTOM_RANGE",
+  "windowLuaSource": "emit({segmentKey = 'promo-june', windowStart = '2026-06-01T00:00:00Z', windowEnd = '2026-06-30T23:59:59Z'})"
+}
+```
+
+执行输出会包含 `quota_check.scopeKey`、`quota_check.logicalKey` 和 `quota_check.windowSegment`。例如主体 key 为 `user_001:activity_001`、窗口为 `promo-june` 时，逻辑 key 为 `user_001:activity_001:promo-june`。
+
+计数维度字段说明：
+
+| 字段 | 作用 | 常用值 |
+| --- | --- | --- |
+| `scope` | 限制范围，描述按什么主体限制次数 | `USER`、`ACTIVITY`、`TENANT`、`BIZ`、`IP`、`DEVICE` |
+| `scopeKeyTemplate` | 主体 key 模板，决定具体被限制的对象 | `${subject.id}:${activityId}` |
+| `window` | 时间窗口，决定计数在哪个周期内有效 | `DAY`、`WEEK`、`MONTH`、`ACTIVITY`、`ROLLING_WINDOW`、`CUSTOM_RANGE` |
+| `maxCount` | 窗口内最大允许次数 | `1`、`3`、`10` |
+
+字段关系：
+
+```text
+logicalKey = render(scopeKeyTemplate) + ":" + windowSegment
+```
+
+也就是说，`scope` 是产品语义，`scopeKeyTemplate` 是实际 key 的主体部分，`window` 生成时间段，`maxCount` 决定这个逻辑 key 在该时间段内最多能通过几次。
+
+典型配置：
+
+| 场景 | scope | scopeKeyTemplate | window | maxCount |
+| --- | --- | --- | --- | --- |
+| 每日签到一次 | `USER` | `${subject.id}:${activityId}` | `DAY` | `1` |
+| 首存活动一次 | `BIZ` | `${biz.bizId}:${activityId}` | `ACTIVITY` | `1` |
+| 每周任务三次 | `USER` | `${subject.id}:${activityId}` | `WEEK` | `3` |
+| IP 风控频率 | `IP` | `${attributes.ip}:${activityId}` | `ROLLING_WINDOW` | `10` |
+| 自定义活动轮次 | `USER` | `${subject.id}:${activityId}` | `CUSTOM_RANGE` | `2` |
 
 ### grant-order
 

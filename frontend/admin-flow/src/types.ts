@@ -1,5 +1,192 @@
 import type { Edge, Node } from '@xyflow/react';
 
+export type ActivitySummary = {
+  id: string;
+  workspaceId?: string;
+  folderId?: string;
+  activityCode: string;
+  activityName: string;
+  tenantId: string;
+  triggerEvents?: string[];
+  status?: string;
+  visibility?: 'PRIVATE' | 'TEAM' | 'PUBLIC';
+  version?: number;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type WorkspaceRole = 'OWNER' | 'ADMIN' | 'EDITOR' | 'VIEWER' | 'GUEST';
+
+export type WorkspaceSummary = {
+  id: string;
+  tenantId: string;
+  name: string;
+  slug: string;
+  description?: string;
+  icon?: string;
+  color?: string;
+  visibility: 'PRIVATE' | 'TEAM' | 'PUBLIC';
+  defaultRole?: WorkspaceRole;
+  ownerId?: string;
+  status: string;
+};
+
+export type WorkspaceFolderSummary = {
+  id: string;
+  workspaceId: string;
+  parentId?: string;
+  name: string;
+  color?: string;
+  visibility: string;
+  sortOrder: number;
+  status: string;
+};
+
+export type WorkspaceShareLinkSummary = {
+  id: string;
+  workspaceId: string;
+  folderId?: string;
+  activityId?: string;
+  scope: 'WORKSPACE' | 'FOLDER' | 'ACTIVITY';
+  permission?: 'VIEW' | 'EDIT';
+  expiresAt?: string;
+  maxAccessCount?: number;
+  accessCount?: number;
+  lastAccessedAt?: string;
+  disabledReason?: string;
+  enabled: boolean;
+  token?: string;
+  createdBy?: string;
+  createdAt?: string;
+};
+
+export type WorkspaceBatchResult = {
+  committed?: boolean;
+  count?: number;
+  items?: Array<{
+    id: string;
+    type: string;
+    status: string;
+    error?: string;
+  }>;
+};
+
+export type WorkspaceFileObjectSummary = {
+  id: string;
+  workspaceId: string;
+  folderId?: string;
+  activityId?: string;
+  workflowVersionId?: string;
+  executionId?: string;
+  kind: string;
+  fileName: string;
+  contentType?: string;
+  sizeBytes: number;
+  storageProvider: string;
+  storageKey: string;
+  checksumSha256: string;
+  createdBy?: string;
+  status: string;
+  createdAt: string;
+};
+
+export type WorkspaceMemberSummary = {
+  id: string;
+  workspaceId: string;
+  userId?: string;
+  email?: string;
+  displayName?: string;
+  role: WorkspaceRole;
+  status: 'ACTIVE' | 'INVITED' | 'SUSPENDED' | 'REMOVED';
+};
+
+export type WorkspaceAuditLogSummary = {
+  id: string;
+  workspaceId: string;
+  actorId?: string;
+  action: string;
+  targetType: string;
+  targetId: string;
+  createdAt: string;
+};
+
+export type WorkspaceActivityGrantSummary = {
+  id: string;
+  workspaceId: string;
+  activityId: string;
+  principalType: 'USER' | 'MEMBER' | 'ROLE';
+  principalId: string;
+  role: Exclude<WorkspaceRole, 'OWNER'>;
+  createdBy?: string;
+  updatedBy?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type WorkspaceHomeSearchResult = {
+  id: string;
+  type: 'workspace' | 'workflow' | 'folder' | 'member';
+  title: string;
+  subtitle: string;
+  workspaceId?: string;
+  folderId?: string;
+  highlights?: {
+    title?: string;
+    subtitle?: string;
+  };
+  permission?: string;
+  permissionReason?: string;
+  permissionSources?: string[];
+  score?: number;
+};
+
+export type WorkspaceHomeStorageSummary = {
+  usedBytes: number;
+  totalBytes: number;
+  workspaces: number;
+  folders: number;
+  workflows: number;
+  members: number;
+  shareLinks: number;
+  auditLogs: number;
+  drafts?: number;
+  versions?: number;
+  executions?: number;
+  nodeExecutions?: number;
+  activityGrants?: number;
+  fileObjects?: number;
+  fileBytes?: number;
+};
+
+export type ActivityPlacement = {
+  workspaceId: string;
+  folderId: string;
+  shareLinkId?: string;
+};
+
+export type CreateStudioWorkspaceInput = {
+  name: string;
+  tenantId: string;
+};
+
+export type CreateStudioActivityInput = {
+  tenantId: string;
+  activityName: string;
+  activityCode: string;
+  workspaceId: string;
+  folderId: string;
+  definition?: WorkflowDefinition;
+  visibility?: 'PRIVATE' | 'TEAM' | 'PUBLIC';
+};
+
+export type StudioFolderPatch = {
+  parentId?: string;
+  name?: string;
+  visibility?: string;
+  sortOrder?: number;
+  status?: string;
+};
+
 export type NodeKind =
   | 'entry'
   | 'store'

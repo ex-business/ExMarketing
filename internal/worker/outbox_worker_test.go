@@ -788,6 +788,9 @@ func (r *workerTestRepo) GetActivity(context.Context, string) (marketing.Activit
 func (r *workerTestRepo) ListActivities(context.Context) ([]marketing.Activity, error) {
 	panic("not implemented")
 }
+func (r *workerTestRepo) ListActivitiesByQuery(context.Context, marketing.ActivityQuery) ([]marketing.Activity, error) {
+	panic("not implemented")
+}
 func (r *workerTestRepo) UpdateActivity(context.Context, marketing.Activity) (marketing.Activity, error) {
 	panic("not implemented")
 }

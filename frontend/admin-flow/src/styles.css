@@ -17935,6 +17935,11 @@ input:focus-visible {
   align-items: center;
 }
 
+.property-tab-actions.hidden {
+  visibility: hidden;
+  pointer-events: none;
+}
+
 .property-tabs button {
   position: relative !important;
   min-height: 48px !important;
@@ -21180,4 +21185,133 @@ input:focus-visible {
   color: #64748b;
   font-size: 12px;
   line-height: 1.5;
+}
+
+.node-lua-config-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.node-lua-config-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.node-lua-config-toolbar button {
+  border: 1px solid #d0d7e2;
+  border-radius: 8px;
+  background: #fff;
+  color: #1f2a44;
+  padding: 7px 10px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.node-lua-config-toolbar button:first-child {
+  border-color: #bfcbff;
+  background: #eef3ff;
+  color: #3154ff;
+}
+
+.node-lua-code-shell {
+  overflow: visible;
+  border: 1px solid #dbe3ee;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.node-lua-code-shell .cm-editor {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+}
+
+.node-lua-code-shell .cm-focused {
+  outline: 2px solid rgba(75, 99, 255, 0.24);
+  outline-offset: -2px;
+}
+
+.node-lua-code-shell .cm-tooltip-autocomplete {
+  z-index: 50;
+}
+
+.node-lua-code-fallback {
+  width: 100%;
+  min-height: 180px;
+  border: 1px solid #dbe3ee;
+  border-radius: 10px;
+  background: #fff;
+  color: #172033;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+}
+
+.node-lua-variable-help {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+  border-radius: 10px;
+  background: #f8faff;
+}
+
+.node-lua-variable-help > div:first-child {
+  display: grid;
+  gap: 3px;
+}
+
+.node-lua-variable-help b {
+  color: #172033;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.node-lua-variable-help span,
+.node-lua-variable-help em {
+  color: #64748b;
+  font-size: 12px;
+  font-style: normal;
+  line-height: 1.45;
+}
+
+.node-lua-variable-list {
+  display: grid;
+  gap: 6px;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.node-lua-variable-list button {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.7fr) minmax(80px, 0.5fr) minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  padding: 7px;
+  text-align: left;
+}
+
+.node-lua-variable-list button:hover {
+  background: #eef3ff;
+}
+
+.node-lua-variable-list code,
+.node-lua-api-hints code {
+  color: #3154ff;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.node-lua-api-hints {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.node-lua-api-hints code {
+  border-radius: 999px;
+  background: #fff;
+  padding: 4px 8px;
 }

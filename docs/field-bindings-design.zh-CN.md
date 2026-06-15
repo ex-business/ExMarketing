@@ -41,6 +41,24 @@
 }
 ```
 
+节点也可以使用整段 Lua 配置脚本生成配置值。该模式适合一个节点内多个字段有关联，需要共享临时变量、资源读取或上下文计算的场景。
+
+```json
+{
+  "configMode": "LUA",
+  "configScript": "local userId = Context.get('event.subject.id')\nscope = 'USER'\nscopeKeyTemplate = userId .. ':' .. Context.get('activityId')\nwindow = 'DAY'\nmaxCount = Resource.activityConfig.get('daily_checkin_max_count')\nconsumeMode = 'ATOMIC'\nexceedAction = 'BLOCK'"
+}
+```
+
+节点级脚本规则：
+
+- 每个节点可赋值的变量名由该节点 schema 固定定义。
+- 脚本里直接给固定变量赋值，例如 `maxCount = 3`。
+- 临时变量必须使用 `local`，例如 `local userId = Context.get(...)`。
+- resolver 只收集 schema 中存在且是合法 Lua 标识符的字段。
+- 未被 schema 声明的全局变量不会进入 `resolvedConfig`。
+- 节点级 Lua 配置在字段级 `fieldBindings` 之后执行，因此优先级最高。
+
 ## Binding 字段
 
 | 字段 | 说明 |
@@ -152,9 +170,10 @@ Time.date("Asia/Shanghai")
 1. 读取节点原始 config。
 2. 应用 schema 默认值。
 3. 解析 `fieldBindings`。
-4. 生成 `resolvedConfig`。
-5. handler 使用 `resolvedConfig` 执行。
-6. 节点运行 input/trace 写入字段解析记录。
+4. 执行节点级 `configScript`，收集 schema 固定字段变量。
+5. 生成 `resolvedConfig`。
+6. handler 使用 `resolvedConfig` 执行。
+7. 节点运行 input/trace 写入字段解析记录。
 
 ## 错误策略
 
@@ -185,6 +204,15 @@ Time.date("Asia/Shanghai")
       "status": "SUCCESS",
       "value": 3,
       "durationMs": 2
+    },
+    {
+      "field": "configScript",
+      "mode": "SCRIPT",
+      "language": "LUA",
+      "status": "SUCCESS",
+      "assignedFields": ["scope", "scopeKeyTemplate", "window", "maxCount"],
+      "ignoredFields": [],
+      "durationMs": 3
     }
   ]
 }
@@ -201,4 +229,7 @@ Time.date("Asia/Shanghai")
   - Lua 脚本
 - 支持填写 source、错误策略、fallback。
 - 字段行展示 `fx` 状态和简短预览。
+- 配置区域提供节点级 Lua 配置编辑器。
+- Lua 编辑器使用轻量级代码编辑器，支持 Lua 语法高亮。
+- 编辑器聚焦或按空格时提示当前节点固定变量名、默认值和字段说明。
 - 调试面板展示 `resolvedConfig` 和 `fieldBindingTrace`。

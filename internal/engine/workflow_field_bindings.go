@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -31,11 +32,13 @@ func (s *Service) resolveWorkflowNodeConfig(ctx context.Context, node marketing.
 		return node, config, nil, nil
 	}
 	bindings := workflowFieldBindings(config)
-	if len(bindings) == 0 {
+	configScript := workflowConfigScriptSource(config)
+	if len(bindings) == 0 && configScript == "" {
 		return node, config, nil, nil
 	}
 	resolved := cloneWorkflowMap(config)
 	delete(resolved, "fieldBindings")
+	delete(resolved, "configScript")
 	trace := make([]map[string]any, 0, len(bindings))
 	for field, binding := range bindings {
 		started := time.Now()
@@ -66,12 +69,44 @@ func (s *Service) resolveWorkflowNodeConfig(ctx context.Context, node marketing.
 		resolved[field] = workflowJSONValue(value)
 		trace = append(trace, item)
 	}
+	if configScript != "" {
+		started := time.Now()
+		item := map[string]any{
+			"field":    "configScript",
+			"mode":     "SCRIPT",
+			"language": "LUA",
+			"source":   configScript,
+		}
+		assigned, ignored, err := s.evaluateWorkflowConfigScript(ctx, node, runtime, configScript)
+		item["durationMs"] = time.Since(started).Milliseconds()
+		if err != nil {
+			item["status"] = "FAILED"
+			item["error"] = err.Error()
+			trace = append(trace, item)
+			return node, config, trace, fmt.Errorf("config script failed: %w", err)
+		}
+		for field, value := range assigned {
+			resolved[field] = workflowJSONValue(value)
+		}
+		item["status"] = "SUCCESS"
+		item["assignedFields"] = sortedWorkflowMapKeys(assigned)
+		item["ignoredFields"] = ignored
+		item["value"] = workflowJSONValue(assigned)
+		trace = append(trace, item)
+	}
 	encoded, err := json.Marshal(resolved)
 	if err != nil {
 		return node, config, trace, err
 	}
 	node.Config = encoded
 	return node, resolved, trace, nil
+}
+
+func workflowConfigScriptSource(config map[string]any) string {
+	if mode := strings.ToUpper(workflowOutputString(config["configMode"])); mode != "" && mode != "LUA" {
+		return ""
+	}
+	return strings.TrimSpace(workflowOutputString(config["configScript"]))
 }
 
 func workflowFieldBindings(config map[string]any) map[string]workflowFieldBinding {
@@ -126,6 +161,82 @@ func (s *Service) evaluateWorkflowFieldBinding(ctx context.Context, node marketi
 		return nil, fmt.Errorf("field binding did not return value")
 	}
 	return workflowCoerceFieldBindingValue(value, binding.ValueType)
+}
+
+func (s *Service) evaluateWorkflowConfigScript(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime, source string) (map[string]any, []string, error) {
+	fields := workflowConfigScriptFields(node)
+	if len(fields) == 0 {
+		return nil, nil, nil
+	}
+	var builder strings.Builder
+	builder.WriteString("local __config_script_return = (function()\n")
+	builder.WriteString(source)
+	builder.WriteString("\nend)()\n")
+	builder.WriteString("emit({")
+	for _, field := range fields {
+		if !workflowLuaIdentifier(field) {
+			continue
+		}
+		builder.WriteString(field)
+		builder.WriteString(" = ")
+		builder.WriteString(field)
+		builder.WriteString(",")
+	}
+	builder.WriteString("__scriptReturn = __config_script_return})")
+	output, err := s.executeWorkflowLua(ctx, node, runtime, builder.String())
+	if err != nil {
+		return nil, nil, err
+	}
+	allowed := map[string]bool{}
+	for _, field := range fields {
+		allowed[field] = true
+	}
+	assigned := map[string]any{}
+	var ignored []string
+	for key, value := range output {
+		if strings.HasPrefix(key, "__") || key == "vars" {
+			continue
+		}
+		if allowed[key] {
+			assigned[key] = value
+		} else {
+			ignored = append(ignored, key)
+		}
+	}
+	return assigned, ignored, nil
+}
+
+func workflowConfigScriptFields(node marketing.WorkflowNode) []string {
+	schema, ok := marketing.DefaultWorkflowNodeConfigSchemas().Get(nodeHandlerKey(node))
+	if !ok {
+		return nil
+	}
+	fields := make([]string, 0, len(schema.Fields))
+	for _, field := range schema.Fields {
+		if workflowLuaIdentifier(field.Key) {
+			fields = append(fields, field.Key)
+		}
+	}
+	return fields
+}
+
+func workflowLuaIdentifier(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	for index, item := range value {
+		if index == 0 {
+			if item != '_' && (item < 'A' || item > 'Z') && (item < 'a' || item > 'z') {
+				return false
+			}
+			continue
+		}
+		if item != '_' && (item < 'A' || item > 'Z') && (item < 'a' || item > 'z') && (item < '0' || item > '9') {
+			return false
+		}
+	}
+	return true
 }
 
 func workflowFieldBindingFallback(binding workflowFieldBinding, defaultValue any) (any, bool) {
@@ -190,4 +301,13 @@ func cloneWorkflowMap(in map[string]any) map[string]any {
 		out[key] = workflowJSONValue(value)
 	}
 	return out
+}
+
+func sortedWorkflowMapKeys(in map[string]any) []string {
+	keys := make([]string, 0, len(in))
+	for key := range in {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }

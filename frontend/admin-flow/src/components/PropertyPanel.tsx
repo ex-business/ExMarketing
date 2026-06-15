@@ -1,9 +1,12 @@
-import { useState } from 'react';
+import { lazy, Suspense, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import type { ReactNode } from 'react';
 import type { ActivityEdge, ActivityNode, FlowNode, GroupNode, NoteNode, ResourceSummary, WorkflowEdgeRoute, WorkflowEdgeRouteType, WorkflowNodeConfigField, WorkflowNodeConfigSchema, WorkflowNodeConfigValidationRule, WorkflowValidationIssue } from '../types';
 import { cx } from '../utils/flow';
 import { NodeKindIcon } from './NodeKindIcon';
+import type { LuaConfigVariable } from './LuaConfigCodeEditor';
+
+const LazyLuaConfigCodeEditor = lazy(() => import('./LuaConfigCodeEditor').then((module) => ({ default: module.LuaConfigCodeEditor })));
 
 const ROUTE_TYPE_GROUPS: Array<{ title: string; description: string; items: WorkflowEdgeRouteType[] }> = [
   { title: '默认路径', description: '没有命中其它分支时执行。', items: ['DEFAULT', 'ELSE'] },
@@ -24,7 +27,7 @@ const DEFAULT_ROUTE_EXPRESSIONS: Partial<Record<WorkflowEdgeRouteType, string>> 
 
 const DEFAULT_ROUTE_TYPES = new Set<WorkflowEdgeRouteType>(['DEFAULT', 'ELSE', 'RISK', 'SKIP']);
 const PROPERTY_PANEL_TAB_STORAGE_KEY = 'exmarketing.studio.propertyPanelTab';
-type PropertyPanelTab = 'settings' | 'run';
+type PropertyPanelTab = 'basic' | 'config' | 'lua' | 'other' | 'run';
 
 const ROUTE_EXPRESSION_HINTS = [
   { label: '决策等于 PASS', expression: 'decision == "PASS"' },
@@ -35,12 +38,14 @@ const ROUTE_EXPRESSION_HINTS = [
 ];
 
 function loadPropertyPanelTab(): PropertyPanelTab {
-  return window.localStorage.getItem(PROPERTY_PANEL_TAB_STORAGE_KEY) === 'run' ? 'run' : 'settings';
+  const stored = window.localStorage.getItem(PROPERTY_PANEL_TAB_STORAGE_KEY);
+  if (stored === 'settings') return 'config';
+  return stored === 'basic' || stored === 'config' || stored === 'lua' || stored === 'other' || stored === 'run' ? stored : 'basic';
 }
 
-function PropertyList({ title, items }: { title: string; items: string[] }) {
+function PropertyList({ title, items, defaultOpen = false }: { title: string; items: string[]; defaultOpen?: boolean }) {
   return (
-    <PropertyDisclosure title={title} summary={`${items.length} 项`}>
+    <PropertyDisclosure title={title} summary={`${items.length} 项`} defaultOpen={defaultOpen}>
       <div className="property-tags">
         {items.length > 0 ? items.map((item) => <span key={item}>{item}</span>) : <em>未配置</em>}
       </div>
@@ -250,6 +255,7 @@ function InputMappingEditor({
   schemas,
   onNodeConfigChange,
   onLocateNode,
+  defaultOpen = false,
 }: {
   node: ActivityNode;
   schema?: WorkflowNodeConfigSchema;
@@ -258,6 +264,7 @@ function InputMappingEditor({
   schemas: WorkflowNodeConfigSchema[];
   onNodeConfigChange: (nodeId: string, key: string, value: unknown) => void;
   onLocateNode?: (nodeId: string) => void;
+  defaultOpen?: boolean;
 }) {
   const [variableSearch, setVariableSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState('ALL');
@@ -345,7 +352,7 @@ function InputMappingEditor({
     return !selectedOption || Boolean(selected.path && !selected.path.trim().startsWith('$'));
   }).length;
   return (
-    <PropertyDisclosure title="输入映射" summary={`${inputs.length} 个输入`}>
+    <PropertyDisclosure title="输入映射" summary={`${inputs.length} 个输入`} defaultOpen={defaultOpen}>
       {inputs.length === 0 ? (
         <p className="property-empty">该节点没有输入变量。</p>
       ) : options.length === 0 && !hasMappedInputs ? (
@@ -787,7 +794,7 @@ function ConfigFieldRow({
   );
 }
 
-function NodeConfigPreview({ schema }: { schema: WorkflowNodeConfigSchema }) {
+function NodeConfigPreview({ schema, defaultOpen = false }: { schema: WorkflowNodeConfigSchema; defaultOpen?: boolean }) {
   const reads = schema.preview?.reads?.length
     ? schema.preview.reads
     : schema.inputs.map((input) => `${input.key}${input.required ? ' *' : ''}`);
@@ -796,7 +803,7 @@ function NodeConfigPreview({ schema }: { schema: WorkflowNodeConfigSchema }) {
     : schema.outputs.map((output) => output.key);
   const notes = schema.preview?.notes ?? [];
   return (
-    <PropertyDisclosure title="配置预览" summary={`${reads.length} 读 / ${writes.length} 写`}>
+    <PropertyDisclosure title="配置预览" summary={`${reads.length} 读 / ${writes.length} 写`} defaultOpen={defaultOpen}>
       <div className="node-config-preview">
         <div>
           <span>读取</span>
@@ -839,6 +846,12 @@ function NodeConfigForm({
     row?.scrollIntoView({ block: 'center', behavior: 'smooth' });
     row?.querySelector<HTMLElement>('input, select, textarea, button')?.focus();
   };
+  const updateConfigAndLua = (nodeId: string, key: string, value: unknown) => {
+    onNodeConfigChange(nodeId, key, value);
+    if (nodeId === node.id) {
+      syncLuaScriptFromConfigField(node, schema, key, value, onNodeConfigChange);
+    }
+  };
   return (
     <div className="schema-config-grid">
       {validationIssues?.length ? (
@@ -874,11 +887,220 @@ function NodeConfigForm({
           </div>
           {group.description ? <p>{group.description}</p> : null}
           {group.fields.map((field) => (
-            <ConfigFieldRow key={field.key} node={node} field={field} issues={issuesByField.get(field.key)} resourceOptions={resourceOptions} onNodeConfigChange={onNodeConfigChange} />
+            <ConfigFieldRow key={field.key} node={node} field={field} issues={issuesByField.get(field.key)} resourceOptions={resourceOptions} onNodeConfigChange={updateConfigAndLua} />
           ))}
         </div>
       ))}
     </div>
+  );
+}
+
+function luaConfigVariables(schema?: WorkflowNodeConfigSchema): WorkflowNodeConfigField[] {
+  if (!schema) return [];
+  return schema.fields.filter((field) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(field.key));
+}
+
+function luaLiteralForConfigValue(value: unknown): string {
+  if (value === undefined || value === null || value === '') return 'nil';
+  if (typeof value === 'string') return JSON.stringify(value);
+  if (typeof value === 'number') return Number.isFinite(value) ? String(value) : 'nil';
+  if (typeof value === 'boolean') return value ? 'true' : 'false';
+  if (Array.isArray(value)) return `{ ${value.map((item) => luaLiteralForConfigValue(item)).join(', ')} }`;
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>).map(([key, item]) => {
+      const luaKey = /^[A-Za-z_][A-Za-z0-9_]*$/.test(key) ? key : `[${JSON.stringify(key)}]`;
+      return `${luaKey} = ${luaLiteralForConfigValue(item)}`;
+    });
+    return `{ ${entries.join(', ')} }`;
+  }
+  return JSON.stringify(String(value));
+}
+
+function upsertLuaConfigAssignment(script: string, fieldKey: string, value: unknown): string {
+  const nextLine = `${fieldKey} = ${luaLiteralForConfigValue(value)}`;
+  const lines = script.split('\n');
+  const matcher = new RegExp(`^(\\s*)${fieldKey}\\s*=`);
+  const index = lines.findIndex((line) => matcher.test(line));
+  if (index >= 0) {
+    const indent = lines[index].match(/^(\s*)/)?.[1] ?? '';
+    lines[index] = `${indent}${nextLine}`;
+    return lines.join('\n');
+  }
+  const trimmed = script.trimEnd();
+  return trimmed ? `${trimmed}\n${nextLine}` : nextLine;
+}
+
+function syncLuaScriptFromConfigField(
+  node: ActivityNode,
+  schema: WorkflowNodeConfigSchema | undefined,
+  fieldKey: string,
+  value: unknown,
+  onNodeConfigChange: (nodeId: string, key: string, value: unknown) => void,
+) {
+  const field = luaConfigVariables(schema).find((item) => item.key === fieldKey);
+  if (!field) return;
+  const script = stringifyConfigValue(node.data.config?.configScript ?? '');
+  onNodeConfigChange(node.id, 'configScript', upsertLuaConfigAssignment(script, field.key, value));
+}
+
+function luaConfigStarter(schema?: WorkflowNodeConfigSchema): string {
+  const fields = luaConfigVariables(schema).slice(0, 8);
+  if (!fields.length) return '-- 当前节点没有可脚本配置的字段';
+  return fields
+    .map((field) => `${field.key} = ${luaLiteralForConfigValue(field.default)}`)
+    .join('\n');
+}
+
+function parseLuaStringLiteral(value: string): string | undefined {
+  const trimmed = value.trim();
+  if (trimmed.startsWith('"')) {
+    try {
+      return JSON.parse(trimmed);
+    } catch {
+      return undefined;
+    }
+  }
+  if (trimmed.startsWith("'") && trimmed.endsWith("'")) {
+    return trimmed.slice(1, -1).replace(/\\'/g, "'").replace(/\\\\/g, '\\');
+  }
+  return undefined;
+}
+
+function stripLuaLineComment(value: string): string {
+  let quote: '"' | "'" | undefined;
+  for (let index = 0; index < value.length - 1; index += 1) {
+    const char = value[index];
+    const next = value[index + 1];
+    if ((char === '"' || char === "'") && value[index - 1] !== '\\') {
+      quote = quote === char ? undefined : quote ?? char;
+    }
+    if (!quote && char === '-' && next === '-') {
+      return value.slice(0, index).trim();
+    }
+  }
+  return value.trim();
+}
+
+function parseLuaConfigLiteral(rawValue: string, field: WorkflowNodeConfigField): unknown {
+  const value = stripLuaLineComment(rawValue);
+  if (!value || value === 'nil') return undefined;
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  const stringValue = parseLuaStringLiteral(value);
+  if (stringValue !== undefined) return field.type === 'NUMBER' ? Number(stringValue) : stringValue;
+  if (/^-?\d+(?:\.\d+)?$/.test(value)) return field.type === 'STRING' || field.type === 'ENUM' ? value : Number(value);
+  if (field.type === 'ARRAY' && value.startsWith('{') && value.endsWith('}')) {
+    const body = value.slice(1, -1).trim();
+    if (!body) return [];
+    return body
+      .split(',')
+      .map((item) => parseLuaStringLiteral(item.trim()) ?? item.trim())
+      .filter(Boolean);
+  }
+  return undefined;
+}
+
+function syncConfigFieldsFromLuaScript(
+  node: ActivityNode,
+  schema: WorkflowNodeConfigSchema | undefined,
+  script: string,
+  onNodeConfigChange: (nodeId: string, key: string, value: unknown) => void,
+) {
+  const fields = luaConfigVariables(schema);
+  if (!fields.length) return;
+  const fieldsByKey = new Map(fields.map((field) => [field.key, field]));
+  script.split('\n').forEach((line) => {
+    const match = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+)$/);
+    if (!match) return;
+    const field = fieldsByKey.get(match[1]);
+    if (!field) return;
+    const parsed = parseLuaConfigLiteral(match[2], field);
+    if (parsed !== undefined) {
+      onNodeConfigChange(node.id, field.key, parsed);
+    }
+  });
+}
+
+function NodeConfigLuaEditor({
+  node,
+  schema,
+  onNodeConfigChange,
+}: {
+  node: ActivityNode;
+  schema?: WorkflowNodeConfigSchema;
+  onNodeConfigChange: (nodeId: string, key: string, value: unknown) => void;
+}) {
+  const [showHints, setShowHints] = useState(false);
+  if (!schema) return null;
+  const variables = luaConfigVariables(schema);
+  const editorVariables: LuaConfigVariable[] = variables.map((field) => ({
+    key: field.key,
+    label: field.label,
+    type: `${field.type}${field.required ? '，必填' : ''}`,
+    description: field.description,
+    options: field.options,
+  }));
+  const script = stringifyConfigValue(node.data.config?.configScript ?? '');
+  const enabled = script.trim().length > 0 || node.data.config?.configMode === 'LUA';
+  const updateScript = (value: string) => {
+    onNodeConfigChange(node.id, 'configMode', value.trim() ? 'LUA' : undefined);
+    onNodeConfigChange(node.id, 'configScript', value);
+    syncConfigFieldsFromLuaScript(node, schema, value, onNodeConfigChange);
+  };
+  return (
+    <PropertyDisclosure title="节点 Lua 配置" summary={enabled ? `${variables.length} 个变量` : '未启用'} defaultOpen>
+      <div className="node-lua-config-panel">
+        <div className="node-lua-config-toolbar">
+          <button type="button" onClick={() => onNodeConfigChange(node.id, 'configMode', 'LUA')}>启用 Lua 配置</button>
+          <button type="button" onClick={() => updateScript(luaConfigStarter(schema))}>插入默认变量</button>
+          <button
+            type="button"
+            onClick={() => {
+              onNodeConfigChange(node.id, 'configMode', undefined);
+              onNodeConfigChange(node.id, 'configScript', undefined);
+            }}
+          >
+            清空
+          </button>
+        </div>
+        <Suspense fallback={<textarea className="node-lua-code-fallback" value={script} readOnly />}>
+          <LazyLuaConfigCodeEditor
+            value={script}
+            variables={editorVariables}
+            onHint={() => setShowHints(true)}
+            onChange={updateScript}
+          />
+        </Suspense>
+        {showHints ? (
+          <div className="node-lua-variable-help">
+            <div>
+              <b>当前节点可配置变量</b>
+              <span>脚本里直接给这些固定变量赋值，临时变量请使用 local。</span>
+            </div>
+            <div className="node-lua-variable-list">
+              {variables.map((field) => (
+                <button
+                  key={field.key}
+                  type="button"
+                  onClick={() => updateScript(`${script}${script.trim() ? '\n' : ''}${field.key} = ${field.type === 'STRING' || field.type === 'ENUM' ? '""' : field.type === 'BOOLEAN' ? 'false' : field.type === 'NUMBER' ? '0' : '{}'}`
+                  )}
+                >
+                  <code>{field.key}</code>
+                  <span>{field.label}</span>
+                  <em>{field.description}</em>
+                </button>
+              ))}
+            </div>
+            <div className="node-lua-api-hints">
+              <code>Context.get("event.subject.id")</code>
+              <code>Resource.default.get("key")</code>
+              <code>ResourceRef("resource").get("key")</code>
+              <code>Node.get("nodeId", "output", "$.path")</code>
+            </div>
+          </div>
+        ) : null}
+      </div>
+    </PropertyDisclosure>
   );
 }
 
@@ -1508,16 +1730,19 @@ export function PropertyPanel({ nodes, edges, selectedNodeIds, selectedEdgeIds, 
       {selectedNode ? (
         <div className="property-tabs">
           <div className="property-tab-buttons">
-            <button className={activeTab === 'settings' ? 'active' : ''} onClick={() => changeActiveTab('settings')}>设置</button>
-            <button className={activeTab === 'run' ? 'active' : ''} onClick={() => changeActiveTab('run')}>上次运行</button>
+            <button className={activeTab === 'basic' ? 'active' : ''} onClick={() => changeActiveTab('basic')}>基础信息</button>
+            <button className={activeTab === 'config' ? 'active' : ''} onClick={() => changeActiveTab('config')}>配置</button>
+            <button className={activeTab === 'lua' ? 'active' : ''} onClick={() => changeActiveTab('lua')}>Lua脚本</button>
+            <button className={activeTab === 'other' ? 'active' : ''} onClick={() => changeActiveTab('other')}>其他</button>
+            <button className={activeTab === 'run' ? 'active' : ''} onClick={() => changeActiveTab('run')}>运行日志</button>
           </div>
-          <div className="property-tab-actions">
+          <div className={cx('property-tab-actions', activeTab !== 'config' && 'hidden')}>
             <button type="button" onClick={() => setAllSettingPanelsOpen(true)}>全部展开</button>
             <button type="button" onClick={() => setAllSettingPanelsOpen(false)}>全部收起</button>
           </div>
         </div>
       ) : null}
-      {selectedNode && activeTab === 'settings' ? (
+      {selectedNode && activeTab === 'basic' ? (
         <div className="property-body">
           <PropertyDisclosure
             title="节点信息"
@@ -1528,14 +1753,17 @@ export function PropertyPanel({ nodes, edges, selectedNodeIds, selectedEdgeIds, 
           >
             <NodeInfoSummary node={selectedNode} schema={selectedNodeSchema} />
           </PropertyDisclosure>
-          <PropertyDisclosure title="配置参数" summary={selectedNodeSchema ? `${selectedNodeSchema.fields.length} 项 / ${requiredConfigCount(selectedNodeSchema)} 必填` : '未找到 schema'}>
+        </div>
+      ) : null}
+      {selectedNode && activeTab === 'config' ? (
+        <div className="property-body">
+          <PropertyDisclosure title="配置参数" summary={selectedNodeSchema ? `${selectedNodeSchema.fields.length} 项 / ${requiredConfigCount(selectedNodeSchema)} 必填` : '未找到 schema'} defaultOpen>
             <NodeConfigForm node={selectedNode} schema={selectedNodeSchema} validationIssues={validationIssues} resourceOptions={resourceOptions} onNodeConfigChange={onNodeConfigChange} />
           </PropertyDisclosure>
-          <LuaScriptEditor node={selectedNode} onNodeConfigChange={onNodeConfigChange} />
-          <InputMappingEditor node={selectedNode} schema={selectedNodeSchema} nodes={nodes} edges={edges} schemas={nodeConfigSchemas} onNodeConfigChange={onNodeConfigChange} onLocateNode={onLocateNode} />
-          {selectedNodeSchema ? <NodeConfigPreview schema={selectedNodeSchema} /> : null}
-          <PropertyList title="输出变量" items={(selectedNodeSchema?.outputs ?? []).map((output) => output.key)} />
-          <PropertyDisclosure title="下一步" summary={selectedNode.data.outputs[0] ?? '默认路径'}>
+          <InputMappingEditor node={selectedNode} schema={selectedNodeSchema} nodes={nodes} edges={edges} schemas={nodeConfigSchemas} onNodeConfigChange={onNodeConfigChange} onLocateNode={onLocateNode} defaultOpen />
+          {selectedNodeSchema ? <NodeConfigPreview schema={selectedNodeSchema} defaultOpen /> : null}
+          <PropertyList title="输出变量" items={(selectedNodeSchema?.outputs ?? []).map((output) => output.key)} defaultOpen />
+          <PropertyDisclosure title="下一步" summary={selectedNode.data.outputs[0] ?? '默认路径'} defaultOpen>
             <div className="next-step-card">
               <NodeKindIcon node={selectedNode.data} className="palette-dot" />
               <div>
@@ -1544,6 +1772,10 @@ export function PropertyPanel({ nodes, edges, selectedNodeIds, selectedEdgeIds, 
               </div>
             </div>
           </PropertyDisclosure>
+        </div>
+      ) : null}
+      {selectedNode && activeTab === 'other' ? (
+        <div className="property-body">
           <PropertyDisclosure title="失败时重试" summary={selectedNode.data.kind === 'reliable' || selectedNode.data.kind === 'dispatch' ? '启用' : '关闭'}>
             <label className="switch-row">
               <span>启用重试</span>
@@ -1559,6 +1791,12 @@ export function PropertyPanel({ nodes, edges, selectedNodeIds, selectedEdgeIds, 
           <PropertyDisclosure title="异常处理" summary="无">
             <button className="exception-select">无</button>
           </PropertyDisclosure>
+        </div>
+      ) : null}
+      {selectedNode && activeTab === 'lua' ? (
+        <div className="property-body">
+          <NodeConfigLuaEditor node={selectedNode} schema={selectedNodeSchema} onNodeConfigChange={onNodeConfigChange} />
+          <LuaScriptEditor node={selectedNode} onNodeConfigChange={onNodeConfigChange} />
         </div>
       ) : null}
       {selectedNode && activeTab === 'run' ? (

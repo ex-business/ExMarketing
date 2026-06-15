@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -3033,6 +3034,49 @@ func TestWorkflowFieldBindingsResolveConfigFromContextAndResource(t *testing.T) 
 	}
 	if _, ok := workflowNodeConfigMap(resolvedNode)["fieldBindings"]; ok {
 		t.Fatalf("resolved node config must not expose fieldBindings to handler: %+v", workflowNodeConfigMap(resolvedNode))
+	}
+}
+
+func TestWorkflowConfigScriptAssignsSchemaFields(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	runtime := testWorkflowHandlerRuntime(true)
+	node := marketing.WorkflowNode{
+		ID:   "quota-check",
+		Type: "quota-check",
+		Config: json.RawMessage(`{
+			"scope":"USER",
+			"scopeKeyTemplate":"${subject.id}:${activityId}",
+			"window":"DAY",
+			"maxCount":1,
+			"configMode":"LUA",
+			"configScript":"local userId = Context.get('event.subject.id')\nscope = 'USER'\nscopeKeyTemplate = userId .. ':' .. Context.get('activityId')\nwindow = 'DAY'\nmaxCount = 5\nconsumeMode = 'ATOMIC'\nexceedAction = 'BLOCK'\nlocalOnly = 'ignored'"
+		}`),
+	}
+	execCtx := workflowNodeExecutionContext{
+		ResolvedInput:   map[string]any{"eventId": runtime.Inbox.Event.EventID, "activityId": runtime.Activity.ID},
+		NodeOutputs:     map[string]map[string]any{},
+		NodeDefinitions: map[string]marketing.WorkflowNode{node.ID: node},
+		Variables:       map[string]any{},
+	}
+	nodeCtx := context.WithValue(ctx, workflowNodeExecutionContextKey{}, execCtx)
+	resolvedNode, resolvedConfig, trace, err := service.resolveWorkflowNodeConfig(nodeCtx, node, runtime)
+	if err != nil {
+		t.Fatalf("resolve config script: %v", err)
+	}
+	if resolvedConfig["maxCount"] != float64(5) || resolvedConfig["scopeKeyTemplate"] != "user_001:activity_handler" || resolvedConfig["consumeMode"] != "ATOMIC" {
+		t.Fatalf("unexpected config script result: %+v", resolvedConfig)
+	}
+	if _, ok := workflowNodeConfigMap(resolvedNode)["configScript"]; ok {
+		t.Fatalf("resolved node config must not expose configScript to handler: %+v", workflowNodeConfigMap(resolvedNode))
+	}
+	if len(trace) != 1 || trace[0]["field"] != "configScript" || trace[0]["status"] != "SUCCESS" {
+		t.Fatalf("expected config script trace, got %+v", trace)
+	}
+	assigned := trace[0]["assignedFields"].([]string)
+	if !slices.Contains(assigned, "maxCount") || !slices.Contains(assigned, "scopeKeyTemplate") {
+		t.Fatalf("expected assigned schema fields, got %+v", trace[0])
 	}
 }
 

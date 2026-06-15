@@ -20,6 +20,7 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks(id) {
+          if (id.includes('node_modules/@codemirror') || id.includes('node_modules/@uiw/react-codemirror') || id.includes('node_modules/@lezer')) return 'vendor-editor';
           if (id.includes('node_modules/@xyflow')) return 'vendor-flow';
           if (id.includes('node_modules/lucide-react')) return 'vendor-icons';
           if (id.includes('node_modules/react') || id.includes('node_modules/react-dom')) return 'vendor-react';

@@ -300,7 +300,7 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 		)),
 		groupedSchema("qualify", "资格校验", "执行资格、风控和名单规则，输出 PASS / BLOCK / RISK。", groups(
 			fieldGroup("rules", "规则集合", "定义需要执行的资格规则和命中策略。", fields(
-				withDefault(arrayField("ruleCodes", "规则编码", true, "要执行的资格规则编码，例如 ELIGIBILITY、KYC、RISK_SCORE。", rules(minItems(1), maxItems(50))), []string{"ELIGIBILITY"}),
+				withOptions(withDefault(arrayField("ruleCodes", "规则编码", true, "要执行的资格规则编码，例如 ELIGIBILITY、KYC、RISK_SCORE。", rules(minItems(1), maxItems(50))), []string{"ELIGIBILITY"}), []string{"ELIGIBILITY", "KYC", "RISK_SCORE", "VIP_LEVEL", "DEPOSIT_REQUIRED", "COUNTRY_ALLOWED", "CHANNEL_ALLOWED", "REGISTER_AGE"}),
 				enumField("evaluationMode", "执行模式", true, "ALL_PASS", []string{"ALL_PASS", "ANY_PASS", "FIRST_DECISION"}),
 				booleanField("stopOnFirstBlock", "阻断即停止", false, true),
 			)),

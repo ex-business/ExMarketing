@@ -749,6 +749,8 @@ func TestCoreWorkflowNodeHandlersProduceStableOutputs(t *testing.T) {
 		ctx       context.Context
 	}{
 		{name: "event in", node: marketing.WorkflowNode{ID: "node_event", Type: "event-in"}, handler: entryWorkflowNodeHandler, outputKey: "raw_event"},
+		{name: "mq event", node: marketing.WorkflowNode{ID: "node_mq_event", Type: "mq-event", Config: json.RawMessage(`{"broker":"KAFKA","topic":"marketing.events","consumerGroup":"exmarketing","ackPolicy":"ACK_AFTER_INBOX_COMMIT","retryPolicy":"RETRY_THEN_DLQ"}`)}, handler: mqEventWorkflowNodeHandler, outputKey: "consumerPlan"},
+		{name: "schedule event", node: marketing.WorkflowNode{ID: "node_schedule_event", Type: "schedule-event", Config: json.RawMessage(`{"scheduleType":"CRON","cron":"0 0 * * *","timezone":"UTC","eventType":"SCHEDULE_TICK"}`)}, handler: scheduleEventWorkflowNodeHandler, outputKey: "schedulePlan"},
 		{name: "inbox", node: marketing.WorkflowNode{ID: "node_inbox", Type: "inbox"}, handler: inboxWorkflowNodeHandler, outputKey: "event_context"},
 		{name: "normalize", node: marketing.WorkflowNode{ID: "node_normalize", Type: "normalize", Config: json.RawMessage(`{"defaults":{"channel":"web"}}`)}, handler: normalizeWorkflowNodeHandler, outputKey: "normalized_event"},
 		{name: "match", node: marketing.WorkflowNode{ID: "node_match", Type: "match", Config: json.RawMessage(`{"requireActiveActivity":true}`)}, handler: matchWorkflowNodeHandler, outputKey: "matched_activity"},
@@ -1571,12 +1573,105 @@ func TestCombineAndSplitWorkflowNodeHandlersSupportLua(t *testing.T) {
 	}
 }
 
+func TestScheduleEventWorkflowNodeHandlerUsesGeneratedBizIDInEventID(t *testing.T) {
+	node := marketing.WorkflowNode{
+		ID:   "schedule_event",
+		Type: "schedule-event",
+		Config: json.RawMessage(`{
+			"scheduleType":"CRON",
+			"cron":"0 0 * * *",
+			"timezone":"UTC",
+			"eventType":"SCHEDULE_TICK",
+			"bizType":"SCHEDULE",
+			"bizIdTemplate":"planned:${activityId}:${nodeId}",
+			"eventIdTemplate":"evt:${biz.bizId}"
+		}`),
+	}
+
+	result := scheduleEventWorkflowNodeHandler(context.Background(), node, testWorkflowHandlerRuntime(true))
+	if result.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected schedule event success, got %+v", result)
+	}
+	schedulePlan, ok := result.Output["schedulePlan"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected schedulePlan map, got %+v", result.Output["schedulePlan"])
+	}
+	eventTemplate, ok := schedulePlan["eventTemplate"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected eventTemplate map, got %+v", schedulePlan["eventTemplate"])
+	}
+	biz, ok := eventTemplate["biz"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected biz map, got %+v", eventTemplate["biz"])
+	}
+	expectedBizID := "planned:activity_handler:schedule_event"
+	if biz["bizId"] != expectedBizID {
+		t.Fatalf("expected generated bizId %q, got %+v", expectedBizID, biz["bizId"])
+	}
+	if eventTemplate["eventId"] != "evt:"+expectedBizID {
+		t.Fatalf("expected eventId rendered from generated bizId, got %+v", eventTemplate["eventId"])
+	}
+}
+
 func TestWorkflowNodeHandlersRespectCanceledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	result := entryWorkflowNodeHandler(ctx, marketing.WorkflowNode{ID: "event", Type: "event-in"}, testWorkflowHandlerRuntime(true))
 	if result.Status != marketing.WorkflowNodeFailed || result.Output["errorCode"] != "WORKFLOW_NODE_CONTEXT_CANCELED" {
 		t.Fatalf("expected canceled context failure, got %+v", result)
+	}
+}
+
+func TestStateEventWorkflowNodeHandlerRequiresResourceRefForExternalSources(t *testing.T) {
+	ctx := context.Background()
+	service := NewService(marketing.NewMemoryRepository())
+	node := marketing.WorkflowNode{
+		ID:     "state_event",
+		Type:   "state-event",
+		Config: json.RawMessage(`{"source":"REDIS","namespace":"state-watch","keyTemplate":"activity:state:${activityId}","condition":"value.enabled == true","intervalSeconds":10}`),
+	}
+
+	result := service.stateEventWorkflowNodeHandler(ctx, node, testWorkflowHandlerRuntime(true))
+	if result.Status != marketing.WorkflowNodeFailed || result.Output["errorCode"] != "STATE_EVENT_RESOURCE_REF_REQUIRED" {
+		t.Fatalf("expected missing resourceRef failure, got %+v", result)
+	}
+}
+
+func TestStateEventWorkflowNodeHandlerReadsResourceAndMatchesCondition(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	runtime := testWorkflowHandlerRuntime(true)
+	if _, err := repo.SaveResource(ctx, marketing.Resource{
+		ID:           "res_state_watch",
+		TenantID:     "site_001",
+		Code:         "state_watch_resource",
+		Name:         "State Watch Resource",
+		Type:         marketing.ResourceDatabaseKV,
+		Driver:       marketing.ResourceDriverInternal,
+		Scope:        marketing.ResourceScopeTenant,
+		Status:       marketing.ResourceActive,
+		Capabilities: []marketing.ResourceOperation{marketing.ResourceRead, marketing.ResourceUpsert},
+	}); err != nil {
+		t.Fatalf("save resource: %v", err)
+	}
+	seed := marketing.WorkflowNode{ID: "seed", Type: "state-store", Config: json.RawMessage(`{"resourceRef":"state_watch_resource","operation":"UPSERT","namespace":"state-watch","keyTemplate":"activity:state:${activityId}","valueType":"OBJECT","defaultValue":{"enabled":true,"count":3}}`)}
+	if result := service.stateStoreWorkflowNodeHandler(ctx, seed, runtime); result.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("seed state: %+v", result)
+	}
+	node := marketing.WorkflowNode{ID: "state_event", Type: "state-event", Config: json.RawMessage(`{"source":"RESOURCE","resourceRef":"state_watch_resource","namespace":"state-watch","keyTemplate":"activity:state:${activityId}","condition":"value.enabled == true","intervalSeconds":10}`)}
+	result := service.stateEventWorkflowNodeHandler(ctx, node, runtime)
+	if result.Status != marketing.WorkflowNodeSuccess || result.Output["triggered"] != true {
+		t.Fatalf("expected triggered state event, got %+v", result)
+	}
+	if result.Output["executionMode"] != "TRIGGER_ADAPTER" || result.Output["executionAuthority"] != "StateWatcher/ResourceAPI" {
+		t.Fatalf("unexpected execution metadata: %+v", result.Output)
+	}
+
+	node.Config = json.RawMessage(`{"source":"RESOURCE","resourceRef":"state_watch_resource","namespace":"state-watch","keyTemplate":"activity:state:${activityId}","condition":"value.count > 10","intervalSeconds":10}`)
+	skipped := service.stateEventWorkflowNodeHandler(ctx, node, runtime)
+	if skipped.Status != marketing.WorkflowNodeSkipped || skipped.Output["triggered"] != false {
+		t.Fatalf("expected skipped state event, got %+v", skipped)
 	}
 }
 
@@ -1944,6 +2039,91 @@ func TestStateStoreWorkflowNodeHandlerAppendsDatabaseTableResourceRows(t *testin
 	}
 }
 
+func TestStateStoreWorkflowNodeHandlerAppliesDatabaseTableSchemaAndMapping(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	runtime := testWorkflowHandlerRuntime(true)
+	if _, err := service.SaveResource(ctx, marketing.Resource{
+		TenantID:    runtime.Activity.TenantID,
+		WorkspaceID: runtime.Activity.WorkspaceID,
+		Code:        "mapped_checkin_table",
+		Name:        "映射签到表",
+		Type:        marketing.ResourceDatabaseTable,
+		Driver:      marketing.ResourceDriverPostgres,
+		Scope:       marketing.ResourceScopeWorkspace,
+		Status:      marketing.ResourceActive,
+		Config: json.RawMessage(`{
+			"physicalTable":"marketing_mapped_checkin",
+			"primaryKey":["tenantId","activityId","subjectId","bizId"],
+			"schema":{"columns":{
+				"tenantId":{"type":"STRING","required":true},
+				"activityId":{"type":"STRING","required":true},
+				"subjectId":{"type":"STRING","required":true},
+				"bizId":{"type":"STRING","required":true},
+				"streakDays":{"type":"NUMBER","required":true},
+				"eventType":{"type":"STRING","required":true}
+			}},
+			"keyMapping":{"bizId":"$.event.biz.bizId"},
+			"valueMapping":{"streakDays":"$.row.streak","eventType":"$.event.eventType"}
+		}`),
+	}); err != nil {
+		t.Fatalf("save mapped table resource: %v", err)
+	}
+	node := marketing.WorkflowNode{
+		ID:     "mapped-table",
+		Type:   "state-store",
+		Config: json.RawMessage(`{"resourceRef":"mapped_checkin_table","operation":"UPSERT","namespace":"checkin","keyTemplate":"ignored","valueType":"TABLE"}`),
+	}
+	nodeCtx := context.WithValue(ctx, workflowNodeExecutionContextKey{}, workflowNodeExecutionContext{
+		ResolvedInput: map[string]any{"value": map[string]any{"streak": 3}},
+	})
+	result := service.stateStoreWorkflowNodeHandler(nodeCtx, node, runtime)
+	if result.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected mapped table success, got %+v", result)
+	}
+	row := result.Output["stored_value"].([]any)[0].(map[string]any)
+	if row["bizId"] != runtime.Inbox.Event.Biz.BizID || row["streakDays"] != float64(3) || row["eventType"] != runtime.Inbox.Event.EventType {
+		t.Fatalf("expected mapped row values, got %+v", row)
+	}
+	storageEntry := result.Output["storage_entry"].(map[string]any)
+	if storageEntry["key"] != runtime.Activity.TenantID+":"+runtime.Activity.ID+":"+runtime.Inbox.Event.Subject.ID+":"+runtime.Inbox.Event.Biz.BizID {
+		t.Fatalf("expected mapped primary key storage key, got %+v", result.Output)
+	}
+}
+
+func TestStateStoreWorkflowNodeHandlerRejectsDatabaseTableSchemaViolation(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	runtime := testWorkflowHandlerRuntime(true)
+	if _, err := service.SaveResource(ctx, marketing.Resource{
+		TenantID:    runtime.Activity.TenantID,
+		WorkspaceID: runtime.Activity.WorkspaceID,
+		Code:        "schema_checkin_table",
+		Name:        "Schema 签到表",
+		Type:        marketing.ResourceDatabaseTable,
+		Driver:      marketing.ResourceDriverPostgres,
+		Scope:       marketing.ResourceScopeWorkspace,
+		Status:      marketing.ResourceActive,
+		Config:      json.RawMessage(`{"physicalTable":"marketing_schema_checkin","primaryKey":["tenantId","activityId","subjectId"],"schema":{"columns":{"tenantId":{"type":"STRING","required":true},"activityId":{"type":"STRING","required":true},"subjectId":{"type":"STRING","required":true},"streakDays":{"type":"NUMBER","required":true}}}}`),
+	}); err != nil {
+		t.Fatalf("save schema table resource: %v", err)
+	}
+	node := marketing.WorkflowNode{
+		ID:     "schema-table",
+		Type:   "state-store",
+		Config: json.RawMessage(`{"resourceRef":"schema_checkin_table","operation":"UPSERT","namespace":"checkin","keyTemplate":"ignored","valueType":"TABLE"}`),
+	}
+	nodeCtx := context.WithValue(ctx, workflowNodeExecutionContextKey{}, workflowNodeExecutionContext{
+		ResolvedInput: map[string]any{"value": map[string]any{"note": "missing streak"}},
+	})
+	result := service.stateStoreWorkflowNodeHandler(nodeCtx, node, runtime)
+	if result.Status != marketing.WorkflowNodeFailed || result.Output["errorCode"] != "STATE_STORE_TABLE_SCHEMA_INVALID" {
+		t.Fatalf("expected schema violation, got %+v", result)
+	}
+}
+
 func TestStateStoreWorkflowNodeHandlerRejectsInvalidDatabaseTableResource(t *testing.T) {
 	ctx := context.Background()
 	repo := marketing.NewMemoryRepository()
@@ -2019,6 +2199,105 @@ func TestStateStoreWorkflowNodeHandlerUsesHTTPProviderResourceConfig(t *testing.
 	}
 	if receivedMethod != http.MethodPut || receivedHeader != "resource-config" {
 		t.Fatalf("expected provider config method/header, got method=%s header=%s", receivedMethod, receivedHeader)
+	}
+}
+
+func TestStateStoreWorkflowNodeHandlerUsesHTTPProviderSecretRefAndResponseSchema(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	runtime := testWorkflowHandlerRuntime(true)
+	t.Setenv("EXM_PROVIDER_TOKEN", "secret-token-001")
+	var receivedAuth string
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"value":{"resourceProvider":"ok"},"version":12,"exists":true}`))
+	}))
+	defer provider.Close()
+	if _, err := service.SaveResource(ctx, marketing.Resource{
+		TenantID:    runtime.Activity.TenantID,
+		WorkspaceID: runtime.Activity.WorkspaceID,
+		Code:        "secret_http_provider",
+		Name:        "Secret HTTP Provider",
+		Type:        marketing.ResourceHTTPProvider,
+		Driver:      marketing.ResourceDriverREST,
+		Scope:       marketing.ResourceScopeWorkspace,
+		Status:      marketing.ResourceActive,
+		Config:      json.RawMessage(`{"endpoint":"` + provider.URL + `","method":"POST","secretRef":"env:EXM_PROVIDER_TOKEN","responseSchema":{"required":["$.value"],"fields":{"$.version":"NUMBER","$.value":"OBJECT"}}}`),
+	}); err != nil {
+		t.Fatalf("save secret http provider resource: %v", err)
+	}
+	node := marketing.WorkflowNode{
+		ID:     "secret-http-store",
+		Type:   "state-store",
+		Config: json.RawMessage(`{"resourceRef":"secret_http_provider","operation":"UPSERT","namespace":"checkin","keyTemplate":"${activityId}:${subject.id}:secret","valueType":"OBJECT"}`),
+	}
+	result := service.stateStoreWorkflowNodeHandler(ctx, node, runtime)
+	if result.Status != marketing.WorkflowNodeSuccess || result.Output["storage_version"] != int64(12) {
+		t.Fatalf("expected secret http provider success, got %+v", result)
+	}
+	if receivedAuth != "Bearer secret-token-001" {
+		t.Fatalf("expected Authorization from secretRef, got %q", receivedAuth)
+	}
+}
+
+func TestStateStoreWorkflowNodeHandlerRejectsHTTPProviderResponseSchemaMismatch(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	runtime := testWorkflowHandlerRuntime(true)
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"value":"bad","version":"v12"}`))
+	}))
+	defer provider.Close()
+	if _, err := service.SaveResource(ctx, marketing.Resource{
+		TenantID:    runtime.Activity.TenantID,
+		WorkspaceID: runtime.Activity.WorkspaceID,
+		Code:        "bad_response_http_provider",
+		Name:        "Bad Response HTTP Provider",
+		Type:        marketing.ResourceHTTPProvider,
+		Driver:      marketing.ResourceDriverREST,
+		Scope:       marketing.ResourceScopeWorkspace,
+		Status:      marketing.ResourceActive,
+		Config:      json.RawMessage(`{"endpoint":"` + provider.URL + `","method":"POST","responseSchema":{"fields":{"$.version":"NUMBER","$.value":"OBJECT"}}}`),
+	}); err != nil {
+		t.Fatalf("save bad response http provider resource: %v", err)
+	}
+	node := marketing.WorkflowNode{
+		ID:     "bad-response-http-store",
+		Type:   "state-store",
+		Config: json.RawMessage(`{"resourceRef":"bad_response_http_provider","operation":"UPSERT","namespace":"checkin","keyTemplate":"${activityId}:${subject.id}:bad-response","valueType":"OBJECT"}`),
+	}
+	result := service.stateStoreWorkflowNodeHandler(ctx, node, runtime)
+	if result.Status != marketing.WorkflowNodeFailed || result.Output["errorCode"] != "RESOURCE_HTTP_RESPONSE_SCHEMA_INVALID" {
+		t.Fatalf("expected response schema failure, got %+v", result)
+	}
+}
+
+func TestResourceHTTPProviderRejectsSensitiveLiteralHeaderWithoutSecretRef(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	if _, err := service.SaveResource(ctx, marketing.Resource{
+		TenantID: "site_001",
+		Code:     "literal_secret_http_provider",
+		Name:     "Literal Secret HTTP Provider",
+		Type:     marketing.ResourceHTTPProvider,
+		Driver:   marketing.ResourceDriverREST,
+		Scope:    marketing.ResourceScopeWorkspace,
+		Status:   marketing.ResourceActive,
+		Config:   json.RawMessage(`{"endpoint":"https://provider.example/state","method":"POST","headers":{"Authorization":"Bearer literal-token"}}`),
+	}); err != nil {
+		t.Fatalf("save literal secret provider: %v", err)
+	}
+	result, err := service.TestResource(ctx, "site_001", "literal_secret_http_provider", "tester")
+	if err != nil {
+		t.Fatalf("test literal secret provider: %v", err)
+	}
+	if result["ok"] != false || result["errorCode"] != "RESOURCE_HTTP_SECRET_REF_REQUIRED" {
+		t.Fatalf("expected secret ref required, got %+v", result)
 	}
 }
 
@@ -2448,6 +2727,86 @@ func TestStateStoreWorkflowNodeHandlerUsesRedisCounterResource(t *testing.T) {
 	}
 }
 
+func TestQuotaCheckWorkflowNodeHandlerUsesRedisCounterResource(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	runtime := testWorkflowHandlerRuntime(true)
+	if _, err := service.SaveResource(ctx, marketing.Resource{
+		TenantID:    runtime.Activity.TenantID,
+		WorkspaceID: runtime.Activity.WorkspaceID,
+		Code:        "quota_counter",
+		Name:        "次数频控计数器",
+		Type:        marketing.ResourceRedisCounter,
+		Driver:      marketing.ResourceDriverInternal,
+		Scope:       marketing.ResourceScopeWorkspace,
+		Status:      marketing.ResourceActive,
+		Config:      json.RawMessage(`{"keyPrefix":"quota:counter"}`),
+	}); err != nil {
+		t.Fatalf("save quota counter resource: %v", err)
+	}
+	node := marketing.WorkflowNode{
+		ID:     "quota-check",
+		Type:   "quota-check",
+		Config: json.RawMessage(`{"resourceRef":"quota_counter","namespace":"checkin","scope":"USER","scopeKeyTemplate":"${subject.id}:${activityId}","maxCount":1,"consumeMode":"ATOMIC","exceedAction":"BLOCK"}`),
+	}
+	first := service.quotaCheckWorkflowNodeHandler(ctx, node, runtime)
+	if first.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected first quota check success, got %+v", first)
+	}
+	quotaCheck := first.Output["quota_check"].(map[string]any)
+	if quotaCheck["allowed"] != true || quotaCheck["counter"] != float64(1) {
+		t.Fatalf("expected quota counter allowed, got %+v", quotaCheck)
+	}
+	second := service.quotaCheckWorkflowNodeHandler(ctx, node, runtime)
+	if second.Status != marketing.WorkflowNodeFailed || second.Output["errorCode"] != "REDIS_COUNTER_LIMIT_EXCEEDED" {
+		t.Fatalf("expected quota counter limit failure, got %+v", second)
+	}
+}
+
+func TestLockWorkflowNodeHandlerUsesRedisLockResource(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	runtime := testWorkflowHandlerRuntime(true)
+	if _, err := service.SaveResource(ctx, marketing.Resource{
+		TenantID:    runtime.Activity.TenantID,
+		WorkspaceID: runtime.Activity.WorkspaceID,
+		Code:        "user_lock",
+		Name:        "用户互斥锁",
+		Type:        marketing.ResourceRedisLock,
+		Driver:      marketing.ResourceDriverInternal,
+		Scope:       marketing.ResourceScopeWorkspace,
+		Status:      marketing.ResourceActive,
+		Config:      json.RawMessage(`{"keyPrefix":"lock:user","ttlSeconds":30}`),
+	}); err != nil {
+		t.Fatalf("save lock resource: %v", err)
+	}
+	node := marketing.WorkflowNode{
+		ID:     "lock",
+		Type:   "lock",
+		Config: json.RawMessage(`{"resourceRef":"user_lock","namespace":"checkin","keyTemplate":"${subject.id}","operation":"ACQUIRE","owner":"test-owner","ttlSeconds":30}`),
+	}
+	first := service.lockWorkflowNodeHandler(ctx, node, runtime)
+	if first.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected first lock acquire success, got %+v", first)
+	}
+	second := service.lockWorkflowNodeHandler(ctx, node, runtime)
+	if second.Status != marketing.WorkflowNodeFailed || second.Output["errorCode"] != "REDIS_LOCK_HELD" {
+		t.Fatalf("expected held lock failure, got %+v", second)
+	}
+	releaseNode := node
+	releaseNode.Config = json.RawMessage(`{"resourceRef":"user_lock","namespace":"checkin","keyTemplate":"${subject.id}","operation":"RELEASE"}`)
+	released := service.lockWorkflowNodeHandler(ctx, releaseNode, runtime)
+	if released.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected lock release success, got %+v", released)
+	}
+	reacquired := service.lockWorkflowNodeHandler(ctx, node, runtime)
+	if reacquired.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected lock reacquire success after release, got %+v", reacquired)
+	}
+}
+
 func TestStateStoreWorkflowNodeHandlerRequiresApprovalForHighRiskResourceOperation(t *testing.T) {
 	ctx := context.Background()
 	repo := marketing.NewMemoryRepository()
@@ -2481,6 +2840,42 @@ func TestStateStoreWorkflowNodeHandlerRequiresApprovalForHighRiskResourceOperati
 	approved := service.stateStoreWorkflowNodeHandler(ctx, approvedNode, runtime)
 	if approved.Status != marketing.WorkflowNodeSuccess {
 		t.Fatalf("expected approved delete success, got %+v", approved)
+	}
+}
+
+func TestStateStoreWorkflowNodeHandlerRequiresFormalActivityApprovalForHighRiskResource(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	runtime := testWorkflowHandlerRuntime(true)
+	runtime.Activity.Approval = marketing.ApprovalSnapshot{Status: marketing.ApprovalNone}
+	if _, err := service.SaveResource(ctx, marketing.Resource{
+		TenantID:    runtime.Activity.TenantID,
+		WorkspaceID: runtime.Activity.WorkspaceID,
+		Code:        "formal_approval_state",
+		Name:        "正式审批资源",
+		Type:        marketing.ResourceDatabaseKV,
+		Driver:      marketing.ResourceDriverInternal,
+		Scope:       marketing.ResourceScopeWorkspace,
+		Status:      marketing.ResourceActive,
+		Config:      json.RawMessage(`{"requireApproval":true,"requireFormalApproval":true}`),
+	}); err != nil {
+		t.Fatalf("save resource: %v", err)
+	}
+	node := marketing.WorkflowNode{
+		ID:     "formal-approval-delete",
+		Type:   "state-store",
+		Config: json.RawMessage(`{"resourceRef":"formal_approval_state","operation":"DELETE","namespace":"checkin","keyTemplate":"${subject.id}","valueType":"OBJECT","approvalId":"approval_001"}`),
+	}
+	blocked := service.stateStoreWorkflowNodeHandler(ctx, node, runtime)
+	if blocked.Status != marketing.WorkflowNodeFailed || blocked.Output["errorCode"] != "RESOURCE_APPROVAL_REQUIRED" {
+		t.Fatalf("expected formal approval failure, got %+v", blocked)
+	}
+
+	runtime.Activity.Approval = marketing.ApprovalSnapshot{Status: marketing.ApprovalApproved, ActivityVersion: runtime.Activity.Version, Submitter: "ops", Approver: "lead"}
+	approved := service.stateStoreWorkflowNodeHandler(ctx, node, runtime)
+	if approved.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected formally approved operation success, got %+v", approved)
 	}
 }
 

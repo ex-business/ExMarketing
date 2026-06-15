@@ -22,9 +22,9 @@
 | `event-in` | 标准事件入口 | 校验已标准化事件的 `eventType`、`sourceSystem`、`tenant`，输出 workflow raw event | 已实现 | `raw_event`, `eventId`, `eventType`, `tenantId` |
 | `http-event` | HTTP 接口事件 | 描述外部系统通过 `/openapi/v1/events` 主动上报标准事件 | 解释型，真实入口已存在 | `standard_event`, `source`, `adapter` |
 | `webhook-event` | Webhook 映射事件 | 描述第三方 webhook payload 经签名校验和 mapping 转为标准事件 | 解释型，真实入口已存在 | `standard_event`, `source`, `adapter` |
-| `mq-event` | MQ Topic 事件 | 描述监听 Kafka/RabbitMQ/Pulsar topic 并映射消息为标准事件 | 待实现入站 consumer | `standard_event`, `source`, `adapter` |
-| `schedule-event` | 定时事件 | 描述 cron/延迟任务生成标准事件 | 待实现/可复用调度能力 | `standard_event`, `source`, `adapter` |
-| `state-event` | 状态监听事件 | 描述监听 Redis、配置、指标或状态条件并生成标准事件 | 待实现 watcher | `standard_event`, `source`, `adapter` |
+| `mq-event` | MQ Topic 事件 | 描述监听 Kafka/RabbitMQ/Pulsar topic 并映射消息为标准事件 | 已完成 trigger adapter 第一版 | `standard_event`, `source`, `consumerPlan` |
+| `schedule-event` | 定时事件 | 描述 cron/延迟任务生成标准事件 | 已完成 Scheduler adapter plan 第一版 | `standard_event`, `source`, `schedulePlan` |
+| `state-event` | 状态监听事件 | 描述监听 Redis、配置、指标或状态条件并生成标准事件 | 已完成 ResourceAPI 快照判断第一版 | `standard_event`, `source`, `stateSnapshot`, `triggered` |
 | `manual-event` | 人工触发事件 | 描述管理台人工补偿、重放或手动执行标准事件 | 待收口生产补偿入口 | `standard_event`, `source`, `adapter` |
 
 ## CORE 核心链路
@@ -122,8 +122,7 @@ event-in -> inbox -> normalize -> match -> fact-query -> activity-state -> quota
 
 仍未完成：
 
-- 专用 `lock` 节点。
 - 真实 Redis client adapter。
-- HTTP Provider `secretRef` 和 response schema 强校验。
-- 正式审批单校验。
-- `mq-event` 入站 consumer、`schedule-event` trigger runtime、`state-event` watcher runtime。
+- 生产 Kafka/RabbitMQ/Pulsar transport SDK 注入。
+- 独立资源审批单。
+- `mq-event` broker loop/offset/replay UI、`schedule-event` 统一调度注册表、`state-event` watcher cursor/debounce。

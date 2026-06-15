@@ -103,23 +103,24 @@ EVENT_INPUT -> CORE -> ADVANCED(可选) -> OPS(审计/恢复)
 
 这些能力当前由主引擎、OpenAPI、Admin API、OPS 节点和运维流程共同承担。节点分类可以表达，但上线前必须检查配置和环境能力。
 
-### 部分满足，需要后续 runtime 扩展
+### 已有第一版 adapter，仍需后台运行态完善
 
-以下活动能力还不能只靠普通 workflow 节点完整表达：
+以下活动能力已经具备节点 adapter 第一版，但生产级后台 worker、cursor、replay 和 UI 运行态还要继续完善：
 
 1. **MQ 入站触发**
-   - `mq-event` 当前是解释型/预留节点。
-   - 还缺真实 consumer、offset、ack、retry、DLQ、replay。
-   - `MQ_TOPIC` 资源和 `mq-publish` 已支持出站发布意图，但不等于入站 consumer 已实现。
+   - `mq-event` 已输出 MQTriggerWorker adapter plan。
+   - `internal/mqconsumer.Consumer` 已支持标准事件解析、幂等、ACK/DLQ/NACK_RETRY 语义。
+   - 仍需生产 broker loop、offset 管理和 replay UI。
 
 2. **定时触发**
-   - `schedule-event` 当前是解释型/预留节点。
-   - 插件调度能力可复用，但还没有统一 workflow trigger runtime。
+   - `schedule-event` 已输出 Scheduler/EventInboxProducer plan。
+   - 已要求稳定 eventId/bizId/idempotencyKey。
+   - 仍需统一调度注册表和运行态可视化。
 
 3. **状态监听**
-   - `state-event` 当前是解释型/预留节点。
-   - 还缺 Redis/config/metrics watcher、cursor、debounce、恢复语义。
-   - `REDIS_*` 资源已能作为 workflow 状态读写能力使用，但不等于 Redis watcher trigger 已实现。
+   - `state-event` 已支持通过 `resourceRef` 读取快照并判断条件。
+   - 仍需 Redis/config/metrics watcher、cursor、debounce 持久化和恢复语义。
+   - `REDIS_*` 资源已能作为 workflow 状态读写能力使用，真实 Redis client adapter 仍是后续边界。
 
 4. **红包雨/抽奖插件状态**
    - 已有 `activity-state`、`candidate-reward`、`random-pick`、`plugin-execute` 表达边界。
@@ -155,8 +156,8 @@ EVENT_INPUT -> CORE -> ADVANCED(可选) -> OPS(审计/恢复)
 资源化后的仍需补齐项：
 
 - `REDIS_*` 当前是资源语义和状态承载版，不是真实 Redis client adapter。
-- HTTP Provider `secretRef`、response schema 强校验仍未完成。
-- 资源级 `requireApproval` 是第一版信号校验，未接正式审批单。
+- 生产 Kafka/RabbitMQ/Pulsar transport SDK 需要通过 OutboxWorker/MQSender 注入。
+- 资源级 `requireApproval` 是第一版信号校验；`requireFormalApproval` 已可校验活动正式审批快照，独立资源审批单仍未建立。
 
 ## 对签到奖励的结论
 
@@ -189,11 +190,11 @@ EVENT_INPUT -> CORE -> ADVANCED(可选) -> OPS(审计/恢复)
 | T5-T9 高风险资金模板 | 基本满足，但依赖审批、callback、reconcile、quota 配置 |
 | RED_ENVELOPE 红包雨 | 基本满足，真实玩法状态仍需 ActivityPlugin 权威 |
 | LOTTERY 抽奖 | 基本满足，真实奖池/次数消费仍需 ActivityPlugin/Quota 权威 |
-| MQ 入站活动 | 部分满足，节点已预留但 runtime 未实现 |
-| 定时活动 | 部分满足，节点已预留但统一 trigger runtime 未实现 |
-| 状态监听活动 | 部分满足，节点已预留但 watcher runtime 未实现 |
+| MQ 入站活动 | 基本满足，已完成 adapter 第一版，生产 broker loop/replay UI 待完善 |
+| 定时活动 | 基本满足，已完成 adapter 第一版，统一调度注册表待完善 |
+| 状态监听活动 | 基本满足，已完成 ResourceAPI 快照判断第一版，后台 watcher/cursor 待完善 |
 
 补充说明：
 
 - 出站 `MQ_TOPIC` 资源能力已经可用于通知、发奖指令或业务消息发布意图。
-- 入站 `mq-event`、定时 `schedule-event`、状态监听 `state-event` 仍属于 trigger runtime 能力，不应因为资源管理 P3 已完成而标记为生产可执行。
+- 入站 `mq-event`、定时 `schedule-event`、状态监听 `state-event` 仍属于 trigger runtime 能力；当前节点 adapter 已可配置和验证，但生产 worker 运行态还需要继续补齐。

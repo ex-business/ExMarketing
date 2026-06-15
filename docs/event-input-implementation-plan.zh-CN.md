@@ -62,9 +62,9 @@ tenantId:sourceSystem:eventType:biz.bizType:biz.bizId
 - 左侧节点库增加预留节点，但标注能力状态：
   - `HTTP 接口事件`：已支持接口，节点解释型。
   - `Webhook 映射事件`：已支持接口，节点解释型。
-  - `MQ Topic 事件`：待实现入站 consumer；出站 `MQ_TOPIC` 资源不等于入站 trigger。
-  - `定时事件`：待实现/可复用调度能力。
-  - `状态监听事件`：待实现。
+  - `MQ Topic 事件`：已完成 trigger adapter 第一版，复用 `internal/mqconsumer.Consumer`；生产 broker loop/offset/replay 继续完善。
+  - `定时事件`：已完成 Scheduler/EventInboxProducer adapter plan 第一版。
+  - `状态监听事件`：已完成 ResourceAPI 快照读取和条件判断第一版。
   - `人工触发事件`：待收口为生产补偿入口。
 
 建议文件：

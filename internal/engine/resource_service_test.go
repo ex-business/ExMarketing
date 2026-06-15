@@ -3,6 +3,8 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/ex-stack/ExMarketing/internal/marketing"
@@ -87,6 +89,48 @@ func TestResourceTestValidatesAdapterConfig(t *testing.T) {
 				Config:   json.RawMessage(`{"provider":"KAFKA"}`),
 			},
 			errorCode: "RESOURCE_MQ_TOPIC_REQUIRED",
+		},
+		{
+			name: "database table rejects invalid schema column type",
+			resource: marketing.Resource{
+				TenantID: "site_001",
+				Code:     "bad_table_schema",
+				Name:     "Bad Table Schema",
+				Type:     marketing.ResourceDatabaseTable,
+				Driver:   marketing.ResourceDriverPostgres,
+				Scope:    marketing.ResourceScopeWorkspace,
+				Status:   marketing.ResourceActive,
+				Config:   json.RawMessage(`{"physicalTable":"marketing_user_state","primaryKey":["tenantId"],"schema":{"columns":{"tenantId":{"type":"STRING"},"bad":{"type":"BINARY"}}}}`),
+			},
+			errorCode: "RESOURCE_TABLE_SCHEMA_INVALID",
+		},
+		{
+			name: "database table rejects invalid key mapping",
+			resource: marketing.Resource{
+				TenantID: "site_001",
+				Code:     "bad_table_mapping",
+				Name:     "Bad Table Mapping",
+				Type:     marketing.ResourceDatabaseTable,
+				Driver:   marketing.ResourceDriverPostgres,
+				Scope:    marketing.ResourceScopeWorkspace,
+				Status:   marketing.ResourceActive,
+				Config:   json.RawMessage(`{"physicalTable":"marketing_user_state","primaryKey":["tenantId"],"keyMapping":{"tenantId":{"unknown":"$.tenantId"}}}`),
+			},
+			errorCode: "RESOURCE_TABLE_KEY_MAPPING_INVALID",
+		},
+		{
+			name: "database table rejects uncovered primary key",
+			resource: marketing.Resource{
+				TenantID: "site_001",
+				Code:     "bad_table_pk_mapping",
+				Name:     "Bad Table PK Mapping",
+				Type:     marketing.ResourceDatabaseTable,
+				Driver:   marketing.ResourceDriverPostgres,
+				Scope:    marketing.ResourceScopeWorkspace,
+				Status:   marketing.ResourceActive,
+				Config:   json.RawMessage(`{"physicalTable":"marketing_user_state","primaryKey":["tenantId","externalId"],"schema":{"columns":{"tenantId":{"type":"STRING"}}}}`),
+			},
+			errorCode: "RESOURCE_TABLE_PRIMARY_KEY_MAPPING_INVALID",
 		},
 	}
 
@@ -176,5 +220,68 @@ func TestResourceDefaultCapabilitiesIncludeAdapterOperations(t *testing.T) {
 	}
 	if !mqTopic.Supports(marketing.ResourcePublish) || !mqTopic.Supports(marketing.ResourceCall) {
 		t.Fatalf("expected mq topic publish and call capabilities, got %+v", mqTopic.Capabilities)
+	}
+}
+
+func TestResourceTestHTTPProviderDryRunAndResponseSchema(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Fatalf("expected GET dry-run, got %s", r.Method)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"value":{"ok":true},"version":1}`))
+	}))
+	defer provider.Close()
+	if _, err := service.SaveResource(ctx, marketing.Resource{
+		TenantID: "site_001",
+		Code:     "dry_run_http",
+		Name:     "Dry Run HTTP",
+		Type:     marketing.ResourceHTTPProvider,
+		Driver:   marketing.ResourceDriverREST,
+		Scope:    marketing.ResourceScopeWorkspace,
+		Status:   marketing.ResourceActive,
+		Config:   json.RawMessage(`{"endpoint":"` + provider.URL + `","method":"POST","dryRun":true,"dryRunMethod":"GET","responseSchema":{"required":["$.value"],"fields":{"$.version":"NUMBER","$.value":"OBJECT"}}}`),
+	}); err != nil {
+		t.Fatalf("save dry-run resource: %v", err)
+	}
+	result, err := service.TestResource(ctx, "site_001", "dry_run_http", "tester")
+	if err != nil {
+		t.Fatalf("test dry-run resource: %v", err)
+	}
+	if result["ok"] != true || result["errorCode"] != "" {
+		t.Fatalf("expected dry-run success, got %+v", result)
+	}
+}
+
+func TestResourceTestHTTPProviderDryRunRejectsResponseSchemaMismatch(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"value":"bad","version":"v1"}`))
+	}))
+	defer provider.Close()
+	if _, err := service.SaveResource(ctx, marketing.Resource{
+		TenantID: "site_001",
+		Code:     "dry_run_bad_schema",
+		Name:     "Dry Run Bad Schema",
+		Type:     marketing.ResourceHTTPProvider,
+		Driver:   marketing.ResourceDriverREST,
+		Scope:    marketing.ResourceScopeWorkspace,
+		Status:   marketing.ResourceActive,
+		Config:   json.RawMessage(`{"endpoint":"` + provider.URL + `","method":"POST","dryRun":true,"responseSchema":{"fields":{"$.version":"NUMBER","$.value":"OBJECT"}}}`),
+	}); err != nil {
+		t.Fatalf("save dry-run bad schema resource: %v", err)
+	}
+	result, err := service.TestResource(ctx, "site_001", "dry_run_bad_schema", "tester")
+	if err != nil {
+		t.Fatalf("test dry-run resource: %v", err)
+	}
+	if result["ok"] != false || result["errorCode"] != "RESOURCE_HTTP_RESPONSE_SCHEMA_INVALID" {
+		t.Fatalf("expected dry-run schema failure, got %+v", result)
 	}
 }

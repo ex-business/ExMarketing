@@ -586,18 +586,23 @@ Executor 已经可以跑，但生产级还需要：
 - `DATABASE_TABLE` 和 `HTTP_PROVIDER` 已支持第一版执行。
 - `REDIS_KV`、`REDIS_HASH`、`REDIS_COUNTER`、`REDIS_LOCK` 已支持第一版资源语义。
 - `mq-publish + MQ_TOPIC resourceRef` 已支持出站发布意图和资源审计。
-- Lua Resource API 已支持 `resource_read/write/upsert/call/publish`。
-- 高风险资源操作已有第一版 `requireApproval` 信号校验。
+- `fact-query + resourceRef` 已支持资源读和 HTTP Provider CALL 查询，统一输出 `facts`。
+- 核心 `outbox/callback + resourceRef` 已支持第一版资源绑定、权限校验、投递/回调计划和资源审计。
+- HTTP Provider 安全治理已完成第一版：URL scheme、userinfo、host allowlist、blockedHosts、private network 阻断和 redirect 防护。
+- HTTP Provider 已支持 `secretRef/headersRef`、response schema 强校验和 `TestResource dryRun` 探活。
+- 公共表已支持 `schema/tableSchema`、`keyMapping`、`valueMapping` 强约束。
+- `quota-check + REDIS_COUNTER resourceRef` 与专用 `lock + REDIS_LOCK resourceRef` 已完成第一版。
+- `mq-event`、`schedule-event`、`state-event` 已从 planned/explain-only 收口到 trigger adapter 第一版。
+- Lua Resource API 已支持 `resource_read/write/upsert/call/publish`，并增加 `maxResourceCalls` / `maxResourceResponseBytes` 限额。
+- 高风险资源操作已有第一版 `requireApproval` 信号校验；`requireFormalApproval` 可强制校验当前活动版本正式审批快照。
 - CAS 已要求明确版本，避免退化成普通写入。
 
 当前边界：
 
 - Redis 资源当前由 `marketing_storage_state` 承载语义，还不是真实 Redis client。
-- `MQ_TOPIC` 当前生成 publish intent，真实 broker ack 仍由 OutboxWorker/MQ sender 负责。
-- `fact-query + resourceRef` 未完成。
-- 核心 `outbox/callback + resourceRef` 未完整资源化。
-- HTTP Provider 安全治理还缺 `secretRef`、allowlist、SSRF/redirect 防护和 response schema 校验。
-- 资源审批仍是第一版信号，未接正式审批单。
+- `MQ_TOPIC` 当前生成 publish intent；OutboxWorker/MQSender 已有 adapter 边界，生产 Kafka/RabbitMQ/Pulsar SDK transport 需部署注入。
+- 资源审批已有活动正式审批快照硬校验，但还没有独立 resource approval order。
+- 生产 debug 写入审批仍需结合 Debug/Execution 权限和审批链路。
 
 暂停项：
 

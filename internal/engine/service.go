@@ -189,6 +189,12 @@ func (s *Service) CreateActivity(ctx context.Context, cmd marketing.CreateActivi
 		return marketing.Activity{}, err
 	}
 	_ = s.audit(ctx, created.TenantID, actorOrSystem(cmd.Operator), "CREATE_ACTIVITY", "ACTIVITY", created.ID, auditSnapshot(nil, created, nil))
+	if err := s.ensureEmptyWorkflowDraft(ctx, created, cmd.Operator); err != nil {
+		_ = s.audit(ctx, created.TenantID, actorOrSystem(cmd.Operator), "CREATE_WORKFLOW_EMPTY_DRAFT_FAILED", "WORKFLOW_DRAFT", created.ID, auditSnapshot(nil, nil, map[string]any{
+			"activityId": created.ID,
+			"error":      err.Error(),
+		}))
+	}
 	return created, nil
 }
 

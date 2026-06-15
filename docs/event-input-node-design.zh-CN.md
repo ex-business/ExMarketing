@@ -106,9 +106,9 @@ tenantId:sourceSystem:eventType:biz.bizType:biz.bizId
 | `standard-event` / `event-in` | 标准事件入口 | 接收已经标准化的事件，只做入口校验 | 已有基础，建议重命名和收口 |
 | `http-event` | HTTP 接口事件 | 外部系统通过 OpenAPI 主动上报标准事件 | 已支持接口，UI 节点待建模 |
 | `webhook-event` | Webhook 映射事件 | 接收第三方 payload，签名校验后映射为标准事件 | 已支持接口和 receiver config，UI 节点待建模 |
-| `mq-event` | MQ Topic 事件 | 监听 Kafka/RabbitMQ/Pulsar topic，映射消息为标准事件 | 待实现入站 consumer |
-| `schedule-event` | 定时事件 | 按 cron/延迟任务生成标准事件 | 部分能力可复用插件调度，节点模型待建 |
-| `state-event` | 状态监听事件 | 监听 Redis/config/指标/全局状态条件，命中后生成事件 | 待实现 watcher |
+| `mq-event` | MQ Topic 事件 | 监听 Kafka/RabbitMQ/Pulsar topic，映射消息为标准事件 | 已完成 trigger adapter 第一版，复用 `internal/mqconsumer.Consumer` |
+| `schedule-event` | 定时事件 | 按 cron/延迟任务生成标准事件 | 已完成 Scheduler/EventInboxProducer adapter plan 第一版 |
+| `state-event` | 状态监听事件 | 监听 Redis/config/指标/全局状态条件，命中后生成事件 | 已完成 ResourceAPI 快照读取和条件判断第一版 |
 | `cdc-event` | 数据变更事件 | 监听数据库变更并映射为标准事件 | 待实现 CDC adapter |
 | `file-event` | 文件导入事件 | CSV/Excel/S3/OSS/SFTP 批量导入并生成事件 | 待实现导入 adapter |
 | `manual-event` | 人工触发事件 | 管理台补偿、重放、手动执行 | 有 debug/replay 基础，生产补偿入口待收口 |
@@ -117,7 +117,7 @@ tenantId:sourceSystem:eventType:biz.bizType:biz.bizId
 边界说明：
 
 - `MQ_TOPIC` 资源和 `mq-publish` 属于出站发布能力，用于发奖指令、通知或业务消息发布意图。
-- `mq-event` 属于入站 trigger runtime，需要 consumer、offset、ack、retry、DLQ 和 replay；不能因为出站 `MQ_TOPIC` 已实现就标记为入站可用。
+- `mq-event` 属于入站 trigger runtime；当前已有标准事件 consumer、ACK_AFTER_INBOX_COMMIT、retry/DLQ 结果语义和节点 adapter plan，真实 broker loop/offset/replay 由部署侧 worker 承接。
 
 ### 幂等与标准化
 
@@ -335,9 +335,9 @@ tenantId:sourceSystem:eventType:biz.bizType:biz.bizId
 5. 预留入口节点：
    - `HTTP 接口事件`：已支持接口，节点先作为解释/配置节点。
    - `Webhook 映射事件`：已支持接口，节点先作为解释/配置节点。
-   - `MQ Topic 事件`：待实现入站 consumer；当前已实现的是出站 `MQ_TOPIC` 资源。
-   - `定时事件`：待实现或接入已有调度能力。
-   - `状态监听事件`：待实现。
+   - `MQ Topic 事件`：已接入 `internal/mqconsumer.Consumer` adapter plan。
+   - `定时事件`：已输出 Scheduler/EventInboxProducer plan，要求稳定 eventId/bizId/idempotencyKey。
+   - `状态监听事件`：已通过 `resourceRef` 读取可恢复状态并判断触发条件。
    - `人工触发事件`：待从 debug/replay 收口为生产补偿入口。
 
 ### 中期调整
@@ -356,9 +356,9 @@ tenantId:sourceSystem:eventType:biz.bizType:biz.bizId
 
 ### 长期调整
 
-1. 实现 MQ 入站 consumer。
-2. 实现 schedule trigger runtime。
-3. 实现 state watcher runtime。
+1. MQ 入站 consumer 已完成第一版，后续补 broker loop、offset replay 管理和 UI 运行态。
+2. schedule trigger runtime 已完成 adapter plan 第一版，后续补统一调度注册表和可视化运行态。
+3. state watcher runtime 已完成 ResourceAPI 快照判断第一版，后续补 cursor、debounce 持久化和后台 watcher。
 4. 实现 CDC adapter。
 5. 实现文件导入批处理入口。
 6. 形成统一 Trigger Registry：
@@ -436,13 +436,13 @@ updated_at
 
 第四阶段：MQ 入站。
 
-- 实现 MQ trigger registry。
-- consumer ack 必须在 inbox commit 后。
-- 支持 retry / DLQ / replay。
+- 已实现 MQ trigger adapter plan。
+- consumer ack 策略固定为 inbox commit 后。
+- 已支持 retry / DLQ 结果语义；replay 管理待 UI/worker 完整化。
 
 第五阶段：Schedule / State / CDC / File。
 
-- 按业务优先级逐个实现。
+- Schedule / State 第一版 adapter 已实现；CDC / File 后续按业务优先级实现。
 - 每个入口都必须遵守标准事件、幂等、审计、运行历史契约。
 
 ## 对签到奖励流程的落地方式

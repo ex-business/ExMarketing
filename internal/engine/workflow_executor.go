@@ -329,9 +329,9 @@ func (s *Service) workflowNodeHandlers() map[string]workflowNodeHandler {
 		"event-in":          entryWorkflowNodeHandler,
 		"http-event":        eventInputExplainWorkflowNodeHandler("HTTP", "OpenAPIEventHandler", true),
 		"webhook-event":     eventInputExplainWorkflowNodeHandler("WEBHOOK", "WebhookReceiver", true),
-		"mq-event":          eventInputExplainWorkflowNodeHandler("MQ", "MQTriggerWorker", false),
-		"schedule-event":    eventInputExplainWorkflowNodeHandler("SCHEDULE", "Scheduler", false),
-		"state-event":       eventInputExplainWorkflowNodeHandler("STATE", "StateWatcher", false),
+		"mq-event":          mqEventWorkflowNodeHandler,
+		"schedule-event":    scheduleEventWorkflowNodeHandler,
+		"state-event":       s.stateEventWorkflowNodeHandler,
 		"manual-event":      eventInputExplainWorkflowNodeHandler("MANUAL", "AdminManualTriggerAPI", false),
 		"inbox":             inboxWorkflowNodeHandler,
 		"normalize":         normalizeWorkflowNodeHandler,
@@ -347,7 +347,7 @@ func (s *Service) workflowNodeHandlers() map[string]workflowNodeHandler {
 		"lua-query":         s.luaFactQueryWorkflowNodeHandler,
 		"activity-state":    s.activityStateWorkflowNodeHandler,
 		"state-store":       s.stateStoreWorkflowNodeHandler,
-		"quota-check":       quotaCheckWorkflowNodeHandler,
+		"quota-check":       s.quotaCheckWorkflowNodeHandler,
 		"condition":         decisionWorkflowNodeHandler,
 		"qualify":           decisionWorkflowNodeHandler,
 		"switch":            decisionWorkflowNodeHandler,
@@ -360,6 +360,7 @@ func (s *Service) workflowNodeHandlers() map[string]workflowNodeHandler {
 		"limit":             limitWorkflowNodeHandler,
 		"quota":             quotaWorkflowNodeHandler,
 		"budget-reserve":    budgetReserveWorkflowNodeHandler,
+		"lock":              s.lockWorkflowNodeHandler,
 		"participation":     participationWorkflowNodeHandler,
 		"audit":             auditWorkflowNodeHandler,
 		"grant-order":       grantOrderWorkflowNodeHandler,
@@ -2017,6 +2018,382 @@ func eventInputExplainWorkflowNodeHandler(sourceType string, authority string, i
 	}
 }
 
+func mqEventWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
+	if canceled := workflowHandlerContextCanceled(ctx, node, runtime); canceled.Status != "" {
+		return canceled
+	}
+	config, failed, ok := workflowRequireNodeConfig(node)
+	if !ok {
+		failed.Output["audit"] = workflowHandlerAudit(node, runtime)
+		return failed
+	}
+	broker := strings.ToUpper(firstWorkflowString(workflowConfigString(config, "broker"), "KAFKA"))
+	topic := strings.TrimSpace(workflowConfigString(config, "topic"))
+	consumerGroup := strings.TrimSpace(workflowConfigString(config, "consumerGroup"))
+	if topic == "" || consumerGroup == "" {
+		return nodeFailed("MQ_EVENT_CONFIG_INVALID: topic and consumerGroup are required", map[string]any{
+			"errorCode": "MQ_EVENT_CONFIG_INVALID",
+			"audit":     workflowHandlerAudit(node, runtime),
+		})
+	}
+	if broker != "KAFKA" && broker != "RABBITMQ" && broker != "PULSAR" {
+		return nodeFailed("MQ_EVENT_BROKER_UNSUPPORTED: broker must be KAFKA, RABBITMQ or PULSAR", map[string]any{
+			"errorCode": "MQ_EVENT_BROKER_UNSUPPORTED",
+			"broker":    broker,
+			"audit":     workflowHandlerAudit(node, runtime),
+		})
+	}
+	ackPolicy := strings.ToUpper(firstWorkflowString(workflowConfigString(config, "ackPolicy"), "ACK_AFTER_INBOX_COMMIT"))
+	retryPolicy := strings.ToUpper(firstWorkflowString(workflowConfigString(config, "retryPolicy"), "RETRY_THEN_DLQ"))
+	if ackPolicy != "ACK_AFTER_INBOX_COMMIT" {
+		return nodeFailed("MQ_EVENT_ACK_POLICY_UNSUPPORTED: only ACK_AFTER_INBOX_COMMIT is supported", map[string]any{"errorCode": "MQ_EVENT_ACK_POLICY_UNSUPPORTED", "ackPolicy": ackPolicy, "audit": workflowHandlerAudit(node, runtime)})
+	}
+	if retryPolicy != "RETRY_THEN_DLQ" && retryPolicy != "DLQ_ONLY" {
+		return nodeFailed("MQ_EVENT_RETRY_POLICY_UNSUPPORTED: retryPolicy must be RETRY_THEN_DLQ or DLQ_ONLY", map[string]any{"errorCode": "MQ_EVENT_RETRY_POLICY_UNSUPPORTED", "retryPolicy": retryPolicy, "audit": workflowHandlerAudit(node, runtime)})
+	}
+	allowlist := workflowConfigStringList(config, "allowedSourceSystems")
+	if len(allowlist) == 0 {
+		allowlist = workflowConfigStringList(config, "sourceSystems")
+	}
+	return nodeSuccess(map[string]any{
+		"standard_event": workflowJSONValue(runtime.Inbox.Event),
+		"source": map[string]any{
+			"type":          "MQ",
+			"broker":        broker,
+			"topic":         topic,
+			"consumerGroup": consumerGroup,
+			"receivedAt":    runtime.Inbox.CreatedAt,
+		},
+		"consumerPlan": map[string]any{
+			"adapter":              "internal/mqconsumer.Consumer",
+			"payloadMode":          "STANDARD_EVENT",
+			"ackPolicy":            ackPolicy,
+			"retryPolicy":          retryPolicy,
+			"dlqRequired":          retryPolicy != "DLQ_ONLY" || workflowConfigBool(config, "dlqRequired", true),
+			"sourceAllowlist":      allowlist,
+			"idempotencyHeader":    idempotencyKeyHeaderName(),
+			"commitBoundary":       "ProcessEventFrom(mq) commits inbox before ACK",
+			"maxBodyBytes":         int64(workflowConfigNumber(config, "maxBodyBytes")),
+			"offsetCommitStrategy": "ACK_AFTER_INBOX_COMMIT",
+		},
+		"executionMode":      "TRIGGER_ADAPTER",
+		"executionAuthority": "MQTriggerWorker/internal/mqconsumer.Consumer",
+		"implemented":        true,
+		"audit":              workflowHandlerAudit(node, runtime),
+	})
+}
+
+func scheduleEventWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
+	if canceled := workflowHandlerContextCanceled(ctx, node, runtime); canceled.Status != "" {
+		return canceled
+	}
+	config, failed, ok := workflowRequireNodeConfig(node)
+	if !ok {
+		failed.Output["audit"] = workflowHandlerAudit(node, runtime)
+		return failed
+	}
+	scheduleType := strings.ToUpper(firstWorkflowString(workflowConfigString(config, "scheduleType"), "CRON"))
+	cron := strings.TrimSpace(workflowConfigString(config, "cron"))
+	timezone := firstWorkflowString(workflowConfigString(config, "timezone"), "UTC")
+	if scheduleType != "CRON" && scheduleType != "DELAY" {
+		return nodeFailed("SCHEDULE_EVENT_TYPE_UNSUPPORTED: scheduleType must be CRON or DELAY", map[string]any{"errorCode": "SCHEDULE_EVENT_TYPE_UNSUPPORTED", "scheduleType": scheduleType, "audit": workflowHandlerAudit(node, runtime)})
+	}
+	if scheduleType == "CRON" && cron == "" {
+		return nodeFailed("SCHEDULE_EVENT_CRON_REQUIRED: cron is required", map[string]any{"errorCode": "SCHEDULE_EVENT_CRON_REQUIRED", "audit": workflowHandlerAudit(node, runtime)})
+	}
+	if _, err := time.LoadLocation(timezone); err != nil {
+		return nodeFailed("SCHEDULE_EVENT_TIMEZONE_INVALID: "+err.Error(), map[string]any{"errorCode": "SCHEDULE_EVENT_TIMEZONE_INVALID", "timezone": timezone, "audit": workflowHandlerAudit(node, runtime)})
+	}
+	eventType := firstWorkflowString(workflowConfigString(config, "eventType"), runtime.Inbox.Event.EventType)
+	bizType := firstWorkflowString(workflowConfigString(config, "bizType"), "SCHEDULE")
+	bizIDTemplate := firstWorkflowString(workflowConfigString(config, "bizIdTemplate"), "${activityId}:${nodeId}:${eventId}")
+	bizID := workflowRenderNodeTemplate(bizIDTemplate, runtime, node)
+	eventIDTemplate := firstWorkflowString(workflowConfigString(config, "eventIdTemplate"), "${activityId}:${nodeId}:${biz.bizId}")
+	eventID := workflowRenderScheduleEventTemplate(eventIDTemplate, runtime, node, bizType, bizID)
+	eventPlan := map[string]any{
+		"tenantId":       runtime.Activity.TenantID,
+		"eventType":      eventType,
+		"sourceSystem":   firstWorkflowString(workflowConfigString(config, "sourceSystem"), "exmarketing-scheduler"),
+		"eventId":        eventID,
+		"occurredAt":     runtime.Inbox.Event.OccurredAt,
+		"subject":        workflowJSONValue(runtime.Inbox.Event.Subject),
+		"biz":            map[string]any{"bizType": bizType, "bizId": bizID},
+		"attributes":     workflowJSONValue(runtime.Inbox.Event.Attributes),
+		"idempotencyKey": runtime.Activity.TenantID + ":exmarketing-scheduler:" + eventType + ":" + bizType + ":" + bizID,
+	}
+	return nodeSuccess(map[string]any{
+		"standard_event": workflowJSONValue(runtime.Inbox.Event),
+		"source": map[string]any{
+			"type":         "SCHEDULE",
+			"scheduleType": scheduleType,
+			"cron":         cron,
+			"timezone":     timezone,
+		},
+		"schedulePlan": map[string]any{
+			"adapter":        "Scheduler/EventInboxProducer",
+			"misfirePolicy":  strings.ToUpper(firstWorkflowString(workflowConfigString(config, "misfirePolicy"), "FIRE_ONCE")),
+			"jitterSeconds":  int64(workflowConfigNumber(config, "jitterSeconds")),
+			"eventTemplate":  eventPlan,
+			"commitBoundary": "scheduler creates marketing_event_inbox with stable idempotencyKey",
+		},
+		"executionMode":      "TRIGGER_ADAPTER",
+		"executionAuthority": "Scheduler/EventInboxProducer",
+		"implemented":        true,
+		"audit":              workflowHandlerAudit(node, runtime),
+	})
+}
+
+func workflowRenderScheduleEventTemplate(template string, runtime workflowRuntime, node marketing.WorkflowNode, bizType, bizID string) string {
+	out := strings.TrimSpace(template)
+	for placeholder, value := range map[string]string{
+		"${biz.bizType}":     bizType,
+		"${bizType}":         bizType,
+		"${biz.bizId}":       bizID,
+		"${bizId}":           bizID,
+		"${scheduleBizId}":   bizID,
+		"${scheduleBizType}": bizType,
+	} {
+		out = strings.ReplaceAll(out, placeholder, value)
+	}
+	return workflowRenderNodeTemplate(out, runtime, node)
+}
+
+func (s *Service) stateEventWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
+	if canceled := workflowHandlerContextCanceled(ctx, node, runtime); canceled.Status != "" {
+		return canceled
+	}
+	config, failed, ok := workflowRequireNodeConfig(node)
+	if !ok {
+		failed.Output["audit"] = workflowHandlerAudit(node, runtime)
+		return failed
+	}
+	source := strings.ToUpper(firstWorkflowString(workflowConfigString(config, "source"), "RESOURCE"))
+	keyTemplate := firstWorkflowString(workflowConfigString(config, "keyTemplate"), workflowConfigString(config, "key"))
+	if keyTemplate == "" {
+		return nodeFailed("STATE_EVENT_KEY_REQUIRED: keyTemplate is required", map[string]any{"errorCode": "STATE_EVENT_KEY_REQUIRED", "audit": workflowHandlerAudit(node, runtime)})
+	}
+	condition := strings.TrimSpace(workflowConfigString(config, "condition"))
+	if condition == "" {
+		return nodeFailed("STATE_EVENT_CONDITION_REQUIRED: condition is required", map[string]any{"errorCode": "STATE_EVENT_CONDITION_REQUIRED", "audit": workflowHandlerAudit(node, runtime)})
+	}
+	namespace := firstWorkflowString(workflowConfigString(config, "namespace"), "state-watch")
+	key := workflowRenderNodeTemplate(keyTemplate, runtime, node)
+	var snapshot any
+	var resourceOutput map[string]any
+	resourceRef := strings.TrimSpace(workflowConfigString(config, "resourceRef"))
+	if resourceRef != "" {
+		output, err := s.workflowExecuteResourceAPI(ctx, node, runtime, workflowResourceAPIRequest{
+			Operation:   marketing.ResourceRead,
+			ResourceRef: resourceRef,
+			Namespace:   namespace,
+			Key:         key,
+			ValueType:   "OBJECT",
+			Options:     map[string]any{"missingPolicy": firstWorkflowString(workflowConfigString(config, "missingPolicy"), "EMPTY")},
+		})
+		if err != nil {
+			code := firstWorkflowString(workflowConfigString(output, "errorCode"), "STATE_EVENT_RESOURCE_READ_FAILED")
+			return nodeFailed(code+": "+err.Error(), output)
+		}
+		resourceOutput = output
+		snapshot = firstWorkflowAny(output["stored_value"], output["provider_response"])
+		if entry, ok := workflowJSONValue(output["storage_entry"]).(map[string]any); ok {
+			snapshot = firstWorkflowAny(entry["value"], snapshot)
+		}
+	} else {
+		switch source {
+		case "CONTEXT", "WORKFLOW_CONTEXT":
+			snapshot = workflowJSONValue(runtime.Inbox.Event.Attributes)
+		default:
+			return nodeFailed("STATE_EVENT_RESOURCE_REF_REQUIRED: resourceRef is required for "+source+" state source", map[string]any{
+				"errorCode":   "STATE_EVENT_RESOURCE_REF_REQUIRED",
+				"source":      source,
+				"namespace":   namespace,
+				"key":         key,
+				"resourceRef": resourceRef,
+				"audit":       workflowHandlerAudit(node, runtime),
+			})
+		}
+	}
+	triggered, err := workflowStateEventConditionMatched(snapshot, condition)
+	if err != nil {
+		return nodeFailed("STATE_EVENT_CONDITION_INVALID: "+err.Error(), map[string]any{"errorCode": "STATE_EVENT_CONDITION_INVALID", "condition": condition, "audit": workflowHandlerAudit(node, runtime)})
+	}
+	output := map[string]any{
+		"standard_event": workflowJSONValue(runtime.Inbox.Event),
+		"source": map[string]any{
+			"type":            "STATE",
+			"source":          source,
+			"namespace":       namespace,
+			"key":             key,
+			"intervalSeconds": int64(workflowConfigNumber(config, "intervalSeconds")),
+			"debounceSeconds": int64(workflowConfigNumber(config, "debounceSeconds")),
+		},
+		"stateSnapshot":      workflowJSONValue(snapshot),
+		"condition":          condition,
+		"triggered":          triggered,
+		"resource_result":    resourceOutput,
+		"executionMode":      "TRIGGER_ADAPTER",
+		"executionAuthority": "StateWatcher/ResourceAPI",
+		"implemented":        true,
+		"audit":              workflowHandlerAudit(node, runtime),
+	}
+	if !triggered {
+		return nodeSkipped("STATE_EVENT_CONDITION_NOT_MATCHED: state condition did not match", output)
+	}
+	return nodeSuccess(output)
+}
+
+func idempotencyKeyHeaderName() string {
+	return "Idempotency-Key"
+}
+
+func workflowStateEventConditionMatched(snapshot any, condition string) (bool, error) {
+	condition = strings.TrimSpace(condition)
+	if condition == "" {
+		return false, errors.New("condition is required")
+	}
+	if strings.EqualFold(condition, "true") {
+		return true, nil
+	}
+	if strings.EqualFold(condition, "false") {
+		return false, nil
+	}
+	ops := []string{"==", "!=", ">=", "<=", ">", "<"}
+	for _, op := range ops {
+		if left, right, ok := strings.Cut(condition, op); ok {
+			value, err := workflowStateEventConditionValue(snapshot, strings.TrimSpace(left))
+			if err != nil {
+				return false, err
+			}
+			expected := workflowStateEventLiteral(strings.TrimSpace(right))
+			return workflowCompareStateEventValues(value, expected, op), nil
+		}
+	}
+	value, err := workflowStateEventConditionValue(snapshot, condition)
+	if err != nil {
+		return false, err
+	}
+	return workflowStateEventTruthy(value), nil
+}
+
+func workflowStateEventConditionValue(snapshot any, expr string) (any, error) {
+	expr = strings.TrimSpace(expr)
+	if expr == "" || expr == "value" || expr == "$" {
+		return workflowJSONValue(snapshot), nil
+	}
+	if strings.HasPrefix(expr, "$.") || strings.HasPrefix(expr, "$[") {
+		return extractWorkflowJSONPath(snapshot, expr)
+	}
+	if strings.HasPrefix(expr, "value.") {
+		return extractWorkflowJSONPath(snapshot, "$."+strings.TrimPrefix(expr, "value."))
+	}
+	return extractWorkflowJSONPath(snapshot, "$."+expr)
+}
+
+func workflowStateEventLiteral(value string) any {
+	value = strings.TrimSpace(value)
+	if strings.EqualFold(value, "true") {
+		return true
+	}
+	if strings.EqualFold(value, "false") {
+		return false
+	}
+	if strings.EqualFold(value, "null") {
+		return nil
+	}
+	if len(value) >= 2 {
+		if (strings.HasPrefix(value, `"`) && strings.HasSuffix(value, `"`)) || (strings.HasPrefix(value, `'`) && strings.HasSuffix(value, `'`)) {
+			return strings.Trim(value, `"'`)
+		}
+	}
+	if number, err := strconv.ParseFloat(value, 64); err == nil {
+		return number
+	}
+	return value
+}
+
+func workflowCompareStateEventValues(value any, expected any, op string) bool {
+	if left, leftOK := workflowStateEventFloat(value); leftOK {
+		if right, rightOK := workflowStateEventFloat(expected); rightOK {
+			switch op {
+			case "==":
+				return left == right
+			case "!=":
+				return left != right
+			case ">=":
+				return left >= right
+			case "<=":
+				return left <= right
+			case ">":
+				return left > right
+			case "<":
+				return left < right
+			}
+		}
+	}
+	left := fmt.Sprint(value)
+	right := fmt.Sprint(expected)
+	switch op {
+	case "==":
+		return left == right
+	case "!=":
+		return left != right
+	case ">=":
+		return left >= right
+	case "<=":
+		return left <= right
+	case ">":
+		return left > right
+	case "<":
+		return left < right
+	default:
+		return false
+	}
+}
+
+func workflowStateEventFloat(value any) (float64, bool) {
+	switch typed := value.(type) {
+	case float64:
+		return typed, true
+	case float32:
+		return float64(typed), true
+	case int:
+		return float64(typed), true
+	case int64:
+		return float64(typed), true
+	case json.Number:
+		number, err := typed.Float64()
+		return number, err == nil
+	case string:
+		number, err := strconv.ParseFloat(strings.TrimSpace(typed), 64)
+		return number, err == nil
+	default:
+		return 0, false
+	}
+}
+
+func workflowStateEventTruthy(value any) bool {
+	switch typed := value.(type) {
+	case nil:
+		return false
+	case bool:
+		return typed
+	case string:
+		return strings.TrimSpace(typed) != "" && !strings.EqualFold(strings.TrimSpace(typed), "false")
+	case float64:
+		return typed != 0
+	case json.Number:
+		number, err := typed.Float64()
+		return err == nil && number != 0
+	case []any:
+		return len(typed) > 0
+	case map[string]any:
+		return len(typed) > 0
+	default:
+		return true
+	}
+}
+
 func entryWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
 	if canceled := workflowHandlerContextCanceled(ctx, node, runtime); canceled.Status != "" {
 		return canceled
@@ -3306,7 +3683,7 @@ func (s *Service) workflowStateStoreResourceConfig(ctx context.Context, node mar
 	if code := resourceAdapterConfigError(resource); code != "" {
 		return resource, true, nodeFailed(code+": resource adapter config is invalid", map[string]any{"errorCode": code, "resourceRef": resourceRef, "resourceType": resource.Type, "audit": workflowHandlerAudit(node, runtime)})
 	}
-	if workflowResourceApprovalRequired(resource, operation, config) {
+	if workflowResourceApprovalRequired(resource, operation, config, runtime) {
 		return resource, true, nodeFailed("RESOURCE_APPROVAL_REQUIRED: high risk resource operation requires approval", map[string]any{
 			"errorCode":    "RESOURCE_APPROVAL_REQUIRED",
 			"resourceRef":  resourceRef,
@@ -3470,7 +3847,7 @@ func (s *Service) workflowExecuteResourceAPI(ctx context.Context, node marketing
 		output := map[string]any{"errorCode": code, "resourceRef": resourceRef, "resourceType": resource.Type, "audit": workflowHandlerAudit(node, runtime)}
 		return output, fmt.Errorf("%s: resource adapter config is invalid", code)
 	}
-	if workflowResourceApprovalRequired(resource, accessOperation, req.Options) {
+	if workflowResourceApprovalRequired(resource, accessOperation, req.Options, runtime) {
 		output := map[string]any{"errorCode": "RESOURCE_APPROVAL_REQUIRED", "resourceRef": resourceRef, "resourceType": resource.Type, "operation": accessOperation, "audit": workflowHandlerAudit(node, runtime)}
 		return output, errors.New("RESOURCE_APPROVAL_REQUIRED: high risk resource operation requires approval")
 	}
@@ -3553,12 +3930,15 @@ func workflowNormalizeResourceAPIOperation(operation marketing.ResourceOperation
 	}
 }
 
-func workflowResourceApprovalRequired(resource marketing.Resource, operation marketing.ResourceOperation, options map[string]any) bool {
+func workflowResourceApprovalRequired(resource marketing.Resource, operation marketing.ResourceOperation, options map[string]any, runtime workflowRuntime) bool {
 	if !workflowConfigBool(resource.ConfigMap(), "requireApproval", false) {
 		return false
 	}
 	switch operation {
 	case marketing.ResourceDelete, marketing.ResourceCall, marketing.ResourcePublish:
+		if workflowConfigBool(resource.ConfigMap(), "requireFormalApproval", false) {
+			return !activityApprovalValid(runtime.Activity)
+		}
 		if workflowConfigBool(options, "approved", false) || strings.TrimSpace(workflowConfigString(options, "approvalId")) != "" {
 			return false
 		}
@@ -3637,12 +4017,8 @@ func (s *Service) workflowHTTPStateStore(ctx context.Context, node marketing.Wor
 		return nodeFailed("STATE_STORE_HTTP_REQUEST_INVALID: "+err.Error(), map[string]any{"errorCode": "STATE_STORE_HTTP_REQUEST_INVALID", "error": err.Error(), "audit": workflowHandlerAudit(node, runtime)})
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if rawHeaders, ok := config["requestHeaders"].(map[string]any); ok {
-		for key, value := range rawHeaders {
-			if strings.TrimSpace(key) != "" && value != nil {
-				req.Header.Set(key, fmt.Sprint(value))
-			}
-		}
+	if err := workflowApplyHTTPProviderHeaders(req, config); err != nil {
+		return nodeFailed("STATE_STORE_HTTP_SECRET_UNRESOLVED: "+err.Error(), map[string]any{"errorCode": "STATE_STORE_HTTP_SECRET_UNRESOLVED", "error": err.Error(), "audit": workflowHandlerAudit(node, runtime)})
 	}
 	client := workflowHTTPProviderClient(config)
 	resp, err := client.Do(req)
@@ -3654,21 +4030,27 @@ func (s *Service) workflowHTTPStateStore(ctx context.Context, node marketing.Wor
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nodeFailed("STATE_STORE_HTTP_FAILED: provider returned non-2xx", map[string]any{"errorCode": "STATE_STORE_HTTP_FAILED", "statusCode": resp.StatusCode, "response": string(respBody), "audit": workflowHandlerAudit(node, runtime)})
 	}
-	output := workflowHTTPStateStoreOutput(node, runtime, operation, namespace, storageKey, valueType, respBody)
+	output, schemaErr := workflowHTTPStateStoreOutput(node, runtime, config, operation, namespace, storageKey, valueType, respBody)
+	if schemaErr != nil {
+		return nodeFailed("RESOURCE_HTTP_RESPONSE_SCHEMA_INVALID: "+schemaErr.Error(), map[string]any{"errorCode": "RESOURCE_HTTP_RESPONSE_SCHEMA_INVALID", "error": schemaErr.Error(), "audit": workflowHandlerAudit(node, runtime)})
+	}
 	return nodeSuccess(output)
 }
 
-func workflowHTTPStateStoreOutput(node marketing.WorkflowNode, runtime workflowRuntime, operation string, namespace string, storageKey string, valueType string, body []byte) map[string]any {
+func workflowHTTPStateStoreOutput(node marketing.WorkflowNode, runtime workflowRuntime, config map[string]any, operation string, namespace string, storageKey string, valueType string, body []byte) (map[string]any, error) {
 	if len(strings.TrimSpace(string(body))) == 0 {
-		return workflowStateStoreOutput(node, runtime, "HTTP", operation, namespace, storageKey, valueType, nil, 0, operation != "READ" && operation != "DELETE")
+		return workflowStateStoreOutput(node, runtime, "HTTP", operation, namespace, storageKey, valueType, nil, 0, operation != "READ" && operation != "DELETE"), nil
 	}
 	var decoded any
 	if err := json.Unmarshal(body, &decoded); err != nil {
-		return workflowStateStoreOutput(node, runtime, "HTTP", operation, namespace, storageKey, "STRING", string(body), 0, true)
+		return workflowStateStoreOutput(node, runtime, "HTTP", operation, namespace, storageKey, "STRING", string(body), 0, true), nil
+	}
+	if err := workflowValidateHTTPResponseSchema(config, decoded); err != nil {
+		return nil, err
 	}
 	mapped, _ := workflowJSONValue(decoded).(map[string]any)
 	if mapped == nil {
-		return workflowStateStoreOutput(node, runtime, "HTTP", operation, namespace, storageKey, valueType, decoded, 0, true)
+		return workflowStateStoreOutput(node, runtime, "HTTP", operation, namespace, storageKey, valueType, decoded, 0, true), nil
 	}
 	value := firstWorkflowAny(mapped["stored_value"], mapped["value"], mapped["data"])
 	version := workflowInt64(firstWorkflowAny(mapped["storage_version"], mapped["version"]))
@@ -3689,7 +4071,38 @@ func workflowHTTPStateStoreOutput(node marketing.WorkflowNode, runtime workflowR
 	}
 	output := workflowStateStoreOutput(node, runtime, "HTTP", operation, namespace, storageKey, valueType, value, version, exists)
 	output["provider_response"] = workflowJSONValue(decoded)
-	return output
+	return output, nil
+}
+
+func workflowValidateHTTPResponseSchema(config map[string]any, decoded any) error {
+	raw, ok := config["responseSchema"]
+	if !ok || raw == nil {
+		return nil
+	}
+	schema, ok := workflowJSONValue(raw).(map[string]any)
+	if !ok {
+		return errors.New("responseSchema must be object")
+	}
+	for _, key := range []string{"required", "requiredPaths"} {
+		for _, path := range resourceConfigStringList(schema, key) {
+			value, err := extractWorkflowJSONPath(decoded, path)
+			if err != nil || workflowDatabaseTableValueEmpty(value) {
+				return fmt.Errorf("required response path %s is missing", path)
+			}
+		}
+	}
+	if fields, ok := workflowJSONValue(schema["fields"]).(map[string]any); ok {
+		for path, rawType := range fields {
+			value, err := extractWorkflowJSONPath(decoded, path)
+			if err != nil {
+				return fmt.Errorf("response path %s is missing", path)
+			}
+			if !workflowDatabaseTableColumnTypeValid(value, strings.ToUpper(fmt.Sprint(rawType))) {
+				return fmt.Errorf("response path %s must be %s", path, rawType)
+			}
+		}
+	}
+	return nil
 }
 
 func workflowValidateHTTPProviderEndpoint(endpoint string, config map[string]any) error {
@@ -3947,7 +4360,10 @@ func (s *Service) workflowDatabaseTableStateStore(ctx context.Context, node mark
 		output["primaryKey"] = primaryKey
 		return nodeSuccess(output)
 	case "DEFINE", "WRITE", "UPSERT", "APPEND":
-		rows := workflowDatabaseTableRows(workflowStateStoreValue(ctx, config, runtime, "TABLE"), runtime)
+		rows, tableErr := workflowDatabaseTableRows(ctx, node, config, workflowStateStoreValue(ctx, config, runtime, "TABLE"), runtime)
+		if tableErr != nil {
+			return nodeFailed(tableErr.Error(), map[string]any{"errorCode": workflowDatabaseTableErrorCode(tableErr), "error": tableErr.Error(), "audit": workflowHandlerAudit(node, runtime)})
+		}
 		if len(rows) == 0 {
 			return nodeFailed("STATE_STORE_TABLE_ROW_REQUIRED: table row is required", map[string]any{"errorCode": "STATE_STORE_TABLE_ROW_REQUIRED", "audit": workflowHandlerAudit(node, runtime)})
 		}
@@ -4010,20 +4426,38 @@ func workflowDatabaseTableNamespace(config map[string]any, fallback string) stri
 	return "table:" + fallback
 }
 
-func workflowDatabaseTableRows(value any, runtime workflowRuntime) []map[string]any {
+func workflowDatabaseTableRows(ctx context.Context, node marketing.WorkflowNode, config map[string]any, value any, runtime workflowRuntime) ([]map[string]any, error) {
 	normalized := workflowJSONValue(value)
 	var rows []map[string]any
 	switch typed := normalized.(type) {
 	case []any:
 		for _, item := range typed {
 			if row, ok := item.(map[string]any); ok {
-				rows = append(rows, workflowDatabaseTableEnrichRow(row, runtime))
+				mapped, err := workflowDatabaseTablePrepareRow(ctx, node, config, row, runtime)
+				if err != nil {
+					return nil, err
+				}
+				rows = append(rows, mapped)
 			}
 		}
 	case map[string]any:
-		rows = append(rows, workflowDatabaseTableEnrichRow(typed, runtime))
+		mapped, err := workflowDatabaseTablePrepareRow(ctx, node, config, typed, runtime)
+		if err != nil {
+			return nil, err
+		}
+		rows = append(rows, mapped)
 	}
-	return rows
+	return rows, nil
+}
+
+func workflowDatabaseTablePrepareRow(ctx context.Context, node marketing.WorkflowNode, config map[string]any, row map[string]any, runtime workflowRuntime) (map[string]any, error) {
+	out := workflowDatabaseTableEnrichRow(row, runtime)
+	out = workflowDatabaseTableApplyMapping(ctx, node, config, out, runtime, "keyMapping")
+	out = workflowDatabaseTableApplyMapping(ctx, node, config, out, runtime, "valueMapping")
+	if err := workflowDatabaseTableValidateRow(config, out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func workflowDatabaseTableEnrichRow(row map[string]any, runtime workflowRuntime) map[string]any {
@@ -4056,6 +4490,182 @@ func workflowDatabaseTableRowKey(row map[string]any, primaryKey []string) string
 		parts = append(parts, strings.TrimSpace(fmt.Sprint(value)))
 	}
 	return strings.Join(parts, ":")
+}
+
+func workflowDatabaseTableApplyMapping(ctx context.Context, node marketing.WorkflowNode, config map[string]any, row map[string]any, runtime workflowRuntime, mappingKey string) map[string]any {
+	raw, ok := config[mappingKey]
+	if !ok || raw == nil {
+		return row
+	}
+	mapping, ok := workflowJSONValue(raw).(map[string]any)
+	if !ok {
+		return row
+	}
+	out := make(map[string]any, len(row)+len(mapping))
+	for key, value := range row {
+		out[key] = value
+	}
+	base := workflowFactQueryBaseContext(ctx, runtime)
+	base["row"] = workflowJSONValue(row)
+	for column, spec := range mapping {
+		column = strings.TrimSpace(column)
+		if column == "" {
+			continue
+		}
+		if value, ok := workflowDatabaseTableMappingValue(base, spec, runtime, node); ok {
+			out[column] = value
+		}
+	}
+	return out
+}
+
+func workflowDatabaseTableMappingValue(base map[string]any, spec any, runtime workflowRuntime, node marketing.WorkflowNode) (any, bool) {
+	switch typed := spec.(type) {
+	case string:
+		text := strings.TrimSpace(typed)
+		if text == "" {
+			return nil, false
+		}
+		if strings.HasPrefix(text, "$.") || text == "$" {
+			value, err := extractWorkflowJSONPath(base, text)
+			return value, err == nil
+		}
+		if strings.Contains(text, "${") {
+			return workflowRenderNodeTemplate(text, runtime, node), true
+		}
+		return typed, true
+	case map[string]any:
+		if path := workflowConfigString(typed, "path"); path != "" {
+			value, err := extractWorkflowJSONPath(base, path)
+			if err == nil {
+				return value, true
+			}
+			if fallback, ok := typed["default"]; ok {
+				return workflowJSONValue(fallback), true
+			}
+			return nil, false
+		}
+		if template := workflowConfigString(typed, "template"); template != "" {
+			return workflowRenderNodeTemplate(template, runtime, node), true
+		}
+		if value, ok := typed["value"]; ok {
+			return workflowJSONValue(value), true
+		}
+	case nil:
+		return nil, false
+	default:
+		return workflowJSONValue(spec), true
+	}
+	return nil, false
+}
+
+func workflowDatabaseTableValidateRow(config map[string]any, row map[string]any) error {
+	columns := workflowDatabaseTableSchemaColumns(config)
+	for _, column := range columns {
+		value, exists := row[column.Name]
+		if column.Required && (!exists || workflowDatabaseTableValueEmpty(value)) {
+			return fmt.Errorf("STATE_STORE_TABLE_SCHEMA_INVALID: required column %s is missing", column.Name)
+		}
+		if exists && !workflowDatabaseTableColumnTypeValid(value, column.Type) {
+			return fmt.Errorf("STATE_STORE_TABLE_SCHEMA_INVALID: column %s must be %s", column.Name, column.Type)
+		}
+	}
+	return nil
+}
+
+type workflowDatabaseTableColumn struct {
+	Name     string
+	Type     string
+	Required bool
+}
+
+func workflowDatabaseTableSchemaColumns(config map[string]any) []workflowDatabaseTableColumn {
+	schema, _ := workflowJSONValue(config["schema"]).(map[string]any)
+	if schema == nil {
+		schema, _ = workflowJSONValue(config["tableSchema"]).(map[string]any)
+	}
+	if schema == nil {
+		return nil
+	}
+	rawColumns := firstWorkflowAny(schema["columns"], schema["fields"])
+	switch typed := workflowJSONValue(rawColumns).(type) {
+	case []any:
+		columns := make([]workflowDatabaseTableColumn, 0, len(typed))
+		for _, item := range typed {
+			if mapped, ok := item.(map[string]any); ok {
+				name := firstWorkflowString(workflowConfigString(mapped, "name"), workflowConfigString(mapped, "key"))
+				if name == "" {
+					continue
+				}
+				columns = append(columns, workflowDatabaseTableColumn{
+					Name:     name,
+					Type:     strings.ToUpper(firstWorkflowString(workflowConfigString(mapped, "type"), "ANY")),
+					Required: workflowConfigBool(mapped, "required", false),
+				})
+			}
+		}
+		return columns
+	case map[string]any:
+		columns := make([]workflowDatabaseTableColumn, 0, len(typed))
+		for name, item := range typed {
+			column := workflowDatabaseTableColumn{Name: strings.TrimSpace(name), Type: "ANY"}
+			if mapped, ok := workflowJSONValue(item).(map[string]any); ok {
+				column.Type = strings.ToUpper(firstWorkflowString(workflowConfigString(mapped, "type"), "ANY"))
+				column.Required = workflowConfigBool(mapped, "required", false)
+			} else if typeName := strings.TrimSpace(fmt.Sprint(item)); typeName != "" {
+				column.Type = strings.ToUpper(typeName)
+			}
+			if column.Name != "" {
+				columns = append(columns, column)
+			}
+		}
+		return columns
+	default:
+		return nil
+	}
+}
+
+func workflowDatabaseTableValueEmpty(value any) bool {
+	if value == nil {
+		return true
+	}
+	if text, ok := value.(string); ok {
+		return strings.TrimSpace(text) == ""
+	}
+	return false
+}
+
+func workflowDatabaseTableColumnTypeValid(value any, columnType string) bool {
+	if value == nil || columnType == "" || columnType == "ANY" {
+		return true
+	}
+	switch strings.ToUpper(columnType) {
+	case "STRING":
+		_, ok := value.(string)
+		return ok
+	case "NUMBER", "DECIMAL":
+		_, ok := workflowRouteNumber(value)
+		return ok
+	case "BOOLEAN", "BOOL":
+		_, ok := value.(bool)
+		return ok
+	case "OBJECT", "JSON":
+		_, ok := workflowJSONValue(value).(map[string]any)
+		return ok
+	case "ARRAY", "TABLE":
+		_, ok := workflowJSONValue(value).([]any)
+		return ok
+	default:
+		return true
+	}
+}
+
+func workflowDatabaseTableErrorCode(err error) string {
+	message := err.Error()
+	if strings.HasPrefix(message, "STATE_STORE_TABLE_SCHEMA_INVALID") {
+		return "STATE_STORE_TABLE_SCHEMA_INVALID"
+	}
+	return "STATE_STORE_TABLE_INVALID"
 }
 
 func (s *Service) workflowRedisStateStore(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime, resource marketing.Resource, config map[string]any, operation string, namespace string, storageKey string, valueType string) workflowNodeResult {
@@ -4344,6 +4954,141 @@ func quotaCheckWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowN
 	result.Output["executionMode"] = "REAL_HANDLER"
 	result.Output["executionAuthority"] = "WorkflowExecutor/QuotaStore"
 	return result
+}
+
+func (s *Service) quotaCheckWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
+	if strings.TrimSpace(workflowExplicitConfigString(node, "resourceRef")) == "" {
+		return quotaCheckWorkflowNodeHandler(ctx, node, runtime)
+	}
+	config, failed, ok := workflowRequireNodeConfig(node)
+	if !ok {
+		failed.Output["audit"] = workflowHandlerAudit(node, runtime)
+		return failed
+	}
+	scopeKey := workflowRenderNodeTemplate(firstWorkflowString(workflowConfigString(config, "scopeKeyTemplate"), "${subject.id}:${activityId}"), runtime, node)
+	namespace := firstWorkflowString(workflowConfigString(config, "namespace"), "quota")
+	operation := marketing.ResourceCheckAndIncrement
+	if strings.EqualFold(workflowConfigString(config, "consumeMode"), "CHECK_ONLY") {
+		operation = marketing.ResourceRead
+	}
+	output, err := s.workflowExecuteResourceAPI(ctx, node, runtime, workflowResourceAPIRequest{
+		Operation:   operation,
+		ResourceRef: workflowExplicitConfigString(node, "resourceRef"),
+		Namespace:   namespace,
+		Key:         scopeKey,
+		ValueType:   "NUMBER",
+		Options: map[string]any{
+			"delta": workflowQuotaCheckDelta(config),
+			"max":   workflowConfigNumber(config, "maxCount"),
+		},
+	})
+	if err != nil {
+		if output == nil {
+			output = map[string]any{}
+		}
+		output["quota_check"] = workflowQuotaCheckResult(config, runtime, scopeKey, output, false)
+		output["executionMode"] = "REAL_HANDLER"
+		output["executionAuthority"] = "WorkflowExecutor/RedisCounterResource"
+		return nodeFailed(err.Error(), output)
+	}
+	quotaCheck := workflowQuotaCheckResult(config, runtime, scopeKey, output, true)
+	return nodeSuccess(map[string]any{
+		"quota_check":        quotaCheck,
+		"limit_hold":         quotaCheck,
+		"resource_result":    output,
+		"nodeType":           nodeHandlerKey(node),
+		"executionMode":      "REAL_HANDLER",
+		"executionAuthority": "WorkflowExecutor/RedisCounterResource",
+		"audit":              workflowHandlerAudit(node, runtime),
+	})
+}
+
+func workflowQuotaCheckDelta(config map[string]any) float64 {
+	switch strings.ToUpper(firstWorkflowString(workflowConfigString(config, "consumeMode"), "CHECK_ONLY")) {
+	case "ATOMIC":
+		return 1
+	default:
+		return 0
+	}
+}
+
+func workflowQuotaCheckResult(config map[string]any, runtime workflowRuntime, scopeKey string, resourceOutput map[string]any, allowed bool) map[string]any {
+	counter := firstWorkflowAny(resourceOutput["counter"], resourceOutput["stored_value"])
+	return map[string]any{
+		"scope":        firstWorkflowString(workflowConfigString(config, "scope"), "USER"),
+		"scopeKey":     scopeKey,
+		"window":       firstWorkflowString(workflowConfigString(config, "window"), "DAY"),
+		"maxCount":     workflowConfigNumber(config, "maxCount"),
+		"consumeMode":  firstWorkflowString(workflowConfigString(config, "consumeMode"), "CHECK_ONLY"),
+		"exceedAction": firstWorkflowString(workflowConfigString(config, "exceedAction"), "BLOCK"),
+		"allowed":      allowed,
+		"counter":      counter,
+		"subject":      runtime.Inbox.Event.Subject.ID,
+		"activityId":   runtime.Activity.ID,
+		"resourceRef":  workflowConfigString(resourceOutput, "resourceRef"),
+	}
+}
+
+func (s *Service) lockWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
+	config, failed, ok := workflowRequireNodeConfig(node)
+	if !ok {
+		failed.Output["audit"] = workflowHandlerAudit(node, runtime)
+		return failed
+	}
+	resourceRef := strings.TrimSpace(workflowExplicitConfigString(node, "resourceRef"))
+	if resourceRef == "" {
+		return nodeFailed("LOCK_RESOURCE_REF_REQUIRED: resourceRef is required", map[string]any{"errorCode": "LOCK_RESOURCE_REF_REQUIRED", "audit": workflowHandlerAudit(node, runtime)})
+	}
+	operation := workflowLockResourceOperation(config)
+	key := workflowRenderNodeTemplate(firstWorkflowString(workflowConfigString(config, "keyTemplate"), "${activityId}:${subject.id}"), runtime, node)
+	output, err := s.workflowExecuteResourceAPI(ctx, node, runtime, workflowResourceAPIRequest{
+		Operation:   operation,
+		ResourceRef: resourceRef,
+		Namespace:   firstWorkflowString(workflowConfigString(config, "namespace"), "lock"),
+		Key:         key,
+		ValueType:   "OBJECT",
+		Options: map[string]any{
+			"ttlSeconds": workflowConfigNumber(config, "ttlSeconds"),
+			"owner":      firstWorkflowString(workflowConfigString(config, "owner"), runtime.Inbox.Event.EventID),
+		},
+	})
+	if err != nil {
+		if output == nil {
+			output = map[string]any{}
+		}
+		output["lock_result"] = workflowLockResult(config, key, output, false)
+		return nodeFailed(err.Error(), output)
+	}
+	return nodeSuccess(map[string]any{
+		"lock_result":        workflowLockResult(config, key, output, true),
+		"resource_result":    output,
+		"nodeType":           nodeHandlerKey(node),
+		"executionMode":      "REAL_HANDLER",
+		"executionAuthority": "WorkflowExecutor/RedisLockResource",
+		"audit":              workflowHandlerAudit(node, runtime),
+	})
+}
+
+func workflowLockResourceOperation(config map[string]any) marketing.ResourceOperation {
+	switch strings.ToUpper(firstWorkflowString(workflowConfigString(config, "operation"), "ACQUIRE")) {
+	case "READ":
+		return marketing.ResourceRead
+	case "RELEASE", "DELETE":
+		return marketing.ResourceDelete
+	default:
+		return marketing.ResourceUpsert
+	}
+}
+
+func workflowLockResult(config map[string]any, key string, resourceOutput map[string]any, acquired bool) map[string]any {
+	return map[string]any{
+		"operation":   firstWorkflowString(workflowConfigString(config, "operation"), "ACQUIRE"),
+		"key":         key,
+		"acquired":    acquired,
+		"lock":        firstWorkflowAny(resourceOutput["lock"], resourceOutput["stored_value"]),
+		"resourceRef": workflowConfigString(resourceOutput, "resourceRef"),
+		"errorCode":   workflowConfigString(resourceOutput, "errorCode"),
+	}
 }
 
 func decisionWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
@@ -5203,7 +5948,7 @@ func (s *Service) outboxWorkflowNodeHandler(ctx context.Context, node marketing.
 		if code := resourceAdapterConfigError(resource); code != "" {
 			return nodeFailed(code+": resource adapter config is invalid", map[string]any{"errorCode": code, "resourceRef": resourceRef, "resourceType": resource.Type, "audit": workflowHandlerAudit(node, runtime)})
 		}
-		if workflowResourceApprovalRequired(resource, operation, config) {
+		if workflowResourceApprovalRequired(resource, operation, config, runtime) {
 			return nodeFailed("RESOURCE_APPROVAL_REQUIRED: high risk resource operation requires approval", map[string]any{
 				"errorCode":    "RESOURCE_APPROVAL_REQUIRED",
 				"resourceRef":  resourceRef,
@@ -5428,7 +6173,7 @@ func (s *Service) callbackWorkflowNodeHandler(ctx context.Context, node marketin
 		if code := resourceAdapterConfigError(resource); code != "" {
 			return nodeFailed(code+": resource adapter config is invalid", map[string]any{"errorCode": code, "resourceRef": resourceRef, "resourceType": resource.Type, "audit": workflowHandlerAudit(node, runtime)})
 		}
-		if workflowResourceApprovalRequired(resource, marketing.ResourceCall, config) {
+		if workflowResourceApprovalRequired(resource, marketing.ResourceCall, config, runtime) {
 			return nodeFailed("RESOURCE_APPROVAL_REQUIRED: high risk resource operation requires approval", map[string]any{
 				"errorCode":    "RESOURCE_APPROVAL_REQUIRED",
 				"resourceRef":  resourceRef,

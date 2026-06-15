@@ -208,6 +208,7 @@ func TestDefaultWorkflowNodeConfigSchemasClassifyEventInputCoreAdvancedAndOpsNod
 		"split":             "ADVANCED",
 		"activity-state":    "STORAGE",
 		"state-store":       "STORAGE",
+		"lock":              "STORAGE",
 		"quota-check":       "CORE",
 		"candidate-reward":  "CORE",
 		"decimal":           "ADVANCED",

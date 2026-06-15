@@ -1198,24 +1198,29 @@ func TestActivityWorkflowHTTPAPI(t *testing.T) {
 		}
 	})
 
-	t.Run("publish requires draft", func(t *testing.T) {
+	t.Run("new activity starts with saved empty draft", func(t *testing.T) {
 		handler := newTestHandler()
 		activityID := createActivity(t, handler)
+		getDraft := httptest.NewRecorder()
+		handler.Routes().ServeHTTP(getDraft, httptest.NewRequest(http.MethodGet, "/admin/v1/activities/"+activityID+"/workflow/draft", nil))
+		if getDraft.Code != http.StatusOK || !strings.Contains(getDraft.Body.String(), `"nodes":[]`) || !strings.Contains(getDraft.Body.String(), `"createdAs":"empty-draft"`) {
+			t.Fatalf("expected saved empty draft, got %d: %s", getDraft.Code, getDraft.Body.String())
+		}
 		rec := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodPost, "/admin/v1/activities/"+activityID+"/workflow/publish", strings.NewReader(`{"operator":"ops"}`))
 		handler.Routes().ServeHTTP(rec, req)
-		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "workflow draft is required") {
-			t.Fatalf("expected missing draft status %d, got %d: %s", http.StatusBadRequest, rec.Code, rec.Body.String())
+		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "WORKFLOW_NODES_REQUIRED") {
+			t.Fatalf("expected empty draft publish validation failure, got %d: %s", rec.Code, rec.Body.String())
 		}
 	})
 
 	handler := newTestHandler()
 	activityID := createActivity(t, handler)
 
-	validateMissingDraft := httptest.NewRecorder()
-	handler.Routes().ServeHTTP(validateMissingDraft, httptest.NewRequest(http.MethodPost, "/admin/v1/activities/"+activityID+"/workflow/draft/validate", nil))
-	if validateMissingDraft.Code != http.StatusNotFound {
-		t.Fatalf("expected missing draft validation status %d, got %d: %s", http.StatusNotFound, validateMissingDraft.Code, validateMissingDraft.Body.String())
+	validateEmptyDraft := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(validateEmptyDraft, httptest.NewRequest(http.MethodPost, "/admin/v1/activities/"+activityID+"/workflow/draft/validate", nil))
+	if validateEmptyDraft.Code != http.StatusOK || !strings.Contains(validateEmptyDraft.Body.String(), `"valid":false`) || !strings.Contains(validateEmptyDraft.Body.String(), `"code":"WORKFLOW_NODES_REQUIRED"`) {
+		t.Fatalf("expected empty draft validation issue, got %d: %s", validateEmptyDraft.Code, validateEmptyDraft.Body.String())
 	}
 
 	invalidDraft := httptest.NewRecorder()

@@ -1174,6 +1174,10 @@ VIEWER 不能保存写资源节点
 | `HTTP_PROVIDER` adapter | 已完成第一版 | `endpoint/method/httpMethod/headers/timeoutSeconds` 从资源读取，节点显式配置可覆盖 |
 | Adapter 配置校验 | 已完成第一版 | `TestResource` 和运行时都会校验公共表、HTTP Provider 的必要配置 |
 | HTTP Provider 安全治理 | 已完成第一版 | URL scheme、userinfo、allowlist、blockedHosts、private network 阻断开关、redirect 防护已接入运行时 |
+| 公共表 schema / mapping | 已完成第一版 | `schema/tableSchema`、`keyMapping`、`valueMapping` 已在 TestResource 和运行时强校验 |
+| HTTP Provider 密钥治理 | 已完成第一版 | 支持 `secretRef`、`headersRef`，避免敏感 header 明文配置 |
+| HTTP Provider response schema | 已完成第一版 | 支持 `responseSchema.required/requiredPaths/fields` 校验 |
+| 测试连接 dry-run | 已完成第一版 | `dryRun=true` 时 TestResource 会对 HTTP Provider 执行受控 dry-run 调用 |
 | `fact-query + resourceRef` | 已完成第一版 | 支持资源读和 HTTP Provider CALL 查询，统一输出 `facts` |
 | `outbox/callback + resourceRef` | 已完成第一版 | 核心节点可绑定资源、校验权限、生成计划并记录审计；真实投递/回调仍由 worker/API 权威 |
 | 资源审计 | 已完成第一版 | `state-store/fact-query/outbox/callback/mq-publish/Lua Resource API + resourceRef` 会记录资源调用审计 |
@@ -1182,10 +1186,8 @@ VIEWER 不能保存写资源节点
 
 | 项目 | 状态 | 说明 |
 | --- | --- | --- |
-| 公共表 schema / mapping | 未完成 | 目前只校验表名和主键；`schema`、`keyMapping`、`valueMapping` 还未成为强约束 |
-| HTTP Provider 密钥治理 | 未完成 | `secretRef` 仍未接入密钥服务；当前只能使用资源配置中的非敏感 headers |
-| HTTP Provider response schema | 未完成 | 当前只做通用 response 解析，没有按资源 schema 校验响应 |
-| 测试连接 dry-run | 未完成 | 当前 `TestResource` 是配置校验，不是真实外部探活或 dry-run 调用 |
+| 独立密钥服务 | 未完成 | `secretRef` 当前支持环境变量解析，尚未接企业 KMS/Vault |
+| 外部 Provider 灰度/熔断 | 未完成 | 当前有 timeout/schema/dry-run，还没有 provider 级熔断和健康权重 |
 
 验收：
 
@@ -1212,7 +1214,7 @@ HTTP Provider endpoint 不再必须出现在节点配置里：已完成
 2. `mq-publish + resourceRef` 已支持 `MQ_TOPIC`：
    - topic/provider/destination 从资源配置读取
    - 节点负责生成受控 `PUBLISH_ACCEPTED` 意图、资源权限校验和审计
-   - 真正 broker ack 仍由 OutboxWorker/MQ sender 边界负责，不在流程节点里伪造发送成功
+   - OutboxWorker 已有 `MQSender`/`RuntimeMQSender` adapter 边界、provider allowlist、send timeout 和失败重试/DLQ 语义；真实 broker SDK 由部署侧 transport 注入，不在流程节点里伪造发送成功
 3. Lua 已暴露受控 Resource API：
    - `resource_read(resourceRef, key, options)`
    - `resource_write(resourceRef, key, value, options)`
@@ -1223,7 +1225,8 @@ HTTP Provider endpoint 不再必须出现在节点配置里：已完成
    - 支持 `maxResourceCalls` 和 `maxResourceResponseBytes`，防止脚本无限调用资源或拉取超大响应
 4. 高风险操作第一版支持资源级审批开关：
    - 资源配置 `requireApproval: true` 时，`DELETE/CALL/PUBLISH` 必须在 options 中传 `approved: true` 或 `approvalId`
-   - 后续需要接入正式审批单和生产 debug 写入审批链路
+   - 资源配置 `requireFormalApproval: true` 时，必须命中当前活动版本的正式审批快照，`approvalId` 不能绕过
+   - 后续需要接入独立资源审批单和生产 debug 写入审批链路
 
 已完成：
 
@@ -1237,6 +1240,9 @@ HTTP Provider endpoint 不再必须出现在节点配置里：已完成
 | Lua Resource API | 已完成第一版 | 支持 `resource_read/write/upsert/call/publish` |
 | Lua 资源调用限流 | 已完成第一版 | 支持每个脚本最大资源调用次数和单次响应大小限制 |
 | 高风险资源操作审批 | 已完成第一版 | `requireApproval=true` 时，`DELETE/CALL/PUBLISH` 要求 `approved` 或 `approvalId` |
+| 正式活动审批快照校验 | 已完成第一版 | `requireFormalApproval=true` 时必须通过当前活动版本审批 |
+| `quota-check + REDIS_COUNTER` | 已完成第一版 | `quota-check` 可直接引用 `REDIS_COUNTER resourceRef` 做 `READ/CHECK_AND_INCREMENT` |
+| `lock + REDIS_LOCK` | 已完成第一版 | 专用 `lock` 节点支持 acquire/read/release 和 ttl |
 | CAS 语义 | 已完成第一版 | `CAS` 必须带 `expectedVersion` 或上游 `storage_version`，否则阻断 |
 
 仍需完善：
@@ -1244,16 +1250,16 @@ HTTP Provider endpoint 不再必须出现在节点配置里：已完成
 | 项目 | 状态 | 说明 |
 | --- | --- | --- |
 | 真实 Redis client adapter | 未完成 | 当前 Redis 语义由 `marketing_storage_state` 承载，未来替换成真实 Redis client |
-| MQ broker ack | 未完成 | `MQ_TOPIC` 当前不直接发送 broker，只生成发布意图；真实 ack 仍由 OutboxWorker/MQ sender |
-| 正式审批单校验 | 未完成 | 当前只认 `approved/approvalId` 信号，还没校验审批单状态和权限 |
+| MQ broker transport SDK | 未完成 | 当前有 OutboxWorker/MQSender 边界和测试 transport，生产 Kafka/RabbitMQ/Pulsar SDK 需部署侧注入 |
+| 独立资源审批单 | 未完成 | 已支持活动正式审批快照硬校验，尚未建立独立 resource approval order |
 | 生产 debug 写入审批 | 未完成 | 需要结合 Debug/Execution 权限和审批链路 |
 
 验收：
 
 ```text
-quota-check 可使用 REDIS_COUNTER：部分完成，REDIS_COUNTER resource 已可执行，quota-check 直接 resourceRef 还未改造
-lock 节点可使用 REDIS_LOCK：部分完成，REDIS_LOCK resource 已可执行，专用 lock 节点还未建立
-outbox 可使用 MQ_TOPIC/HTTP_PROVIDER：已完成第一版，核心 outbox 可绑定资源并生成 dispatch plan；真实 broker ack 仍由 OutboxWorker/MQ sender
+quota-check 可使用 REDIS_COUNTER：已完成第一版，quota-check 可直接绑定 resourceRef
+lock 节点可使用 REDIS_LOCK：已完成第一版，专用 lock 节点已建立
+outbox 可使用 MQ_TOPIC/HTTP_PROVIDER：已完成第一版，核心 outbox 可绑定资源并生成 dispatch plan；MQ 真发送由 OutboxWorker/MQSender transport 承接
 Lua 只能访问被 binding 授权的资源：已完成第一版
 ```
 

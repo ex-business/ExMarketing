@@ -2431,20 +2431,6 @@ function buildStudioActivityPayload(input: CreateStudioActivityInput) {
   };
 }
 
-function emptyWorkflowDefinition(context: { activityId: string; workspaceId: string; folderId: string }): WorkflowDefinition {
-  return {
-    meta: {
-      activityId: context.activityId,
-      workspaceId: context.workspaceId,
-      folderId: context.folderId,
-      exportedAt: new Date().toISOString(),
-    },
-    nodes: [],
-    edges: [],
-    viewport: { x: 24, y: 36, zoom: 1 },
-  };
-}
-
 function serializeWorkflowDefinition(
   nodes: FlowNode[],
   edges: ActivityEdge[],
@@ -4823,7 +4809,7 @@ export function App() {
         const shouldUseTemplateLayout = /资格校验|风控/.test(activity?.activityName ?? '') && next.nodes.some((node) => node.type === 'activity' && node.data.id === 'qualify');
         setNodes(shouldUseTemplateLayout ? layoutFlowNodes(next.nodes) : next.nodes);
         setEdges(next.edges);
-        setWorkflowStatus('已加载草稿');
+        setWorkflowStatus(next.nodes.length === 0 && next.edges.length === 0 ? '空 draft 已保存，等待添加节点' : '已加载草稿');
         setDraftDirty(false);
         setDraftSaveState('saved');
         setDraftSaveError('');
@@ -4838,7 +4824,7 @@ export function App() {
           setNodes([]);
           setEdges([]);
           setSelectedTemplate('default');
-          setWorkflowStatus('当前活动暂无草稿，空画布开始编排');
+          setWorkflowStatus('未找到 draft，已进入待保存空画布');
           setDraftDirty(false);
           setDraftSaveState('idle');
           setDraftSaveError('');
@@ -5999,18 +5985,6 @@ export function App() {
     if (activity?.workspaceId) await refreshWorkspaceOps(activity.workspaceId);
   }, [activities, refreshActivityACL, refreshWorkspaceOps]);
 
-  const saveEmptyWorkflowDraft = useCallback(async (created: ActivitySummary, input: { workspaceId: string; folderId: string }) => {
-    const definition = emptyWorkflowDefinition({
-      activityId: created.id,
-      workspaceId: created.workspaceId || input.workspaceId,
-      folderId: created.folderId || input.folderId,
-    });
-    await fetchJSON(`/admin/v1/activities/${created.id}/workflow/draft`, {
-      method: 'PUT',
-      body: JSON.stringify({ operator: currentActorId, definition }),
-    });
-  }, [currentActorId]);
-
   const createStudioActivity = useCallback(async (input: CreateStudioActivityInput) => {
     const payload = buildStudioActivityPayload(input);
     const created = await fetchJSON<ActivitySummary>('/admin/v1/activities', {
@@ -6034,8 +6008,6 @@ export function App() {
           },
         }),
       });
-    } else {
-      await saveEmptyWorkflowDraft(created, input);
     }
     setActivities((items) => [created, ...items.filter((item) => item.id !== created.id)]);
     setActivityPlacements((items) => ({
@@ -6064,7 +6036,7 @@ export function App() {
     savedDraftRevisionRef.current = 0;
     setIsPublished(false);
     return created;
-  }, [currentActorId, saveEmptyWorkflowDraft, setEdges, setNodes]);
+  }, [currentActorId, setEdges, setNodes]);
 
   const updateActivitySettings = useCallback(async (input: ActivitySettingsInput) => {
     if (!activityId) return;
@@ -6910,7 +6882,15 @@ export function App() {
                   }}>从模板开始</button>
                   <button type="button" onClick={() => importFileInputRef.current?.click()}>导入 JSON</button>
                 </div>
-                <em>{draftSaveState === 'saved' ? '空 draft 已保存，可以直接开始编排。' : '添加节点前也可以先保存空 draft。'}</em>
+                <em>
+                  {draftSaveState === 'saved'
+                    ? '空 draft 已保存，可以直接开始编排。'
+                    : draftSaveState === 'saving'
+                      ? '正在保存空 draft。'
+                      : draftSaveState === 'failed'
+                        ? '空 draft 保存失败，请先重试保存。'
+                        : '空画布尚未保存；保存草稿后会记录一个空 draft。'}
+                </em>
               </div>
             ) : null}
             <input

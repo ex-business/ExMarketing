@@ -47,6 +47,36 @@ func (s *Service) SaveWorkflowDraft(ctx context.Context, activityID string, cmd 
 	return saved, nil
 }
 
+func (s *Service) ensureEmptyWorkflowDraft(ctx context.Context, activity marketing.Activity, operator string) error {
+	if strings.TrimSpace(activity.ID) == "" {
+		return marketing.ErrNotFound
+	}
+	if _, err := s.repository.GetWorkflowDraft(ctx, activity.ID); err == nil {
+		return nil
+	} else if !errors.Is(err, marketing.ErrNotFound) {
+		return err
+	}
+	definition, err := json.Marshal(marketing.WorkflowDefinition{
+		Meta: map[string]any{
+			"activityId":  activity.ID,
+			"workspaceId": activity.WorkspaceID,
+			"folderId":    activity.FolderID,
+			"createdAs":   "empty-draft",
+		},
+		Nodes:    []marketing.WorkflowNode{},
+		Edges:    []marketing.WorkflowEdge{},
+		Viewport: map[string]float64{"x": 24, "y": 36, "zoom": 1},
+	})
+	if err != nil {
+		return err
+	}
+	_, err = s.SaveWorkflowDraft(ctx, activity.ID, marketing.SaveWorkflowDraftCommand{
+		Operator:   firstNonEmptyString(operator, "system"),
+		Definition: definition,
+	})
+	return err
+}
+
 func (s *Service) GetWorkflowDraft(ctx context.Context, activityID string) (marketing.WorkflowDraft, error) {
 	return s.repository.GetWorkflowDraft(ctx, strings.TrimSpace(activityID))
 }

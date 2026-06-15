@@ -150,17 +150,19 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 				enumField("broker", "Broker", true, "KAFKA", []string{"KAFKA", "RABBITMQ", "PULSAR"}),
 				withDescription(stringField("topic", "Topic / Queue", true, "", rules(minLength(1), maxLength(256))), "待监听的 topic 或 queue。"),
 				withDescription(stringField("consumerGroup", "Consumer Group", true, "", rules(minLength(1), maxLength(256))), "消费组必须稳定。"),
+				withDefault(arrayField("allowedSourceSystems", "允许来源", false, "允许接入的 sourceSystem。", rules(maxItems(20))), []string{"app"}),
 			)),
-			fieldGroup("runtime", "运行策略", "当前阶段仅做能力占位，不启动真实 consumer。", fields(
+			fieldGroup("runtime", "运行策略", "节点生成 MQTriggerWorker 的 adapter plan；真实消费由 worker 执行。", fields(
 				enumField("ackPolicy", "Ack 策略", true, "ACK_AFTER_INBOX_COMMIT", []string{"ACK_AFTER_INBOX_COMMIT"}),
-				enumField("retryPolicy", "重试策略", true, "RETRY_THEN_DLQ", []string{"RETRY_THEN_DLQ"}),
-				executionModeField("EXPLAIN_ONLY"),
-				executionAuthorityField("MQTriggerWorker"),
+				enumField("retryPolicy", "重试策略", true, "RETRY_THEN_DLQ", []string{"RETRY_THEN_DLQ", "DLQ_ONLY"}),
+				numberField("maxBodyBytes", "最大消息字节数", false, 1048576, rules(minValue(1024), maxValue(10485760))),
+				executionModeField("TRIGGER_ADAPTER"),
+				executionAuthorityField("MQTriggerWorker/internal/mqconsumer.Consumer"),
 			)),
 		), preview(
 			[]string{"MQ message", "topic / partition / offset"},
 			[]string{"standard_event"},
-			[]string{"待实现入口节点；真实 consumer 需要单独实现 offset、ack、retry 和 DLQ。"},
+			[]string{"节点生成入站消费 adapter plan；ack 在 inbox commit 后执行。"},
 		)),
 		groupedSchema("schedule-event", "定时事件", "按 cron 或延迟任务生成标准事件。", groups(
 			fieldGroup("schedule", "调度", "描述定时触发规则。", fields(
@@ -168,33 +170,42 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 				withDescription(stringField("cron", "Cron", false, "0 0 * * *", rules(maxLength(128))), "CRON 调度表达式。"),
 				withDescription(stringField("timezone", "时区", true, "UTC", rules(minLength(2), maxLength(64))), "例如 UTC、Asia/Shanghai。"),
 			)),
-			fieldGroup("runtime", "运行策略", "当前阶段仅做能力占位。", fields(
+			fieldGroup("event-template", "事件模板", "调度命中后写入 inbox 的标准事件模板。", fields(
+				withDescription(stringField("eventType", "事件类型", false, "SCHEDULE_TICK", rules(maxLength(128))), "不填时沿用当前调试事件 eventType。"),
+				withDescription(stringField("sourceSystem", "来源系统", false, "exmarketing-scheduler", rules(maxLength(128))), "调度生成事件的 sourceSystem。"),
+				withDescription(stringField("bizType", "Biz Type", false, "SCHEDULE", rules(maxLength(128))), "调度事件的 bizType。"),
+				withDescription(stringField("bizIdTemplate", "Biz ID 模板", false, "${activityId}:${nodeId}:${eventId}", rules(maxLength(256))), "必须稳定，保证同一计划时间幂等。"),
+				withDescription(stringField("eventIdTemplate", "Event ID 模板", false, "${activityId}:${nodeId}:${biz.bizId}", rules(maxLength(256))), "生成标准事件 eventId。"),
+			)),
+			fieldGroup("runtime", "运行策略", "节点生成 Scheduler/EventInboxProducer 的 adapter plan。", fields(
 				enumField("misfirePolicy", "错过执行策略", true, "FIRE_ONCE", []string{"FIRE_ONCE", "SKIP", "CATCH_UP"}),
 				numberField("jitterSeconds", "抖动秒数", false, 0, rules(minValue(0), maxValue(3600))),
-				executionModeField("EXPLAIN_ONLY"),
-				executionAuthorityField("Scheduler"),
+				executionModeField("TRIGGER_ADAPTER"),
+				executionAuthorityField("Scheduler/EventInboxProducer"),
 			)),
 		), preview(
 			[]string{"cron / delay schedule", "event template"},
 			[]string{"standard_event"},
-			[]string{"待实现入口节点；同一计划时间必须生成稳定 bizId。"},
+			[]string{"同一计划时间必须生成稳定 bizId 和 idempotencyKey。"},
 		)),
 		groupedSchema("state-event", "状态监听事件", "监听 Redis、配置、指标或全局状态条件并生成标准事件。", groups(
 			fieldGroup("watch", "监听源", "描述可恢复状态来源和路径。", fields(
-				enumField("source", "状态来源", true, "REDIS", []string{"REDIS", "DATABASE", "CONFIG", "METRICS"}),
-				withDescription(stringField("key", "Key / Path", true, "", rules(minLength(1), maxLength(256))), "不建议使用进程内临时全局变量。"),
-				withDescription(stringField("condition", "触发条件", true, "", rules(minLength(1), maxLength(2000))), "条件命中后生成标准事件。"),
+				enumField("source", "状态来源", true, "RESOURCE", []string{"RESOURCE", "REDIS", "DATABASE", "CONFIG", "METRICS", "CONTEXT"}),
+				withDescription(stringField("resourceRef", "资源 Ref", false, "", rules(maxLength(128))), "推荐引用资源管理中的 REDIS_KV、REDIS_HASH、DATABASE_KV 或 HTTP_PROVIDER。"),
+				withDescription(stringField("namespace", "Namespace", false, "state-watch", rules(maxLength(128))), "状态监听命名空间。"),
+				withDescription(stringField("keyTemplate", "Key 模板", true, "", rules(minLength(1), maxLength(256))), "用于读取可恢复状态，兼容旧字段 key。"),
+				withDescription(stringField("condition", "触发条件", true, "", rules(minLength(1), maxLength(2000))), "支持 value.enabled == true、$.count >= 10、value 等简单表达。"),
 			)),
-			fieldGroup("runtime", "运行策略", "当前阶段仅做能力占位。", fields(
+			fieldGroup("runtime", "运行策略", "节点通过 ResourceAPI 读取快照并判断是否触发。", fields(
 				numberField("intervalSeconds", "轮询秒数", true, 10, rules(minValue(1), maxValue(3600))),
 				numberField("debounceSeconds", "去抖秒数", false, 60, rules(minValue(0), maxValue(86400))),
-				executionModeField("EXPLAIN_ONLY"),
-				executionAuthorityField("StateWatcher"),
+				executionModeField("TRIGGER_ADAPTER"),
+				executionAuthorityField("StateWatcher/ResourceAPI"),
 			)),
 		), preview(
 			[]string{"state snapshot", "condition", "last-seen cursor"},
 			[]string{"standard_event"},
-			[]string{"待实现入口节点；生产环境必须监听可恢复状态并记录 cursor。"},
+			[]string{"生产环境必须监听可恢复状态并记录 cursor。"},
 		)),
 		groupedSchema("manual-event", "人工触发事件", "管理台人工补偿、重放或手动执行标准事件。", groups(
 			fieldGroup("permission", "权限", "描述人工触发需要的权限和审计。", fields(
@@ -524,6 +535,10 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 			[]string{"节点只引用 resourceRef；资源管理负责存储类型、endpoint、表、schema、密钥、权限和审计。"},
 		)),
 		groupedSchema("quota-check", "次数频控校验", "对用户、设备、IP、活动或租户维度做次数和频率校验。", groups(
+			fieldGroup("resource", "资源引用", "可选：使用 REDIS_COUNTER 资源作为频控计数器。", fields(
+				withDescription(stringField("resourceRef", "资源 Ref", false, "", rules(maxLength(128))), "引用资源管理中的 REDIS_COUNTER；为空时保持兼容的 limit 语义。"),
+				withDescription(stringField("namespace", "命名空间", false, "quota", rules(maxLength(128))), "资源审计和 key policy 使用的命名空间。"),
+			)),
 			fieldGroup("counter", "计数维度", "定义频控 bucket、窗口和上限。", fields(
 				enumField("scope", "限制范围", true, "USER", []string{"USER", "ACTIVITY", "TENANT", "BIZ", "IP", "DEVICE"}),
 				withDescription(stringField("scopeKeyTemplate", "Scope Key 模板", true, "${subject.id}:${activityId}", rules(minLength(1), maxLength(256))), "用于组成频控 key。"),
@@ -539,7 +554,25 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 		), preview(
 			[]string{"subject", "activity_id", "event_context"},
 			[]string{"quota_check", "limit_hold"},
-			[]string{"quota-check 是 limit 的生产语义别名，专门表达次数/频控，不表达预算库存。"},
+			[]string{"quota-check 专门表达次数/频控；配置 REDIS_COUNTER resourceRef 时会读写受控资源计数器。"},
+		)),
+		groupedSchema("lock", "资源锁", "通过 REDIS_LOCK 资源获取、读取或释放业务互斥锁。", groups(
+			fieldGroup("resource", "锁资源", "定义锁资源和 key。", fields(
+				withDescription(stringField("resourceRef", "资源 Ref", true, "", rules(minLength(1), maxLength(128))), "引用资源管理中的 REDIS_LOCK。"),
+				withDescription(stringField("namespace", "命名空间", false, "lock", rules(maxLength(128))), "资源审计和 key policy 使用的命名空间。"),
+				withDescription(stringField("keyTemplate", "锁 Key 模板", true, "${activityId}:${subject.id}", rules(minLength(1), maxLength(256))), "稳定定位业务锁。"),
+			)),
+			fieldGroup("policy", "锁策略", "定义锁操作、持有人和 TTL。", fields(
+				enumField("operation", "操作", true, "ACQUIRE", []string{"ACQUIRE", "READ", "RELEASE"}),
+				withDescription(stringField("owner", "Owner", false, "${eventId}", rules(maxLength(128))), "锁持有人；默认使用 eventId。"),
+				numberField("ttlSeconds", "TTL 秒数", false, 30, rules(minValue(1), maxValue(86400))),
+				executionModeField("REAL_HANDLER"),
+				executionAuthorityField("WorkflowExecutor/RedisLockResource"),
+			)),
+		), preview(
+			[]string{"subject", "activity_id", "resourceRef"},
+			[]string{"lock_result"},
+			[]string{"lock 节点只访问授权的 REDIS_LOCK 资源；真实底层可从当前状态承载替换为 Redis client。"},
 		)),
 		groupedSchema("candidate-reward", "候选奖励", "根据活动配置和上游状态生成待发奖励候选，不直接产生资金副作用。", groups(
 			fieldGroup("source", "奖励来源", "定义候选奖励从哪里生成。", fields(
@@ -935,7 +968,7 @@ func defaultWorkflowNodeCategory(nodeType string) string {
 	switch strings.TrimSpace(nodeType) {
 	case "event-in", "http-event", "webhook-event", "mq-event", "schedule-event", "state-event", "manual-event":
 		return "EVENT_INPUT"
-	case "activity-state", "state-store", "inbox", "participation":
+	case "activity-state", "state-store", "lock", "inbox", "participation":
 		return "STORAGE"
 	case "condition", "switch", "code", "combine", "split", "decimal", "http-call", "mq-publish", "webhook", "callback", "approval-gate", "compensation", "random-pick", "plugin-execute", "ab-bucket", "risk-score", "settlement-window", "manual-adjust":
 		return "ADVANCED"
@@ -1044,6 +1077,11 @@ func defaultWorkflowNodeInputs(nodeType string) []WorkflowNodeInputVar {
 		return inputVars(
 			inputVar("value", "Value", "any", false, "要写入的值。"),
 			inputVar("state_patch", "State Patch", "object", false, "可选写入对象。"),
+		)
+	case "lock":
+		return inputVars(
+			inputVar("subject", "Subject", "object", false, "锁定主体；未配置时使用事件 subject。"),
+			inputVar("resourceRef", "Resource Ref", "string", true, "REDIS_LOCK 资源引用。"),
 		)
 	case "quota-check":
 		return inputVars(
@@ -1208,6 +1246,8 @@ func defaultWorkflowNodeOutputs(nodeType string) []WorkflowNodeOutputVar {
 			outputVar("storage_entry", "Storage Entry", "object", "存储项元数据和值。"),
 			outputVar("storage_version", "Storage Version", "number", "数据库存储版本。"),
 		)
+	case "lock":
+		return outputVars(outputVar("lock_result", "Lock Result", "object", "锁获取、读取或释放结果。"))
 	case "quota-check":
 		return outputVars(
 			outputVar("quota_check", "Quota Check", "object", "次数/频控校验结果。"),

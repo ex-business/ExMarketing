@@ -97,8 +97,10 @@ Debug run / rerun 已完成第一轮增强：
 - 从某个节点继续跑时，请求会带上 `sourceExecutionId`；后端会读取 source execution 的上游成功节点 output，作为本次 debug 的初始 node output，再从指定节点继续执行。
 - Debug execution 在运行历史中显示 `DEBUG_DRAFT`，并用独立视觉样式区分 production execution。
 - Debug run / rerun 成功后会自动执行当前 draft 的真实发布检查，并打开检查清单展示结果。
+- 支持从当前运行节点的 input / output 一键填充 Debug payload，或保存成本地 payload 模板。
+- 从节点继续跑前展示上游成功节点 output 预览、起点节点和输入缺口，便于判断 resume 上下文是否完整。
 
-后续还可以继续补：团队共享 payload 模板、从某次 node input/output 一键生成模板、继续跑前的上游 output 差异预览、debug trace 离线 replay。
+后续还可以继续补：团队共享 payload 模板、debug trace 离线 replay。
 
 ### 7. 版本管理完善
 

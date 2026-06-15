@@ -440,6 +440,14 @@ type DebugRunResultSummary = {
   logs: string[];
 };
 
+type DebugResumePreview = {
+  startNodeId: string;
+  sourceExecutionId: string;
+  upstreamNodes: Array<{ nodeId: string; title: string; outputKeys: string[] }>;
+  expectedInputs: string[];
+  missingInputs: string[];
+};
+
 type DebugPayloadTemplate = {
   id: string;
   name: string;
@@ -872,6 +880,44 @@ function compactDebugItem(item: Record<string, unknown>, keys: string[]): Record
   return Object.keys(out).length > 0 ? out : item;
 }
 
+function objectKeys(value: unknown): string[] {
+  return value && typeof value === 'object' && !Array.isArray(value) ? Object.keys(value as Record<string, unknown>).sort() : [];
+}
+
+function nodePayloadText(nodeExecution: WorkflowNodeExecution | undefined, source: 'input' | 'output'): string {
+  const value = source === 'input' ? nodeExecution?.input : nodeExecution?.output;
+  return value === undefined ? '' : JSON.stringify(value, null, 2);
+}
+
+function buildDebugResumePreview(input: {
+  startNodeId: string;
+  sourceExecutionId: string;
+  nodeExecutions: WorkflowNodeExecution[];
+  flowNodes: FlowNode[];
+}): DebugResumePreview | undefined {
+  const startNodeId = input.startNodeId.trim();
+  if (!startNodeId || !input.sourceExecutionId) return undefined;
+  const startIndex = input.nodeExecutions.findIndex((item) => item.nodeId === startNodeId);
+  const upstream = input.nodeExecutions
+    .filter((item, index) => item.status === 'SUCCESS' && item.output !== undefined && (startIndex < 0 || index < startIndex))
+    .map((item) => ({
+      nodeId: item.nodeId,
+      title: item.nodeTitle || item.nodeId,
+      outputKeys: objectKeys(item.output),
+    }));
+  const targetNode = input.flowNodes.find((node) => node.id === startNodeId && node.type === 'activity');
+  const expectedInputs: string[] = targetNode?.type === 'activity' ? targetNode.data.inputs : [];
+  const providedKeys = new Set(upstream.flatMap((item) => item.outputKeys));
+  const missingInputs = expectedInputs.filter((key) => !providedKeys.has(key));
+  return {
+    startNodeId,
+    sourceExecutionId: input.sourceExecutionId,
+    upstreamNodes: upstream,
+    expectedInputs,
+    missingInputs,
+  };
+}
+
 function debugTraceSummary(trace: WorkflowExecutionTrace): DebugRunResultSummary {
   const nodes = trace.nodeExecutions ?? [];
   const success = nodes.filter((item) => item.status === 'SUCCESS').length;
@@ -987,11 +1033,15 @@ function DebugRunPanel({
   templates,
   selectedExecutionId,
   selectedNodeId,
+  selectedNodeExecution,
+  resumePreview,
   onResizeStart,
   onChange,
   onClose,
   onLoadTemplate,
   onSaveTemplate,
+  onSaveNodePayloadTemplate,
+  onUseNodePayload,
   onUseSelectedExecutionPayload,
   onRunDraft,
   onRunOpenApi,
@@ -1005,11 +1055,15 @@ function DebugRunPanel({
   templates: DebugPayloadTemplate[];
   selectedExecutionId: string;
   selectedNodeId: string;
+  selectedNodeExecution?: WorkflowNodeExecution;
+  resumePreview?: DebugResumePreview;
   onResizeStart: (event: React.PointerEvent<HTMLButtonElement>) => void;
   onChange: (patch: Partial<DebugPanelState>) => void;
   onClose: () => void;
   onLoadTemplate: (templateId: string) => void;
   onSaveTemplate: () => void;
+  onSaveNodePayloadTemplate: (source: 'input' | 'output') => void;
+  onUseNodePayload: (source: 'input' | 'output') => void;
   onUseSelectedExecutionPayload: () => void;
   onRunDraft: () => void;
   onRunOpenApi: () => void;
@@ -1074,6 +1128,12 @@ function DebugRunPanel({
             <button type="button" onClick={onSaveTemplate} disabled={!state.payloadText.trim()}>保存为模板</button>
             <button type="button" onClick={onUseSelectedExecutionPayload} disabled={!selectedExecutionId}>使用选中 execution payload</button>
           </div>
+          <div className="debug-inline-actions node-payload-actions">
+            <button type="button" onClick={() => onUseNodePayload('input')} disabled={selectedNodeExecution?.input === undefined}>使用节点 Input</button>
+            <button type="button" onClick={() => onUseNodePayload('output')} disabled={selectedNodeExecution?.output === undefined}>使用节点 Output</button>
+            <button type="button" onClick={() => onSaveNodePayloadTemplate('input')} disabled={selectedNodeExecution?.input === undefined}>Input 存模板</button>
+            <button type="button" onClick={() => onSaveNodePayloadTemplate('output')} disabled={selectedNodeExecution?.output === undefined}>Output 存模板</button>
+          </div>
         </div>
         <details className="debug-disclosure">
           <summary>
@@ -1117,6 +1177,36 @@ function DebugRunPanel({
             <input value={state.startNodeId} placeholder={selectedNodeId || '可选：node id'} onChange={(event) => onChange({ startNodeId: event.target.value })} />
           </label>
           <span>复用选中 execution 的上游成功节点输出。</span>
+          {resumePreview ? (
+            <div className="debug-resume-preview">
+              <div>
+                <span>来源 execution</span>
+                <b>{resumePreview.sourceExecutionId}</b>
+              </div>
+              <div>
+                <span>起点节点</span>
+                <b>{resumePreview.startNodeId}</b>
+              </div>
+              <div>
+                <span>上游 output</span>
+                <b>{resumePreview.upstreamNodes.length} 个成功节点</b>
+              </div>
+              {resumePreview.upstreamNodes.length ? (
+                <ul>
+                  {resumePreview.upstreamNodes.slice(0, 4).map((item) => (
+                    <li key={item.nodeId}>
+                      <b>{item.title}</b>
+                      <em>{item.outputKeys.length ? item.outputKeys.join(', ') : '无 output key'}</em>
+                    </li>
+                  ))}
+                </ul>
+              ) : <em>没有可复用的上游成功 output。</em>}
+              <div>
+                <span>输入缺口</span>
+                <b>{resumePreview.missingInputs.length ? resumePreview.missingInputs.join(', ') : '无明显缺口'}</b>
+              </div>
+            </div>
+          ) : null}
         </div>
         <DebugRunResult result={state.lastResult} />
       </section>
@@ -6491,8 +6581,8 @@ export function App() {
     }
   }, [applyRunOverlay]);
 
-  const saveCurrentDebugPayloadTemplate = useCallback(() => {
-    const payloadText = debugPanel.payloadText.trim();
+  const saveDebugPayloadTemplate = useCallback((payloadTextInput: string, defaultName: string, successLabel: string) => {
+    const payloadText = payloadTextInput.trim();
     if (!payloadText) {
       setDebugPanel((state) => ({ ...state, message: 'Payload 为空，不能保存模板' }));
       return;
@@ -6503,7 +6593,7 @@ export function App() {
       setDebugPanel((state) => ({ ...state, message: `Payload JSON 无效：${(error as Error).message}` }));
       return;
     }
-    const name = window.prompt('模板名称', `Debug Payload ${debugPayloadTemplates.length + 1}`)?.trim();
+    const name = window.prompt('模板名称', defaultName)?.trim();
     if (!name) return;
     const next = [{
       id: `payload_${Date.now().toString(36)}`,
@@ -6513,8 +6603,12 @@ export function App() {
     }, ...debugPayloadTemplates.filter((item) => item.name !== name)].slice(0, 30);
     setDebugPayloadTemplates(next);
     saveDebugPayloadTemplates(next);
-    setDebugPanel((state) => ({ ...state, message: `已保存 payload 模板：${name}` }));
-  }, [debugPanel.payloadText, debugPayloadTemplates]);
+    setDebugPanel((state) => ({ ...state, payloadText, message: `${successLabel}：${name}` }));
+  }, [debugPayloadTemplates]);
+
+  const saveCurrentDebugPayloadTemplate = useCallback(() => {
+    saveDebugPayloadTemplate(debugPanel.payloadText, `Debug Payload ${debugPayloadTemplates.length + 1}`, '已保存 payload 模板');
+  }, [debugPanel.payloadText, debugPayloadTemplates.length, saveDebugPayloadTemplate]);
 
   const loadDebugPayloadTemplate = useCallback((templateId: string) => {
     const template = debugPayloadTemplates.find((item) => item.id === templateId);
@@ -6535,6 +6629,40 @@ export function App() {
       message: `已复制 execution payload：${execution?.id.slice(0, 12)}`,
     }));
   }, [runHistory.executions, runHistory.selectedExecutionId]);
+
+  const selectedRunNodeExecution = useMemo(() => (
+    runHistory.nodeExecutions.find((item) => item.id === runHistory.selectedNodeExecutionId) ?? runHistory.nodeExecutions[0]
+  ), [runHistory.nodeExecutions, runHistory.selectedNodeExecutionId]);
+
+  const useSelectedNodePayload = useCallback((source: 'input' | 'output') => {
+    const payloadText = nodePayloadText(selectedRunNodeExecution, source);
+    if (!payloadText) {
+      setDebugPanel((state) => ({ ...state, message: `当前节点没有 ${source.toUpperCase()} payload` }));
+      return;
+    }
+    setDebugPanel((state) => ({
+      ...state,
+      payloadText,
+      message: `已复制节点 ${source.toUpperCase()}：${selectedRunNodeExecution?.nodeTitle || selectedRunNodeExecution?.nodeId || '-'}`,
+    }));
+  }, [selectedRunNodeExecution]);
+
+  const saveSelectedNodePayloadTemplate = useCallback((source: 'input' | 'output') => {
+    const payloadText = nodePayloadText(selectedRunNodeExecution, source);
+    if (!payloadText) {
+      setDebugPanel((state) => ({ ...state, message: `当前节点没有 ${source.toUpperCase()} payload` }));
+      return;
+    }
+    const nodeLabel = selectedRunNodeExecution?.nodeTitle || selectedRunNodeExecution?.nodeId || 'Node';
+    saveDebugPayloadTemplate(payloadText, `${nodeLabel} ${source.toUpperCase()} 模板`, `已保存节点 ${source.toUpperCase()} 模板`);
+  }, [saveDebugPayloadTemplate, selectedRunNodeExecution]);
+
+  const debugResumePreview = useMemo(() => buildDebugResumePreview({
+    startNodeId: debugPanel.startNodeId.trim() || selectedNodeIds[0] || '',
+    sourceExecutionId: runHistory.selectedExecutionId,
+    nodeExecutions: runHistory.nodeExecutions,
+    flowNodes: nodes,
+  }), [debugPanel.startNodeId, nodes, runHistory.nodeExecutions, runHistory.selectedExecutionId, selectedNodeIds]);
 
   const debugPayloadBody = useCallback((startNodeId = '', payloadTextOverride?: string) => {
     const body: Record<string, unknown> = {
@@ -7167,11 +7295,15 @@ export function App() {
         templates={debugPayloadTemplates}
         selectedExecutionId={runHistory.selectedExecutionId}
         selectedNodeId={selectedNodeIds[0] ?? ''}
+        selectedNodeExecution={selectedRunNodeExecution}
+        resumePreview={debugResumePreview}
         onResizeStart={beginRightPanelResize}
         onChange={(patch) => setDebugPanel((state) => ({ ...state, ...patch }))}
         onClose={() => setDebugPanel((state) => ({ ...state, open: false }))}
         onLoadTemplate={loadDebugPayloadTemplate}
         onSaveTemplate={saveCurrentDebugPayloadTemplate}
+        onSaveNodePayloadTemplate={saveSelectedNodePayloadTemplate}
+        onUseNodePayload={useSelectedNodePayload}
         onUseSelectedExecutionPayload={useSelectedExecutionPayload}
         onRunDraft={() => {
           void runDraftDebug('');

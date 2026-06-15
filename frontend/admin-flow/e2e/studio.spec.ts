@@ -1307,6 +1307,8 @@ test('debug panel saves payload templates, reuses execution payload, and links v
   await expect(page.locator('.debug-run-panel')).toContainText('DEBUG_DRAFT');
   await page.getByRole('button', { name: '使用选中 execution payload' }).click();
   await expect(page.locator('.debug-run-panel textarea')).toContainText('evt_1001');
+  await page.getByRole('button', { name: '使用节点 Input' }).click();
+  await expect(page.locator('.debug-run-panel textarea')).toContainText('raw_event');
 
   page.once('dialog', async (dialog) => {
     await dialog.accept('历史失败样例');
@@ -1314,8 +1316,15 @@ test('debug panel saves payload templates, reuses execution payload, and links v
   await page.getByRole('button', { name: '保存为模板' }).click();
   await expect(page.locator('.debug-run-panel')).toContainText('已保存 payload 模板');
   await expect(page.locator('.debug-run-panel select').nth(1)).toContainText('历史失败样例');
+  page.once('dialog', async (dialog) => {
+    await dialog.accept('节点输出样例');
+  });
+  await page.getByRole('button', { name: 'Output 存模板' }).click();
+  await expect(page.locator('.debug-run-panel')).toContainText('已保存节点 OUTPUT 模板');
+  await expect(page.locator('.debug-run-panel select').nth(1)).toContainText('节点输出样例');
 
   await page.getByRole('textbox', { name: '从节点继续跑' }).fill('inbox');
+  await expect(page.locator('.debug-resume-preview')).toContainText('上游 output');
   await page.getByRole('button', { name: '从节点继续' }).click();
   await expect(page.locator('.debug-run-panel')).toContainText('已生成 DEBUG_DRAFT');
   await expect(page.locator('.run-execution-item.debug-execution')).toContainText('DEBUG_DRAFT');

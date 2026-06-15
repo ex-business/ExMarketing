@@ -10842,6 +10842,15 @@ input:focus-visible {
   opacity: 0.48;
 }
 
+.debug-inline-actions.node-payload-actions {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.debug-inline-actions.node-payload-actions button {
+  min-width: 0;
+  padding: 0 6px;
+}
+
 .debug-mode-note {
   display: grid;
   gap: 4px;
@@ -10885,6 +10894,63 @@ input:focus-visible {
 .debug-actions button:disabled {
   cursor: not-allowed;
   opacity: 0.5;
+}
+
+.debug-resume-preview {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+  border: 1px solid rgba(96, 165, 250, 0.28);
+  border-radius: 8px;
+  background: #eff6ff;
+  padding: 10px;
+}
+
+.debug-resume-preview div {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 82px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+}
+
+.debug-resume-preview span,
+.debug-resume-preview em {
+  color: #64748b;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.debug-resume-preview b {
+  min-width: 0;
+  overflow: hidden;
+  color: #0f172a;
+  font-size: 11px;
+  font-weight: 900;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.debug-resume-preview ul {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.debug-resume-preview li {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.72);
+  padding: 6px 8px;
+}
+
+.debug-resume-preview li em {
+  overflow-wrap: anywhere;
 }
 
 .debug-run-panel p {

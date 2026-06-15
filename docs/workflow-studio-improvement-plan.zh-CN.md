@@ -112,8 +112,10 @@ Debug run / rerun 已完成第一轮增强：
 - 版本生命周期扩展为 `DRAFT`、`ACTIVE`、`SUPERSEDED`、`ARCHIVED`；新 active 发布时旧 active 会变为 `SUPERSEDED`，不会误归档。
 - Rollback 会生成新的 active version，并记录 `sourceVersionId`、`action=ROLLBACK` 和审计备注。
 - Archive / rollback 确认弹窗支持填写审计备注，版本面板展示最近版本操作记录。
+- 版本面板支持查看单个 version 的详情：节点数、连线数、发布人、发布时间、操作类型、来源版本、发布说明和与 active 的差异摘要。
+- 版本面板展示 SUPERSEDED / ARCHIVED 治理提示，提醒归档旧 superseded version。
 
-后续还可以继续补：后端版本 diff API、版本详情独立页面、版本操作审计列表从后端 audit log 拉取、SUPERSEDED 自动清理策略。
+后续还可以继续补：后端版本 diff API、版本详情独立路由页、版本操作审计列表从后端 audit log 拉取、SUPERSEDED 自动清理策略。
 
 ### 8. Workspace Studio 首页设计
 

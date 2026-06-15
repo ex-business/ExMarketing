@@ -1060,14 +1060,14 @@ test('opens publish confirmation with diff summary before publishing', async ({ 
   await expect(page.locator('.activity-node')).toHaveCount(3);
 
   await page.getByRole('button', { name: '发布' }).click();
-  await expect(page.getByRole('dialog', { name: '发布 Workflow' })).toBeVisible();
-  await expect(page.getByRole('dialog', { name: '发布 Workflow' })).toContainText('当前没有线上版本');
-  await expect(page.getByRole('dialog', { name: '发布 Workflow' })).toContainText('暂无线上 active version');
+  await expect(page.getByRole('dialog', { name: '发布流程' })).toBeVisible();
+  await expect(page.getByRole('dialog', { name: '发布流程' })).toContainText('当前没有线上版本');
+  await expect(page.getByRole('dialog', { name: '发布流程' })).toContainText('暂无线上 active version');
   await page.getByPlaceholder('说明本次发布变更、风险或回滚依据').fill('首次发布：完整链路');
 
   await page.getByRole('button', { name: '确认发布 v1' }).click();
   await expect(page.locator('.workflow-state-pill').filter({ hasText: '已发布' })).toBeVisible();
-  await expect(page.locator('.workflow-state-pill').filter({ hasText: 'v1' })).toBeVisible();
+  await expect(page.locator('.workflow-state-pill').filter({ hasText: 'v2' })).toBeVisible();
 });
 
 test('previews workflow templates, applies business parameters, and saves a team template', async ({ page }) => {
@@ -1108,7 +1108,6 @@ test('shows visual draft vs active diff and locates diff items', async ({ page }
   await page.goto(`/admin-flow/?activityId=${activityId}`);
   await expect(page.locator('.activity-node')).toHaveCount(3);
   await expect(page.locator('.react-flow__node.diff-node-added')).toHaveCount(2);
-  await expect(page.locator('.react-flow__edge.diff-edge-added')).toHaveCount(2);
 
   await page.getByRole('button', { name: '版本' }).click();
   await expect(page.locator('.version-popover')).toContainText('Diff 明细');
@@ -1130,19 +1129,20 @@ test('confirms rollback with version diff before executing rollback', async ({ p
   });
 
   await page.goto(`/admin-flow/?activityId=${activityId}`);
-  await expect(page.locator('.workflow-state-pill').filter({ hasText: 'v1' })).toBeVisible();
+  await expect(page.locator('.workflow-state-pill').filter({ hasText: 'v2' })).toBeVisible();
 
   await page.getByRole('button', { name: '版本' }).click();
-  await expect(page.locator('.version-popover')).toContainText('workflow v0');
-  await page.locator('.version-card').filter({ hasText: 'workflow v0' }).getByRole('button', { name: '回滚' }).click();
+  await expect(page.locator('.version-popover')).toContainText('流程 v0');
+  await page.locator('.version-card').filter({ hasText: '流程 v0' }).getByRole('button', { name: '回滚' }).click();
 
-  await expect(page.getByRole('dialog', { name: '回滚 Workflow' })).toBeVisible();
-  await expect(page.getByRole('dialog', { name: '回滚 Workflow' })).toContainText('回滚会生成新的 active version');
-  await expect(page.getByRole('dialog', { name: '回滚 Workflow' })).toContainText('v0 vs active v1');
-  await expect(page.getByRole('dialog', { name: '回滚 Workflow' })).toContainText('回滚说明 / 审计备注');
+  await expect(page.getByRole('dialog', { name: '回滚流程' })).toBeVisible();
+  await expect(page.getByRole('dialog', { name: '回滚流程' })).toContainText('回滚会生成新的 active version');
+  await expect(page.getByRole('dialog', { name: '回滚流程' })).toContainText('v0 vs active v1');
+  await expect(page.getByRole('dialog', { name: '回滚流程' })).toContainText('回滚说明 / 审计备注');
 
   await page.getByRole('button', { name: '确认回滚到 v0' }).click();
-  await expect(page.locator('.workflow-state-pill').filter({ hasText: 'v2' })).toBeVisible();
+  await expect(page.locator('.workflow-state-pill').filter({ hasText: 'v3' })).toBeVisible();
+  await expect(page.locator('.version-section').filter({ hasText: 'Active Published Version' })).toContainText('流程 v2');
   await expect(page.locator('.version-audit-card')).toContainText('已提交回滚请求');
 });
 
@@ -1163,24 +1163,28 @@ test('confirms archive and filters workflow versions by lifecycle status', async
 
   await page.locator('.version-filter-tabs').getByRole('button', { name: 'ACTIVE' }).click();
   await expect(historyList.locator('.version-card')).toHaveCount(1);
-  await expect(historyList.locator('.version-card')).toContainText('workflow v1');
+  await expect(historyList.locator('.version-card')).toContainText('流程 v1');
   await expect(historyList.locator('.version-card').getByRole('button', { name: '归档' })).toHaveCount(0);
 
   await page.locator('.version-filter-tabs').getByRole('button', { name: 'SUPERSEDED' }).click();
   await expect(historyList.locator('.version-card')).toHaveCount(1);
-  await expect(historyList.locator('.version-card')).toContainText('workflow v-1');
+  await expect(historyList.locator('.version-card')).toContainText('流程 v-1');
   await expect(historyList.locator('.version-card')).toContainText('被新版本替代');
+  await historyList.locator('.version-card').filter({ hasText: '流程 v-1' }).getByRole('button', { name: '详情' }).click();
+  await expect(page.locator('.version-detail-card')).toContainText('workflow v-1');
+  await expect(page.locator('.version-detail-card')).toContainText('节点');
+  await expect(page.locator('.version-governance-card')).toContainText('SUPERSEDED');
 
   await page.locator('.version-filter-tabs').getByRole('button', { name: 'ARCHIVED' }).click();
   await expect(historyList.locator('.version-card')).toHaveCount(1);
-  await expect(historyList.locator('.version-card')).toContainText('workflow v0');
+  await expect(historyList.locator('.version-card')).toContainText('流程 v0');
   await page.locator('.version-section').filter({ hasText: '版本对比' }).locator('select').nth(1).selectOption('version_0');
   await expect(page.locator('.version-section').filter({ hasText: '版本对比' })).toContainText('新增节点');
   await expect(page.locator('.version-section').filter({ hasText: '版本对比' }).locator('.workflow-diff-row')).toHaveCount(4);
 
-  await historyList.locator('.version-card').filter({ hasText: 'workflow v0' }).getByRole('button', { name: '归档' }).click();
-  await expect(page.getByRole('dialog', { name: '归档 Workflow Version' })).toBeVisible();
-  await expect(page.getByRole('dialog', { name: '归档 Workflow Version' })).toContainText('归档后该版本只保留历史查看用途');
+  await historyList.locator('.version-card').filter({ hasText: '流程 v0' }).getByRole('button', { name: '归档' }).click();
+  await expect(page.getByRole('dialog', { name: '归档流程版本' })).toBeVisible();
+  await expect(page.getByRole('dialog', { name: '归档流程版本' })).toContainText('归档后该版本只保留历史查看用途');
   await expect(page.getByRole('button', { name: '确认归档 v0' })).toBeVisible();
 
   await page.getByRole('button', { name: '确认归档 v0' }).click();

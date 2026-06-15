@@ -219,7 +219,7 @@ function statusLabel(status: ChecklistStatus, count: number): string {
   }
 }
 
-function VersionCard({ version, active, onRollback, onArchive }: { version: WorkflowVersion; active?: boolean; onRollback?: () => void; onArchive?: () => void }) {
+function VersionCard({ version, active, onInspect, onRollback, onArchive }: { version: WorkflowVersion; active?: boolean; onInspect?: () => void; onRollback?: () => void; onArchive?: () => void }) {
   return (
     <div className={`version-card ${active ? 'active' : ''} status-${version.status.toLowerCase()}`}>
       <i>{active ? 'ACTIVE' : version.status}</i>
@@ -230,8 +230,40 @@ function VersionCard({ version, active, onRollback, onArchive }: { version: Work
         {version.action ? <small>{version.action}{version.sourceVersionId ? ` · from ${version.sourceVersionId.slice(0, 10)}` : ''}</small> : null}
       </span>
       <div>
+        {onInspect ? <button type="button" onClick={onInspect}>详情</button> : null}
         {onRollback ? <button onClick={onRollback}>回滚</button> : null}
         {onArchive ? <button onClick={onArchive}>归档</button> : null}
+      </div>
+    </div>
+  );
+}
+
+function VersionDetailCard({ version, activeVersion, onClose }: { version: WorkflowVersion; activeVersion?: WorkflowVersion; onClose: () => void }) {
+  const diff = workflowDiffSummaryLocal(version.definition, activeVersion?.definition, '暂无 active version 可对比');
+  return (
+    <div className="version-detail-card">
+      <header>
+        <span>
+          <b>workflow v{version.version}</b>
+          <em>{version.status} · {version.id}</em>
+        </span>
+        <button type="button" onClick={onClose}>收起</button>
+      </header>
+      <div className="version-detail-grid">
+        <div><span>节点</span><b>{version.definition.nodes.length}</b></div>
+        <div><span>连线</span><b>{version.definition.edges.length}</b></div>
+        <div><span>发布人</span><b>{version.publishedBy || 'system'}</b></div>
+        <div><span>发布时间</span><b>{new Date(version.publishedAt).toLocaleString()}</b></div>
+        <div><span>操作</span><b>{version.action || 'PUBLISH'}</b></div>
+        <div><span>来源</span><b>{version.sourceVersionId || '-'}</b></div>
+      </div>
+      <div className="version-detail-note">
+        <span>发布说明</span>
+        <b>{version.releaseNote || '无发布说明'}</b>
+      </div>
+      <div className={`version-detail-diff ${diff.changed ? 'changed' : 'clean'}`}>
+        <span>{activeVersion?.id === version.id ? '当前 active version' : '与 active 对比'}</span>
+        <b>{activeVersion?.id === version.id ? '无差异' : diff.summary}</b>
       </div>
     </div>
   );
@@ -610,6 +642,7 @@ export function StudioChrome({
   const [versionActionMessage, setVersionActionMessage] = useState('');
   const [compareLeftId, setCompareLeftId] = useState('');
   const [compareRightId, setCompareRightId] = useState('');
+  const [inspectVersionId, setInspectVersionId] = useState('');
   const [activitySearch, setActivitySearch] = useState('');
   const [showTestActivities, setShowTestActivities] = useState(false);
   const [pickerWorkspaceId, setPickerWorkspaceId] = useState('');
@@ -629,9 +662,15 @@ export function StudioChrome({
   const compareRight = workflowVersions.find((item) => item.id === (compareRightId || workflowVersions[1]?.id));
   const rollbackTargetVersion = workflowVersions.find((item) => item.id === rollbackTargetVersionId);
   const archiveTargetVersion = workflowVersions.find((item) => item.id === archiveTargetVersionId);
+  const inspectVersion = workflowVersions.find((item) => item.id === inspectVersionId);
   const filteredWorkflowVersions = workflowVersions.filter((version) => (
     versionStatusFilter === 'ALL' || version.status === versionStatusFilter
   ));
+  const supersededVersions = workflowVersions.filter((version) => version.status === 'SUPERSEDED');
+  const archivedVersions = workflowVersions.filter((version) => version.status === 'ARCHIVED');
+  const versionGovernanceHint = supersededVersions.length > 0
+    ? `有 ${supersededVersions.length} 个 SUPERSEDED 版本可评估归档；ARCHIVED ${archivedVersions.length} 个。`
+    : `没有 SUPERSEDED 待治理版本；ARCHIVED ${archivedVersions.length} 个。`;
   const versionCompare = workflowDiffSummaryLocal(compareLeft?.definition, compareRight?.definition, '请选择两个历史版本');
   const activePlacement = activityId ? placements[activityId] : undefined;
   const activeWorkspace = activePlacement ? workspaces.find((workspace) => workspace.id === activePlacement.workspaceId) : undefined;
@@ -1042,7 +1081,20 @@ export function StudioChrome({
           </section>
           <section className="version-section">
             <h3>Active Published Version</h3>
-            {activeVersion ? <VersionCard version={activeVersion} active /> : <div className="version-empty">当前没有 active version。</div>}
+            {activeVersion ? <VersionCard version={activeVersion} active onInspect={() => setInspectVersionId(activeVersion.id)} /> : <div className="version-empty">当前没有 active version。</div>}
+          </section>
+          {inspectVersion ? (
+            <section className="version-section">
+              <h3>版本详情</h3>
+              <VersionDetailCard version={inspectVersion} activeVersion={activeVersion} onClose={() => setInspectVersionId('')} />
+            </section>
+          ) : null}
+          <section className="version-section">
+            <h3>版本治理</h3>
+            <div className={supersededVersions.length > 0 ? 'version-governance-card warning' : 'version-governance-card clean'}>
+              <b>{versionGovernanceHint}</b>
+              <span>{supersededVersions.length > 0 ? '建议先对比确认无回滚需求，再归档旧 SUPERSEDED 版本。' : '当前版本生命周期较干净。'}</span>
+            </div>
           </section>
           <section className="version-section">
             <h3>历史 Versions</h3>
@@ -1064,6 +1116,7 @@ export function StudioChrome({
                   key={version.id}
                   version={version}
                   active={version.status === 'ACTIVE'}
+                  onInspect={() => setInspectVersionId(version.id)}
                   onRollback={canPublishWorkflow && version.status !== 'ACTIVE' ? () => setRollbackTargetVersionId(version.id) : undefined}
                   onArchive={canPublishWorkflow && version.status !== 'ACTIVE' ? () => setArchiveTargetVersionId(version.id) : undefined}
                 />

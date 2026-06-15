@@ -387,6 +387,7 @@ type WorkflowRouteTraceItem = {
 type RunHistoryState = {
   open: boolean;
   loading: boolean;
+  offlineTrace: boolean;
   versionId: string;
   executions: WorkflowExecution[];
   pageLimit: number;
@@ -578,19 +579,61 @@ function compactDuration(ms: number | undefined): string {
   return `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)}s`;
 }
 
-function classifyWorkflowError(message?: string): { code: string; category: string; tone: 'neutral' | 'warning' | 'danger' } {
+type WorkflowErrorClass = {
+  code: string;
+  category: string;
+  tone: 'neutral' | 'warning' | 'danger';
+  suggestion: string;
+};
+
+const WORKFLOW_ERROR_DICTIONARY: Array<Omit<WorkflowErrorClass, 'code'> & { patterns: RegExp[] }> = [
+  {
+    category: '超时',
+    tone: 'danger',
+    suggestion: '检查节点超时配置、外部接口耗时和重试退避策略。',
+    patterns: [/TIMEOUT/i, /DEADLINE/i],
+  },
+  {
+    category: '配置错误',
+    tone: 'danger',
+    suggestion: '回到节点设置，检查必填配置、Schema 默认值和变量引用是否完整。',
+    patterns: [/CONFIG/i, /MISSING/i, /REQUIRED/i, /SCHEMA/i],
+  },
+  {
+    category: '路由错误',
+    tone: 'danger',
+    suggestion: '检查上一节点输出、连线路由表达式、默认分支和 handle 是否匹配。',
+    patterns: [/ROUTE/i, /BRANCH/i, /CONDITION/i, /DEFAULT/i],
+  },
+  {
+    category: '风控限制',
+    tone: 'warning',
+    suggestion: '确认资格、额度、幂等、限流或风险策略是否按预期拦截。',
+    patterns: [/QUOTA/i, /LIMIT/i, /RISK/i, /QUALIFY/i],
+  },
+  {
+    category: '外部依赖',
+    tone: 'danger',
+    suggestion: '检查 HTTP、Webhook、MQ、Kafka、Redis 或 Provider 资源是否可用。',
+    patterns: [/HTTP/i, /WEBHOOK/i, /CALLBACK/i, /\bMQ\b/i, /KAFKA/i, /REDIS/i, /PROVIDER/i],
+  },
+  {
+    category: '事件接入',
+    tone: 'danger',
+    suggestion: '检查 eventId、eventType、sourceSystem、tenantId 和幂等收件箱记录。',
+    patterns: [/INBOX/i, /EVENT/i, /IDEMPOTEN/i],
+  },
+];
+
+function classifyWorkflowError(message?: string): WorkflowErrorClass {
   const text = (message || '').trim();
-  if (!text) return { code: 'NONE', category: '无错误', tone: 'neutral' };
+  if (!text) return { code: 'NONE', category: '无错误', tone: 'neutral', suggestion: '当前 execution 或节点没有错误信息。' };
   const upper = text.toUpperCase();
   const codeMatch = upper.match(/\b([A-Z][A-Z0-9_]{2,})\b/);
   const code = codeMatch?.[1] ?? 'UNCLASSIFIED_ERROR';
-  if (upper.includes('TIMEOUT') || upper.includes('DEADLINE')) return { code, category: '超时', tone: 'danger' };
-  if (upper.includes('CONFIG') || upper.includes('MISSING') || upper.includes('REQUIRED') || upper.includes('SCHEMA')) return { code, category: '配置错误', tone: 'danger' };
-  if (upper.includes('ROUTE') || upper.includes('BRANCH') || upper.includes('CONDITION') || upper.includes('DEFAULT')) return { code, category: '路由错误', tone: 'danger' };
-  if (upper.includes('QUOTA') || upper.includes('LIMIT') || upper.includes('RISK') || upper.includes('QUALIFY')) return { code, category: '风控限制', tone: 'warning' };
-  if (upper.includes('HTTP') || upper.includes('WEBHOOK') || upper.includes('CALLBACK') || upper.includes('MQ') || upper.includes('KAFKA')) return { code, category: '外部依赖', tone: 'danger' };
-  if (upper.includes('INBOX') || upper.includes('EVENT')) return { code, category: '事件接入', tone: 'danger' };
-  return { code, category: '业务执行错误', tone: 'danger' };
+  const matched = WORKFLOW_ERROR_DICTIONARY.find((item) => item.patterns.some((pattern) => pattern.test(text)));
+  if (matched) return { code, category: matched.category, tone: matched.tone, suggestion: matched.suggestion };
+  return { code, category: '业务执行错误', tone: 'danger', suggestion: '查看节点 input/output，确认业务 handler 返回值、异常和副作用写入是否符合预期。' };
 }
 
 function workflowRouteTrace(execution?: WorkflowExecution): WorkflowRouteTraceItem[] {
@@ -617,6 +660,36 @@ function workflowExecutionModeLabel(execution?: WorkflowExecution): 'DEBUG_DRAFT
   const output = execution.output;
   if (output && typeof output === 'object' && (output as Record<string, unknown>).debug === true) return 'DEBUG_DRAFT';
   return 'PRODUCTION';
+}
+
+const WORKFLOW_EXECUTION_STATUSES = new Set(['RUNNING', 'SUCCESS', 'FAILED', 'CANCELED']);
+const WORKFLOW_NODE_EXECUTION_STATUSES = new Set(['RUNNING', 'SUCCESS', 'FAILED', 'SKIPPED']);
+
+function validateWorkflowTrace(trace: WorkflowExecutionTrace): string {
+  if (!trace || typeof trace !== 'object') return '文件不是 trace JSON 对象';
+  if (!trace.execution || typeof trace.execution !== 'object') return '缺少 execution';
+  if (!Array.isArray(trace.nodeExecutions)) return '缺少 nodeExecutions';
+  const execution = trace.execution as Partial<WorkflowExecution>;
+  if (!execution.id || typeof execution.id !== 'string') return 'execution 缺少 id';
+  if (!execution.tenantId || typeof execution.tenantId !== 'string') return 'execution 缺少 tenantId';
+  if (!execution.activityId || typeof execution.activityId !== 'string') return 'execution 缺少 activityId';
+  if (!execution.workflowVersionId || typeof execution.workflowVersionId !== 'string') return 'execution 缺少 workflowVersionId';
+  if (typeof execution.workflowVersion !== 'number' || !Number.isFinite(execution.workflowVersion)) return 'execution 缺少有效 workflowVersion';
+  if (!execution.status || !WORKFLOW_EXECUTION_STATUSES.has(execution.status)) return 'execution 缺少有效 status';
+  if (!execution.startedAt || typeof execution.startedAt !== 'string') return 'execution 缺少 startedAt';
+  const invalidNode = trace.nodeExecutions.find((item) => (
+    !item ||
+    typeof item !== 'object' ||
+    !item.id ||
+    !item.executionId ||
+    !item.nodeId ||
+    !item.nodeType ||
+    !item.status ||
+    !WORKFLOW_NODE_EXECUTION_STATUSES.has(item.status) ||
+    !item.startedAt
+  ));
+  if (invalidNode) return 'nodeExecutions 存在缺少 id/executionId/nodeId/nodeType/status/startedAt 的节点';
+  return '';
 }
 
 function traceToRunState(trace: WorkflowExecutionTrace): Pick<RunHistoryState, 'executions' | 'selectedExecutionId' | 'nodeExecutions' | 'nodeSummaries' | 'selectedNodeExecutionId'> {
@@ -2003,6 +2076,7 @@ function RunHistoryPanel({
   onSelectNode,
   onPageChange,
   onExportTrace,
+  onImportTrace,
   onFocusEdge,
   onReplayStepChange,
 }: {
@@ -2016,12 +2090,14 @@ function RunHistoryPanel({
   onSelectNode: (nodeExecution: WorkflowNodeExecution) => void;
   onPageChange: (offset: number) => void;
   onExportTrace: () => void;
+  onImportTrace: (file: File) => void;
   onFocusEdge: (edgeId: string) => void;
   onReplayStepChange: (step: number) => void;
 }) {
   const [payloadQuery, setPayloadQuery] = useState('');
   const [collapsedPayloads, setCollapsedPayloads] = useState({ input: false, output: false });
   const [shareLinkStatus, setShareLinkStatus] = useState('');
+  const traceInputRef = useRef<HTMLInputElement | null>(null);
   if (!state.open) return null;
   const selectedExecution = state.executions.find((item) => item.id === state.selectedExecutionId);
   const compareExecution = state.executions.find((item) => item.id === state.compareExecutionId);
@@ -2066,20 +2142,38 @@ function RunHistoryPanel({
       <header>
         <div>
           <b>运行历史</b>
-          <span>{shareLinkStatus || (selectedExecution ? `execution ${selectedExecution.id.slice(0, 12)}` : '选择一次执行')}</span>
+          <span>{shareLinkStatus || (state.offlineTrace ? '离线 Trace 查看' : selectedExecution ? `execution ${selectedExecution.id.slice(0, 12)}` : '选择一次执行')}</span>
         </div>
         <div className="run-history-header-actions">
+          <input
+            ref={traceInputRef}
+            type="file"
+            accept="application/json,.json"
+            hidden
+            onChange={(event) => {
+              const file = event.currentTarget.files?.[0];
+              if (file) onImportTrace(file);
+              event.currentTarget.value = '';
+            }}
+          />
+          <button type="button" className="share" onClick={() => traceInputRef.current?.click()}>导入 Trace</button>
           <button type="button" className="share" onClick={onExportTrace} disabled={!selectedExecution}>导出 Trace</button>
           <button type="button" className="share" onClick={() => void copyCurrentRunLink()} disabled={!selectedExecution}>复制定位链接</button>
           <button type="button" onClick={onClose}>×</button>
         </div>
       </header>
       <div className="run-history-filters">
-        <select value={state.versionId} onChange={(event) => onVersionChange(event.target.value)}>
-          <option value="">全部版本</option>
-          {workflowVersions.map((version) => (
-            <option key={version.id} value={version.id}>workflow v{version.version} · {version.status}</option>
-          ))}
+        <select value={state.versionId} onChange={(event) => onVersionChange(event.target.value)} disabled={state.offlineTrace}>
+          {state.offlineTrace ? (
+            <option value="">离线 Trace</option>
+          ) : (
+            <>
+              <option value="">全部版本</option>
+              {workflowVersions.map((version) => (
+                <option key={version.id} value={version.id}>workflow v{version.version} · {version.status}</option>
+              ))}
+            </>
+          )}
         </select>
       </div>
       <div className="run-compare-selector">
@@ -2153,6 +2247,7 @@ function RunHistoryPanel({
                 <span>错误分类</span>
                 <b>{executionError.category}</b>
                 <em>{executionError.code}</em>
+                <small>{executionError.suggestion}</small>
               </div>
             </div>
           ) : null}
@@ -2181,7 +2276,7 @@ function RunHistoryPanel({
                 <b>{selectedNode.nodeTitle || selectedNode.nodeId}</b>
                 <em>{selectedNodeSummary?.explanation || selectedNode.errorMessage || `耗时 ${selectedDuration ?? 0}ms · retry ${Math.max((selectedAttempts ?? 1) - 1, 0)}`}</em>
                 {selectedNodeSummary?.decision ? <i>decision · {selectedNodeSummary.decision}</i> : null}
-                {selectedNodeSummary?.errorCode || selectedNode.errorMessage ? <i>{nodeError.category} · {selectedNodeSummary?.errorCode || nodeError.code}</i> : null}
+                {selectedNodeSummary?.errorCode || selectedNode.errorMessage ? <i title={nodeError.suggestion}>{nodeError.category} · {selectedNodeSummary?.errorCode || nodeError.code}</i> : null}
               </div>
               {selectedNodeSummary ? (
                 <div className="run-node-explain">
@@ -4597,6 +4692,7 @@ export function App() {
   const [runHistory, setRunHistory] = useState<RunHistoryState>({
     open: false,
     loading: false,
+    offlineTrace: false,
     versionId: '',
     executions: [],
     pageLimit: 20,
@@ -6107,14 +6203,16 @@ export function App() {
 
   const loadExecutionNodes = useCallback(async (execution: WorkflowExecution | undefined) => {
     if (!execution) {
-      setRunHistory((state) => ({ ...state, selectedExecutionId: '', nodeExecutions: [], nodeSummaries: [], selectedNodeExecutionId: '', replayStep: 0, compareExecutionId: '', compareNodeExecutions: [], compareResult: undefined, compareLoading: false }));
+      setRunHistory((state) => ({ ...state, offlineTrace: false, selectedExecutionId: '', nodeExecutions: [], nodeSummaries: [], selectedNodeExecutionId: '', replayStep: 0, compareExecutionId: '', compareNodeExecutions: [], compareResult: undefined, compareLoading: false }));
       replaceUrlParams({ executionId: undefined, replayStep: undefined, compareExecutionId: undefined });
       applyRunOverlay(undefined, []);
       return;
     }
     const trace = await fetchJSON<WorkflowExecutionTrace>(`/admin/v1/workflow/executions/${execution.id}/trace`);
     replaceUrlParams({ executionId: execution.id });
-    const mergedNodes = trace.nodeExecutions;
+    const mergedNodes = trace.nodeExecutions.length
+      ? trace.nodeExecutions
+      : (await fetchJSON<{ items: WorkflowNodeExecution[] }>(`/admin/v1/workflow/executions/${execution.id}/nodes`)).items;
     const failed = mergedNodes.find((item) => item.status === 'FAILED');
     setRunHistory((state) => ({
       ...state,
@@ -6141,7 +6239,7 @@ export function App() {
       setWorkflowStatus('需要先绑定活动');
       return;
     }
-    setRunHistory((state) => ({ ...state, open: true, loading: true, versionId }));
+    setRunHistory((state) => ({ ...state, open: true, loading: true, offlineTrace: false, versionId }));
     try {
       const pageLimit = 20;
       const query = new URLSearchParams({ limit: String(pageLimit), offset: String(Math.max(0, pageOffset)) });
@@ -6152,6 +6250,7 @@ export function App() {
         ...state,
         open: true,
         loading: false,
+        offlineTrace: false,
         versionId,
         executions: executions.items,
         pageLimit: executions.limit ?? pageLimit,
@@ -6190,6 +6289,12 @@ export function App() {
 
   const selectRunExecution = useCallback(async (executionId: string) => {
     const execution = runHistory.executions.find((item) => item.id === executionId);
+    if (runHistory.offlineTrace) {
+      setRunHistory((state) => ({ ...state, selectedExecutionId: executionId, replayStep: 0 }));
+      replaceUrlParams({ executionId: undefined, replayStep: undefined, compareExecutionId: undefined });
+      if (execution) setWorkflowStatus(`离线 Trace：${execution.status} / v${execution.workflowVersion}`);
+      return;
+    }
     try {
       setRunHistory((state) => ({ ...state, replayStep: 0 }));
       replaceUrlParams({ executionId, replayStep: 0 });
@@ -6200,7 +6305,7 @@ export function App() {
     } catch (error) {
       setWorkflowStatus(runHistoryErrorMessage(error, '运行详情失败'));
     }
-  }, [loadExecutionNodes, runHistory.executions]);
+  }, [loadExecutionNodes, runHistory.executions, runHistory.offlineTrace]);
 
   const selectCompareExecution = useCallback(async (executionId: string, options: { silent?: boolean } = {}) => {
     if (!executionId) {
@@ -6266,7 +6371,7 @@ export function App() {
 
   const selectRunNode = useCallback(async (nodeExecution: WorkflowNodeExecution) => {
     let selected = nodeExecution;
-    if (nodeExecution.input === undefined && nodeExecution.output === undefined && nodeExecution.executionId) {
+    if (!runHistory.offlineTrace && nodeExecution.input === undefined && nodeExecution.output === undefined && nodeExecution.executionId) {
       try {
         selected = await fetchJSON<WorkflowNodeExecution>(`/admin/v1/workflow/executions/${nodeExecution.executionId}/nodes/${nodeExecution.id}`);
       } catch (error) {
@@ -6292,7 +6397,7 @@ export function App() {
       return;
     }
     setWorkflowStatus(`未找到运行节点：${selected.nodeId}`);
-  }, [nodes, reactFlowInstance]);
+  }, [nodes, reactFlowInstance, runHistory.offlineTrace]);
 
   const focusRunEdge = useCallback((edgeId: string) => {
     setSelectedEdgeIds([edgeId]);
@@ -6321,6 +6426,7 @@ export function App() {
       ...state,
       open: true,
       loading: false,
+      offlineTrace: false,
       versionId: '',
       executions: [trace.execution, ...state.executions.filter((item) => item.id !== trace.execution.id)],
       selectedExecutionId: next.selectedExecutionId,
@@ -6342,6 +6448,47 @@ export function App() {
     }
     setDebugPanel((state) => ({ ...state, lastResult: debugTraceSummary(trace) }));
     setWorkflowStatus(`Debug run：${trace.execution.status} · DEBUG_DRAFT`);
+  }, [applyRunOverlay]);
+
+  const importTraceFile = useCallback(async (file: File) => {
+    try {
+      const text = await file.text();
+      const trace = JSON.parse(text) as WorkflowExecutionTrace;
+      const validationError = validateWorkflowTrace(trace);
+      if (validationError) throw new Error(validationError);
+      const next = traceToRunState(trace);
+      setRunHistory((state) => ({
+        ...state,
+        open: true,
+        loading: false,
+        offlineTrace: true,
+        versionId: '',
+        executions: next.executions,
+        pageLimit: 1,
+        pageOffset: 0,
+        hasMore: false,
+        nextOffset: 0,
+        selectedExecutionId: next.selectedExecutionId,
+        nodeExecutions: next.nodeExecutions,
+        nodeSummaries: next.nodeSummaries,
+        selectedNodeExecutionId: next.selectedNodeExecutionId,
+        replayStep: 0,
+        compareExecutionId: '',
+        compareNodeExecutions: [],
+        compareResult: undefined,
+        compareLoading: false,
+      }));
+      replaceUrlParams({ executionId: undefined, replayStep: undefined, compareExecutionId: undefined });
+      applyRunOverlay(trace.execution, trace.nodeExecutions);
+      const failed = trace.nodeExecutions.find((item) => item.status === 'FAILED');
+      if (failed) {
+        setSelectedNodeIds([failed.nodeId]);
+        setSelectedEdgeIds([]);
+      }
+      setWorkflowStatus(`已导入离线 Trace：${trace.execution.id.slice(0, 12)}`);
+    } catch (error) {
+      setWorkflowStatus(`导入 Trace 失败：${(error as Error).message}`);
+    }
   }, [applyRunOverlay]);
 
   const saveCurrentDebugPayloadTemplate = useCallback(() => {
@@ -6518,13 +6665,26 @@ export function App() {
 
   const exportSelectedTrace = useCallback(async () => {
     if (!runHistory.selectedExecutionId) return;
+    if (runHistory.offlineTrace) {
+      const execution = runHistory.executions.find((item) => item.id === runHistory.selectedExecutionId);
+      if (!execution) return;
+      downloadJSON(`workflow-trace-${runHistory.selectedExecutionId}.json`, {
+        schemaVersion: 'workflow.execution.trace.v1',
+        exportedAt: new Date().toISOString(),
+        execution,
+        nodeExecutions: runHistory.nodeExecutions,
+        nodeSummaries: runHistory.nodeSummaries,
+        routeTrace: workflowRouteTrace(execution),
+      } satisfies WorkflowExecutionTrace);
+      return;
+    }
     try {
       const trace = await fetchJSON<WorkflowExecutionTrace>(`/admin/v1/workflow/executions/${runHistory.selectedExecutionId}/trace`);
       downloadJSON(`workflow-trace-${runHistory.selectedExecutionId}.json`, trace);
     } catch (error) {
       setDebugPanel((state) => ({ ...state, message: runHistoryErrorMessage(error, '导出失败') }));
     }
-  }, [runHistory.selectedExecutionId]);
+  }, [runHistory.executions, runHistory.nodeExecutions, runHistory.nodeSummaries, runHistory.offlineTrace, runHistory.selectedExecutionId]);
 
   const refreshWorkflowTemplates = useCallback(async () => {
     const [templateBody, presetBody] = await Promise.all([
@@ -6996,6 +7156,9 @@ export function App() {
           void changeRunHistoryPage(offset);
         }}
         onExportTrace={exportSelectedTrace}
+        onImportTrace={(file) => {
+          void importTraceFile(file);
+        }}
         onFocusEdge={focusRunEdge}
         onReplayStepChange={updateRunReplayStep}
       />

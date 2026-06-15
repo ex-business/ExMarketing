@@ -83,8 +83,10 @@ Run history 已经完成第一轮完整化：
 - 失败原因按错误码和关键词归类为超时、配置错误、路由错误、风控限制、外部依赖、事件接入或业务执行错误。
 - execution trace 导出格式统一为 `workflow.execution.trace.v1`，包含 `exportedAt`、execution、node executions 和 route trace。
 - 大 execution 日志改为按需加载：节点列表默认请求 summary，不带 input/output；选中节点时再请求单个 node execution 详情。
+- 运行历史支持导入已下载的 Trace JSON，进入离线 Trace 查看模式，不依赖后端 execution 查询。
+- 错误分类已收口为前端字典，详情面板展示错误分类、错误码和排查建议。
 
-后续还可以继续补：execution 详情独立路由页、trace 下载后的离线查看器、超大 JSON 的虚拟滚动、错误码字典从后端配置化返回。
+后续还可以继续补：execution 详情独立路由页、超大 JSON 的虚拟滚动、错误码字典从后端配置化返回。
 
 ### 6. Debug 工具增强
 

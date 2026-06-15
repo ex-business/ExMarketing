@@ -1315,12 +1315,71 @@ test('debug panel saves payload templates, reuses execution payload, and links v
   await expect(page.locator('.debug-run-panel')).toContainText('已保存 payload 模板');
   await expect(page.locator('.debug-run-panel select').nth(1)).toContainText('历史失败样例');
 
-  await page.locator('.debug-run-panel input').fill('inbox');
+  await page.getByRole('textbox', { name: '从节点继续跑' }).fill('inbox');
   await page.getByRole('button', { name: '从节点继续' }).click();
   await expect(page.locator('.debug-run-panel')).toContainText('已生成 DEBUG_DRAFT');
   await expect(page.locator('.run-execution-item.debug-execution')).toContainText('DEBUG_DRAFT');
   await expect(page.locator('.checklist-popover')).toContainText('全部检查通过');
   await expect(page.locator('.checklist-popover')).toContainText('当前 draft 可以发布');
+});
+
+test('imports offline trace and keeps sparse node details offline', async ({ page }) => {
+  await mockStudioApi(page, { activeDefinition: workflowDefinition, withExecution: true });
+  let offlineNodeDetailRequests = 0;
+  await page.route('**/admin/v1/workflow/executions/offline_execution/nodes/**', async (route) => {
+    offlineNodeDetailRequests++;
+    await route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'offline should not fetch node detail' }) });
+  });
+
+  await page.goto(`/admin-flow/?activityId=${activityId}`);
+  await page.getByRole('button', { name: '运行历史' }).click();
+  const trace = {
+    schemaVersion: 'workflow.execution.trace.v1',
+    exportedAt: '2026-06-02T10:00:01.000Z',
+    execution: {
+      id: 'offline_execution',
+      tenantId: 'site_001',
+      activityId,
+      workflowVersionId: 'version_1',
+      workflowVersion: 1,
+      status: 'FAILED',
+      eventId: 'evt_offline',
+      startedAt: '2026-06-02T10:00:00.000Z',
+      finishedAt: '2026-06-02T10:00:00.300Z',
+      errorMessage: 'INBOX_WRITE_FAILED: offline import',
+    },
+    nodeExecutions: [{
+      id: 'offline_node_exec_inbox',
+      executionId: 'offline_execution',
+      nodeId: 'inbox',
+      nodeType: 'inbox',
+      nodeTitle: '幂等收件箱',
+      status: 'FAILED',
+      errorMessage: 'INBOX_WRITE_FAILED: offline import',
+      startedAt: '2026-06-02T10:00:00.120Z',
+      finishedAt: '2026-06-02T10:00:00.300Z',
+    }],
+    nodeSummaries: [{
+      nodeId: 'inbox',
+      nodeType: 'inbox',
+      nodeTitle: '幂等收件箱',
+      status: 'FAILED',
+      errorCode: 'INBOX_WRITE_FAILED',
+      explanation: 'offline sparse summary',
+    }],
+    routeTrace: [],
+  };
+  await page.locator('.run-history-header-actions input[type="file"]').setInputFiles({
+    name: 'offline-trace.json',
+    mimeType: 'application/json',
+    buffer: Buffer.from(JSON.stringify(trace)),
+  });
+
+  await expect(page.locator('.run-history-panel header')).toContainText('离线 Trace 查看');
+  await expect(page.locator('.run-execution-item.active')).toContainText('evt_offline');
+  await expect(page.locator('.run-node-item.active')).toContainText('幂等收件箱');
+  await page.locator('.run-node-item.active').click();
+  expect(offlineNodeDetailRequests).toBe(0);
 });
 
 test('restores run history execution, replay step, and compare baseline from URL', async ({ page }) => {

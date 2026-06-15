@@ -459,6 +459,10 @@ func TestWorkflowValidationIssuesAreStableExplicitAndLocatable(t *testing.T) {
 			raw:  json.RawMessage(`{"meta":{"activityId":"activity-1","workspaceId":"workspace-1","folderId":"folder-1"},"nodes":[{"id":"event-in","type":"event-in","kind":"entry"},{"id":"match","type":"match"}],"edges":[{"id":"bad-edge","source":"event-in"}]}`),
 		},
 		{
+			name: "edge id duplicated",
+			raw:  json.RawMessage(`{"meta":{"activityId":"activity-1","workspaceId":"workspace-1","folderId":"folder-1"},"nodes":[{"id":"event-in","type":"event-in","kind":"entry"},{"id":"normalize","type":"normalize"},{"id":"reward","type":"reward"}],"edges":[{"id":"same-edge","source":"event-in","target":"normalize"},{"id":" same-edge ","source":"normalize","target":"reward"}]}`),
+		},
+		{
 			name: "edge route type required",
 			raw:  json.RawMessage(`{"meta":{"activityId":"activity-1","workspaceId":"workspace-1","folderId":"folder-1"},"nodes":[{"id":"event-in","type":"event-in","kind":"entry"},{"id":"match","type":"match"}],"edges":[{"id":"event-in-match","source":"event-in","target":"match","route":{"key":"raw_event","label":"raw_event"}}]}`),
 		},
@@ -586,6 +590,7 @@ func TestWorkflowValidationIssuesAreStableExplicitAndLocatable(t *testing.T) {
 		"WORKFLOW_NODE_INPUT_MAPPING_OUTPUT_MISSING",
 		"WORKFLOW_NODE_INPUT_MAPPING_PATH_INVALID",
 		"WORKFLOW_ENTRY_MISSING",
+		"WORKFLOW_EDGE_ID_DUPLICATED",
 		"WORKFLOW_EDGE_ENDPOINT_REQUIRED",
 		"WORKFLOW_EDGE_ROUTE_TYPE_REQUIRED",
 		"WORKFLOW_EDGE_ROUTE_KEY_REQUIRED",
@@ -709,6 +714,33 @@ func TestValidateWorkflowDefinitionRejectsDuplicateOutputEdge(t *testing.T) {
 		result.Items[0].NodeID != "event-in" ||
 		result.Items[0].EdgeID != "event-in-qualify" {
 		t.Fatalf("expected duplicate output edge issue, got %+v", result.Items)
+	}
+}
+
+func TestValidateWorkflowDefinitionRejectsDuplicateEdgeID(t *testing.T) {
+	result := ValidateWorkflowDefinition(json.RawMessage(`{
+		"meta": {"activityId": "activity-1", "workspaceId": "workspace-1", "folderId": "folder-1"},
+		"nodes": [
+			{"id": "event-in", "type": "event-in", "kind": "entry"},
+			{"id": "normalize", "type": "normalize", "kind": "logic"},
+			{"id": "reward", "type": "reward", "kind": "reward"}
+		],
+		"edges": [
+			{"id": "same-edge", "source": "event-in", "sourceHandle": "raw_event", "target": "normalize"},
+			{"id": " same-edge ", "source": "normalize", "sourceHandle": "normalized_event", "target": "reward"}
+		]
+	}`))
+	if result.Valid {
+		t.Fatalf("expected workflow validation to fail")
+	}
+	var found bool
+	for _, item := range result.Items {
+		if item.Code == "WORKFLOW_EDGE_ID_DUPLICATED" && item.EdgeID == "same-edge" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected duplicate edge id issue, got %+v", result.Items)
 	}
 }
 

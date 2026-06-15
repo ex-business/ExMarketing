@@ -106,11 +106,37 @@ func (s WorkflowValidationService) ValidateDefinition(raw json.RawMessage) Workf
 	outgoingRoutesByNode := map[string]map[string]string{}
 	defaultRouteByNode := map[string]string{}
 	incomingEdgesByTarget := map[string][]string{}
+	seenEdgeIDs := map[string]int{}
 	for index, edge := range definition.Edges {
 		edgeID := strings.TrimSpace(edge.ID)
 		source := strings.TrimSpace(edge.Source)
 		target := strings.TrimSpace(edge.Target)
 		routeKey, routeLabel := workflowEdgeRouteKey(edge)
+		if edgeID != "" {
+			if firstIndex, ok := seenEdgeIDs[edgeID]; ok {
+				result.addIssue(
+					WorkflowValidationBlock,
+					"WORKFLOW_EDGE_ID_DUPLICATED",
+					fmt.Sprintf("连线 ID %q 重复，请保证每条连线 ID 唯一。", edgeID),
+					fmt.Sprintf("edges[%d].id", index),
+					"",
+					edgeID,
+				)
+				if firstIndex >= 0 {
+					result.addIssue(
+						WorkflowValidationBlock,
+						"WORKFLOW_EDGE_ID_DUPLICATED",
+						fmt.Sprintf("连线 ID %q 重复，请保证每条连线 ID 唯一。", edgeID),
+						fmt.Sprintf("edges[%d].id", firstIndex),
+						"",
+						edgeID,
+					)
+					seenEdgeIDs[edgeID] = -1
+				}
+			} else {
+				seenEdgeIDs[edgeID] = index
+			}
+		}
 		if edge.Route != nil {
 			routeType := edge.Route.NormalizedType()
 			if routeType == "" {

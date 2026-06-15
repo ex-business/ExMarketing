@@ -736,6 +736,80 @@ func TestCancelWorkflowExecutionMarksRunningExecutionCanceled(t *testing.T) {
 	}
 }
 
+func TestWorkflowExecutorPreservesCancelAfterLastNode(t *testing.T) {
+	ctx := context.Background()
+	baseRepo := marketing.NewMemoryRepository()
+	repo := &cancelAfterNodeUpdateRepository{Repository: baseRepo}
+	service := NewService(repo)
+	now := time.Date(2026, 6, 2, 11, 30, 0, 0, time.UTC)
+	service.now = func() time.Time { return now }
+	execution, err := service.executeWorkflowDefinition(ctx, workflowRuntime{
+		Inbox: marketing.EventInbox{
+			ID:             "inbox_cancel_race",
+			IdempotencyKey: "idem_cancel_race",
+			Event: marketing.ActivityEvent{
+				EventID:      "evt_cancel_race",
+				EventType:    "CHECKIN_SUCCESS",
+				SourceSystem: "app",
+				TenantID:     "site_001",
+				Subject:      marketing.EventSubject{Type: "USER", ID: "u_cancel_race"},
+				OccurredAt:   now,
+			},
+		},
+		Activity: marketing.Activity{ID: "act_cancel_race", TenantID: "site_001"},
+	}, workflowExecutionOptions{
+		WorkflowVersionID: "wfver_cancel_race",
+		WorkflowVersion:   1,
+		Definition: json.RawMessage(`{
+			"nodes": [{"id":"event-in","type":"event-in","kind":"entry","title":"事件入口"}],
+			"edges": []
+		}`),
+		Mode:            "PRODUCTION",
+		IdempotencyKey:  "idem_cancel_race",
+		SkipIdempotency: true,
+	})
+	if err != nil {
+		t.Fatalf("execute workflow: %v", err)
+	}
+	if execution.Status != marketing.WorkflowExecutionCanceled || execution.ErrorMessage != "manual stop after last node" {
+		t.Fatalf("expected final execution to preserve canceled state, got %+v", execution)
+	}
+}
+
+type cancelAfterNodeUpdateRepository struct {
+	marketing.Repository
+	executionID string
+	canceled    atomic.Bool
+}
+
+func (r *cancelAfterNodeUpdateRepository) CreateWorkflowExecution(ctx context.Context, execution marketing.WorkflowExecution) (marketing.WorkflowExecution, error) {
+	created, err := r.Repository.CreateWorkflowExecution(ctx, execution)
+	if err == nil {
+		r.executionID = created.ID
+	}
+	return created, err
+}
+
+func (r *cancelAfterNodeUpdateRepository) UpdateWorkflowNodeExecution(ctx context.Context, execution marketing.WorkflowNodeExecution) error {
+	if err := r.Repository.UpdateWorkflowNodeExecution(ctx, execution); err != nil {
+		return err
+	}
+	if r.executionID == "" || r.canceled.Swap(true) {
+		return nil
+	}
+	executions, err := r.Repository.ListWorkflowExecutions(ctx, marketing.WorkflowExecutionQuery{ExecutionID: r.executionID, Limit: 1})
+	if err != nil || len(executions) == 0 {
+		return err
+	}
+	now := execution.UpdatedAt
+	current := executions[0]
+	current.Status = marketing.WorkflowExecutionCanceled
+	current.ErrorMessage = "manual stop after last node"
+	current.FinishedAt = &now
+	current.UpdatedAt = now
+	return r.Repository.UpdateWorkflowExecution(ctx, current)
+}
+
 func TestCoreWorkflowNodeHandlersProduceStableOutputs(t *testing.T) {
 	ctx := context.Background()
 	runtime := testWorkflowHandlerRuntime(true)
@@ -872,6 +946,78 @@ func TestWorkflowNodeSummariesExplainTraceNodes(t *testing.T) {
 	}
 	if summaries[1].ErrorCode != "QUOTA_INSUFFICIENT" || !strings.Contains(summaries[1].Explanation, "QUOTA_INSUFFICIENT") {
 		t.Fatalf("unexpected quota summary: %+v", summaries[1])
+	}
+}
+
+func TestWorkflowExecutionPlanRejectsDuplicateEdgeIDs(t *testing.T) {
+	_, err := workflowExecutionPlan(marketing.WorkflowDefinition{
+		Nodes: []marketing.WorkflowNode{
+			{ID: "event-in", Type: "event-in", Kind: "entry"},
+			{ID: "normalize", Type: "normalize"},
+			{ID: "reward", Type: "reward"},
+		},
+		Edges: []marketing.WorkflowEdge{
+			{ID: "event-normalize", Source: "event-in", Target: "normalize"},
+			{ID: " event-normalize ", Source: "normalize", Target: "reward"},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected workflow plan compile error")
+	}
+	var compileErr workflowPlanCompileError
+	if !errors.As(err, &compileErr) {
+		t.Fatalf("expected workflowPlanCompileError, got %T %v", err, err)
+	}
+	for _, issue := range compileErr.Issues {
+		if issue.Code == "WORKFLOW_DAG_EDGE_ID_DUPLICATED" && issue.EdgeID == "event-normalize" {
+			return
+		}
+	}
+	t.Fatalf("expected duplicate edge issue, got %+v", compileErr.Issues)
+}
+
+func TestWorkflowExecutionPlanRejectsUnreachableNodes(t *testing.T) {
+	_, err := workflowExecutionPlan(marketing.WorkflowDefinition{
+		Nodes: []marketing.WorkflowNode{
+			{ID: "event-in", Type: "event-in", Kind: "entry"},
+			{ID: "normalize", Type: "normalize"},
+			{ID: "orphan", Type: "audit"},
+		},
+		Edges: []marketing.WorkflowEdge{
+			{ID: "event-normalize", Source: "event-in", Target: "normalize"},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected workflow plan compile error")
+	}
+	var compileErr workflowPlanCompileError
+	if !errors.As(err, &compileErr) {
+		t.Fatalf("expected workflowPlanCompileError, got %T %v", err, err)
+	}
+	for _, issue := range compileErr.Issues {
+		if issue.Code == "WORKFLOW_DAG_NODE_UNREACHABLE" && issue.NodeID == "orphan" {
+			return
+		}
+	}
+	t.Fatalf("expected unreachable node issue, got %+v", compileErr.Issues)
+}
+
+func TestWorkflowExecutionPlanNormalizesEdgeEndpoints(t *testing.T) {
+	plan, err := workflowExecutionPlan(marketing.WorkflowDefinition{
+		Nodes: []marketing.WorkflowNode{
+			{ID: "event-in", Type: "event-in", Kind: "entry"},
+			{ID: "normalize", Type: "normalize"},
+		},
+		Edges: []marketing.WorkflowEdge{
+			{ID: " event-normalize ", Source: " event-in ", Target: " normalize "},
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected plan to compile with trimmed endpoints: %v", err)
+	}
+	edges := plan.EdgesBySource["event-in"]
+	if len(edges) != 1 || edges[0].ID != "event-normalize" || edges[0].Source != "event-in" || edges[0].Target != "normalize" {
+		t.Fatalf("expected normalized edge in plan, got %+v", edges)
 	}
 }
 

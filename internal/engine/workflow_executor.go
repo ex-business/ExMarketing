@@ -196,13 +196,13 @@ func (s *Service) executeWorkflowDefinition(ctx context.Context, runtime workflo
 			errorMessage = ctxErr.Error()
 			break
 		}
-		canceled, cancelErr := s.workflowExecutionWasCanceled(ctx, execution.ID)
+		canceled, cancelReason, cancelErr := s.workflowExecutionCancelState(ctx, execution.ID)
 		if cancelErr != nil {
 			return marketing.WorkflowExecution{}, cancelErr
 		}
 		if canceled {
 			status = marketing.WorkflowExecutionCanceled
-			errorMessage = "execution canceled"
+			errorMessage = cancelReason
 			break
 		}
 		node := queue[0]
@@ -295,6 +295,16 @@ func (s *Service) executeWorkflowDefinition(ctx context.Context, runtime workflo
 			missing++
 		}
 		skipped += missing
+	}
+	if err == nil {
+		canceled, cancelReason, cancelErr := s.workflowExecutionCancelState(ctx, execution.ID)
+		if cancelErr != nil {
+			return marketing.WorkflowExecution{}, cancelErr
+		}
+		if canceled {
+			status = marketing.WorkflowExecutionCanceled
+			errorMessage = cancelReason
+		}
 	}
 	finishedAt := s.now()
 	execution.Status = status
@@ -400,7 +410,20 @@ func workflowExecutionPlan(definition marketing.WorkflowDefinition) (workflowExe
 		}
 		nodeByID[node.ID] = node
 	}
+	edgeIDByValue := map[string]int{}
 	for index, edge := range definition.Edges {
+		edgeID := strings.TrimSpace(edge.ID)
+		if edgeID != "" {
+			if firstIndex, ok := edgeIDByValue[edgeID]; ok {
+				issues = append(issues, workflowCompileIssue("WORKFLOW_DAG_EDGE_ID_DUPLICATED", fmt.Sprintf("DAG compile failed: edge %q is duplicated", edgeID), fmt.Sprintf("edges[%d].id", index), "", edgeID))
+				if firstIndex >= 0 {
+					issues = append(issues, workflowCompileIssue("WORKFLOW_DAG_EDGE_ID_DUPLICATED", fmt.Sprintf("DAG compile failed: edge %q is duplicated", edgeID), fmt.Sprintf("edges[%d].id", firstIndex), "", edgeID))
+					edgeIDByValue[edgeID] = -1
+				}
+			} else {
+				edgeIDByValue[edgeID] = index
+			}
+		}
 		source := strings.TrimSpace(edge.Source)
 		target := strings.TrimSpace(edge.Target)
 		if source == "" || target == "" {
@@ -415,8 +438,12 @@ func workflowExecutionPlan(definition marketing.WorkflowDefinition) (workflowExe
 			issues = append(issues, workflowCompileIssue("WORKFLOW_DAG_EDGE_TARGET_MISSING", fmt.Sprintf("DAG compile failed: target node %q does not exist", target), fmt.Sprintf("edges[%d].target", index), target, edge.ID))
 			continue
 		}
-		edgesBySource[edge.Source] = append(edgesBySource[edge.Source], edge)
-		incoming[edge.Target] = append(incoming[edge.Target], edge)
+		normalizedEdge := edge
+		normalizedEdge.ID = edgeID
+		normalizedEdge.Source = source
+		normalizedEdge.Target = target
+		edgesBySource[source] = append(edgesBySource[source], normalizedEdge)
+		incoming[target] = append(incoming[target], normalizedEdge)
 	}
 	if len(issues) > 0 {
 		return workflowExecutionPlanData{}, workflowPlanCompileError{Issues: issues}
@@ -431,6 +458,16 @@ func workflowExecutionPlan(definition marketing.WorkflowDefinition) (workflowExe
 		return workflowExecutionPlanData{}, workflowPlanCompileError{Issues: []marketing.WorkflowValidationIssue{
 			workflowCompileIssue("WORKFLOW_DAG_ENTRY_MISSING", "DAG compile failed: standard event entry node is required", "nodes", "", ""),
 		}}
+	}
+	reachable := workflowReachableNodeIDs(roots, edgesBySource)
+	for _, node := range definition.Nodes {
+		if len(reachable) == 0 || reachable[node.ID] {
+			continue
+		}
+		issues = append(issues, workflowCompileIssue("WORKFLOW_DAG_NODE_UNREACHABLE", fmt.Sprintf("DAG compile failed: node %q is not reachable from an entry node", node.ID), "nodes", node.ID, ""))
+	}
+	if len(issues) > 0 {
+		return workflowExecutionPlanData{}, workflowPlanCompileError{Issues: issues}
 	}
 	topo, levels, err := workflowTopologicalOrder(definition, incoming, edgesBySource)
 	if err != nil {
@@ -448,6 +485,31 @@ func workflowExecutionPlan(definition marketing.WorkflowDefinition) (workflowExe
 		TopoIndex:     topoIndex,
 		TopoLevels:    levels,
 	}, nil
+}
+
+func workflowReachableNodeIDs(roots []marketing.WorkflowNode, edgesBySource map[string][]marketing.WorkflowEdge) map[string]bool {
+	reachable := map[string]bool{}
+	queue := make([]string, 0, len(roots))
+	for _, root := range roots {
+		if strings.TrimSpace(root.ID) == "" {
+			continue
+		}
+		reachable[root.ID] = true
+		queue = append(queue, root.ID)
+	}
+	for len(queue) > 0 {
+		source := queue[0]
+		queue = queue[1:]
+		for _, edge := range edgesBySource[source] {
+			target := strings.TrimSpace(edge.Target)
+			if target == "" || reachable[target] {
+				continue
+			}
+			reachable[target] = true
+			queue = append(queue, target)
+		}
+	}
+	return reachable
 }
 
 func workflowTopologicalOrder(definition marketing.WorkflowDefinition, incoming map[string][]marketing.WorkflowEdge, edgesBySource map[string][]marketing.WorkflowEdge) ([]marketing.WorkflowNode, map[string]int, error) {
@@ -760,15 +822,22 @@ func (s *Service) findExistingWorkflowExecution(ctx context.Context, activityID 
 	return marketing.WorkflowExecution{}, nil
 }
 
-func (s *Service) workflowExecutionWasCanceled(ctx context.Context, executionID string) (bool, error) {
+func (s *Service) workflowExecutionCancelState(ctx context.Context, executionID string) (bool, string, error) {
 	executions, err := s.repository.ListWorkflowExecutions(ctx, marketing.WorkflowExecutionQuery{ExecutionID: executionID, Limit: 1})
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 	if len(executions) == 0 {
-		return false, marketing.ErrNotFound
+		return false, "", marketing.ErrNotFound
 	}
-	return executions[0].Status == marketing.WorkflowExecutionCanceled, nil
+	if executions[0].Status != marketing.WorkflowExecutionCanceled {
+		return false, "", nil
+	}
+	reason := strings.TrimSpace(executions[0].ErrorMessage)
+	if reason == "" {
+		reason = "execution canceled"
+	}
+	return true, reason, nil
 }
 
 func (s *Service) createSkippedWorkflowNodeExecution(ctx context.Context, runtime workflowRuntime, executionID string, node marketing.WorkflowNode, reason string) error {

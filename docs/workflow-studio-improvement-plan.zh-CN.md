@@ -132,14 +132,18 @@ Workspace / Folder / Workflow 的 Studio 首页已经从简单列表升级为工
 
 ### 9. Executor 生产能力
 
-Executor 已经可以跑，但生产级还需要：
+Executor 生产能力已经完成第一轮增强，重点从“能跑”推进到“可诊断、可恢复、可分页读取”：
 
-- 更完整的 DAG 编译错误。
-- 节点并发策略。
-- 节点重试策略可配置。
-- execution cancel / resume 更强。
-- 大规模日志和 trace 的分页读取。
-- handler 单元测试继续补齐。
+- DAG 编译返回结构化错误，覆盖缺失端点、缺失入口、重复节点、重复连线 ID、不可达节点和不支持的环。
+- 发布前 validator 与 executor 编译器都能拦截关键 DAG 结构问题，避免运行时才把错误节点标记为 skipped。
+- 节点执行策略支持 timeout、maxRetries / maxAttempts、retryBackoffSeconds、concurrencyGroup、concurrencyLimit。
+- 当前 executor 仍保持单 execution 串行执行，但会把并发策略写入节点 output，明确 `SERIAL_PER_EXECUTION` 和未跨 execution 强制并发。
+- cancel 在节点间和最终落库前都会检查，避免最后一个节点执行期间的取消被成功状态覆盖。
+- resume 支持从失败/取消 execution 生成新的 `RESUME` execution，并复用上游成功节点 output 和已提交业务副作用上下文。
+- node execution 列表支持 `limit/offset` 分页和 `payload=summary`，大 trace 可以先拉 summary，再按需拉节点详情。
+- 单元测试覆盖 DAG 编译问题、retry/concurrency policy、resume trace、node trace 分页和核心 handler 稳定输出。
+
+后续如果继续增强，重点是真并行 ready-queue、group semaphore、分支 barrier、handler 幂等审计和更大规模 trace 的存储分片。
 
 ### 10. 模板体系实用化
 
@@ -574,10 +578,12 @@ Executor 已经可以跑，但生产级还需要：
 已完成：
 
 - DAG 编译增加结构化错误，返回稳定 `severity/code/message/nodeId/edgeId/path`，覆盖缺失端点、缺失入口和不支持的环。
+- DAG 编译和发布前 validator 补齐重复连线 ID、不可达节点拦截，避免结构错误进入运行时。
 - execution output 增加 `compileIssues`，编译失败时前端和 API 可以定位具体 DAG 问题。
 - 节点执行策略扩展：支持 `retryBackoffSeconds`、`concurrencyGroup`、`concurrencyLimit`。
 - 节点执行 output 暴露实际使用的 retry / concurrency 策略，方便运行历史排查。
 - 重试策略支持 backoff，且受 context cancel 控制。
+- execution cancel 在最终落库前会再次检查，避免最后节点执行期间的取消被成功状态覆盖。
 - 新增 `POST /admin/v1/workflow/executions/{id}/resume`，对 FAILED / CANCELED execution 创建新的 `RESUME` execution。
 - resume 会读取原 execution 的 event、workflow version 和上游成功节点 output，从失败节点或指定节点继续执行。
 - node execution 列表支持 `limit/offset` 分页，并返回 `limit/offset/nextOffset/hasMore`。

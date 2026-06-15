@@ -66,6 +66,12 @@ func (s *Service) ListWorkflowDraftTemplateVersions(ctx context.Context, templat
 	if len(out) == 0 {
 		return nil, marketing.ErrNotFound
 	}
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Version != out[j].Version {
+			return out[i].Version > out[j].Version
+		}
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
 	return out, nil
 }
 
@@ -258,15 +264,13 @@ func (s *Service) CompareWorkflowDraftTemplateVersions(ctx context.Context, temp
 	if len(versions) == 0 {
 		return marketing.WorkflowDraftTemplateCompareResult{}, marketing.ErrNotFound
 	}
-	left := versions[len(versions)-1]
-	right := versions[0]
-	for _, item := range versions {
-		if leftVersionID != "" && item.VersionID == leftVersionID {
-			left = item
-		}
-		if rightVersionID != "" && item.VersionID == rightVersionID {
-			right = item
-		}
+	left, err := workflowTemplateVersionOrDefault(versions, leftVersionID, false)
+	if err != nil {
+		return marketing.WorkflowDraftTemplateCompareResult{}, err
+	}
+	right, err := workflowTemplateVersionOrDefault(versions, rightVersionID, true)
+	if err != nil {
+		return marketing.WorkflowDraftTemplateCompareResult{}, err
 	}
 	leftDef, err := marketing.ParseWorkflowDefinition(left.Definition)
 	if err != nil {
@@ -309,13 +313,44 @@ func (s *Service) CompareWorkflowDraftTemplateVersions(ctx context.Context, temp
 		CommonNodes:    common,
 		NodeChanges:    nodeChanges,
 		EdgeChanges:    edgeChanges,
-		ChangedMeta: map[string]any{
-			"name":       []string{left.Name, right.Name},
-			"category":   []string{left.Category, right.Category},
-			"visibility": []string{string(left.Visibility), string(right.Visibility)},
-			"status":     []string{string(left.Status), string(right.Status)},
-		},
+		ChangedMeta:    workflowTemplateChangedMeta(left, right),
 	}, nil
+}
+
+func workflowTemplateVersionOrDefault(versions []marketing.WorkflowDraftTemplate, versionID string, latest bool) (marketing.WorkflowDraftTemplate, error) {
+	versionID = strings.TrimSpace(versionID)
+	if versionID == "" {
+		if latest {
+			return versions[0], nil
+		}
+		return versions[len(versions)-1], nil
+	}
+	for _, item := range versions {
+		if item.VersionID == versionID {
+			return item, nil
+		}
+	}
+	return marketing.WorkflowDraftTemplate{}, marketing.ErrNotFound
+}
+
+func workflowTemplateChangedMeta(left marketing.WorkflowDraftTemplate, right marketing.WorkflowDraftTemplate) map[string]any {
+	changed := map[string]any{}
+	if left.Name != right.Name {
+		changed["name"] = []string{left.Name, right.Name}
+	}
+	if left.Category != right.Category {
+		changed["category"] = []string{left.Category, right.Category}
+	}
+	if left.Visibility != right.Visibility {
+		changed["visibility"] = []string{string(left.Visibility), string(right.Visibility)}
+	}
+	if left.Status != right.Status {
+		changed["status"] = []string{string(left.Status), string(right.Status)}
+	}
+	if len(changed) == 0 {
+		return nil
+	}
+	return changed
 }
 
 func (s *Service) ListWorkflowNodePresets() []marketing.WorkflowNodePreset {

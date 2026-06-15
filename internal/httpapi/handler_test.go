@@ -1196,6 +1196,11 @@ func TestActivityWorkflowHTTPAPI(t *testing.T) {
 		if versions.Code != http.StatusOK || !strings.Contains(versions.Body.String(), `"version":2`) || !strings.Contains(versions.Body.String(), `"version":1`) {
 			t.Fatalf("expected saved template versions, got %d: %s", versions.Code, versions.Body.String())
 		}
+		compareMissingVersion := httptest.NewRecorder()
+		handler.Routes().ServeHTTP(compareMissingVersion, withOps(httptest.NewRequest(http.MethodGet, "/admin/v1/workflow/draft-templates/saved-fast-reward/compare?leftVersionId=missing-template-version", nil)))
+		if compareMissingVersion.Code != http.StatusNotFound {
+			t.Fatalf("expected missing template compare version to return 404, got %d: %s", compareMissingVersion.Code, compareMissingVersion.Body.String())
+		}
 	})
 
 	t.Run("new activity starts with saved empty draft", func(t *testing.T) {

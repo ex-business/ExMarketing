@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -121,6 +122,22 @@ func TestCompareWorkflowDraftTemplateVersionsReturnsNodeAndEdgeConfigDiff(t *tes
 	}
 	if !workflowDiffContainsPath(compare.EdgeChanges[0].Changes, "$.route.Type") && !workflowDiffContainsPath(compare.EdgeChanges[0].Changes, "$.route.type") {
 		t.Fatalf("expected route type diff, got %+v", compare.EdgeChanges[0].Changes)
+	}
+	defaultCompare, err := service.CompareWorkflowDraftTemplateVersions(ctx, "tpl_compare", "", "")
+	if err != nil {
+		t.Fatalf("compare default template versions: %v", err)
+	}
+	if defaultCompare.LeftVersionID != "tpl_compare_v1" || defaultCompare.RightVersionID != "tpl_compare_v2" {
+		t.Fatalf("expected default compare to use oldest -> latest, got %s -> %s", defaultCompare.LeftVersionID, defaultCompare.RightVersionID)
+	}
+	if defaultCompare.ChangedMeta != nil {
+		t.Fatalf("expected unchanged template metadata to be omitted, got %+v", defaultCompare.ChangedMeta)
+	}
+	if _, err := service.CompareWorkflowDraftTemplateVersions(ctx, "tpl_compare", "missing-left-version", "tpl_compare_v2"); !errors.Is(err, marketing.ErrNotFound) {
+		t.Fatalf("expected missing left version to return ErrNotFound, got %v", err)
+	}
+	if _, err := service.CompareWorkflowDraftTemplateVersions(ctx, "tpl_compare", "tpl_compare_v1", "missing-right-version"); !errors.Is(err, marketing.ErrNotFound) {
+		t.Fatalf("expected missing right version to return ErrNotFound, got %v", err)
 	}
 }
 

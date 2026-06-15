@@ -155,8 +155,11 @@ Executor 生产能力已经完成第一轮增强，重点从“能跑”推进�
 - 后端应用模板时会把业务参数写入对应节点 config，并把 `activityId`、`workspaceId`、`folderId` 和 `templateParameters` 写入 workflow metadata。
 - 保存当前 workflow 为团队模板时可以选择 workspace、folder 和可见性，保存后的模板 definition metadata 会保留这些信息。
 - 模板版本管理 UI 已接入 `/draft-templates/{templateId}/versions`，可以选择历史版本创建 draft。
+- 模板应用和保存会走后端 workflow validation，非法模板不会被应用到 draft 或保存成团队模板。
+- 模板版本 diff 已接入 `/draft-templates/{templateId}/compare`，默认按最老版本到最新版本对比；指定不存在的版本 ID 会返回 404，不再静默回退默认版本。
+- 模板版本列表在后端按版本号倒序稳定返回，版本选择、默认 diff 和权限过滤使用同一套顺序语义。
 
-后续还可以继续补：模板详情独立页面、模板参数 schema 化、模板合法性改为后端真实 validation、模板版本 diff、模板收藏/归档和按 workspace 权限过滤的模板目录。
+后续还可以继续补：模板详情独立页面、模板参数 schema 化、模板收藏入口、模板使用统计和按业务场景推荐模板。
 
 ### 建议下一步
 

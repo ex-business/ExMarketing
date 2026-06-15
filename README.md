@@ -1,19 +1,30 @@
 # ExMarketing
 
-`ExMarketing` is a standalone marketing system under `ex-stack`.
+ExMarketing 是 `ex-stack` 下的独立营销活动与流程编排系统，目标是把“活动配置、事件接入、资格判断、频控、发奖、通知、审计、对账”做成可复用、可调试、可运行的生产编排能力。
 
-It is designed to hold reusable marketing capabilities:
+当前重点能力：
 
-- activity lifecycle
-- rule evaluation
-- reward definition
-- event intake
-- grant order generation
-- idempotency, quota, budget, inventory, audit, outbox and DLQ
+- 标准事件接入：OpenAPI、Webhook、MQ Topic、定时事件、人工触发、状态监听。
+- Workflow Studio：工作区、文件夹、模板、画布编排、节点配置、调试运行、运行历史、版本管理。
+- 节点体系：入口、标准化、幂等、事实查询、资格校验、次数频控、奖励、预算锁定、发奖订单、通知、审计、对账等。
+- 字段绑定：节点配置值支持固定值、表达式和 Lua 脚本模式。
+- Lua 配置：节点变量、Context / Resource / Node API、Lua 标准库补全、语法检查和运行 trace。
+- 资源管理：公共内存、数据库 KV、公共表、Provider Adapter、Redis、MQ、Lua Resource API。
+- 生产执行：PostgreSQL 真库、幂等收件箱、quota / budget / outbox / DLQ、回调签名、审计日志。
 
-## Run
+## Screenshots
 
-Start local PostgreSQL:
+### Workspace Studio
+
+![Workspace Studio](docs/assets/readme-workspace-home.jpg)
+
+### Workflow Studio And Lua Panel
+
+![Workflow Studio And Lua Panel](docs/assets/readme-workflow-lua-panel.png)
+
+## Quick Start
+
+启动 PostgreSQL：
 
 ```bash
 docker compose up -d postgres
@@ -21,78 +32,151 @@ export EX_MARKETING_DATABASE_URL='postgres://exmarketing:exmarketing@localhost:5
 go run ./cmd/db-migration-release --mode apply
 ```
 
-Use the Docker PostgreSQL database:
+启动后端服务：
 
 ```bash
 go run ./cmd/exmarketing
 ```
 
-Default address:
+默认地址：
 
 ```text
-:8080
+http://localhost:8080
 ```
 
-Without `EX_MARKETING_DATABASE_URL`, the service uses the in-memory repository.
-
-Enable the Outbox sender:
+启动 Workflow Studio 前端：
 
 ```bash
-export EX_MARKETING_OUTBOX_WORKER=true
+npm install
+npm run dev:admin-flow
 ```
 
-The worker sends `HTTP`, `WEBHOOK`, and configured `MQ` reward commands to `rewardConfig.targetRef`, retries retryable failures with exponential backoff, then marks exhausted or non-retryable messages as `DLQ`. MQ delivery uses an adapter boundary for Kafka/RabbitMQ/Pulsar; broker credentials stay in runtime configuration and never in activity config or outbox payload.
+默认前端地址：
 
-MQ runtime sender configuration is loaded from `EX_MARKETING_MQ_SENDERS_JSON` when the worker starts. `targetRef` remains only a destination such as `kafka://reward.commands`; endpoints and auth references live in runtime config:
+```text
+http://127.0.0.1:8081/admin-flow/
+```
+
+生产构建：
 
 ```bash
-export EX_MARKETING_MQ_SENDERS_JSON='{"providers":{"kafka":{"enabled":true,"endpoints":["kafka-1:9092"],"authRef":"secret/exmarketing/kafka","sendTimeoutMillis":5000,"destinationAllowlist":["reward.commands"]}}}'
+npm run typecheck:admin-flow
+npm run build:admin-flow
 ```
 
-DLQ messages can be inspected and operated from the admin API:
-
-```bash
-GET  /admin/v1/outbox/dlq?tenantId=site_001&includeClosed=true
-POST /admin/v1/outbox/{id}/replay
-POST /admin/v1/outbox/{id}/close
-```
-
-Stop local PostgreSQL:
+停止本地 PostgreSQL：
 
 ```bash
 docker compose down
 ```
 
-Migration release commands:
+如果没有配置 `EX_MARKETING_DATABASE_URL`，服务会使用内存仓储，适合快速本地验证，但不适合 E2E 和持久化调试。
 
-```bash
-go run ./cmd/db-migration-release --mode precheck
-go run ./cmd/db-migration-release --mode apply
-go run ./cmd/db-migration-release --mode drift
+## Studio Workflow
+
+典型操作路径：
+
+1. 进入 `http://127.0.0.1:8081/admin-flow/`，选择或创建工作区。
+2. 在工作区中新建流程、从模板开始，或导入 JSON。
+3. 在画布添加入口节点，例如标准事件入口、HTTP 接口事件、MQ Topic 事件、定时事件。
+4. 串联幂等收件箱、事实查询、资格校验、次数频控、奖励、发奖订单、通知和审计节点。
+5. 在右侧属性面板配置节点字段，必要时切换到 Lua 脚本。
+6. 用“调试运行”填写 JSON payload，查看每个节点输入、输出、错误、重试和 trace。
+7. 检查版本、发布流程，再通过 OpenAPI / MQ / Webhook 进入真实 execution。
+
+每日签到奖励并通知、风控资格校验链路、次数限制和奖励对账等流程可以从模板或 `hello` 工作区继续演进。模板设计见 [业务活动模板](docs/business-activity-templates.md)。
+
+## Node Model
+
+节点按能力分类，而不是把所有入口或查询都压成一个节点：
+
+| 分类 | 说明 | 代表节点 |
+| --- | --- | --- |
+| `EVENT_INPUT` | 事件接入与触发 | 标准事件入口、HTTP 接口事件、Webhook 映射事件、MQ Topic 事件、定时事件 |
+| `CORE` | 活动核心判断链路 | 事件标准化、事实查询、资格校验、次数频控、奖励计算 |
+| `STORAGE` | 状态、幂等、参与记录和资源状态 | 幂等收件箱、活动状态、通用存储、参与记录、资源锁 |
+| `ADVANCED` | 高级编排与外部集成 | 条件分支、组合、拆分、代码执行、HTTP 发奖、MQ 发奖、Webhook 通知 |
+| `OPS` | 运维、审计、补偿和对账 | 审计记录、失败重试、死信队列、奖励对账、告警通知 |
+
+完整节点清单见 [Workflow 节点分类清单](docs/workflow-node-catalog.zh-CN.md)，活动覆盖评估见 [节点对活动模板覆盖评估](docs/workflow-node-activity-coverage.zh-CN.md)。
+
+## Field Bindings And Lua
+
+每个节点的配置字段都可以逐步支持三种模式：
+
+- 固定值：直接填写业务配置。
+- 表达式：从上下文、节点输出、资源引用中取值。
+- Lua 脚本：用节点固定变量名计算字段值，不需要强制 `return`。
+
+Lua 编辑器提供：
+
+- 当前节点默认变量补全。
+- `Context`、`Resource`、`ResourceRef`、`Node` API 补全。
+- Lua 标准库、字符串、数组、table、math、os 等方法补全。
+- 语法检查和错误行列提示。
+- 调试运行 trace 中展示 resolved input / output。
+
+设计细节见 [字段级表达式与输入解析设计](docs/field-bindings-design.zh-CN.md)。
+
+## Resource Management
+
+公共资源不直接散落在节点里，而是在资源管理中定义，再由节点引用。当前资源方向包括：
+
+- 工作流上下文资源。
+- 内存资源。
+- 数据库 KV。
+- 公共表。
+- Redis。
+- MQ Topic。
+- HTTP / gRPC / Custom Provider Adapter。
+- Lua Resource API。
+
+资源可以按 workspace、folder、workflow 等范围授权使用。详细设计见 [公共资源管理设计](docs/resource-management-design.zh-CN.md)。
+
+## Event Intake
+
+标准事件字段：
+
+```text
+eventId, eventType, sourceSystem, tenantId, subject, biz, occurredAt, attributes
 ```
 
-Database backup / restore drill commands:
+OpenAPI 事件入口：
 
 ```bash
-export EX_MARKETING_DATABASE_URL='postgres://exmarketing:exmarketing@localhost:54329/exmarketing?sslmode=disable'
-go run ./cmd/db-backup-restore --mode backup --output-dir backups/db-restore-drills
-
-export EX_MARKETING_RESTORE_DATABASE_URL='postgres://exmarketing:exmarketing@localhost:54329/exmarketing_restore?sslmode=disable'
-go run ./cmd/db-backup-restore --mode restore --backup-file backups/db-restore-drills/<backup>.dump
-go run ./cmd/db-backup-restore --mode validate
-go run ./cmd/db-backup-restore --mode smoke
+curl -X POST http://localhost:8080/openapi/v1/events \
+  -H 'content-type: application/json' \
+  -H 'Authorization: Bearer dev-token' \
+  -H 'Idempotency-Key: site_001:app:CHECKIN_SUCCESS:CHECKIN:daily_20260614_u_demo_001' \
+  -d '{
+    "eventId": "evt_checkin_20260614_0001",
+    "eventType": "CHECKIN_SUCCESS",
+    "sourceSystem": "app",
+    "tenantId": "site_001",
+    "subject": {"type": "USER", "id": "u_demo_001"},
+    "biz": {"bizType": "CHECKIN", "bizId": "daily_20260614_u_demo_001"},
+    "occurredAt": "2026-06-14T13:10:00Z",
+    "attributes": {
+      "channel": "APP",
+      "checkin": true,
+      "timezone": "Asia/Shanghai",
+      "streakDays": 1
+    }
+  }'
 ```
 
-`restore` defaults to an isolated target and refuses to overwrite a non-empty
-target database unless `--force` is passed after an explicit local drill review.
-`validate` checks migration checksum drift and core table row counts; `smoke`
-uses the restored DSN to run the PostgreSQL Event In -> Outbox E2E flow.
+生产环境建议开启 OpenAPI 事件鉴权：
 
-The migration release flow records successful versions in `schema_migrations`,
-checks SHA-256 checksums, blocks failed or drifted versions, and uses a
-forward-only strategy for shared and production environments.
+```bash
+export EX_MARKETING_REQUIRE_OPENAPI_AUTH=true
+export EX_MARKETING_OPENAPI_TOKENS='dev-token:site_001:app'
+```
 
-## APIs
+事件入口设计见 [事件输入节点设计](docs/event-input-node-design.zh-CN.md)，分阶段计划见 [事件输入实施计划](docs/event-input-implementation-plan.zh-CN.md)。
+
+## API Surface
+
+常用接口：
 
 ```text
 GET  /healthz
@@ -110,130 +194,97 @@ POST /openapi/v1/facts/query
 POST /openapi/v1/reward/callback
 ```
 
-Reward callbacks accept signed JSON from external grant systems. A callback is scoped by `tenantId` and can locate a grant order by `billNo` / `commandId` or `idempotencyKey`; conflicting locators return `CALLBACK_LOCATOR_CONFLICT`, and configured tenants must pass `X-ExMarketing-Timestamp` plus HMAC-SHA256 `X-ExMarketing-Signature` verification before any grant, participation, or quota state changes.
+完整 API 示例见 [API 文档](docs/api.md)。
 
-Create activity example:
+## Operations
 
-```bash
-curl -X POST http://localhost:8080/admin/v1/activities \
-  -H 'content-type: application/json' \
-  -d '{
-    "tenantId": "site_001",
-    "activityCode": "FIRST_DEPOSIT_BONUS",
-    "activityName": "First Deposit Bonus",
-    "activityType": "FIRST_DEPOSIT",
-    "status": "ACTIVE",
-    "triggerEvents": ["DEPOSIT_SUCCESS"],
-    "startTime": "2026-05-01T00:00:00Z",
-    "endTime": "2026-06-01T00:00:00Z",
-    "timezone": "UTC",
-    "rules": [
-      {
-        "ruleCode": "FIRST_DEPOSIT_AND_AMOUNT",
-        "rulePhase": "QUALIFY",
-        "ruleType": "CONDITION",
-        "ruleConfig": {
-          "logic": "AND",
-          "conditions": [
-            {"field": "attributes.isFirstDeposit", "op": "=", "value": true},
-            {"field": "attributes.amount", "op": ">=", "value": "100.00"}
-          ]
-        }
-      }
-    ],
-    "rewards": [
-      {
-        "rewardCode": "FIRST_DEPOSIT_RATIO",
-        "rewardType": "BONUS",
-        "calculateType": "RATIO",
-        "rewardConfig": {
-          "baseField": "attributes.amount",
-          "rate": "0.20",
-          "maxAmount": "500.00",
-          "currency": "CNY",
-          "flowMultiple": "3",
-          "targetRef": "https://wallet.example.com/reward"
-        },
-        "grantMode": "AUTO",
-        "grantChannel": "HTTP",
-        "enabled": true
-      }
-    ]
-  }'
-```
-
-Submit event example:
+迁移发布：
 
 ```bash
-curl -X POST http://localhost:8080/openapi/v1/events \
-  -H 'content-type: application/json' \
-  -H 'Authorization: Bearer dev-token' \
-  -H 'Idempotency-Key: site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:pay_123' \
-  -d '{
-    "eventId": "evt_20260524_000001",
-    "eventType": "DEPOSIT_SUCCESS",
-    "sourceSystem": "payment",
-    "tenantId": "site_001",
-    "subject": {"type": "USER", "id": "10001"},
-    "biz": {"bizType": "DEPOSIT", "bizId": "pay_123"},
-    "occurredAt": "2026-05-24T12:00:00Z",
-    "attributes": {
-      "amount": "299.00",
-      "currency": "CNY",
-      "isFirstDeposit": true
-    }
-  }'
+go run ./cmd/db-migration-release --mode precheck
+go run ./cmd/db-migration-release --mode apply
+go run ./cmd/db-migration-release --mode drift
 ```
 
-The event endpoint accepts only the standard event fields:
+PostgreSQL 备份与恢复演练：
+
+```bash
+export EX_MARKETING_DATABASE_URL='postgres://exmarketing:exmarketing@localhost:54329/exmarketing?sslmode=disable'
+go run ./cmd/db-backup-restore --mode backup --output-dir backups/db-restore-drills
+
+export EX_MARKETING_RESTORE_DATABASE_URL='postgres://exmarketing:exmarketing@localhost:54329/exmarketing_restore?sslmode=disable'
+go run ./cmd/db-backup-restore --mode restore --backup-file backups/db-restore-drills/<backup>.dump
+go run ./cmd/db-backup-restore --mode validate
+go run ./cmd/db-backup-restore --mode smoke
+```
+
+Outbox worker：
+
+```bash
+export EX_MARKETING_OUTBOX_WORKER=true
+```
+
+MQ sender runtime config：
+
+```bash
+export EX_MARKETING_MQ_SENDERS_JSON='{"providers":{"kafka":{"enabled":true,"endpoints":["kafka-1:9092"],"authRef":"secret/exmarketing/kafka","sendTimeoutMillis":5000,"destinationAllowlist":["reward.commands"]}}}'
+```
+
+运维细节见 [运维手册](docs/operations.md)，告警处理见 [Alert Runbook](docs/runbooks/exmarketing-alerts.md)，发布安全闸门见 [Security Release Gate](docs/security-release-gate.md)。
+
+## Repository Layout
 
 ```text
-eventId, eventType, sourceSystem, tenantId, subject, biz, occurredAt, attributes
+cmd/exmarketing                  service entrypoint
+cmd/db-migration-release          PostgreSQL migration release command
+cmd/db-backup-restore             backup / restore drill command
+cmd/engine-e2e-postgres           PostgreSQL E2E runner
+frontend/admin-flow               Workflow Studio frontend
+web/admin-flow                    built Workflow Studio assets
+internal/httpapi                  HTTP handlers and routing
+internal/engine                   event processing pipeline
+internal/workflow                 workflow definition and executor
+internal/marketing                domain model and repository contracts
+internal/rule                     condition rule evaluator
+internal/reward                   reward calculator and reward schema validation
+internal/decimal                  decimal money helper, no float64 for amount math
+internal/worker                   outbox HTTP/Webhook/MQ sender with retry and DLQ
+internal/fact                     fact provider client
+internal/plugin                   activity plugin registry contract
+internal/postgres                 PostgreSQL repository
+internal/redislua                 Redis / Lua integration helpers
+db/migration                      PostgreSQL schema migrations
+docs                              design notes and runbooks
 ```
 
-`Idempotency-Key` is required and must equal `tenantId:sourceSystem:eventType:bizType:bizId`. Reposting the same payload with the same key returns `200 OK` with `duplicate=true` and does not create another participation, grant order, or outbox message. Reusing the same key for a different payload returns `400 INVALID_IDEMPOTENCY_KEY`.
+## Documentation Index
 
-For production, require OpenAPI event auth:
-
-```bash
-export EX_MARKETING_REQUIRE_OPENAPI_AUTH=true
-export EX_MARKETING_OPENAPI_TOKENS='dev-token:site_001:payment'
-```
-
-`EX_MARKETING_OPENAPI_TOKENS` uses `token:tenantId[,tenantId...]:sourceSystem[,sourceSystem...]` entries separated by `;`. `EX_MARKETING_EVENT_MAX_BODY_BYTES` optionally overrides the default 1 MiB event request body limit.
-
-Webhook receivers can accept provider-specific JSON and map it into the same standard event chain:
-
-```bash
-export EX_MARKETING_WEBHOOK_RECEIVERS_JSON='[{"receiverCode":"payment-webhook","enabled":true,"secret":"receiver-secret","allowedTenantIds":["site_001"],"allowedSourceSystems":["payment"],"allowedIPs":[],"mapping":{"eventId":{"path":"$.id"},"eventType":{"const":"DEPOSIT_SUCCESS"},"sourceSystem":{"const":"payment"},"tenantId":{"const":"site_001"},"subject.type":{"const":"USER"},"subject.id":{"path":"$.user.id"},"biz.bizType":{"const":"DEPOSIT"},"biz.bizId":{"path":"$.payment.id"},"occurredAt":{"path":"$.createdAt"},"attributes":{"amount":{"path":"$.payment.amount"},"currency":{"path":"$.payment.currency"},"providerEventId":{"path":"$.id"}}}}]'
-```
-
-`POST /openapi/v1/webhooks/{receiverCode}` requires JSON plus `X-ExMarketing-Timestamp` and `X-ExMarketing-Signature`. The signature is lowercase hex `HMAC-SHA256(receiver.secret, "<timestamp>.<rawBody>")`. `Idempotency-Key` is optional for Webhook requests; when present it must equal the mapped standard event key.
-
-## Layout
-
-```text
-cmd/exmarketing       service entrypoint
-cmd/db-migration-release PostgreSQL migration release command
-internal/httpapi      HTTP handlers and routing
-internal/engine       event processing pipeline
-internal/marketing    domain model and repository contracts
-internal/rule         condition rule evaluator
-internal/reward       reward calculator and reward schema validation helpers
-internal/decimal      decimal money helper, no float64 for amount math
-internal/worker       outbox HTTP/Webhook/MQ sender with retry and DLQ
-internal/fact         HTTP fact provider client
-internal/plugin       activity plugin registry contract
-db/migration          PostgreSQL schema migrations
-docs                  design notes
-```
-
-ActivityPlugin is reserved for new gameplay context that cannot be expressed
-with normal activity config, rules, rewards, and quotas. Plugin context is
-exposed to rules and rewards only through `state.plugin.<pluginCode>.*`; normal
-first-deposit, re-deposit, and discount activities should stay data-configured.
-Plugins do not directly grant rewards, reserve quota, write outbox commands, or
-persist real gameplay state in this phase.
+| 主题 | 文档 |
+| --- | --- |
+| 架构 | [Architecture](docs/architecture.md) |
+| API | [API 文档](docs/api.md) |
+| 数据模型 | [数据模型](docs/data-model.md) |
+| Workflow Studio 完善计划 | [中文计划](docs/workflow-studio-improvement-plan.zh-CN.md) / [English plan](docs/workflow-studio-improvement-plan.md) |
+| 工作台首页 UI | [Workspace Home UI 执行文档](docs/workspace-home-ui-execution-plan.zh-CN.md) |
+| UI 标准 | [TailAdmin UI 标准](docs/tailadmin-ui-standard.zh-CN.md) |
+| 节点契约 | [Core Node Contract](docs/core-node-contract.md) |
+| 节点分类 | [Workflow 节点分类清单](docs/workflow-node-catalog.zh-CN.md) |
+| 活动模板覆盖 | [Workflow 节点对活动模板覆盖评估](docs/workflow-node-activity-coverage.zh-CN.md) |
+| 事件入口 | [事件输入节点设计](docs/event-input-node-design.zh-CN.md) |
+| 事件入口实施 | [事件输入实施计划](docs/event-input-implementation-plan.zh-CN.md) |
+| 字段绑定 / Lua | [字段级表达式与输入解析设计](docs/field-bindings-design.zh-CN.md) |
+| 资源管理 | [公共资源管理设计](docs/resource-management-design.zh-CN.md) |
+| 活动模板 | [业务活动模板](docs/business-activity-templates.md) |
+| ActivityPlugin 生命周期 | [ActivityPlugin Lifecycle](docs/activityplugin-lifecycle.md) |
+| 插件样例 | [Red Envelope / Lottery Plugins](docs/activityplugin-red-envelope-lottery.md) |
+| 自动化需求流水线 | [Automation](docs/automation.md) |
+| 任务流水线 | [Workflow](docs/workflow.md) |
+| Roadmap | [Roadmap](docs/roadmap.md) |
+| 安全威胁模型 | [Security Threat Model](docs/security-threat-model.md) |
+| 发布安全闸门 | [Security Release Gate](docs/security-release-gate.md) |
+| 运维 | [Operations](docs/operations.md) |
+| 告警 | [Alert Runbook](docs/runbooks/exmarketing-alerts.md) |
+| 告警演练 | [Alert Drill](docs/runbooks/exmarketing-alert-drill.md) |
 
 ## Agent Workflow
 
@@ -246,23 +297,4 @@ EX_MARKETING_AGENT_CMD='/Applications/Codex.app/Contents/Resources/codex exec --
 go run ./cmd/workflowctl agent-status --id <requirement-id>
 ```
 
-本地服务启动后可以打开工作流看板：
-
-```text
-http://localhost:8080/admin/
-```
-
-## Documents
-
-```text
-docs/architecture.md  架构说明
-docs/api.md           API 接入示例
-docs/data-model.md    数据模型和状态枚举
-docs/operations.md    本地运维、排障和生产前检查
-docs/roadmap.md       分阶段路线图
-docs/workflow.md      任务流水线 Agent 协作流程
-docs/automation.md    需求列表驱动的自动化流程
-docs/langgraph-studio.md LangGraph + LangSmith Studio 集成
-CLAUDE.md             开发流程和硬性规则
-tasks/                任务级分析、审核、开发、测试、提交产物
-```
+任务流水线说明见 [Workflow](docs/workflow.md)。

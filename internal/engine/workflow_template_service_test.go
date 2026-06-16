@@ -334,8 +334,8 @@ func TestBuiltinTemplateAuditRunsOnQualifyBlockRoute(t *testing.T) {
 	if err != nil {
 		t.Fatalf("execute workflow definition: %v", err)
 	}
-	if execution.Status != marketing.WorkflowExecutionSuccess {
-		t.Fatalf("expected blocked route to finish at audit successfully, got %+v", execution)
+	if execution.Status != marketing.WorkflowExecutionFailed {
+		t.Fatalf("expected blocked route to fail the overall execution, got %+v", execution)
 	}
 	nodes, err := service.ListWorkflowNodeExecutions(ctx, execution.ID)
 	if err != nil {

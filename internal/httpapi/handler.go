@@ -1781,8 +1781,38 @@ func (h *Handler) createEvent(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	if processEventResultRejected(result) {
+		record("rejected", "business_rejected")
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
+			"errorCode":      "BUSINESS_REJECTED",
+			"code":           "BUSINESS_REJECTED",
+			"message":        "event processed but business rules rejected it",
+			"error":          "event processed but business rules rejected it",
+			"inbox":          result.Inbox,
+			"participations": result.Participations,
+			"grantOrders":    result.GrantOrders,
+			"outboxMessages": result.OutboxMessages,
+			"ruleResults":    result.RuleResults,
+			"duplicate":      false,
+		})
+		return
+	}
 	record("success", "ok")
 	writeJSON(w, http.StatusAccepted, result)
+}
+
+func processEventResultRejected(result marketing.ProcessEventResult) bool {
+	for _, participation := range result.Participations {
+		if participation.Status == marketing.ParticipationRejected {
+			return true
+		}
+	}
+	for _, ruleResult := range result.RuleResults {
+		if ruleResult.Decision == marketing.RuleDecisionRejected {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *Handler) recordEventIntakeMetric(event marketing.ActivityEvent, result, reason string, startedAt time.Time) {

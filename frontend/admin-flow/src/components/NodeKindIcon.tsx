@@ -2,6 +2,7 @@ import {
   BadgeCheck,
   Bell,
   Code2,
+  Circle,
   ClipboardCheck,
   Database,
   FileSearch,
@@ -24,6 +25,7 @@ import {
   ShieldCheck,
   Shuffle,
   Split,
+  UserCheck,
   Webhook,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
@@ -62,6 +64,7 @@ const iconById: Record<string, LucideIcon> = {
   qualify: ShieldCheck,
   switch: ListTree,
   'fact-query': FileSearch,
+  'user-level-check': UserCheck,
   'context-query': FileSearch,
   'local-cache-query': Database,
   'http-query': Webhook,
@@ -109,7 +112,7 @@ type Props = {
 };
 
 export function NodeKindIcon({ node, className, strokeWidth = 2.3 }: Props) {
-  const Icon = iconById[node.id] ?? iconByKind[node.kind];
+  const Icon = iconById[node.id] ?? iconByKind[node.kind] ?? Circle;
   return (
     <span className={cx('node-kind-icon', node.kind, className)}>
       <Icon strokeWidth={strokeWidth} />

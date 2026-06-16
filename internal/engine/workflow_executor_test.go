@@ -762,7 +762,7 @@ func TestWorkflowExecutorPreservesCancelAfterLastNode(t *testing.T) {
 		WorkflowVersionID: "wfver_cancel_race",
 		WorkflowVersion:   1,
 		Definition: json.RawMessage(`{
-			"nodes": [{"id":"event-in","type":"event-in","kind":"entry","title":"事件入口"}],
+			"nodes": [{"id":"event-in","type":"event-in","kind":"entry","title":"事件入口","config":{"eventTypes":["CHECKIN_SUCCESS"],"sourceSystems":["app"]}}],
 			"edges": []
 		}`),
 		Mode:            "PRODUCTION",
@@ -774,6 +774,64 @@ func TestWorkflowExecutorPreservesCancelAfterLastNode(t *testing.T) {
 	}
 	if execution.Status != marketing.WorkflowExecutionCanceled || execution.ErrorMessage != "manual stop after last node" {
 		t.Fatalf("expected final execution to preserve canceled state, got %+v", execution)
+	}
+}
+
+func TestWorkflowExecutorMarksBusinessRejectedRuntime(t *testing.T) {
+	ctx := context.Background()
+	service := NewService(marketing.NewMemoryRepository())
+	now := time.Date(2026, 6, 16, 12, 0, 0, 0, time.UTC)
+	service.now = func() time.Time { return now }
+	execution, err := service.executeWorkflowDefinition(ctx, workflowRuntime{
+		Inbox: marketing.EventInbox{
+			ID:             "inbox_rejected_runtime",
+			IdempotencyKey: "idem_rejected_runtime",
+			Event: marketing.ActivityEvent{
+				EventID:      "evt_rejected_runtime",
+				EventType:    "CHECKIN_SUCCESS",
+				SourceSystem: "app",
+				TenantID:     "site_001",
+				Subject:      marketing.EventSubject{Type: "USER", ID: "u_missing"},
+				Biz:          marketing.EventBiz{BizType: "CHECKIN", BizID: "daily_u_missing"},
+				OccurredAt:   now,
+				Attributes:   map[string]any{"checkin": true},
+			},
+		},
+		Activity: marketing.Activity{ID: "act_rejected_runtime", TenantID: "site_001"},
+		Participation: marketing.Participation{
+			ID:           "part_rejected_runtime",
+			TenantID:     "site_001",
+			ActivityID:   "act_rejected_runtime",
+			Subject:      marketing.EventSubject{Type: "USER", ID: "u_missing"},
+			Biz:          marketing.EventBiz{BizType: "CHECKIN", BizID: "daily_u_missing"},
+			Status:       marketing.ParticipationRejected,
+			RejectReason: "CONDITION_NOT_MET: facts.USER_PROFILE.exists != true",
+		},
+		RuleResult: marketing.ActivityRuleResult{
+			ActivityID: "act_rejected_runtime",
+			Decision:   marketing.RuleDecisionRejected,
+			ReasonCode: "CONDITION_NOT_MET",
+			Reason:     "facts.USER_PROFILE.exists != true",
+		},
+	}, workflowExecutionOptions{
+		WorkflowVersionID: "wfver_rejected_runtime",
+		WorkflowVersion:   1,
+		Definition: json.RawMessage(`{
+			"nodes": [{"id":"event-in","type":"event-in","kind":"entry","title":"事件入口","config":{"eventTypes":["CHECKIN_SUCCESS"],"sourceSystems":["app"]}}],
+			"edges": []
+		}`),
+		Mode:            "PRODUCTION",
+		IdempotencyKey:  "idem_rejected_runtime",
+		SkipIdempotency: true,
+	})
+	if err != nil {
+		t.Fatalf("execute workflow: %v", err)
+	}
+	if execution.Status != marketing.WorkflowExecutionFailed {
+		t.Fatalf("status=%s, want %s", execution.Status, marketing.WorkflowExecutionFailed)
+	}
+	if !strings.Contains(execution.ErrorMessage, "facts.USER_PROFILE.exists != true") {
+		t.Fatalf("expected business rejection reason in error message, got %q", execution.ErrorMessage)
 	}
 }
 
@@ -3953,8 +4011,8 @@ func TestResumeWorkflowExecutionCreatesResumeTrace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resume execution: %v", err)
 	}
-	if trace.Execution.ID == source.ID || trace.Execution.Status != marketing.WorkflowExecutionSuccess {
-		t.Fatalf("expected new successful resume execution, got %+v", trace.Execution)
+	if trace.Execution.ID == source.ID || trace.Execution.Status != marketing.WorkflowExecutionFailed {
+		t.Fatalf("expected new failed resume execution, got %+v", trace.Execution)
 	}
 	if !strings.Contains(string(trace.Execution.Input), `"mode":"RESUME"`) || !strings.Contains(string(trace.Execution.Input), `"sourceExecutionId":"`+source.ID+`"`) {
 		t.Fatalf("expected resume metadata in input, got %s", string(trace.Execution.Input))

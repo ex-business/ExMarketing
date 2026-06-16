@@ -187,6 +187,10 @@ function replaceUrlParams(patch: Record<string, string | number | undefined | nu
   window.history.replaceState(null, '', query ? `${window.location.pathname}?${query}` : window.location.pathname);
 }
 
+function initialActivityIdFromLocation(): string {
+  return new URLSearchParams(window.location.search).get('activityId') ?? '';
+}
+
 type RunHistoryState = {
   open: boolean;
   loading: boolean;
@@ -4140,6 +4144,7 @@ function StudioActivityStart({
 }
 
 export function App() {
+  const initialActivityId = useMemo(initialActivityIdFromLocation, []);
   const [nodes, setNodes, onNodesChange] = useNodesState<FlowNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<ActivityEdge>([]);
   const [selectedTemplate, setSelectedTemplate] = useState<'default' | 'simple'>('default');
@@ -4181,7 +4186,7 @@ export function App() {
   const [workspaceAuditLogs, setWorkspaceAuditLogs] = useState<Record<string, WorkspaceAuditLogSummary[]>>({});
   const [workspaceActivityGrants, setWorkspaceActivityGrants] = useState<Record<string, WorkspaceActivityGrantSummary[]>>({});
   const [activityPlacements, setActivityPlacements] = useState<Record<string, ActivityPlacement>>({});
-  const [activityId, setActivityId] = useState('');
+  const [activityId, setActivityId] = useState(initialActivityId);
   const [activityLabel, setActivityLabel] = useState('选择活动');
   const [showActivitySettings, setShowActivitySettings] = useState(false);
   const [savingActivitySettings, setSavingActivitySettings] = useState(false);
@@ -4244,8 +4249,8 @@ export function App() {
     message: '',
   });
   const [debugPayloadTemplates, setDebugPayloadTemplates] = useState<DebugPayloadTemplate[]>(() => loadDebugPayloadTemplates());
-  const [homeWorkspaceId, setHomeWorkspaceId] = useState(() => loadInitialWorkspaceSelectionFromLocation().workspaceId);
-  const [homeFolderId, setHomeFolderId] = useState(() => loadInitialWorkspaceSelectionFromLocation().folderId);
+  const [homeWorkspaceId, setHomeWorkspaceId] = useState(() => (initialActivityId ? '' : loadInitialWorkspaceSelectionFromLocation().workspaceId));
+  const [homeFolderId, setHomeFolderId] = useState(() => (initialActivityId ? '' : loadInitialWorkspaceSelectionFromLocation().folderId));
   const [workspaceDataReady, setWorkspaceDataReady] = useState(false);
 
   const nodeTypes = useMemo(() => ({ activity: ActivityNodeView, group: GroupNodeView, note: NoteNodeView }), []);
@@ -4340,7 +4345,7 @@ export function App() {
     let cancelled = false;
     const params = new URLSearchParams(window.location.search);
     const requestedActivityId = params.get('activityId') ?? '';
-    const storedSelection = loadStoredWorkspaceSelection();
+    const storedSelection = requestedActivityId ? { workspaceId: '', folderId: '' } : loadStoredWorkspaceSelection();
     const activityListParams = new URLSearchParams();
     if (storedSelection.workspaceId) activityListParams.set('workspaceId', storedSelection.workspaceId);
     if (storedSelection.folderId) activityListParams.set('folderId', storedSelection.folderId);

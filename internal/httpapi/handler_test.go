@@ -2389,8 +2389,8 @@ func TestActivityEventRuleRejectionReturnsExplainWithoutGrant(t *testing.T) {
 
 	rec := postRawEvent(t, handler, depositEventJSON("evt_rule_reject", "pay_rule_reject", `"amount":"299.00","vipLevel":3,"isFirstDeposit":false`), "site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:pay_rule_reject")
 
-	if rec.Code != http.StatusAccepted {
-		t.Fatalf("expected status %d, got %d: %s", http.StatusAccepted, rec.Code, rec.Body.String())
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusUnprocessableEntity, rec.Code, rec.Body.String())
 	}
 	body := rec.Body.String()
 	for _, want := range []string{
@@ -2451,8 +2451,8 @@ func TestEntryConfigFiltersSimulationAndProcessEvent(t *testing.T) {
 	}
 
 	eventRec := postRawEvent(t, handler, event, "site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:pay_entry_disabled")
-	if eventRec.Code != http.StatusAccepted {
-		t.Fatalf("expected event status %d, got %d: %s", http.StatusAccepted, eventRec.Code, eventRec.Body.String())
+	if eventRec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected event status %d, got %d: %s", http.StatusUnprocessableEntity, eventRec.Code, eventRec.Body.String())
 	}
 	for _, want := range []string{
 		`"status":"REJECTED"`,
@@ -3188,8 +3188,8 @@ func TestRewardReconciliationValidatesQueryAndSupportsPartialLinks(t *testing.T)
 	}
 
 	rejectedEvent := postRawEvent(t, handler, depositEventJSON("evt_reconcile_rejected", "pay_reconcile_rejected", `"amount":"299.00","vipLevel":3,"isFirstDeposit":false`), "site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:pay_reconcile_rejected")
-	if rejectedEvent.Code != http.StatusAccepted {
-		t.Fatalf("expected rejected event accepted, got %d: %s", rejectedEvent.Code, rejectedEvent.Body.String())
+	if rejectedEvent.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("expected rejected event failed, got %d: %s", rejectedEvent.Code, rejectedEvent.Body.String())
 	}
 	var rejectedResult marketing.ProcessEventResult
 	if err := json.Unmarshal(rejectedEvent.Body.Bytes(), &rejectedResult); err != nil {

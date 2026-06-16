@@ -328,6 +328,12 @@ func (s *Service) executeWorkflowDefinition(ctx context.Context, runtime workflo
 			errorMessage = cancelReason
 		}
 	}
+	if status == marketing.WorkflowExecutionSuccess && workflowRuntimeBusinessRejected(runtime) {
+		status = marketing.WorkflowExecutionFailed
+		if errorMessage == "" {
+			errorMessage = workflowRuntimeBusinessRejectedMessage(runtime)
+		}
+	}
 	finishedAt := s.now()
 	execution.Status = status
 	execution.ErrorMessage = errorMessage
@@ -354,6 +360,26 @@ func (s *Service) executeWorkflowDefinition(ctx context.Context, runtime workflo
 		return marketing.WorkflowExecution{}, err
 	}
 	return execution, nil
+}
+
+func workflowRuntimeBusinessRejected(runtime workflowRuntime) bool {
+	return runtime.Participation.Status == marketing.ParticipationRejected ||
+		runtime.RuleResult.Decision == marketing.RuleDecisionRejected
+}
+
+func workflowRuntimeBusinessRejectedMessage(runtime workflowRuntime) string {
+	reason := strings.TrimSpace(runtime.RuleResult.Reason)
+	if reason == "" {
+		reason = strings.TrimSpace(runtime.Participation.RejectReason)
+	}
+	if reason == "" {
+		reason = "business rejected"
+	}
+	code := strings.TrimSpace(runtime.RuleResult.ReasonCode)
+	if code == "" {
+		code = "BUSINESS_REJECTED"
+	}
+	return code + ": " + reason
 }
 
 func (s *Service) workflowNodeHandlers() map[string]workflowNodeHandler {

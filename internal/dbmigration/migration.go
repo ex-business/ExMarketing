@@ -222,6 +222,7 @@ func RequiredTables() []string {
 		"marketing_resource_binding",
 		"marketing_resource_secret",
 		"marketing_resource_audit",
+		"marketing_user_profile",
 	}
 }
 

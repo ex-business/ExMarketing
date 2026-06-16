@@ -66,6 +66,26 @@ func TestConditionEvaluatorKeepsJSONNumberDecimalPrecision(t *testing.T) {
 	}
 }
 
+func TestConditionEvaluatorComparesWorkflowFloatFactsAsDecimal(t *testing.T) {
+	rule := marketing.Rule{
+		Type: marketing.RuleTypeCondition,
+		Config: []byte(`{
+			"logic": "AND",
+			"conditions": [
+				{"field": "facts.USER_PROFILE.exists", "op": "=", "value": true},
+				{"field": "facts.USER_PROFILE.vipLevel", "op": ">=", "value": 1}
+			]
+		}`),
+	}
+
+	result := ConditionEvaluator{}.Evaluate(Context{Facts: map[string]any{
+		"USER_PROFILE": map[string]any{"exists": true, "vipLevel": float64(1)},
+	}}, rule)
+	if !result.Passed {
+		t.Fatalf("expected workflow float fact comparison to pass, got %+v", result)
+	}
+}
+
 func TestConditionEvaluatorRejectsNonStandardTopLevelField(t *testing.T) {
 	rule := marketing.Rule{
 		Type: marketing.RuleTypeCondition,

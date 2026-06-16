@@ -134,7 +134,6 @@ test.describe('workspace visual acceptance', () => {
     ]) {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
       await page.goto(`/admin-flow/?workspaceId=${workspace.id}&folderId=${root.id}`, { waitUntil: 'networkidle' });
-      await page.getByLabel('切换工作区').selectOption(workspace.id);
       await expect(page.getByRole('heading', { level: 1, name: root.name })).toBeVisible({ timeout: 15_000 });
       await expect(page.locator('[data-testid="workspace-row-workflow"]').first()).toBeVisible({ timeout: 15_000 });
 

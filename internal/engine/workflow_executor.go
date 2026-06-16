@@ -380,6 +380,7 @@ func (s *Service) workflowNodeHandlers() map[string]workflowNodeHandler {
 		"activity-state":    s.activityStateWorkflowNodeHandler,
 		"state-store":       s.stateStoreWorkflowNodeHandler,
 		"quota-check":       s.quotaCheckWorkflowNodeHandler,
+		"user-level-check":  userLevelCheckWorkflowNodeHandler,
 		"condition":         decisionWorkflowNodeHandler,
 		"qualify":           decisionWorkflowNodeHandler,
 		"switch":            decisionWorkflowNodeHandler,
@@ -638,7 +639,7 @@ func workflowExecutionRouteTraceItem(edge marketing.WorkflowEdge, result workflo
 
 func workflowNodeIsBranch(node marketing.WorkflowNode) bool {
 	switch strings.ToLower(strings.TrimSpace(node.Type)) {
-	case "condition", "qualify", "switch", "approval-gate", "ab-bucket", "risk-score", "settlement-window":
+	case "condition", "qualify", "user-level-check", "switch", "approval-gate", "ab-bucket", "risk-score", "settlement-window":
 		return true
 	default:
 		return false
@@ -5392,6 +5393,179 @@ func decisionWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNod
 		"route":        output["route"],
 		"audit":        workflowHandlerAudit(node, runtime),
 	})
+}
+
+func userLevelCheckWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
+	if canceled := workflowHandlerContextCanceled(ctx, node, runtime); canceled.Status != "" {
+		return canceled
+	}
+	config, failed, ok := workflowRequireNodeConfig(node)
+	if !ok {
+		failed.Output["audit"] = workflowHandlerAudit(node, runtime)
+		return failed
+	}
+	base := workflowFactQueryBaseContext(ctx, runtime)
+	user, userPath, userFound := workflowUserLevelCheckUser(base, config)
+	exists := userFound
+	if configuredExists, ok := workflowUserLevelCheckBool(user, workflowConfigString(config, "existsPath")); ok {
+		exists = configuredExists
+	}
+	level, levelPath, levelFound := workflowUserLevelCheckNumber(base, user, config)
+	minLevel := workflowConfigNumber(config, "minLevel")
+	maxLevel := workflowConfigNumber(config, "maxLevel")
+	requireExists := workflowConfigBool(config, "requireExistingUser", true)
+	passed := true
+	reasonCode := "USER_LEVEL_PASSED"
+	reason := "user level passed"
+	if requireExists && !exists {
+		passed = false
+		reasonCode = "USER_NOT_FOUND"
+		reason = "user does not exist"
+	} else if !levelFound {
+		passed = false
+		reasonCode = "USER_LEVEL_MISSING"
+		reason = "user level is missing"
+	} else if level < minLevel {
+		passed = false
+		reasonCode = "USER_LEVEL_TOO_LOW"
+		reason = fmt.Sprintf("user level %.0f is lower than required %.0f", level, minLevel)
+	} else if maxLevel > 0 && level > maxLevel {
+		passed = false
+		reasonCode = "USER_LEVEL_TOO_HIGH"
+		reason = fmt.Sprintf("user level %.0f is higher than allowed %.0f", level, maxLevel)
+	}
+	if override := workflowConfigString(config, "blockReason"); override != "" && !passed {
+		reason = override
+	}
+	decision := "PASS"
+	if !passed {
+		decision = strings.ToUpper(firstWorkflowString(workflowConfigString(config, "failDecision"), "BLOCK"))
+		if decision != "RISK" && decision != "SKIP" {
+			decision = "BLOCK"
+		}
+	}
+	output := map[string]any{
+		"user_level_check": map[string]any{
+			"passed":        passed,
+			"decision":      decision,
+			"reasonCode":    reasonCode,
+			"reason":        reason,
+			"subject":       workflowJSONValue(runtime.Inbox.Event.Subject),
+			"userFound":     userFound,
+			"userExists":    exists,
+			"userPath":      userPath,
+			"level":         level,
+			"levelPath":     levelPath,
+			"minLevel":      minLevel,
+			"maxLevel":      maxLevel,
+			"levelSource":   firstWorkflowString(workflowConfigString(config, "levelSource"), "FACTS_OR_EVENT"),
+			"requireExists": requireExists,
+		},
+		"decision":   decision,
+		"qualified":  passed,
+		"reasonCode": reasonCode,
+		"reason":     reason,
+		"PASS":       decision == "PASS",
+		"BLOCK":      decision == "BLOCK",
+		"RISK":       decision == "RISK",
+		"audit":      workflowHandlerAudit(node, runtime),
+	}
+	if !passed && decision == "SKIP" {
+		return nodeSkipped(reasonCode+": "+reason, output)
+	}
+	return nodeSuccess(output)
+}
+
+func workflowUserLevelCheckUser(base map[string]any, config map[string]any) (map[string]any, string, bool) {
+	paths := workflowConfigStringList(config, "userPaths")
+	if len(paths) == 0 {
+		paths = []string{
+			"$.facts.USER_PROFILE",
+			"$.facts.user_profile",
+			"$.input.facts.USER_PROFILE",
+			"$.event.attributes.USER_PROFILE",
+			"$.event.attributes.userProfile",
+			"$.attributes.USER_PROFILE",
+			"$.attributes.userProfile",
+		}
+	}
+	for _, path := range paths {
+		value, err := extractWorkflowJSONPath(base, path)
+		if err != nil {
+			continue
+		}
+		if mapped, ok := workflowJSONValue(value).(map[string]any); ok {
+			return mapped, path, true
+		}
+	}
+	return nil, "", false
+}
+
+func workflowUserLevelCheckNumber(base map[string]any, user map[string]any, config map[string]any) (float64, string, bool) {
+	levelPaths := workflowConfigStringList(config, "levelPaths")
+	if len(levelPaths) == 0 {
+		if configured := workflowConfigString(config, "levelPath"); configured != "" {
+			levelPaths = []string{configured}
+		}
+	}
+	if len(levelPaths) == 0 {
+		levelPaths = []string{
+			"$.facts.USER_PROFILE.level",
+			"$.facts.USER_PROFILE.vipLevel",
+			"$.facts.USER_PROFILE.userLevel",
+			"$.input.facts.USER_PROFILE.level",
+			"$.event.attributes.userLevel",
+			"$.event.attributes.vipLevel",
+			"$.attributes.userLevel",
+			"$.attributes.vipLevel",
+		}
+	}
+	for _, path := range levelPaths {
+		value, err := extractWorkflowJSONPath(base, path)
+		if err != nil {
+			continue
+		}
+		if number, ok := workflowRouteNumber(value); ok {
+			return number, path, true
+		}
+	}
+	for _, key := range []string{"level", "vipLevel", "userLevel"} {
+		if user == nil {
+			continue
+		}
+		if number, ok := workflowRouteNumber(user[key]); ok {
+			return number, "user." + key, true
+		}
+	}
+	return 0, "", false
+}
+
+func workflowUserLevelCheckBool(user map[string]any, path string) (bool, bool) {
+	if user == nil {
+		return false, false
+	}
+	key := strings.TrimSpace(path)
+	key = strings.TrimPrefix(key, "$.")
+	key = strings.TrimPrefix(key, "user.")
+	if key == "" {
+		key = "exists"
+	}
+	value, ok := user[key]
+	if !ok {
+		return false, false
+	}
+	switch typed := value.(type) {
+	case bool:
+		return typed, true
+	case string:
+		if strings.EqualFold(strings.TrimSpace(typed), "true") {
+			return true, true
+		}
+		if strings.EqualFold(strings.TrimSpace(typed), "false") {
+			return false, true
+		}
+	}
+	return workflowTruthy(value), true
 }
 
 func candidateRewardWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {

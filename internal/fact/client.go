@@ -584,11 +584,16 @@ func validateEndpoint(rawURL string) error {
 		return err
 	}
 	for _, ip := range ips {
-		if isPrivateOrLocalIP(ip) {
+		if isPrivateOrLocalIP(ip) && !allowPrivateFactEndpoint() {
 			return errors.New("fact endpoint resolves to private or local address")
 		}
 	}
 	return nil
+}
+
+func allowPrivateFactEndpoint() bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv("EX_MARKETING_FACT_ALLOW_PRIVATE")))
+	return value == "true" || value == "1" || value == "yes"
 }
 
 func hostAllowed(host string) bool {
@@ -626,7 +631,7 @@ func secureTransport() *http.Transport {
 			return nil, err
 		}
 		for _, ip := range ips {
-			if isPrivateOrLocalIP(ip) {
+			if isPrivateOrLocalIP(ip) && !allowPrivateFactEndpoint() {
 				return nil, errors.New("fact endpoint resolves to private or local address")
 			}
 		}

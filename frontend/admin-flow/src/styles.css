@@ -15855,13 +15855,6 @@ input:focus-visible {
   font-weight: 500 !important;
 }
 
-.studio:not(.studio-home) .dify-float-toolbar button:first-child,
-.studio:not(.studio-home) .dify-float-toolbar button:nth-child(2),
-.studio:not(.studio-home) .dify-float-toolbar button:nth-child(3),
-.studio:not(.studio-home) .dify-float-toolbar button:nth-child(4) {
-  display: none;
-}
-
 .studio:not(.studio-home) .dify-float-toolbar .debug-action,
 .studio:not(.studio-home) .dify-float-toolbar .publish-action {
   border-color: var(--ta-brand-500);
@@ -17917,13 +17910,12 @@ input:focus-visible {
   gap: 4px !important;
   min-height: 48px !important;
   align-items: stretch !important;
-  justify-content: space-between !important;
+  justify-content: flex-start !important;
   border-bottom: 1px solid var(--ta-gray-200) !important;
   padding: 0 16px !important;
 }
 
-.property-tab-buttons,
-.property-tab-actions {
+.property-tab-buttons {
   min-width: 0;
   display: flex;
   align-items: stretch;
@@ -17934,18 +17926,11 @@ input:focus-visible {
   flex: 1 1 auto;
 }
 
-.property-tab-actions {
-  flex: 0 0 auto;
-  align-items: center;
-}
-
-.property-tab-actions.hidden {
-  visibility: hidden;
-  pointer-events: none;
-}
-
 .property-tabs button {
   position: relative !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
   min-height: 48px !important;
   border: 0 !important;
   border-radius: 0 !important;
@@ -17954,26 +17939,8 @@ input:focus-visible {
   color: var(--ta-gray-600) !important;
   padding: 0 10px !important;
   font-size: 13px !important;
-  line-height: 48px !important;
+  line-height: 1 !important;
   font-weight: 600 !important;
-}
-
-.property-tab-actions button {
-  min-height: 30px !important;
-  height: 30px !important;
-  border: 1px solid var(--ta-gray-200) !important;
-  border-radius: 8px !important;
-  background: #fff !important;
-  color: var(--ta-gray-600) !important;
-  padding: 0 8px !important;
-  font-size: 12px !important;
-  line-height: 18px !important;
-  white-space: nowrap !important;
-}
-
-.property-tab-actions button:hover {
-  border-color: var(--ta-brand-500) !important;
-  color: var(--ta-brand-500) !important;
 }
 
 .property-tabs button:hover:not(:disabled) {
@@ -17997,6 +17964,42 @@ input:focus-visible {
   height: 2px !important;
   border-radius: 999px 999px 0 0 !important;
   background: var(--ta-brand-500) !important;
+}
+
+.property-config-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 34px;
+  padding: 0 2px;
+  color: var(--ta-gray-500);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.property-config-toolbar > div {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.property-config-toolbar button {
+  height: 30px;
+  border: 1px solid var(--ta-gray-200);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ta-gray-600);
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.property-config-toolbar button:hover {
+  border-color: var(--ta-brand-500);
+  color: var(--ta-brand-500);
 }
 
 .property-disclosure {
@@ -18364,17 +18367,9 @@ input:focus-visible {
 
 .property-tabs button {
   min-height: 54px !important;
-  line-height: 54px !important;
+  line-height: 1 !important;
   padding: 0 14px !important;
   font-size: 14px !important;
-}
-
-.property-tab-actions button {
-  min-height: 34px !important;
-  height: 34px !important;
-  padding: 0 10px !important;
-  font-size: 12px !important;
-  line-height: 20px !important;
 }
 
 .property-disclosure {

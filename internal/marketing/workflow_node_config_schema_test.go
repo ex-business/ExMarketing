@@ -26,6 +26,7 @@ func TestDefaultWorkflowNodeConfigSchemasCoverSupportedNodeTypes(t *testing.T) {
 		"split",
 		"condition",
 		"qualify",
+		"user-level-check",
 		"switch",
 		"candidate-reward",
 		"reward",
@@ -80,6 +81,7 @@ func TestWorkflowNodeConfigSchemasCoverCoreStudioNodes(t *testing.T) {
 		"match",
 		"condition",
 		"qualify",
+		"user-level-check",
 		"switch",
 		"fact-query",
 		"activity-state",
@@ -116,6 +118,7 @@ func TestCoreStudioNodeConfigSchemaFieldsAreRenderable(t *testing.T) {
 		"match",
 		"condition",
 		"qualify",
+		"user-level-check",
 		"switch",
 		"fact-query",
 		"activity-state",
@@ -210,6 +213,7 @@ func TestDefaultWorkflowNodeConfigSchemasClassifyEventInputCoreAdvancedAndOpsNod
 		"state-store":       "STORAGE",
 		"lock":              "STORAGE",
 		"quota-check":       "CORE",
+		"user-level-check":  "CORE",
 		"candidate-reward":  "CORE",
 		"decimal":           "ADVANCED",
 		"quota":             "CORE",
@@ -335,7 +339,7 @@ func TestAdvancedAndOpsSchemasExposeExecutionSemantics(t *testing.T) {
 
 func TestProductizedCoreNodeConfigSchemasIncludeGroupsAndPreview(t *testing.T) {
 	registry := DefaultWorkflowNodeConfigSchemas()
-	for _, nodeType := range []string{"event-in", "inbox", "normalize", "match", "condition", "qualify", "switch", "fact-query", "code", "combine", "split", "reward", "limit", "quota", "callback", "audit"} {
+	for _, nodeType := range []string{"event-in", "inbox", "normalize", "match", "condition", "qualify", "user-level-check", "switch", "fact-query", "code", "combine", "split", "reward", "limit", "quota", "callback", "audit"} {
 		schema, ok := registry.Get(nodeType)
 		if !ok {
 			t.Fatalf("expected schema for %s", nodeType)

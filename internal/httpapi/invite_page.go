@@ -60,7 +60,7 @@ func (h *Handler) acceptWorkspaceInviteByToken(w http.ResponseWriter, r *http.Re
 			return
 		}
 	}
-	member, err := h.engine.AcceptWorkspaceMemberInviteByToken(r.Context(), r.PathValue("token"), body.DisplayName)
+	member, err := h.engine.AcceptWorkspaceMemberInviteByToken(r.Context(), r.PathValue("token"), body.UserID, body.DisplayName)
 	if err != nil {
 		workspaceError(w, err)
 		return
@@ -124,9 +124,10 @@ var invitePageTemplate = template.Must(template.New("invite").Parse(`<!doctype h
             </div>
             <form id="invite-form" class="invite-form">
               <input id="display-name" type="text" placeholder="你的显示名称" value="{{.Member.DisplayName}}" autocomplete="name" />
+              <input id="user-id" type="text" placeholder="用户 ID" value="{{if .Member.UserID}}{{.Member.UserID}}{{else}}{{.Member.Email}}{{end}}" autocomplete="username" />
               <button id="accept-button" type="submit">接受邀请</button>
             </form>
-            <p id="invite-message" class="invite-muted">邀请会绑定到受邀邮箱。</p>
+            <p id="invite-message" class="invite-muted">邀请会绑定到填写的用户 ID，未填写时使用受邀邮箱。</p>
             <div id="invite-success" class="invite-success">邀请已接受，可以返回 ExMarketing 工作台。</div>
           {{end}}
         </div>
@@ -147,7 +148,8 @@ var invitePageTemplate = template.Must(template.New("invite").Parse(`<!doctype h
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          displayName: document.getElementById('display-name').value
+          displayName: document.getElementById('display-name').value,
+          userId: document.getElementById('user-id').value
         })
       });
       const body = await response.json().catch(() => ({}));

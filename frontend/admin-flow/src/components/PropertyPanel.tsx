@@ -1110,8 +1110,8 @@ function requiredConfigCount(schema?: WorkflowNodeConfigSchema): number {
 }
 
 function nodeInfoMeta(node: ActivityNode, schema?: WorkflowNodeConfigSchema): Array<{ label: string; value: string }> {
-  const inputCount = schema?.inputs.length ?? node.data.inputs.length;
-  const outputCount = schema?.outputs.length ?? node.data.outputs.length;
+  const inputCount = schema?.inputs?.length ?? node.data.inputs?.length ?? 0;
+  const outputCount = schema?.outputs?.length ?? node.data.outputs?.length ?? 0;
   return [
     { label: 'ID', value: node.id },
     { label: '类型', value: `${node.data.code} / ${node.data.kind}` },
@@ -1730,15 +1730,11 @@ export function PropertyPanel({ nodes, edges, selectedNodeIds, selectedEdgeIds, 
       {selectedNode ? (
         <div className="property-tabs">
           <div className="property-tab-buttons">
-            <button className={activeTab === 'basic' ? 'active' : ''} onClick={() => changeActiveTab('basic')}>基础信息</button>
+            <button className={activeTab === 'basic' ? 'active' : ''} onClick={() => changeActiveTab('basic')}>基础</button>
             <button className={activeTab === 'config' ? 'active' : ''} onClick={() => changeActiveTab('config')}>配置</button>
-            <button className={activeTab === 'lua' ? 'active' : ''} onClick={() => changeActiveTab('lua')}>Lua脚本</button>
+            <button className={activeTab === 'lua' ? 'active' : ''} onClick={() => changeActiveTab('lua')}>Code</button>
             <button className={activeTab === 'other' ? 'active' : ''} onClick={() => changeActiveTab('other')}>其他</button>
-            <button className={activeTab === 'run' ? 'active' : ''} onClick={() => changeActiveTab('run')}>运行日志</button>
-          </div>
-          <div className={cx('property-tab-actions', activeTab !== 'config' && 'hidden')}>
-            <button type="button" onClick={() => setAllSettingPanelsOpen(true)}>全部展开</button>
-            <button type="button" onClick={() => setAllSettingPanelsOpen(false)}>全部收起</button>
+            <button className={activeTab === 'run' ? 'active' : ''} onClick={() => changeActiveTab('run')}>日志</button>
           </div>
         </div>
       ) : null}
@@ -1757,6 +1753,13 @@ export function PropertyPanel({ nodes, edges, selectedNodeIds, selectedEdgeIds, 
       ) : null}
       {selectedNode && activeTab === 'config' ? (
         <div className="property-body">
+          <div className="property-config-toolbar">
+            <span>配置视图</span>
+            <div>
+              <button type="button" title="全部展开" aria-label="全部展开" onClick={() => setAllSettingPanelsOpen(true)}>展开</button>
+              <button type="button" title="全部收起" aria-label="全部收起" onClick={() => setAllSettingPanelsOpen(false)}>收起</button>
+            </div>
+          </div>
           <PropertyDisclosure title="配置参数" summary={selectedNodeSchema ? `${selectedNodeSchema.fields.length} 项 / ${requiredConfigCount(selectedNodeSchema)} 必填` : '未找到 schema'} defaultOpen>
             <NodeConfigForm node={selectedNode} schema={selectedNodeSchema} validationIssues={validationIssues} resourceOptions={resourceOptions} onNodeConfigChange={onNodeConfigChange} />
           </PropertyDisclosure>

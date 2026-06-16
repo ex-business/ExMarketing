@@ -73,6 +73,40 @@ func (r *Repository) Close() error {
 	return r.db.Close()
 }
 
+func (r *Repository) GetUserProfile(ctx context.Context, tenantID string, subjectType string, subjectID string) (marketing.UserProfile, error) {
+	var profile marketing.UserProfile
+	var attributes []byte
+	var registeredAt sql.NullTime
+	var country, channel sql.NullString
+	err := r.db.QueryRowContext(ctx, `
+		SELECT tenant_id, subject_type, subject_id, user_level, vip_level, country, channel,
+		       registered_at, status, attributes_json, created_at, updated_at
+		FROM marketing_user_profile
+		WHERE tenant_id = $1 AND subject_type = $2 AND subject_id = $3
+	`, tenantID, subjectType, subjectID).Scan(
+		&profile.TenantID, &profile.SubjectType, &profile.SubjectID, &profile.UserLevel, &profile.VIPLevel,
+		&country, &channel, &registeredAt, &profile.Status, &attributes, &profile.CreatedAt, &profile.UpdatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return marketing.UserProfile{}, marketing.ErrNotFound
+		}
+		return marketing.UserProfile{}, err
+	}
+	profile.Country = country.String
+	profile.Channel = channel.String
+	if registeredAt.Valid {
+		profile.RegisteredAt = registeredAt.Time
+	}
+	if len(attributes) > 0 {
+		_ = json.Unmarshal(attributes, &profile.Attributes)
+	}
+	if profile.Attributes == nil {
+		profile.Attributes = map[string]any{}
+	}
+	return profile, nil
+}
+
 func (r *Repository) CreateActivity(ctx context.Context, activity marketing.Activity) (marketing.Activity, error) {
 	if activity.Visibility == "" {
 		activity.Visibility = marketing.WorkspaceTeam

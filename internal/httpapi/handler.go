@@ -286,6 +286,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /openapi/v1/webhooks/{receiverCode}", h.createWebhookEvent)
 	mux.HandleFunc("POST /openapi/v1/webhooks/", h.missingWebhookReceiver)
 	mux.HandleFunc("POST /openapi/v1/facts/query", h.queryFacts)
+	mux.HandleFunc("POST /internal/facts/user-profile", h.userProfileFactProvider)
 	mux.HandleFunc("POST /openapi/v1/reward/callback", h.rewardCallback)
 	mux.Handle("GET /admin-flow/", http.StripPrefix("/admin-flow/", http.FileServer(http.Dir("web/admin-flow"))))
 	mux.Handle("GET /admin/", http.StripPrefix("/admin/", http.FileServer(http.Dir("web/admin"))))
@@ -1981,6 +1982,40 @@ func (h *Handler) queryFacts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, response)
+}
+
+func (h *Handler) userProfileFactProvider(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+	if !isLoopbackRequest(r) {
+		writeJSON(w, http.StatusForbidden, map[string]any{"success": false, "error": "internal fact provider is local-only"})
+		return
+	}
+	var request marketing.FactQueryRequest
+	decoder := json.NewDecoder(r.Body)
+	decoder.UseNumber()
+	if err := decoder.Decode(&request); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"success": false, "error": "invalid json body"})
+		return
+	}
+	if request.TenantID == "" || request.Subject.Type == "" || request.Subject.ID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"success": false, "error": "tenantId and subject are required"})
+		return
+	}
+	profile, err := h.engine.GetUserProfileFact(r.Context(), request.TenantID, request.Subject)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": profile})
+}
+
+func isLoopbackRequest(r *http.Request) bool {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	ip := net.ParseIP(strings.TrimSpace(host))
+	return ip != nil && ip.IsLoopback()
 }
 
 func (h *Handler) listWorkflowRequirements(w http.ResponseWriter, r *http.Request) {

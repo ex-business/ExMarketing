@@ -362,7 +362,7 @@ func (r *runner) postEvent(stage string, subjectID string, suffix string) (proce
 
 func (r *runner) assertDuplicateEvent(stage string, subjectID string, suffix string) error {
 	var result processEventResponse
-	if err := r.doJSON(stage, http.MethodPost, "/openapi/v1/events", r.event(subjectID, suffix), http.StatusOK, &result); err != nil {
+	if err := r.doJSON(stage, http.MethodPost, "/openapi/v1/events", r.event(subjectID, suffix), http.StatusConflict, &result); err != nil {
 		return err
 	}
 	if !result.Duplicate || len(result.GrantOrders) != 0 || len(result.OutboxMessages) != 0 {

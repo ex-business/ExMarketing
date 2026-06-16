@@ -2918,6 +2918,35 @@ func TestQuotaCheckWorkflowNodeHandlerUsesRedisCounterResource(t *testing.T) {
 	}
 }
 
+func TestUserLevelCheckWorkflowNodeHandlerUsesUserProfileFacts(t *testing.T) {
+	ctx := context.WithValue(context.Background(), workflowNodeExecutionContextKey{}, workflowNodeExecutionContext{
+		ResolvedInput: map[string]any{
+			"facts": map[string]any{
+				"USER_PROFILE": map[string]any{"exists": true, "vipLevel": 2},
+			},
+		},
+	})
+	node := marketing.WorkflowNode{
+		ID:     "user-level",
+		Type:   "user-level-check",
+		Config: json.RawMessage(`{"requireExistingUser":true,"minLevel":1,"levelPaths":["$.facts.USER_PROFILE.vipLevel"],"existsPath":"exists","failDecision":"BLOCK"}`),
+	}
+	result := userLevelCheckWorkflowNodeHandler(ctx, node, testWorkflowHandlerRuntime(true))
+	if result.Status != marketing.WorkflowNodeSuccess || result.Output["decision"] != "PASS" || result.Output["PASS"] != true {
+		t.Fatalf("expected user level pass, got %+v", result)
+	}
+	check := result.Output["user_level_check"].(map[string]any)
+	if check["level"] != float64(2) || check["levelPath"] != "$.facts.USER_PROFILE.vipLevel" {
+		t.Fatalf("expected vip level from facts, got %+v", check)
+	}
+
+	node.Config = json.RawMessage(`{"requireExistingUser":true,"minLevel":3,"levelPaths":["$.facts.USER_PROFILE.vipLevel"],"existsPath":"exists","failDecision":"BLOCK"}`)
+	blocked := userLevelCheckWorkflowNodeHandler(ctx, node, testWorkflowHandlerRuntime(true))
+	if blocked.Status != marketing.WorkflowNodeSuccess || blocked.Output["decision"] != "BLOCK" || blocked.Output["BLOCK"] != true || blocked.Output["reasonCode"] != "USER_LEVEL_TOO_LOW" {
+		t.Fatalf("expected user level block, got %+v", blocked)
+	}
+}
+
 func TestQuotaCheckWorkflowNodeHandlerSupportsCustomLuaWindow(t *testing.T) {
 	ctx := context.Background()
 	repo := marketing.NewMemoryRepository()

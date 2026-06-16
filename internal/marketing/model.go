@@ -970,6 +970,25 @@ type FactQueryResponse struct {
 	ProviderStatus string         `json:"providerStatus,omitempty"`
 }
 
+type UserProfile struct {
+	TenantID     string         `json:"tenantId"`
+	SubjectType  string         `json:"subjectType"`
+	SubjectID    string         `json:"subjectId"`
+	UserLevel    int            `json:"level"`
+	VIPLevel     int            `json:"vipLevel"`
+	Country      string         `json:"country,omitempty"`
+	Channel      string         `json:"channel,omitempty"`
+	RegisteredAt time.Time      `json:"registeredAt,omitempty"`
+	Status       string         `json:"status"`
+	Attributes   map[string]any `json:"attributes,omitempty"`
+	CreatedAt    time.Time      `json:"createdAt"`
+	UpdatedAt    time.Time      `json:"updatedAt"`
+}
+
+func (profile UserProfile) Exists() bool {
+	return strings.EqualFold(strings.TrimSpace(profile.Status), "ACTIVE")
+}
+
 type SimulationResult struct {
 	Event               ActivityEvent              `json:"event"`
 	SimulatedAt         time.Time                  `json:"simulatedAt"`

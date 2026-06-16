@@ -341,12 +341,12 @@ func (s *Service) AcceptWorkspaceMemberInvite(ctx context.Context, workspaceID s
 	return saved, nil
 }
 
-func (s *Service) AcceptWorkspaceMemberInviteByToken(ctx context.Context, token string, displayName string) (marketing.WorkspaceMember, error) {
+func (s *Service) AcceptWorkspaceMemberInviteByToken(ctx context.Context, token string, userID string, displayName string) (marketing.WorkspaceMember, error) {
 	member, err := s.FindWorkspaceMemberByInviteToken(ctx, token)
 	if err != nil {
 		return marketing.WorkspaceMember{}, err
 	}
-	updateUserID := workspaceFirstNonEmpty(member.UserID, member.Email)
+	updateUserID := workspaceFirstNonEmpty(userID, member.UserID, member.Email)
 	accepted, err := s.AcceptWorkspaceMemberInvite(ctx, member.WorkspaceID, member.ID, token, updateUserID)
 	if err != nil {
 		return marketing.WorkspaceMember{}, err

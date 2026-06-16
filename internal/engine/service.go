@@ -53,8 +53,59 @@ type outboxBacklogRepository interface {
 	CountOutboxDLQ(ctx context.Context) ([]marketing.OutboxDLQCount, error)
 }
 
+type userProfileRepository interface {
+	GetUserProfile(ctx context.Context, tenantID string, subjectType string, subjectID string) (marketing.UserProfile, error)
+}
+
 func (s *Service) MetricsRegistry() *metrics.Registry {
 	return s.metrics
+}
+
+func (s *Service) GetUserProfileFact(ctx context.Context, tenantID string, subject marketing.EventSubject) (map[string]any, error) {
+	repository, ok := s.repository.(userProfileRepository)
+	if !ok {
+		return map[string]any{
+			"exists":      false,
+			"subjectType": subject.Type,
+			"subjectId":   subject.ID,
+			"reason":      "USER_PROFILE_REPOSITORY_NOT_CONFIGURED",
+		}, nil
+	}
+	profile, err := repository.GetUserProfile(ctx, tenantID, subject.Type, subject.ID)
+	if err != nil {
+		if errors.Is(err, marketing.ErrNotFound) {
+			return map[string]any{
+				"exists":      false,
+				"subjectType": subject.Type,
+				"subjectId":   subject.ID,
+				"level":       0,
+				"vipLevel":    0,
+				"status":      "MISSING",
+			}, nil
+		}
+		return nil, err
+	}
+	out := map[string]any{
+		"exists":      profile.Exists(),
+		"subjectType": profile.SubjectType,
+		"subjectId":   profile.SubjectID,
+		"level":       profile.UserLevel,
+		"vipLevel":    profile.VIPLevel,
+		"status":      profile.Status,
+	}
+	if profile.Country != "" {
+		out["country"] = profile.Country
+	}
+	if profile.Channel != "" {
+		out["channel"] = profile.Channel
+	}
+	if !profile.RegisteredAt.IsZero() {
+		out["registeredAt"] = profile.RegisteredAt.UTC().Format(time.RFC3339Nano)
+	}
+	if len(profile.Attributes) > 0 {
+		out["attributes"] = profile.Attributes
+	}
+	return out, nil
 }
 
 func (s *Service) RefreshMetrics(ctx context.Context) error {

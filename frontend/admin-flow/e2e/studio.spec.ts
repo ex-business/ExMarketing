@@ -1018,6 +1018,7 @@ test('selects upstream output variables and locates source node', async ({ page 
   await expect(page.locator('.activity-node')).toHaveCount(3);
 
   await page.locator('.activity-node').filter({ hasText: '活动匹配' }).click();
+  await page.locator('.property-tab-buttons').getByRole('button', { name: '配置' }).click();
   await expect(page.locator('.property-panel')).toContainText('输入映射');
 
   await page.locator('.variable-picker button').filter({ hasText: 'event_context' }).click();

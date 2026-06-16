@@ -186,7 +186,6 @@ async function createWorkflow(request: APIRequestContext, input: { name: string;
 
 async function selectWorkspace(page: Page, workspaceId: string) {
   await page.goto(`/admin-flow/?workspaceId=${workspaceId}`, { waitUntil: 'networkidle' });
-  await page.getByLabel('切换工作区').selectOption(workspaceId);
   await expect(page.getByRole('heading', { level: 1, name: /E2E Root/ })).toBeVisible({ timeout: 15_000 });
 }
 
@@ -258,7 +257,6 @@ test.describe('real PostgreSQL workspace workflow operations', () => {
     }, { timeout: 15_000, message: 'workflow move persisted in PostgreSQL' }).toBe(target.id);
 
     await page.reload({ waitUntil: 'networkidle' });
-    await page.getByLabel('切换工作区').selectOption(workspace.id);
     await openFolder(page, target.name);
     await expect(page.locator('[data-testid="workspace-row-workflow"]').filter({ hasText: workflowName }).first()).toBeVisible({ timeout: 15_000 });
 
@@ -279,7 +277,6 @@ test.describe('real PostgreSQL workspace workflow operations', () => {
     }, { timeout: 15_000, message: 'workflow archive persisted in PostgreSQL' }).toBe('ARCHIVED');
 
     await page.reload({ waitUntil: 'networkidle' });
-    await page.getByLabel('切换工作区').selectOption(workspace.id);
     await openFolder(page, target.name);
     await page.locator('.exm-content-tools').getByRole('button', { name: '筛选' }).click();
     await page.locator('.exm-advanced-filters select').nth(1).selectOption('ARCHIVED');
@@ -302,7 +299,6 @@ test.describe('real PostgreSQL workspace workflow operations', () => {
     }, { timeout: 15_000, message: 'folder persisted in PostgreSQL after UI create' }).toBe(true);
 
     await page.reload({ waitUntil: 'networkidle' });
-    await page.getByLabel('切换工作区').selectOption(workspace.id);
     await expect(page.getByRole('button', { name: new RegExp(escapeRegExp(folderName)) }).first()).toBeVisible({ timeout: 15_000 });
   });
 
@@ -326,7 +322,6 @@ test.describe('real PostgreSQL workspace workflow operations', () => {
     }, { timeout: 15_000, message: 'bulk move persisted in PostgreSQL' }).toBe(true);
 
     await page.reload({ waitUntil: 'networkidle' });
-    await page.getByLabel('切换工作区').selectOption(workspace.id);
     await openFolder(page, target.name);
     await checkRow(page, 'workflow', first.activityName);
     await checkRow(page, 'workflow', second.activityName);
@@ -341,7 +336,6 @@ test.describe('real PostgreSQL workspace workflow operations', () => {
     }, { timeout: 15_000, message: 'bulk permission persisted in PostgreSQL' }).toBe(true);
 
     await page.reload({ waitUntil: 'networkidle' });
-    await page.getByLabel('切换工作区').selectOption(workspace.id);
     await openFolder(page, target.name);
     await checkRow(page, 'workflow', first.activityName);
     await checkRow(page, 'workflow', second.activityName);
@@ -401,7 +395,6 @@ test.describe('real PostgreSQL workspace workflow operations', () => {
     for (const item of cases) {
       const { workspace, root, workflow } = await createWorkspaceRoleFixture(request, `${suffix}-${item.role}`, item.role);
       await page.goto(`/admin-flow/?workspaceId=${workspace.id}`, { waitUntil: 'networkidle' });
-      await page.getByLabel('切换工作区').selectOption(workspace.id);
       await expect(page.getByRole('heading', { level: 1, name: root.name })).toBeVisible({ timeout: 15_000 });
       if (item.workflow) await expect(page.getByTestId('workspace-new-workflow')).toBeDisabled();
       else await expect(page.getByTestId('workspace-new-workflow')).toBeEnabled();

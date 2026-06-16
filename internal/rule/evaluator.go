@@ -578,8 +578,38 @@ func toDecimal(value any) (decimal.Decimal, bool) {
 	case int:
 		d, err := decimal.Parse(strconv.Itoa(typed))
 		return d, err == nil
+	case int8:
+		d, err := decimal.Parse(strconv.FormatInt(int64(typed), 10))
+		return d, err == nil
+	case int16:
+		d, err := decimal.Parse(strconv.FormatInt(int64(typed), 10))
+		return d, err == nil
+	case int32:
+		d, err := decimal.Parse(strconv.FormatInt(int64(typed), 10))
+		return d, err == nil
 	case int64:
 		d, err := decimal.Parse(strconv.FormatInt(typed, 10))
+		return d, err == nil
+	case uint:
+		d, err := decimal.Parse(strconv.FormatUint(uint64(typed), 10))
+		return d, err == nil
+	case uint8:
+		d, err := decimal.Parse(strconv.FormatUint(uint64(typed), 10))
+		return d, err == nil
+	case uint16:
+		d, err := decimal.Parse(strconv.FormatUint(uint64(typed), 10))
+		return d, err == nil
+	case uint32:
+		d, err := decimal.Parse(strconv.FormatUint(uint64(typed), 10))
+		return d, err == nil
+	case uint64:
+		d, err := decimal.Parse(strconv.FormatUint(typed, 10))
+		return d, err == nil
+	case float32:
+		d, err := decimal.Parse(strconv.FormatFloat(float64(typed), 'f', -1, 32))
+		return d, err == nil
+	case float64:
+		d, err := decimal.Parse(strconv.FormatFloat(typed, 'f', -1, 64))
 		return d, err == nil
 	default:
 		return decimal.Decimal{}, false

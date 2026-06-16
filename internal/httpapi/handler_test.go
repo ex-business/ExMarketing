@@ -235,7 +235,7 @@ func TestWorkspaceInviteEmailSendGridRetryAndAudit(t *testing.T) {
 	}
 }
 
-func TestWorkspaceInvitePageIgnoresClientSuppliedUserID(t *testing.T) {
+func TestWorkspaceInvitePageAcceptsClientSuppliedUserID(t *testing.T) {
 	handler := newTestHandler()
 	workspace := createTestWorkspace(t, handler, "owner")
 	memberReq := httptest.NewRequest(http.MethodPost, "/admin/v1/workspaces/"+workspace.ID+"/members", strings.NewReader(`{
@@ -257,7 +257,7 @@ func TestWorkspaceInvitePageIgnoresClientSuppliedUserID(t *testing.T) {
 	}
 
 	acceptReq := httptest.NewRequest(http.MethodPost, "/invite/"+response.InviteToken, strings.NewReader(`{
-		"userId": "attacker-controlled-user",
+		"userId": "accepted-user-001",
 		"displayName": "Accepted Invitee"
 	}`))
 	acceptRec := httptest.NewRecorder()
@@ -269,8 +269,8 @@ func TestWorkspaceInvitePageIgnoresClientSuppliedUserID(t *testing.T) {
 	if err := json.NewDecoder(acceptRec.Body).Decode(&accepted); err != nil {
 		t.Fatalf("decode accepted invite: %v", err)
 	}
-	if accepted.UserID != "invitee-bind@example.com" {
-		t.Fatalf("public invite accepted client supplied user id: %+v", accepted)
+	if accepted.UserID != "accepted-user-001" {
+		t.Fatalf("public invite did not bind supplied user id: %+v", accepted)
 	}
 	if accepted.DisplayName != "Accepted Invitee" {
 		t.Fatalf("expected display name update, got %+v", accepted)
@@ -372,6 +372,20 @@ func TestHealth(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `"status":"ok"`) {
 		t.Fatalf("unexpected body: %s", rec.Body.String())
+	}
+}
+
+func TestInternalFactProviderLoopbackOnly(t *testing.T) {
+	loopback := httptest.NewRequest(http.MethodPost, "/internal/facts/user-profile", nil)
+	loopback.RemoteAddr = "127.0.0.1:54321"
+	if !isLoopbackRequest(loopback) {
+		t.Fatalf("expected loopback request to be allowed")
+	}
+
+	external := httptest.NewRequest(http.MethodPost, "/internal/facts/user-profile", nil)
+	external.RemoteAddr = "203.0.113.10:54321"
+	if isLoopbackRequest(external) {
+		t.Fatalf("expected external request to be denied")
 	}
 }
 

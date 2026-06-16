@@ -314,6 +314,27 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 			[]string{"PASS", "BLOCK", "RISK"},
 			[]string{"PASS 分支进入奖励或限制，BLOCK/RISK 分支可接审计、告警或终止。"},
 		)),
+		groupedSchema("user-level-check", "用户等级判断", "判断用户是否存在，以及用户等级或 VIP 等级是否满足活动门槛。", groups(
+			fieldGroup("source", "等级来源", "定义从事实查询结果或事件属性中读取用户资料和等级。", fields(
+				enumField("levelSource", "等级来源", true, "FACTS_OR_EVENT", []string{"FACTS_OR_EVENT", "FACTS", "EVENT_ATTRIBUTES"}),
+				withDefault(arrayField("userPaths", "用户对象 Path", false, "按顺序读取用户对象，例如 facts.USER_PROFILE。", rules(maxItems(20))), []string{"$.facts.USER_PROFILE", "$.event.attributes.USER_PROFILE", "$.attributes.USER_PROFILE"}),
+				withDefault(arrayField("levelPaths", "等级 Path", true, "按顺序读取等级字段，支持 level、vipLevel、userLevel。", rules(minItems(1), maxItems(20))), []string{"$.facts.USER_PROFILE.level", "$.facts.USER_PROFILE.vipLevel", "$.event.attributes.userLevel", "$.event.attributes.vipLevel"}),
+				withDescription(stringField("existsPath", "存在字段", false, "exists", rules(maxLength(160))), "用户对象中的存在标记；为空时只要找到用户对象就认为存在。"),
+			)),
+			fieldGroup("threshold", "等级门槛", "定义用户等级判断规则。", fields(
+				booleanField("requireExistingUser", "要求用户存在", false, true),
+				numberField("minLevel", "最低等级", true, 1, rules(minValue(0), maxValue(100000))),
+				numberField("maxLevel", "最高等级", false, 0, rules(minValue(0), maxValue(100000))),
+			)),
+			fieldGroup("routing", "失败处理", "控制用户不存在或等级不足时走哪个分支。", fields(
+				enumField("failDecision", "失败分支", true, "BLOCK", []string{"BLOCK", "RISK", "SKIP"}),
+				withDescription(stringField("blockReason", "失败原因", false, "", rules(maxLength(200))), "可选，覆盖默认失败原因。"),
+			)),
+		), preview(
+			[]string{"facts.USER_PROFILE", "event.attributes.userLevel / vipLevel", "subject.id"},
+			[]string{"user_level_check", "PASS", "BLOCK", "RISK"},
+			[]string{"建议放在 fact-query 之后、candidate-reward 之前；不负责查询用户，只负责判断用户事实。"},
+		)),
 		groupedSchema("switch", "条件分支", "按上游阶段结果选择多个业务分支。", groups(
 			fieldGroup("source", "分支来源", "定义从哪个字段读取分支值。", fields(
 				withDescription(stringField("sourcePath", "分支字段路径", true, "stage_result.status", rules(minLength(1), maxLength(160))), "从 stage_result 或上游输出读取分支 key 的路径。"),
@@ -1088,6 +1109,12 @@ func defaultWorkflowNodeInputs(nodeType string) []WorkflowNodeInputVar {
 			inputVar("event_context", "Event Context", "object", true, "事件上下文。"),
 			inputVar("matched_activity", "Matched Activity", "object", false, "活动匹配结果；活动绑定流程可省略，默认使用当前 activity。"),
 		)
+	case "user-level-check":
+		return inputVars(
+			inputVar("facts", "Facts", "object", false, "事实查询输出，推荐包含 USER_PROFILE。"),
+			inputVar("event_context", "Event Context", "object", false, "事件上下文；可从 attributes.userLevel / vipLevel 读取。"),
+			inputVar("subject", "Subject", "object", false, "用户主体；未配置时使用事件 subject。"),
+		)
 	case "switch":
 		return inputVars(inputVar("stage_result", "Stage Result", "object", true, "上游阶段结果。"))
 	case "fact-query", "context-query", "local-cache-query", "http-query", "redis-query", "grpc-query", "plugin-query", "custom-query", "lua-query":
@@ -1258,6 +1285,14 @@ func defaultWorkflowNodeOutputs(nodeType string) []WorkflowNodeOutputVar {
 			outputVar("PASS", "PASS", "object", "资格通过结果。"),
 			outputVar("BLOCK", "BLOCK", "object", "资格阻断结果。"),
 			outputVar("RISK", "RISK", "object", "风险路径结果。"),
+		)
+	case "user-level-check":
+		return outputVars(
+			outputVar("user_level_check", "User Level Check", "object", "用户存在和等级判断结果。"),
+			outputVar("decision", "Decision", "string", "PASS / BLOCK / RISK / SKIP。"),
+			outputVar("PASS", "PASS", "boolean", "用户等级通过路径。"),
+			outputVar("BLOCK", "BLOCK", "boolean", "用户不存在或等级不足路径。"),
+			outputVar("RISK", "RISK", "boolean", "风险路径。"),
 		)
 	case "switch":
 		return outputVars(outputVar("PASS", "PASS", "object", "通过分支。"), outputVar("BLOCK", "BLOCK", "object", "阻断分支。"), outputVar("SKIP", "SKIP", "object", "跳过分支。"))

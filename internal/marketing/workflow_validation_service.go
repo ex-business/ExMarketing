@@ -78,6 +78,7 @@ func (s WorkflowValidationService) ValidateDefinition(raw json.RawMessage) Workf
 			)
 		} else if schema, ok := s.nodeConfigSchemas.Get(nodeType); ok {
 			s.validateNodeConfig(&result, index, nodeID, node.Config, schema)
+			s.validateNodeBusinessConfig(&result, index, nodeID, nodeType, node.Config)
 		} else {
 			result.addIssue(
 				WorkflowValidationBlock,
@@ -459,6 +460,145 @@ func (s WorkflowValidationService) validateNodeInputMappings(result *WorkflowVal
 			}
 		}
 	}
+}
+
+func (s WorkflowValidationService) validateNodeBusinessConfig(result *WorkflowValidationResult, nodeIndex int, nodeID string, nodeType string, raw json.RawMessage) {
+	config, ok := s.nodeConfigMap(raw)
+	if !ok {
+		return
+	}
+	switch strings.ToLower(strings.TrimSpace(nodeType)) {
+	case "fact-query":
+		s.validateFactQueryProviderConfig(result, nodeIndex, nodeID, config)
+	}
+}
+
+func (s WorkflowValidationService) validateFactQueryProviderConfig(result *WorkflowValidationResult, nodeIndex int, nodeID string, config map[string]any) {
+	if chain, ok := config["providerChain"]; ok && !s.isEmptyConfigValue(chain) {
+		s.validateFactQueryProviderChain(result, nodeIndex, nodeID, config, chain)
+		return
+	}
+	source := strings.ToUpper(firstNonEmptyConfigString(config, "source", "provider"))
+	if source == "" {
+		source = "FACT_SERVICE"
+	}
+	if factQueryLegacyTargetOptional(source, config) {
+		return
+	}
+	s.validateFactQueryProviderTarget(result, nodeID, fmt.Sprintf("nodes[%d].config", nodeIndex), source, config)
+}
+
+func (s WorkflowValidationService) validateFactQueryProviderChain(result *WorkflowValidationResult, nodeIndex int, nodeID string, rootConfig map[string]any, rawChain any) {
+	items, ok := rawChain.([]any)
+	if !ok {
+		return
+	}
+	for index, rawStep := range items {
+		path := fmt.Sprintf("nodes[%d].config.providerChain[%d]", nodeIndex, index)
+		switch step := rawStep.(type) {
+		case map[string]any:
+			source := strings.ToUpper(firstNonEmptyConfigString(step, "source", "provider"))
+			if source == "" && configString(step, "resourceRef") != "" {
+				source = "RESOURCE"
+			}
+			if source == "" {
+				result.addIssue(
+					WorkflowValidationBlock,
+					"WORKFLOW_FACT_PROVIDER_SOURCE_REQUIRED",
+					fmt.Sprintf("节点 %q 的数据提供者 #%d 必须配置 source。", nodeID, index+1),
+					path+".source",
+					nodeID,
+					"",
+				)
+				continue
+			}
+			merged := map[string]any{}
+			for key, value := range rootConfig {
+				merged[key] = value
+			}
+			for key, value := range step {
+				merged[key] = value
+			}
+			s.validateFactQueryProviderTarget(result, nodeID, path, source, merged)
+		case string:
+			source := strings.ToUpper(strings.TrimSpace(step))
+			if source != "" {
+				s.validateFactQueryProviderTarget(result, nodeID, path, source, rootConfig)
+			}
+		}
+	}
+}
+
+func factQueryLegacyTargetOptional(source string, config map[string]any) bool {
+	switch strings.ToUpper(strings.TrimSpace(source)) {
+	case "FACT_SERVICE", "HTTP_PROVIDER", "HTTP":
+		switch strings.ToUpper(configString(config, "failureAction")) {
+		case "USE_EMPTY", "SKIP":
+			return true
+		}
+	}
+	return false
+}
+
+func (s WorkflowValidationService) validateFactQueryProviderTarget(result *WorkflowValidationResult, nodeID string, path string, source string, config map[string]any) {
+	switch strings.ToUpper(strings.TrimSpace(source)) {
+	case "", "WORKFLOW_CONTEXT", "CONTEXT", "LOCAL_CACHE", "CACHE", "RESOURCE":
+		return
+	case "FACT_SERVICE", "HTTP_PROVIDER", "HTTP":
+		if configString(config, "resourceRef") != "" || configString(config, "providerCode") != "" || configString(config, "endpoint") != "" || configString(config, "providerEndpoint") != "" {
+			return
+		}
+		result.addIssue(
+			WorkflowValidationBlock,
+			"WORKFLOW_FACT_PROVIDER_TARGET_REQUIRED",
+			fmt.Sprintf("节点 %q 的 %s 数据提供者必须配置 resourceRef、providerCode 或 endpoint。", nodeID, source),
+			path+".endpoint",
+			nodeID,
+			"",
+		)
+	case "REDIS", "GRPC", "PLUGIN", "CUSTOM", "LUA_QUERY":
+		if configString(config, "resourceRef") != "" {
+			return
+		}
+		result.addIssue(
+			WorkflowValidationBlock,
+			"WORKFLOW_FACT_PROVIDER_TARGET_REQUIRED",
+			fmt.Sprintf("节点 %q 的 %s 数据提供者当前必须配置 resourceRef，指向资源管理中的可审计资源。", nodeID, source),
+			path+".resourceRef",
+			nodeID,
+			"",
+		)
+	default:
+		result.addIssue(
+			WorkflowValidationBlock,
+			"WORKFLOW_FACT_PROVIDER_SOURCE_UNSUPPORTED",
+			fmt.Sprintf("节点 %q 的数据提供者 %q 暂不支持。", nodeID, source),
+			path+".source",
+			nodeID,
+			"",
+		)
+	}
+}
+
+func firstNonEmptyConfigString(config map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if value := configString(config, key); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func configString(config map[string]any, key string) string {
+	value, ok := config[key]
+	if !ok || value == nil {
+		return ""
+	}
+	text, ok := value.(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(text)
 }
 
 func workflowRequiresInputMapping(meta map[string]any) bool {

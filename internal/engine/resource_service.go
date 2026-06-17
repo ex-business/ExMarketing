@@ -18,6 +18,8 @@ import (
 const (
 	defaultWorkflowStateResource = "default_workflow_state"
 	workflowMemoryResource       = "workflow_memory"
+	defaultMarketingDatabase     = "default_marketing_database"
+	defaultUserProfileStore      = "default_user_profile_store"
 )
 
 func (s *Service) SaveResource(ctx context.Context, resource marketing.Resource) (marketing.Resource, error) {
@@ -650,6 +652,62 @@ func builtInResources(tenantID string) []marketing.Resource {
 			CreatedAt:     now,
 			UpdatedAt:     now,
 		},
+		{
+			ID:          "res_builtin_default_marketing_database",
+			TenantID:    tenantID,
+			Code:        defaultMarketingDatabase,
+			Name:        "默认营销数据库",
+			Description: "营销域默认数据库资源，承载用户资料、活动状态、频控和订单摘要等数据集。",
+			Type:        marketing.ResourceDatabase,
+			Driver:      marketing.ResourceDriverPostgres,
+			Scope:       marketing.ResourceScopeSystem,
+			Status:      marketing.ResourceActive,
+			Config: json.RawMessage(`{
+					"connection":"default",
+					"managedStores":["default_user_profile_store"]
+				}`),
+			Capabilities:  []marketing.ResourceOperation{marketing.ResourceRead, marketing.ResourceTestConnection},
+			SchemaVersion: 1,
+			CreatedAt:     now,
+			UpdatedAt:     now,
+		},
+		{
+			ID:          "res_builtin_default_user_profile_store",
+			TenantID:    tenantID,
+			Code:        defaultUserProfileStore,
+			Name:        "默认用户资料 Store",
+			Description: "基于 default_marketing_database 创建的用户资料 store，读取 marketing_user_profile 并输出 USER_PROFILE 事实。",
+			Type:        marketing.ResourceDatabaseTable,
+			Driver:      marketing.ResourceDriverPostgres,
+			Scope:       marketing.ResourceScopeSystem,
+			Status:      marketing.ResourceActive,
+			Config: json.RawMessage(`{
+					"databaseRef":"default_marketing_database",
+					"storeKind":"FACT_STORE",
+					"factCode":"USER_PROFILE",
+					"adapter":"USER_PROFILE",
+					"physicalTable":"marketing_user_profile",
+					"primaryKey":["tenantId","subjectType","subjectId"],
+					"keyTemplate":"${tenantId}:${subject.type}:${subject.id}",
+					"schema":{"columns":{
+						"tenantId":"STRING",
+						"subjectType":"STRING",
+						"subjectId":"STRING",
+						"userLevel":"NUMBER",
+						"vipLevel":"NUMBER",
+						"status":"STRING"
+					}},
+					"keyMapping":{
+						"tenantId":{"path":"$.tenantId"},
+						"subjectType":{"path":"$.subject.type"},
+						"subjectId":{"path":"$.subject.id"}
+					}
+				}`),
+			Capabilities:  []marketing.ResourceOperation{marketing.ResourceRead, marketing.ResourceTestConnection},
+			SchemaVersion: 1,
+			CreatedAt:     now,
+			UpdatedAt:     now,
+		},
 	}
 }
 
@@ -697,7 +755,7 @@ func resourceScopeAllows(resource marketing.Resource, req marketing.ResourceAcce
 
 func defaultResourceCapabilities(resourceType marketing.ResourceType) []marketing.ResourceOperation {
 	switch resourceType {
-	case marketing.ResourceMemory, marketing.ResourceWorkflowContext, marketing.ResourceDatabaseKV, marketing.ResourceDatabaseTable:
+	case marketing.ResourceMemory, marketing.ResourceWorkflowContext, marketing.ResourceDatabase, marketing.ResourceDatabaseKV, marketing.ResourceDatabaseTable:
 		return []marketing.ResourceOperation{marketing.ResourceRead, marketing.ResourceWrite, marketing.ResourceUpsert, marketing.ResourceAppend, marketing.ResourceDelete, marketing.ResourceCAS}
 	case marketing.ResourceHTTPProvider:
 		return []marketing.ResourceOperation{marketing.ResourceRead, marketing.ResourceWrite, marketing.ResourceUpsert, marketing.ResourceDelete, marketing.ResourceCall, marketing.ResourceTestConnection}

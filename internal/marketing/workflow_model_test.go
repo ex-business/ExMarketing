@@ -238,6 +238,120 @@ func TestValidateWorkflowDefinitionValidatesNodeConfigSchema(t *testing.T) {
 	}
 }
 
+func TestValidateWorkflowDefinitionValidatesFactQueryProviderTargets(t *testing.T) {
+	validHTTP := ValidateWorkflowDefinition(json.RawMessage(`{
+		"meta": {"activityId": "activity-1", "workspaceId": "workspace-1", "folderId": "folder-1"},
+		"nodes": [
+			{"id": "event-in", "type": "event-in", "kind": "entry"},
+			{"id": "facts", "type": "fact-query", "config": {"factKeys": ["USER_PROFILE"], "source": "HTTP_PROVIDER", "endpoint": "http://127.0.0.1:8080/facts"}}
+		],
+		"edges": [
+			{"id": "event-in-facts", "source": "event-in", "target": "facts"}
+		]
+	}`))
+	if !validHTTP.Valid {
+		t.Fatalf("expected HTTP provider endpoint to pass validation, got %+v", validHTTP.Items)
+	}
+
+	legacyUseEmpty := ValidateWorkflowDefinition(json.RawMessage(`{
+		"meta": {"activityId": "activity-1", "workspaceId": "workspace-1", "folderId": "folder-1"},
+		"nodes": [
+			{"id": "event-in", "type": "event-in", "kind": "entry"},
+			{"id": "facts", "type": "fact-query", "config": {"factKeys": ["CHECKIN_STREAK"], "source": "FACT_SERVICE", "subjectPath": "subject.id", "timeoutSeconds": 3, "failureAction": "USE_EMPTY"}}
+		],
+		"edges": [
+			{"id": "event-in-facts", "source": "event-in", "target": "facts"}
+		]
+	}`))
+	if !legacyUseEmpty.Valid {
+		t.Fatalf("expected legacy FACT_SERVICE USE_EMPTY config without target to pass validation, got %+v", legacyUseEmpty.Items)
+	}
+
+	missingBlockingFactServiceTarget := ValidateWorkflowDefinition(json.RawMessage(`{
+		"meta": {"activityId": "activity-1", "workspaceId": "workspace-1", "folderId": "folder-1"},
+		"nodes": [
+			{"id": "event-in", "type": "event-in", "kind": "entry"},
+			{"id": "facts", "type": "fact-query", "config": {"factKeys": ["USER_PROFILE"], "source": "FACT_SERVICE", "failureAction": "BLOCK"}}
+		],
+		"edges": [
+			{"id": "event-in-facts", "source": "event-in", "target": "facts"}
+		]
+	}`))
+	if missingBlockingFactServiceTarget.Valid {
+		t.Fatalf("expected BLOCK FACT_SERVICE config without target to fail")
+	}
+	if len(missingBlockingFactServiceTarget.Items) != 1 || missingBlockingFactServiceTarget.Items[0].Code != "WORKFLOW_FACT_PROVIDER_TARGET_REQUIRED" || missingBlockingFactServiceTarget.Items[0].Path != "nodes[1].config.endpoint" {
+		t.Fatalf("expected missing FACT_SERVICE target issue, got %+v", missingBlockingFactServiceTarget.Items)
+	}
+
+	missingRedisResource := ValidateWorkflowDefinition(json.RawMessage(`{
+		"meta": {"activityId": "activity-1", "workspaceId": "workspace-1", "folderId": "folder-1"},
+		"nodes": [
+			{"id": "event-in", "type": "event-in", "kind": "entry"},
+			{"id": "facts", "type": "fact-query", "config": {"factKeys": ["USER_PROFILE"], "source": "REDIS", "redisRef": "marketing-fact-cache"}}
+		],
+		"edges": [
+			{"id": "event-in-facts", "source": "event-in", "target": "facts"}
+		]
+	}`))
+	if missingRedisResource.Valid {
+		t.Fatalf("expected REDIS provider without resourceRef to fail")
+	}
+	if len(missingRedisResource.Items) != 1 || missingRedisResource.Items[0].Code != "WORKFLOW_FACT_PROVIDER_TARGET_REQUIRED" || missingRedisResource.Items[0].Path != "nodes[1].config.resourceRef" {
+		t.Fatalf("expected resourceRef target issue, got %+v", missingRedisResource.Items)
+	}
+
+	validChain := ValidateWorkflowDefinition(json.RawMessage(`{
+		"meta": {"activityId": "activity-1", "workspaceId": "workspace-1", "folderId": "folder-1"},
+		"nodes": [
+			{"id": "event-in", "type": "event-in", "kind": "entry"},
+			{"id": "facts", "type": "fact-query", "config": {"factKeys": ["USER_PROFILE"], "providerChain": [
+				{"source": "WORKFLOW_CONTEXT", "sourcePath": "$.attributes.USER_PROFILE", "onMiss": "NEXT"},
+				{"source": "FACT_SERVICE", "resourceRef": "default_user_profile_store", "namespace": "facts", "onMiss": "BLOCK"}
+			]}}
+		],
+		"edges": [
+			{"id": "event-in-facts", "source": "event-in", "target": "facts"}
+		]
+	}`))
+	if !validChain.Valid {
+		t.Fatalf("expected resource-backed provider chain to pass validation, got %+v", validChain.Items)
+	}
+
+	missingChainResource := ValidateWorkflowDefinition(json.RawMessage(`{
+		"meta": {"activityId": "activity-1", "workspaceId": "workspace-1", "folderId": "folder-1"},
+		"nodes": [
+			{"id": "event-in", "type": "event-in", "kind": "entry"},
+			{"id": "facts", "type": "fact-query", "config": {"factKeys": ["USER_PROFILE"], "providerChain": [
+				{"source": "REDIS", "redisRef": "marketing-fact-cache", "onMiss": "BLOCK"}
+			]}}
+		],
+		"edges": [
+			{"id": "event-in-facts", "source": "event-in", "target": "facts"}
+		]
+	}`))
+	if missingChainResource.Valid {
+		t.Fatalf("expected provider chain REDIS step without resourceRef to fail")
+	}
+	if len(missingChainResource.Items) != 1 || missingChainResource.Items[0].Code != "WORKFLOW_FACT_PROVIDER_TARGET_REQUIRED" || missingChainResource.Items[0].Path != "nodes[1].config.providerChain[0].resourceRef" {
+		t.Fatalf("expected provider chain resourceRef target issue, got %+v", missingChainResource.Items)
+	}
+
+	validLuaQuery := ValidateWorkflowDefinition(json.RawMessage(`{
+		"meta": {"activityId": "activity-1", "workspaceId": "workspace-1", "folderId": "folder-1"},
+		"nodes": [
+			{"id": "event-in", "type": "event-in", "kind": "entry"},
+			{"id": "facts", "type": "lua-query", "config": {"factKeys": ["USER_PROFILE"], "source": "facts = { USER_PROFILE = { exists = true } }", "failureAction": "BLOCK"}}
+		],
+		"edges": [
+			{"id": "event-in-facts", "source": "event-in", "target": "facts"}
+		]
+	}`))
+	if !validLuaQuery.Valid {
+		t.Fatalf("expected lua-query source script to pass provider target validation, got %+v", validLuaQuery.Items)
+	}
+}
+
 func TestValidateWorkflowDefinitionValidatesInputMappingReferences(t *testing.T) {
 	cases := []struct {
 		name string

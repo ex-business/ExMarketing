@@ -2850,6 +2850,314 @@ func TestFactQueryWorkflowNodeHandlerReadsRedisKVResourceRef(t *testing.T) {
 	}
 }
 
+type workflowUserProfileTestRepository struct {
+	marketing.Repository
+	profiles map[string]marketing.UserProfile
+}
+
+func (r workflowUserProfileTestRepository) GetUserProfile(_ context.Context, tenantID string, subjectType string, subjectID string) (marketing.UserProfile, error) {
+	profile, ok := r.profiles[tenantID+"|"+subjectType+"|"+subjectID]
+	if !ok {
+		return marketing.UserProfile{}, marketing.ErrNotFound
+	}
+	return profile, nil
+}
+
+func TestFactQueryWorkflowNodeHandlerReadsUserProfileStoreFromDefaultMarketingDatabase(t *testing.T) {
+	ctx := context.Background()
+	baseRepo := marketing.NewMemoryRepository()
+	runtime := testWorkflowHandlerRuntime(true)
+	runtime.Inbox.Event.Subject = marketing.EventSubject{Type: "USER", ID: "u_resource_001"}
+	repo := workflowUserProfileTestRepository{
+		Repository: baseRepo,
+		profiles: map[string]marketing.UserProfile{
+			runtime.Activity.TenantID + "|USER|u_resource_001": {
+				TenantID:    runtime.Activity.TenantID,
+				SubjectType: "USER",
+				SubjectID:   "u_resource_001",
+				UserLevel:   2,
+				VIPLevel:    3,
+				Status:      "ACTIVE",
+			},
+		},
+	}
+	service := NewService(repo)
+	node := marketing.WorkflowNode{
+		ID:     "fact-query",
+		Type:   "fact-query",
+		Config: json.RawMessage(`{"resourceRef":"default_user_profile_store","factKeys":["USER_PROFILE"],"namespace":"facts","table":"marketing_user_profile","subjectPath":"subject.id","keyTemplate":"${tenantId}:${subject.type}:${subject.id}","failureAction":"BLOCK"}`),
+	}
+	result := service.factQueryWorkflowNodeHandler(ctx, node, runtime)
+	if result.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected default user profile resource success, got %+v", result)
+	}
+	if result.Output["source"] != "RESOURCE" || result.Output["resourceRef"] != "default_user_profile_store" {
+		t.Fatalf("expected resource-backed fact query, got %+v", result.Output)
+	}
+	profile := result.Output["facts"].(map[string]any)["USER_PROFILE"].(map[string]any)
+	if profile["exists"] != true || profile["level"] != 2 || profile["vipLevel"] != 3 {
+		t.Fatalf("expected user profile facts from resource, got %+v", profile)
+	}
+	logs, err := baseRepo.ListResourceAuditLogs(ctx, marketing.ResourceAuditQuery{ResourceID: "res_builtin_default_user_profile_store"})
+	if err != nil {
+		t.Fatalf("list resource audit logs: %v", err)
+	}
+	if len(logs) != 1 || logs[0].ResourceCode != "default_user_profile_store" || logs[0].Operation != marketing.ResourceRead || logs[0].Status != marketing.ResourceAuditSuccess {
+		t.Fatalf("expected default user profile store audit log, got %+v", logs)
+	}
+}
+
+func TestFactQueryWorkflowNodeHandlerUsesStructuredProviderChainResourceStep(t *testing.T) {
+	ctx := context.Background()
+	baseRepo := marketing.NewMemoryRepository()
+	runtime := testWorkflowHandlerRuntime(true)
+	runtime.Inbox.Event.Subject = marketing.EventSubject{Type: "USER", ID: "u_chain_001"}
+	repo := workflowUserProfileTestRepository{
+		Repository: baseRepo,
+		profiles: map[string]marketing.UserProfile{
+			runtime.Activity.TenantID + "|USER|u_chain_001": {
+				TenantID:    runtime.Activity.TenantID,
+				SubjectType: "USER",
+				SubjectID:   "u_chain_001",
+				UserLevel:   3,
+				VIPLevel:    1,
+				Status:      "ACTIVE",
+			},
+		},
+	}
+	service := NewService(repo)
+	node := marketing.WorkflowNode{
+		ID:   "fact-query",
+		Type: "fact-query",
+		Config: json.RawMessage(`{
+			"factKeys":["USER_PROFILE"],
+			"subjectPath":"subject.id",
+			"failureAction":"BLOCK",
+			"providerChain":[
+				{"source":"LOCAL_CACHE","cachePath":"$.vars.execution.facts.USER_PROFILE","onMiss":"NEXT"},
+				{"source":"FACT_SERVICE","resourceRef":"default_user_profile_store","namespace":"facts","table":"marketing_user_profile","keyTemplate":"${tenantId}:${subject.type}:${subject.id}","onMiss":"BLOCK"}
+			]
+		}`),
+	}
+	result := service.factQueryWorkflowNodeHandler(ctx, node, runtime)
+	if result.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected structured provider chain success, got %+v", result)
+	}
+	profile := result.Output["facts"].(map[string]any)["USER_PROFILE"].(map[string]any)
+	if profile["exists"] != true || profile["level"] != 3 || profile["vipLevel"] != 1 {
+		t.Fatalf("expected user profile facts from provider chain resource step, got %+v", profile)
+	}
+	chain := result.Output["providerChain"].([]any)
+	if len(chain) != 2 {
+		t.Fatalf("expected two provider chain traces, got %+v", result.Output["providerChain"])
+	}
+	second := chain[1].(map[string]any)
+	if second["resourceRef"] != "default_user_profile_store" || second["source"] != "FACT_SERVICE" {
+		t.Fatalf("expected resource step trace, got %+v", second)
+	}
+}
+
+func TestFactQueryWorkflowNodeHandlerProviderChainTakesPrecedenceOverTopLevelResourceRef(t *testing.T) {
+	ctx := context.Background()
+	baseRepo := marketing.NewMemoryRepository()
+	runtime := testWorkflowHandlerRuntime(true)
+	runtime.Inbox.Event.Subject = marketing.EventSubject{Type: "USER", ID: "u_chain_precedence"}
+	repo := workflowUserProfileTestRepository{
+		Repository: baseRepo,
+		profiles: map[string]marketing.UserProfile{
+			runtime.Activity.TenantID + "|USER|u_chain_precedence": {
+				TenantID:    runtime.Activity.TenantID,
+				SubjectType: "USER",
+				SubjectID:   "u_chain_precedence",
+				UserLevel:   4,
+				VIPLevel:    2,
+				Status:      "ACTIVE",
+			},
+		},
+	}
+	service := NewService(repo)
+	node := marketing.WorkflowNode{
+		ID:   "fact-query",
+		Type: "fact-query",
+		Config: json.RawMessage(`{
+			"resourceRef":"default_user_profile_store",
+			"factKeys":["USER_PROFILE"],
+			"providerChain":[
+				{"source":"LOCAL_CACHE","cachePath":"$.vars.execution.facts.USER_PROFILE","onMiss":"NEXT"},
+				{"source":"FACT_SERVICE","resourceRef":"default_user_profile_store","namespace":"facts","table":"marketing_user_profile","keyTemplate":"${tenantId}:${subject.type}:${subject.id}","onMiss":"BLOCK"}
+			],
+			"failureAction":"BLOCK"
+		}`),
+	}
+	result := service.factQueryWorkflowNodeHandler(ctx, node, runtime)
+	if result.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected provider chain success, got %+v", result)
+	}
+	chain, ok := result.Output["providerChain"].([]any)
+	if !ok || len(chain) != 2 {
+		t.Fatalf("expected provider chain trace instead of single resource path, got %+v", result.Output)
+	}
+}
+
+func TestFactQueryWorkflowNodeHandlerProviderChainBlocksOnLocalCacheMiss(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	runtime := testWorkflowHandlerRuntime(true)
+	node := marketing.WorkflowNode{
+		ID:   "fact-query",
+		Type: "fact-query",
+		Config: json.RawMessage(`{
+			"factKeys":["USER_PROFILE"],
+			"providerChain":[
+				{"source":"LOCAL_CACHE","cachePath":"$.vars.execution.facts.USER_PROFILE","onMiss":"BLOCK"},
+				{"source":"FACT_SERVICE","resourceRef":"default_user_profile_store","namespace":"facts","table":"marketing_user_profile","keyTemplate":"${tenantId}:${subject.type}:${subject.id}","onMiss":"BLOCK"}
+			],
+			"failureAction":"BLOCK"
+		}`),
+	}
+	result := service.factQueryWorkflowNodeHandler(ctx, node, runtime)
+	if result.Status != marketing.WorkflowNodeFailed {
+		t.Fatalf("expected local cache miss to block provider chain, got %+v", result)
+	}
+	if result.Output["errorCode"] != "FACT_QUERY_PROVIDER_MISS" {
+		t.Fatalf("expected FACT_QUERY_PROVIDER_MISS, got %+v", result.Output)
+	}
+}
+
+func TestFactQueryWorkflowNodeHandlerProviderChainBlocksOnPartialLocalCacheMiss(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	runtime := testWorkflowHandlerRuntime(true)
+	vars := map[string]any{}
+	workflowSetVar(vars, "execution", "facts", map[string]any{"USER_PROFILE": map[string]any{"exists": true, "vipLevel": 1}})
+	node := marketing.WorkflowNode{
+		ID:   "fact-query",
+		Type: "fact-query",
+		Config: json.RawMessage(`{
+			"factKeys":["USER_PROFILE","DEPOSIT_SUMMARY"],
+			"providerChain":[
+				{"source":"LOCAL_CACHE","onMiss":"BLOCK"}
+			],
+			"failureAction":"BLOCK"
+		}`),
+	}
+	nodeCtx := context.WithValue(ctx, workflowNodeExecutionContextKey{}, workflowNodeExecutionContext{Variables: vars})
+	result := service.factQueryWorkflowNodeHandler(nodeCtx, node, runtime)
+	if result.Status != marketing.WorkflowNodeFailed {
+		t.Fatalf("expected partial local cache miss to block provider chain, got %+v", result)
+	}
+	if result.Output["errorCode"] != "FACT_QUERY_PROVIDER_MISS" {
+		t.Fatalf("expected FACT_QUERY_PROVIDER_MISS, got %+v", result.Output)
+	}
+}
+
+func TestFactQueryWorkflowNodeHandlerProviderChainFailsWhenFactsRemainUnresolved(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	runtime := testWorkflowHandlerRuntime(true)
+	vars := map[string]any{}
+	workflowSetVar(vars, "execution", "facts", map[string]any{"USER_PROFILE": map[string]any{"exists": true, "vipLevel": 1}})
+	node := marketing.WorkflowNode{
+		ID:   "fact-query",
+		Type: "fact-query",
+		Config: json.RawMessage(`{
+			"factKeys":["USER_PROFILE","DEPOSIT_SUMMARY"],
+			"providerChain":[
+				{"source":"LOCAL_CACHE","onMiss":"NEXT"}
+			],
+			"failureAction":"BLOCK"
+		}`),
+	}
+	nodeCtx := context.WithValue(ctx, workflowNodeExecutionContextKey{}, workflowNodeExecutionContext{Variables: vars})
+	result := service.factQueryWorkflowNodeHandler(nodeCtx, node, runtime)
+	if result.Status != marketing.WorkflowNodeFailed {
+		t.Fatalf("expected unresolved remaining facts to fail provider chain, got %+v", result)
+	}
+	if result.Output["errorCode"] != "FACT_QUERY_NO_PROVIDER_HIT" {
+		t.Fatalf("expected FACT_QUERY_NO_PROVIDER_HIT, got %+v", result.Output)
+	}
+}
+
+func TestFactQueryWorkflowNodeHandlerProviderChainDoesNotSwallowResourceErrors(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	runtime := testWorkflowHandlerRuntime(true)
+	node := marketing.WorkflowNode{
+		ID:   "fact-query",
+		Type: "fact-query",
+		Config: json.RawMessage(`{
+			"factKeys":["USER_PROFILE"],
+			"providerChain":[
+				{"source":"REDIS","resourceRef":"missing_resource","namespace":"facts","keyTemplate":"${subject.id}:${factCode}","onMiss":"NEXT"},
+				{"source":"FACT_SERVICE","resourceRef":"default_user_profile_store","namespace":"facts","table":"marketing_user_profile","keyTemplate":"${tenantId}:${subject.type}:${subject.id}","onMiss":"BLOCK"}
+			],
+			"failureAction":"BLOCK"
+		}`),
+	}
+	result := service.factQueryWorkflowNodeHandler(ctx, node, runtime)
+	if result.Status != marketing.WorkflowNodeFailed {
+		t.Fatalf("expected missing resource to fail even with onMiss NEXT, got %+v", result)
+	}
+	if result.Output["errorCode"] != "RESOURCE_NOT_FOUND" {
+		t.Fatalf("expected RESOURCE_NOT_FOUND, got %+v", result.Output)
+	}
+}
+
+func TestFactQueryWorkflowNodeHandlerProviderChainUsesRedisResourceRefStep(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	runtime := testWorkflowHandlerRuntime(true)
+	if _, err := service.SaveResource(ctx, marketing.Resource{
+		TenantID:    runtime.Activity.TenantID,
+		WorkspaceID: runtime.Activity.WorkspaceID,
+		Code:        "user_fact_cache_chain",
+		Name:        "用户事实缓存",
+		Type:        marketing.ResourceRedisKV,
+		Driver:      marketing.ResourceDriverInternal,
+		Scope:       marketing.ResourceScopeWorkspace,
+		Status:      marketing.ResourceActive,
+		Config:      json.RawMessage(`{"keyPrefix":"fact:user"}`),
+	}); err != nil {
+		t.Fatalf("save fact cache resource: %v", err)
+	}
+	storeNode := marketing.WorkflowNode{
+		ID:     "store-user-profile",
+		Type:   "state-store",
+		Config: json.RawMessage(`{"resourceRef":"user_fact_cache_chain","operation":"UPSERT","namespace":"facts","keyTemplate":"${subject.id}:USER_PROFILE","valueType":"OBJECT"}`),
+	}
+	storeCtx := context.WithValue(ctx, workflowNodeExecutionContextKey{}, workflowNodeExecutionContext{
+		ResolvedInput: map[string]any{"value": map[string]any{"vipLevel": "VIP3", "country": "BR"}},
+	})
+	if stored := service.stateStoreWorkflowNodeHandler(storeCtx, storeNode, runtime); stored.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected fact cache seed success, got %+v", stored)
+	}
+
+	node := marketing.WorkflowNode{
+		ID:   "fact-query",
+		Type: "fact-query",
+		Config: json.RawMessage(`{
+			"factKeys":["USER_PROFILE"],
+			"providerChain":[
+				{"source":"REDIS","resourceRef":"user_fact_cache_chain","namespace":"facts","keyTemplate":"${subject.id}:${factCode}","onMiss":"BLOCK"}
+			],
+			"failureAction":"BLOCK"
+		}`),
+	}
+	result := service.factQueryWorkflowNodeHandler(ctx, node, runtime)
+	if result.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected redis resource provider chain success, got %+v", result)
+	}
+	profile := result.Output["facts"].(map[string]any)["USER_PROFILE"].(map[string]any)
+	if profile["vipLevel"] != "VIP3" {
+		t.Fatalf("expected redis profile fact, got %+v", result.Output)
+	}
+}
+
 func TestFactQueryWorkflowNodeHandlerCallsHTTPProviderResourceRef(t *testing.T) {
 	ctx := context.Background()
 	repo := marketing.NewMemoryRepository()

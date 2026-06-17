@@ -618,6 +618,7 @@ Executor 生产能力已经完成第一轮增强，重点从“能跑”推进�
 - `quota-check + REDIS_COUNTER resourceRef` 与专用 `lock + REDIS_LOCK resourceRef` 已完成第一版。
 - `mq-event`、`schedule-event`、`state-event` 已从 planned/explain-only 收口到 trigger adapter 第一版。
 - Lua Resource API 已支持 `resource_read/write/upsert/call/publish`，并增加 `maxResourceCalls` / `maxResourceResponseBytes` 限额。
+- `fact-query providerChain` 已记录为结构化步骤列表，支持 UI 选择 source/resourceRef/onMiss，并兼容旧字符串数组配置。
 - 高风险资源操作已有第一版 `requireApproval` 信号校验；`requireFormalApproval` 可强制校验当前活动版本正式审批快照。
 - CAS 已要求明确版本，避免退化成普通写入。
 

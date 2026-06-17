@@ -1519,6 +1519,24 @@ func workflowFactValueFromPaths(source any, paths []string) (any, string, bool) 
 	return nil, "", false
 }
 
+func workflowFactValueFromPathsForCode(source any, paths []string, factCode string, multiFact bool) (any, string, bool) {
+	for _, path := range paths {
+		value, err := extractWorkflowJSONPath(source, path)
+		if err != nil {
+			continue
+		}
+		if mapped, ok := workflowJSONValue(value).(map[string]any); ok {
+			if factValue, ok := mapped[factCode]; ok {
+				return factValue, strings.TrimRight(path, ".") + "." + factCode, true
+			}
+		}
+		if !multiFact || strings.HasSuffix(strings.ToUpper(strings.TrimSpace(path)), "."+strings.ToUpper(factCode)) {
+			return value, path, true
+		}
+	}
+	return nil, "", false
+}
+
 func workflowFactOutput(node marketing.WorkflowNode, runtime workflowRuntime, source string, facts map[string]any, responses []any) map[string]any {
 	return map[string]any{
 		"factCount": len(facts),
@@ -2797,11 +2815,11 @@ func (s *Service) factQueryWorkflowNodeHandler(ctx context.Context, node marketi
 		failed.Output["audit"] = workflowHandlerAudit(node, runtime)
 		return failed
 	}
+	if chain := workflowFactQueryProviderChain(config); len(chain) > 0 {
+		return s.factQueryProviderChainWorkflowNodeHandler(ctx, node, runtime, config, chain)
+	}
 	if strings.TrimSpace(workflowExplicitConfigString(node, "resourceRef")) != "" {
 		return s.factQueryResourceRefWorkflowNodeHandler(ctx, node, runtime, config)
-	}
-	if chain := workflowConfigStringList(config, "providerChain"); len(chain) > 0 {
-		return s.factQueryProviderChainWorkflowNodeHandler(ctx, node, runtime, config, chain)
 	}
 	source := strings.ToUpper(firstWorkflowString(workflowConfigString(config, "source"), "FACT_SERVICE"))
 	if source != "FACT_SERVICE" && source != "HTTP_PROVIDER" {
@@ -2883,6 +2901,9 @@ func (s *Service) factQueryResourceRefWorkflowNodeHandler(ctx context.Context, n
 			"audit":       workflowHandlerAudit(node, runtime),
 		})
 	}
+	if workflowResourceHasUserProfileDataset(resource, config, refs) {
+		return s.factQueryUserProfileResourceWorkflowNodeHandler(ctx, node, runtime, config, resource, refs)
+	}
 	facts := map[string]any{}
 	responses := make([]any, 0, len(refs))
 	for _, factCode := range refs {
@@ -2929,6 +2950,116 @@ func (s *Service) factQueryResourceRefWorkflowNodeHandler(ctx context.Context, n
 		"cacheTtlSeconds": workflowConfigNumber(config, "cacheTtlSeconds"),
 		"audit":           workflowHandlerAudit(node, runtime),
 	})
+}
+
+func workflowResourceHasUserProfileDataset(resource marketing.Resource, config map[string]any, refs []string) bool {
+	if len(refs) != 1 || !strings.EqualFold(refs[0], "USER_PROFILE") {
+		return false
+	}
+	resourceConfig := resource.ConfigMap()
+	dataset := workflowResourceDatasetConfig(resourceConfig, "USER_PROFILE")
+	table := firstNonEmpty(
+		workflowConfigString(config, "physicalTable"),
+		workflowConfigString(config, "table"),
+		workflowConfigString(config, "tableNamespace"),
+		workflowConfigString(resourceConfig, "physicalTable"),
+		workflowConfigString(resourceConfig, "table"),
+		workflowConfigString(resourceConfig, "tableNamespace"),
+		workflowConfigString(dataset, "physicalTable"),
+		workflowConfigString(dataset, "table"),
+	)
+	adapter := firstNonEmpty(workflowConfigString(config, "adapter"), workflowConfigString(resourceConfig, "adapter"), workflowConfigString(dataset, "adapter"))
+	return resource.Code == defaultUserProfileStore ||
+		(strings.EqualFold(adapter, "USER_PROFILE") && strings.EqualFold(table, "marketing_user_profile"))
+}
+
+func workflowResourceDatasetConfig(resourceConfig map[string]any, factCode string) map[string]any {
+	datasets, ok := workflowJSONValue(resourceConfig["datasets"]).(map[string]any)
+	if !ok {
+		return nil
+	}
+	raw, ok := datasets[factCode]
+	if !ok {
+		raw, ok = datasets[strings.ToUpper(factCode)]
+	}
+	if !ok {
+		return nil
+	}
+	mapped, _ := workflowJSONValue(raw).(map[string]any)
+	return mapped
+}
+
+func (s *Service) factQueryUserProfileResourceWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime, config map[string]any, resource marketing.Resource, refs []string) workflowNodeResult {
+	facts := map[string]any{}
+	responses := make([]any, 0, len(refs))
+	namespace := firstWorkflowString(workflowConfigString(config, "namespace"), "facts")
+	subject := workflowFactQuerySubject(ctx, config, runtime)
+	for _, factCode := range refs {
+		if !strings.EqualFold(factCode, "USER_PROFILE") {
+			return workflowFactQueryFailure(node, runtime, config, factCode, "FACT_QUERY_RESOURCE_FACT_UNSUPPORTED", "default user profile resource only supports USER_PROFILE", facts, responses)
+		}
+		resourceConfig := resource.ConfigMap()
+		dataset := workflowResourceDatasetConfig(resourceConfig, factCode)
+		keyTemplate := firstNonEmpty(
+			workflowConfigString(config, "keyTemplate"),
+			workflowConfigString(dataset, "keyTemplate"),
+			workflowConfigString(resourceConfig, "keyTemplate"),
+		)
+		if keyTemplate == "" {
+			keyTemplate = "${tenantId}:${subject.type}:${subject.id}"
+		}
+		key := workflowRenderFactQueryTemplate(keyTemplate, runtime, node, factCode)
+		accessReq := marketing.ResourceAccessRequest{
+			TenantID:    runtime.Activity.TenantID,
+			WorkspaceID: runtime.Activity.WorkspaceID,
+			FolderID:    runtime.Activity.FolderID,
+			ActivityID:  runtime.Activity.ID,
+			NodeID:      node.ID,
+			NodeType:    nodeHandlerKey(node),
+			Operation:   marketing.ResourceRead,
+			Namespace:   namespace,
+			ResourceKey: key,
+		}
+		if err := s.ValidateResourceAccess(ctx, resource, accessReq); err != nil {
+			code := firstWorkflowString(strings.TrimSpace(err.Error()), "RESOURCE_PERMISSION_DENIED")
+			return workflowFactQueryFailure(node, runtime, config, factCode, code, code+": resource access denied", facts, responses)
+		}
+		if code := resourceAdapterConfigError(resource); code != "" {
+			return workflowFactQueryFailure(node, runtime, config, factCode, code, code+": resource adapter config is invalid", facts, responses)
+		}
+		value, err := s.GetUserProfileFact(ctx, runtime.Activity.TenantID, subject)
+		response := map[string]any{
+			"success":     err == nil,
+			"factCode":    factCode,
+			"resourceRef": resource.Code,
+			"resourceKey": key,
+			"subject":     workflowJSONValue(subject),
+		}
+		if err != nil {
+			response["error"] = err.Error()
+			responses = append(responses, response)
+			result := workflowFactQueryFailure(node, runtime, config, factCode, "FACT_QUERY_USER_PROFILE_FAILED", err.Error(), facts, responses)
+			_ = s.workflowRecordResourceAudit(ctx, resource, runtime, node, marketing.ResourceRead, result)
+			return result
+		}
+		response["facts"] = map[string]any{factCode: value}
+		responses = append(responses, response)
+		facts[factCode] = value
+	}
+	result := nodeSuccess(map[string]any{
+		"factCount":       len(facts),
+		"factKeys":        refs,
+		"facts":           facts,
+		"responses":       responses,
+		"source":          "RESOURCE",
+		"resourceRef":     resource.Code,
+		"resource":        map[string]any{"id": resource.ID, "code": resource.Code, "type": resource.Type, "driver": resource.Driver},
+		"subject":         workflowJSONValue(subject),
+		"cacheTtlSeconds": workflowConfigNumber(config, "cacheTtlSeconds"),
+		"audit":           workflowHandlerAudit(node, runtime),
+	})
+	_ = s.workflowRecordResourceAudit(ctx, resource, runtime, node, marketing.ResourceRead, result)
+	return result
 }
 
 func workflowFactQueryResourceOperation(resource marketing.Resource, config map[string]any) marketing.ResourceOperation {
@@ -2998,7 +3129,191 @@ func workflowFactValueFromResourceOutput(output map[string]any, factCode string,
 	return nil, false
 }
 
-func (s *Service) factQueryProviderChainWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime, config map[string]any, chain []string) workflowNodeResult {
+type workflowFactQueryProviderStep struct {
+	Source         string
+	ResourceRef    string
+	Namespace      string
+	Operation      string
+	SourcePath     string
+	CachePath      string
+	KeyTemplate    string
+	ValuePath      string
+	Endpoint       string
+	Method         string
+	ProviderCode   string
+	RedisRef       string
+	GRPCTarget     string
+	PluginCode     string
+	TimeoutSeconds float64
+	OnMiss         string
+	Raw            map[string]any
+}
+
+func workflowFactQueryProviderChain(config map[string]any) []workflowFactQueryProviderStep {
+	value, ok := config["providerChain"]
+	if !ok || value == nil {
+		return nil
+	}
+	switch typed := value.(type) {
+	case []string:
+		steps := make([]workflowFactQueryProviderStep, 0, len(typed))
+		for _, item := range typed {
+			if source := strings.ToUpper(strings.TrimSpace(item)); source != "" {
+				steps = append(steps, workflowFactQueryProviderStep{Source: source, OnMiss: "NEXT"})
+			}
+		}
+		return steps
+	case []any:
+		steps := make([]workflowFactQueryProviderStep, 0, len(typed))
+		for _, item := range typed {
+			switch normalized := workflowJSONValue(item).(type) {
+			case map[string]any:
+				step := workflowFactQueryProviderStep{
+					Source:         firstWorkflowString(strings.ToUpper(workflowConfigString(normalized, "source")), strings.ToUpper(workflowConfigString(normalized, "provider"))),
+					ResourceRef:    workflowConfigString(normalized, "resourceRef"),
+					Namespace:      workflowConfigString(normalized, "namespace"),
+					Operation:      strings.ToUpper(workflowConfigString(normalized, "operation")),
+					SourcePath:     workflowConfigString(normalized, "sourcePath"),
+					CachePath:      workflowConfigString(normalized, "cachePath"),
+					KeyTemplate:    workflowConfigString(normalized, "keyTemplate"),
+					ValuePath:      workflowConfigString(normalized, "valuePath"),
+					Endpoint:       workflowConfigString(normalized, "endpoint"),
+					Method:         workflowConfigString(normalized, "method"),
+					ProviderCode:   workflowConfigString(normalized, "providerCode"),
+					RedisRef:       workflowConfigString(normalized, "redisRef"),
+					GRPCTarget:     workflowConfigString(normalized, "grpcTarget"),
+					PluginCode:     workflowConfigString(normalized, "pluginCode"),
+					TimeoutSeconds: workflowConfigNumber(normalized, "timeoutSeconds"),
+					OnMiss:         strings.ToUpper(firstWorkflowString(workflowConfigString(normalized, "onMiss"), "NEXT")),
+					Raw:            normalized,
+				}
+				if step.Source == "" && step.ResourceRef != "" {
+					step.Source = "RESOURCE"
+				}
+				if step.Source != "" {
+					steps = append(steps, step)
+				}
+			default:
+				if source := strings.ToUpper(strings.TrimSpace(fmt.Sprint(normalized))); source != "" {
+					steps = append(steps, workflowFactQueryProviderStep{Source: source, OnMiss: "NEXT"})
+				}
+			}
+		}
+		return steps
+	case string:
+		legacy := workflowConfigStringList(config, "providerChain")
+		steps := make([]workflowFactQueryProviderStep, 0, len(legacy))
+		for _, source := range legacy {
+			steps = append(steps, workflowFactQueryProviderStep{Source: strings.ToUpper(source), OnMiss: "NEXT"})
+		}
+		return steps
+	default:
+		return nil
+	}
+}
+
+func workflowFactQueryProviderStepConfig(config map[string]any, step workflowFactQueryProviderStep, remaining []string) map[string]any {
+	next := map[string]any{}
+	for key, value := range config {
+		next[key] = value
+	}
+	if step.Raw != nil {
+		for key, value := range step.Raw {
+			if key == "source" || key == "provider" || key == "onMiss" {
+				continue
+			}
+			next[key] = value
+		}
+	}
+	next["factKeys"] = remaining
+	if step.ResourceRef != "" {
+		next["resourceRef"] = step.ResourceRef
+	}
+	if step.Namespace != "" {
+		next["namespace"] = step.Namespace
+	}
+	if step.Operation != "" {
+		next["operation"] = step.Operation
+	}
+	if step.SourcePath != "" {
+		next["sourcePath"] = step.SourcePath
+	}
+	if step.CachePath != "" {
+		next["cachePath"] = step.CachePath
+	}
+	if step.KeyTemplate != "" {
+		next["keyTemplate"] = step.KeyTemplate
+	}
+	if step.ValuePath != "" {
+		next["valuePath"] = step.ValuePath
+	}
+	if step.Endpoint != "" {
+		next["endpoint"] = step.Endpoint
+		next["providerEndpoint"] = step.Endpoint
+	}
+	if step.Method != "" {
+		next["method"] = step.Method
+		next["httpMethod"] = step.Method
+	}
+	if step.ProviderCode != "" {
+		next["providerCode"] = step.ProviderCode
+	}
+	if step.RedisRef != "" {
+		next["redisRef"] = step.RedisRef
+	}
+	if step.GRPCTarget != "" {
+		next["grpcTarget"] = step.GRPCTarget
+	}
+	if step.PluginCode != "" {
+		next["pluginCode"] = step.PluginCode
+	}
+	if step.TimeoutSeconds > 0 {
+		next["timeoutSeconds"] = step.TimeoutSeconds
+	}
+	return next
+}
+
+func workflowFactQueryProviderStepNode(node marketing.WorkflowNode, config map[string]any) marketing.WorkflowNode {
+	node.Config = workflowRawJSON(config)
+	return node
+}
+
+func workflowFactQueryProviderStepTrace(step workflowFactQueryProviderStep, status string, remaining []string, output any) map[string]any {
+	trace := map[string]any{
+		"source":    step.Source,
+		"status":    status,
+		"remaining": remaining,
+		"onMiss":    firstWorkflowString(step.OnMiss, "NEXT"),
+	}
+	if step.ResourceRef != "" {
+		trace["resourceRef"] = step.ResourceRef
+	}
+	if step.Namespace != "" {
+		trace["namespace"] = step.Namespace
+	}
+	if step.KeyTemplate != "" {
+		trace["keyTemplate"] = step.KeyTemplate
+	}
+	if output != nil {
+		trace["output"] = output
+	}
+	return trace
+}
+
+func workflowFactQueryProviderStepHasFacts(output map[string]any) bool {
+	facts, _ := workflowJSONValue(output["facts"]).(map[string]any)
+	return len(facts) > 0
+}
+
+func workflowFactQueryProviderShouldBlockOnMiss(step workflowFactQueryProviderStep) bool {
+	return strings.EqualFold(strings.TrimSpace(step.OnMiss), "BLOCK")
+}
+
+func workflowFactQueryProviderHasMiss(remaining []string, facts map[string]any) bool {
+	return len(workflowRemainingFactKeys(remaining, facts)) > 0
+}
+
+func (s *Service) factQueryProviderChainWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime, config map[string]any, chain []workflowFactQueryProviderStep) workflowNodeResult {
 	refs := workflowFactQueryKeys(config, runtime)
 	if len(refs) == 0 {
 		return nodeSkipped("FACT_QUERY_NO_KEYS: no fact references", map[string]any{
@@ -3011,32 +3326,88 @@ func (s *Service) factQueryProviderChainWorkflowNodeHandler(ctx context.Context,
 	facts := map[string]any{}
 	responses := make([]any, 0, len(chain))
 	remaining := append([]string(nil), refs...)
-	for _, rawProvider := range chain {
-		provider := strings.ToUpper(strings.TrimSpace(rawProvider))
+	resolvedChain := make([]any, 0, len(chain))
+	for _, step := range chain {
+		provider := strings.ToUpper(strings.TrimSpace(step.Source))
 		if provider == "" || len(remaining) == 0 {
 			continue
 		}
+		step.Source = provider
+		stepConfig := workflowFactQueryProviderStepConfig(config, step, remaining)
+		stepNode := workflowFactQueryProviderStepNode(node, stepConfig)
 		switch provider {
 		case "WORKFLOW_CONTEXT", "CONTEXT":
-			result := contextFactQuery(ctx, node, runtime, config, remaining)
+			result := contextFactQuery(ctx, stepNode, runtime, stepConfig, remaining)
 			responses = append(responses, result.response)
+			stepFacts := map[string]any{}
 			for key, value := range result.facts {
+				stepFacts[key] = value
 				facts[key] = value
+			}
+			status := "DONE"
+			if workflowFactQueryProviderHasMiss(remaining, stepFacts) {
+				status = "MISS"
+			}
+			resolvedChain = append(resolvedChain, workflowFactQueryProviderStepTrace(step, status, remaining, result.response))
+			if status == "MISS" && workflowFactQueryProviderShouldBlockOnMiss(step) {
+				return workflowFactQueryFailure(node, runtime, config, "", "FACT_QUERY_PROVIDER_MISS", "providerChain step did not resolve requested facts", facts, responses)
 			}
 		case "LOCAL_CACHE", "CACHE":
-			result := localCacheFactQuery(ctx, node, runtime, config, remaining)
+			result := localCacheFactQuery(ctx, stepNode, runtime, stepConfig, remaining)
 			responses = append(responses, result.response)
+			stepFacts := map[string]any{}
 			for key, value := range result.facts {
+				stepFacts[key] = value
 				facts[key] = value
 			}
-		case "FACT_SERVICE", "HTTP_PROVIDER", "HTTP":
-			httpConfig := map[string]any{}
-			for key, value := range config {
-				httpConfig[key] = value
+			status := "DONE"
+			if workflowFactQueryProviderHasMiss(remaining, stepFacts) {
+				status = "MISS"
 			}
-			httpConfig["factKeys"] = remaining
-			httpResult := s.executeHTTPFactQuery(ctx, node, runtime, httpConfig)
+			resolvedChain = append(resolvedChain, workflowFactQueryProviderStepTrace(step, status, remaining, result.response))
+			if status == "MISS" && workflowFactQueryProviderShouldBlockOnMiss(step) {
+				return workflowFactQueryFailure(node, runtime, config, "", "FACT_QUERY_PROVIDER_MISS", "providerChain step did not resolve requested facts", facts, responses)
+			}
+		case "RESOURCE":
+			resourceResult := s.factQueryResourceRefWorkflowNodeHandler(ctx, stepNode, runtime, stepConfig)
+			responses = append(responses, resourceResult.Output)
+			if resourceResult.Status == marketing.WorkflowNodeFailed {
+				return resourceResult
+			}
+			if mapped, ok := resourceResult.Output["facts"].(map[string]any); ok {
+				for key, value := range mapped {
+					facts[key] = value
+				}
+			}
+			status := "DONE"
+			if !workflowFactQueryProviderStepHasFacts(resourceResult.Output) {
+				status = "MISS"
+			}
+			resolvedChain = append(resolvedChain, workflowFactQueryProviderStepTrace(step, status, remaining, resourceResult.Output))
+			if status == "MISS" && workflowFactQueryProviderShouldBlockOnMiss(step) {
+				return workflowFactQueryFailure(node, runtime, config, "", "FACT_QUERY_PROVIDER_MISS", "providerChain step did not resolve requested facts", facts, responses)
+			}
+		case "FACT_SERVICE", "HTTP_PROVIDER", "HTTP":
+			if strings.TrimSpace(workflowConfigString(stepConfig, "resourceRef")) != "" {
+				resourceResult := s.factQueryResourceRefWorkflowNodeHandler(ctx, stepNode, runtime, stepConfig)
+				responses = append(responses, resourceResult.Output)
+				if resourceResult.Status == marketing.WorkflowNodeFailed {
+					return resourceResult
+				}
+				if mapped, ok := resourceResult.Output["facts"].(map[string]any); ok {
+					for key, value := range mapped {
+						facts[key] = value
+					}
+				}
+				resolvedChain = append(resolvedChain, workflowFactQueryProviderStepTrace(step, "DONE", remaining, resourceResult.Output))
+				break
+			}
+			httpResult := s.executeHTTPFactQuery(ctx, stepNode, runtime, stepConfig)
 			if httpResult.Status == marketing.WorkflowNodeFailed {
+				if !workflowFactQueryProviderShouldBlockOnMiss(step) {
+					resolvedChain = append(resolvedChain, workflowFactQueryProviderStepTrace(step, "FAILED_NEXT", remaining, httpResult.Output))
+					break
+				}
 				return httpResult
 			}
 			responses = append(responses, httpResult.Output["responses"])
@@ -3045,12 +3416,36 @@ func (s *Service) factQueryProviderChainWorkflowNodeHandler(ctx context.Context,
 					facts[key] = value
 				}
 			}
+			resolvedChain = append(resolvedChain, workflowFactQueryProviderStepTrace(step, "DONE", remaining, httpResult.Output))
 		default:
-			responses = append(responses, map[string]any{"provider": provider, "status": "ADAPTER_REQUIRED", "remaining": remaining})
+			if strings.TrimSpace(workflowConfigString(stepConfig, "resourceRef")) != "" {
+				resourceResult := s.factQueryResourceRefWorkflowNodeHandler(ctx, stepNode, runtime, stepConfig)
+				responses = append(responses, resourceResult.Output)
+				if resourceResult.Status == marketing.WorkflowNodeFailed {
+					return resourceResult
+				}
+				if mapped, ok := resourceResult.Output["facts"].(map[string]any); ok {
+					for key, value := range mapped {
+						facts[key] = value
+					}
+				}
+				status := "DONE"
+				if !workflowFactQueryProviderStepHasFacts(resourceResult.Output) {
+					status = "MISS"
+				}
+				resolvedChain = append(resolvedChain, workflowFactQueryProviderStepTrace(step, status, remaining, resourceResult.Output))
+				if status == "MISS" && workflowFactQueryProviderShouldBlockOnMiss(step) {
+					return workflowFactQueryFailure(node, runtime, config, "", "FACT_QUERY_PROVIDER_MISS", "providerChain step did not resolve requested facts", facts, responses)
+				}
+				break
+			}
+			response := map[string]any{"provider": provider, "status": "ADAPTER_REQUIRED", "remaining": remaining}
+			responses = append(responses, response)
+			resolvedChain = append(resolvedChain, workflowFactQueryProviderStepTrace(step, "ADAPTER_REQUIRED", remaining, response))
 		}
 		remaining = workflowRemainingFactKeys(refs, facts)
 	}
-	if len(facts) == 0 {
+	if len(facts) == 0 || len(remaining) > 0 {
 		return workflowFactQueryFailure(node, runtime, config, "", "FACT_QUERY_NO_PROVIDER_HIT", "providerChain did not resolve any requested facts", facts, responses)
 	}
 	return nodeSuccess(map[string]any{
@@ -3058,7 +3453,7 @@ func (s *Service) factQueryProviderChainWorkflowNodeHandler(ctx context.Context,
 		"factKeys":        refs,
 		"facts":           facts,
 		"responses":       responses,
-		"providerChain":   chain,
+		"providerChain":   resolvedChain,
 		"cacheTtlSeconds": workflowConfigNumber(config, "cacheTtlSeconds"),
 		"audit":           workflowHandlerAudit(node, runtime),
 	})
@@ -3098,7 +3493,7 @@ func contextFactQuery(ctx context.Context, node marketing.WorkflowNode, runtime 
 	facts := map[string]any{}
 	resolved := []any{}
 	for _, factCode := range refs {
-		if value, path, ok := workflowFactValueFromPaths(base, workflowFactQuerySourcePaths(config, factCode)); ok {
+		if value, path, ok := workflowFactValueFromPathsForCode(base, workflowFactQuerySourcePaths(config, factCode), factCode, len(refs) > 1); ok {
 			facts[factCode] = value
 			resolved = append(resolved, map[string]any{"factCode": factCode, "path": path, "hit": true})
 		} else {
@@ -3145,7 +3540,7 @@ func localCacheFactQuery(ctx context.Context, node marketing.WorkflowNode, runti
 		if len(paths) == 0 {
 			paths = []string{"$.facts." + factCode, "$.vars.facts." + factCode, "$.vars.execution.facts." + factCode}
 		}
-		if value, path, ok := workflowFactValueFromPaths(cacheRoot, paths); ok {
+		if value, path, ok := workflowFactValueFromPathsForCode(cacheRoot, paths, factCode, len(refs) > 1); ok {
 			facts[factCode] = value
 			resolved = append(resolved, map[string]any{"factCode": factCode, "path": path, "hit": true})
 		} else {
@@ -3871,6 +4266,8 @@ func workflowStorageTypeForResource(resource marketing.Resource) string {
 	case marketing.ResourceMemory, marketing.ResourceWorkflowContext:
 		return "MEMORY"
 	case marketing.ResourceDatabaseKV:
+		return "DATABASE"
+	case marketing.ResourceDatabase:
 		return "DATABASE"
 	case marketing.ResourceDatabaseTable:
 		return "DATABASE_TABLE"

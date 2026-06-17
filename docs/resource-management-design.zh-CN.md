@@ -541,21 +541,31 @@ CREATE TABLE marketing_resource_audit (
 
 ### fact-query
 
-事实查询节点只表达查询意图。
+事实查询节点只表达查询意图。节点应引用 Store 或 Provider，不直接引用底层数据库连接、Redis 地址或 HTTP 密钥。
+
+推荐结构：
+
+```text
+default_marketing_database
+  -> default_user_profile_store
+       -> marketing_user_profile
+       -> USER_PROFILE
+```
 
 ```json
 {
   "type": "fact-query",
-  "resourceRef": "user_profile_provider",
+  "resourceRef": "default_user_profile_store",
   "operation": "READ",
-  "queryMapping": {
-    "tenantId": "${tenantId}",
-    "userId": "${subject.id}"
-  },
-  "outputPath": "facts.userProfile",
-  "missingPolicy": "BLOCK"
+  "factKeys": ["USER_PROFILE"],
+  "namespace": "facts",
+  "subjectPath": "subject.id",
+  "keyTemplate": "${tenantId}:${subject.type}:${subject.id}",
+  "failureAction": "BLOCK"
 }
 ```
+
+详细使用说明见 [Fact Query 事实查询节点](fact-query-node.zh-CN.md)。
 
 ### quota-check
 
@@ -682,9 +692,10 @@ logicalKey = render(scopeKeyTemplate) + ":" + windowSegment
 Lua 不允许直接打开数据库、Redis 或 HTTP。只能通过受控 resource API。
 
 ```lua
-local profile = resource_read("user_profile_provider", {
-  userId = ctx.event.subject.id
-})
+local profile = resource_read(
+  "default_user_profile_store",
+  ctx.event.tenantId .. ":" .. ctx.event.subject.type .. ":" .. ctx.event.subject.id
+)
 
 resource_upsert("checkin_user_state", {
   tenantId = ctx.event.tenantId,
@@ -1223,6 +1234,8 @@ VIEWER 不能保存写资源节点
    - 资源配置优先于 schema 默认值，节点显式配置仍可覆盖
    - 运行时已增加 URL scheme、userinfo、host allowlist、blockedHosts、private network 阻断开关和 redirect 防护第一版
 3. `fact-query + resourceRef` 已支持资源查询：
+   - 推荐节点引用 Store，例如 `default_user_profile_store`
+   - Store 可由底层资源创建，例如 `default_marketing_database -> default_user_profile_store`
    - 可读取 `DATABASE_KV/DATABASE_TABLE/REDIS_*` 语义资源
    - 可通过 `HTTP_PROVIDER` 执行 `CALL` 查询，并从 `value/stored_value/data/facts` 或 `valuePath` 抽取事实
    - 查询 key 支持 `${tenantId}`、`${activityId}`、`${eventId}`、`${subject.id}`、`${factCode}`
@@ -1391,12 +1404,11 @@ Lua 只能访问被 binding 授权的资源：已完成第一版
 
 ```json
 {
-  "resourceRef": "user_profile_provider",
-  "operation": "CALL",
+  "resourceRef": "default_user_profile_store",
+  "operation": "READ",
   "factKeys": ["USER_PROFILE"],
   "namespace": "facts",
-  "keyTemplate": "${tenantId}:${subject.id}:${factCode}",
-  "valuePath": "$.stored_value.USER_PROFILE",
+  "keyTemplate": "${tenantId}:${subject.type}:${subject.id}",
   "failureAction": "BLOCK"
 }
 ```

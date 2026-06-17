@@ -68,7 +68,7 @@ docker compose down
 | --- | --- | --- |
 | 事件入口 | OpenAPI、Webhook、MQ Topic、定时事件、人工触发、状态监听 | [事件输入节点设计](docs/event-input-node-design.zh-CN.md) |
 | 流程编排 | 工作区、文件夹、模板、画布、节点属性、调试运行、版本管理 | [Workflow Studio 完善计划](docs/workflow-studio-improvement-plan.zh-CN.md) |
-| 节点体系 | 入口、标准化、幂等、事实查询、资格校验、频控、奖励、发奖、通知、审计 | [Workflow 节点分类清单](docs/workflow-node-catalog.zh-CN.md) |
+| 节点体系 | 入口、标准化、幂等、事实查询、资格校验、频控、奖励、发奖、通知、审计 | [Workflow 节点分类清单](docs/workflow-node-catalog.zh-CN.md)、[Fact Query 事实查询节点](docs/fact-query-node.zh-CN.md) |
 | 字段绑定 | 固定值、表达式、Lua 脚本、资源引用、上下文取值 | [字段级表达式与输入解析设计](docs/field-bindings-design.zh-CN.md) |
 | 资源管理 | 公共内存、数据库 KV、公共表、Redis、MQ、Provider Adapter、权限范围 | [公共资源管理设计](docs/resource-management-design.zh-CN.md) |
 | 活动模板 | 签到、存款、奖励、风控、资格链路等活动模板覆盖 | [业务活动模板](docs/business-activity-templates.md) |

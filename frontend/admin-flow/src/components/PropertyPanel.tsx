@@ -555,6 +555,239 @@ function parseArrayInput(value: string): string[] {
     .filter(Boolean);
 }
 
+type ProviderChainStepValue = {
+  source: string;
+  resourceRef?: string;
+  namespace?: string;
+  sourcePath?: string;
+  cachePath?: string;
+  keyTemplate?: string;
+  valuePath?: string;
+  endpoint?: string;
+  method?: 'GET' | 'POST' | string;
+  authRef?: string;
+  providerCode?: string;
+  redisRef?: string;
+  grpcTarget?: string;
+  pluginCode?: string;
+  operation?: 'READ' | 'CALL' | string;
+  onMiss?: 'NEXT' | 'BLOCK' | string;
+};
+
+const PROVIDER_CHAIN_SOURCES = ['WORKFLOW_CONTEXT', 'LOCAL_CACHE', 'FACT_SERVICE', 'HTTP_PROVIDER', 'REDIS', 'GRPC', 'PLUGIN', 'CUSTOM', 'LUA_QUERY'];
+
+function providerChainNeedsResource(source: string): boolean {
+  return ['FACT_SERVICE', 'HTTP_PROVIDER', 'REDIS', 'GRPC', 'PLUGIN', 'CUSTOM', 'LUA_QUERY'].includes(source);
+}
+
+function providerChainRequiresManagedResource(source: string): boolean {
+  return ['REDIS', 'GRPC', 'PLUGIN', 'CUSTOM', 'LUA_QUERY'].includes(source);
+}
+
+function providerChainHasTarget(step: ProviderChainStepValue): boolean {
+  if (!providerChainNeedsResource(step.source)) return true;
+  if (step.resourceRef) return true;
+  if (step.source === 'FACT_SERVICE' || step.source === 'HTTP_PROVIDER') {
+    return Boolean(step.providerCode || step.endpoint);
+  }
+  return false;
+}
+
+function emptyProviderChainStep(source = 'FACT_SERVICE'): ProviderChainStepValue {
+  return {
+    source,
+    namespace: 'facts',
+    operation: source === 'HTTP_PROVIDER' ? 'CALL' : 'READ',
+    onMiss: 'NEXT',
+  };
+}
+
+function normalizeProviderChain(value: unknown): ProviderChainStepValue[] {
+  if (Array.isArray(value)) {
+    return value
+      .map((item): ProviderChainStepValue | undefined => {
+        if (typeof item === 'string') return emptyProviderChainStep(item.trim().toUpperCase());
+        if (!item || typeof item !== 'object' || Array.isArray(item)) return undefined;
+        const mapped = item as Record<string, unknown>;
+        const source = typeof mapped.source === 'string'
+          ? mapped.source
+          : typeof mapped.provider === 'string'
+            ? mapped.provider
+            : '';
+        if (!source.trim()) return undefined;
+        return {
+          source: source.trim().toUpperCase(),
+          resourceRef: typeof mapped.resourceRef === 'string' ? mapped.resourceRef : undefined,
+          namespace: typeof mapped.namespace === 'string' ? mapped.namespace : undefined,
+          sourcePath: typeof mapped.sourcePath === 'string' ? mapped.sourcePath : undefined,
+          cachePath: typeof mapped.cachePath === 'string' ? mapped.cachePath : undefined,
+          keyTemplate: typeof mapped.keyTemplate === 'string' ? mapped.keyTemplate : undefined,
+          valuePath: typeof mapped.valuePath === 'string' ? mapped.valuePath : undefined,
+          endpoint: typeof mapped.endpoint === 'string' ? mapped.endpoint : undefined,
+          method: typeof mapped.method === 'string' ? mapped.method : undefined,
+          authRef: typeof mapped.authRef === 'string' ? mapped.authRef : undefined,
+          providerCode: typeof mapped.providerCode === 'string' ? mapped.providerCode : undefined,
+          redisRef: typeof mapped.redisRef === 'string' ? mapped.redisRef : undefined,
+          grpcTarget: typeof mapped.grpcTarget === 'string' ? mapped.grpcTarget : undefined,
+          pluginCode: typeof mapped.pluginCode === 'string' ? mapped.pluginCode : undefined,
+          operation: typeof mapped.operation === 'string' ? mapped.operation : undefined,
+          onMiss: typeof mapped.onMiss === 'string' ? mapped.onMiss : 'NEXT',
+        };
+      })
+      .filter((item): item is ProviderChainStepValue => Boolean(item));
+  }
+  if (typeof value === 'string' && value.trim()) {
+    return parseArrayInput(value).map((item) => emptyProviderChainStep(item.trim().toUpperCase()));
+  }
+  return [];
+}
+
+function compactProviderChain(steps: ProviderChainStepValue[]): ProviderChainStepValue[] {
+  return steps.map((step) => {
+    const next: ProviderChainStepValue = { source: step.source || 'FACT_SERVICE' };
+    (['resourceRef', 'namespace', 'sourcePath', 'cachePath', 'keyTemplate', 'valuePath', 'endpoint', 'method', 'authRef', 'providerCode', 'redisRef', 'grpcTarget', 'pluginCode', 'operation', 'onMiss'] as const).forEach((key) => {
+      const value = step[key];
+      if (typeof value === 'string' && value.trim()) {
+        next[key] = value.trim();
+      }
+    });
+    if (!next.onMiss) next.onMiss = 'NEXT';
+    return next;
+  });
+}
+
+function ProviderChainEditor({
+  node,
+  value,
+  resourceOptions,
+  onNodeConfigChange,
+}: {
+  node: ActivityNode;
+  value: unknown;
+  resourceOptions: ResourceSummary[];
+  onNodeConfigChange: (nodeId: string, key: string, value: unknown) => void;
+}) {
+  const steps = normalizeProviderChain(value);
+  const update = (next: ProviderChainStepValue[]) => onNodeConfigChange(node.id, 'providerChain', compactProviderChain(next));
+  const patchStep = (index: number, patch: Partial<ProviderChainStepValue>) => {
+    update(steps.map((step, itemIndex) => {
+      if (itemIndex !== index) return step;
+      const next = { ...step, ...patch };
+      if (patch.source) {
+        next.source = patch.source.toUpperCase();
+        if (!providerChainNeedsResource(next.source)) {
+          next.resourceRef = '';
+        }
+        if (next.source === 'HTTP_PROVIDER') next.operation = 'CALL';
+        if (next.source === 'LOCAL_CACHE' && !next.cachePath) next.cachePath = '$.vars.execution.facts.USER_PROFILE';
+        if (next.source === 'WORKFLOW_CONTEXT' && !next.sourcePath) next.sourcePath = '$.attributes.USER_PROFILE';
+        if (next.source === 'HTTP_PROVIDER' && !next.method) next.method = 'POST';
+      }
+      return next;
+    }));
+  };
+  const moveStep = (index: number, direction: -1 | 1) => {
+    const target = index + direction;
+    if (target < 0 || target >= steps.length) return;
+    const next = [...steps];
+    [next[index], next[target]] = [next[target], next[index]];
+    update(next);
+  };
+  return (
+    <div className="provider-chain-editor">
+      {steps.length ? steps.map((step, index) => {
+        const needsResource = providerChainNeedsResource(step.source);
+        const requiresManagedResource = providerChainRequiresManagedResource(step.source);
+        const hasTarget = providerChainHasTarget(step);
+        const resourceExists = !step.resourceRef || resourceOptions.some((resource) => resource.code === step.resourceRef);
+        return (
+          <div key={`${index}-${step.source}-${step.resourceRef ?? ''}`} className={cx('provider-chain-step', !hasTarget && 'missing-resource', !resourceExists && 'missing-resource')}>
+            <div className="provider-chain-step-head">
+              <b>#{index + 1}</b>
+              <select value={step.source} onChange={(event) => patchStep(index, { source: event.target.value })}>
+                {PROVIDER_CHAIN_SOURCES.map((source) => <option key={source} value={source}>{source}</option>)}
+              </select>
+              <select value={step.onMiss ?? 'NEXT'} onChange={(event) => patchStep(index, { onMiss: event.target.value })}>
+                <option value="NEXT">miss 后继续</option>
+                <option value="BLOCK">miss 后阻断</option>
+              </select>
+              <div>
+                <button type="button" onClick={() => moveStep(index, -1)} disabled={index === 0}>上移</button>
+                <button type="button" onClick={() => moveStep(index, 1)} disabled={index === steps.length - 1}>下移</button>
+                <button type="button" onClick={() => update(steps.filter((_, itemIndex) => itemIndex !== index))}>删除</button>
+              </div>
+            </div>
+            {needsResource ? (
+              <select className={resourceExists ? '' : 'invalid'} value={step.resourceRef ?? ''} onChange={(event) => patchStep(index, { resourceRef: event.target.value })}>
+                <option value="">{requiresManagedResource ? '必须选择资源 Ref' : '选择资源 Ref（可选）'}</option>
+                {step.resourceRef && !resourceExists ? <option value={step.resourceRef}>{step.resourceRef}（未加载或无权限）</option> : null}
+                {resourceOptions.map((resource) => (
+                  <option key={resource.id || resource.code} value={resource.code}>{resource.name || resource.code} · {resource.code} · {resource.type}</option>
+                ))}
+              </select>
+            ) : null}
+            {!hasTarget ? (
+              <div className="provider-chain-warning">
+                {requiresManagedResource ? '当前数据提供者必须选择资源 Ref。' : '需要配置 resourceRef、providerCode 或 endpoint。'}
+              </div>
+            ) : null}
+            {step.source === 'WORKFLOW_CONTEXT' ? (
+              <input value={step.sourcePath ?? ''} placeholder="sourcePath，例如 $.attributes.USER_PROFILE" onChange={(event) => patchStep(index, { sourcePath: event.target.value })} />
+            ) : null}
+            {step.source === 'LOCAL_CACHE' ? (
+              <input value={step.cachePath ?? ''} placeholder="cachePath，例如 $.vars.execution.facts.USER_PROFILE" onChange={(event) => patchStep(index, { cachePath: event.target.value })} />
+            ) : null}
+            {needsResource ? (
+              <div className="provider-chain-step-grid">
+                <input value={step.namespace ?? ''} placeholder="namespace，例如 facts" onChange={(event) => patchStep(index, { namespace: event.target.value })} />
+                <select value={step.operation ?? 'READ'} onChange={(event) => patchStep(index, { operation: event.target.value })}>
+                  <option value="READ">READ</option>
+                  <option value="CALL">CALL</option>
+                </select>
+              </div>
+            ) : null}
+            {step.source === 'HTTP_PROVIDER' ? (
+              <>
+                <input value={step.endpoint ?? ''} placeholder="HTTP Endpoint，例如 https://user-service/internal/facts" onChange={(event) => patchStep(index, { endpoint: event.target.value })} />
+                <div className="provider-chain-step-grid">
+                  <select value={step.method ?? 'POST'} onChange={(event) => patchStep(index, { method: event.target.value })}>
+                    <option value="POST">POST</option>
+                    <option value="GET">GET</option>
+                  </select>
+                  <input value={step.authRef ?? ''} placeholder="authRef，可选" onChange={(event) => patchStep(index, { authRef: event.target.value })} />
+                </div>
+              </>
+            ) : null}
+            {step.source === 'REDIS' ? (
+              <input value={step.redisRef ?? ''} placeholder="redisRef，例如 marketing-fact-cache" onChange={(event) => patchStep(index, { redisRef: event.target.value })} />
+            ) : null}
+            {step.source === 'GRPC' ? (
+              <input value={step.grpcTarget ?? ''} placeholder="grpcTarget，例如 user-profile-service" onChange={(event) => patchStep(index, { grpcTarget: event.target.value })} />
+            ) : null}
+            {step.source === 'PLUGIN' ? (
+              <input value={step.pluginCode ?? ''} placeholder="pluginCode，例如 vip-profile-provider" onChange={(event) => patchStep(index, { pluginCode: event.target.value })} />
+            ) : null}
+            {step.source === 'CUSTOM' || step.source === 'FACT_SERVICE' ? (
+              <input value={step.providerCode ?? ''} placeholder="providerCode，可选，例如 user_profile_provider" onChange={(event) => patchStep(index, { providerCode: event.target.value })} />
+            ) : null}
+            {needsResource ? (
+              <>
+                <input value={step.keyTemplate ?? ''} placeholder="keyTemplate，例如 ${tenantId}:${subject.type}:${subject.id}" onChange={(event) => patchStep(index, { keyTemplate: event.target.value })} />
+                <input value={step.valuePath ?? ''} placeholder="valuePath，可选，例如 $.stored_value.profile" onChange={(event) => patchStep(index, { valuePath: event.target.value })} />
+              </>
+            ) : null}
+          </div>
+        );
+      }) : <p className="property-empty">未配置数据提供者列表。默认按单提供者来源查询。</p>}
+      <div className="provider-chain-actions">
+        <button type="button" onClick={() => update([...steps, emptyProviderChainStep('WORKFLOW_CONTEXT')])}>加上下文</button>
+        <button type="button" onClick={() => update([...steps, emptyProviderChainStep('LOCAL_CACHE')])}>加缓存</button>
+        <button type="button" onClick={() => update([...steps, { ...emptyProviderChainStep('FACT_SERVICE'), resourceRef: 'default_user_profile_store', keyTemplate: '${tenantId}:${subject.type}:${subject.id}', onMiss: 'BLOCK' }])}>加 Store</button>
+      </div>
+    </div>
+  );
+}
+
 function toggleArrayOption(current: unknown, option: string): string[] {
   const values = Array.isArray(current) ? current.map((item) => String(item)) : parseArrayInput(stringifyConfigValue(current));
   return values.includes(option) ? values.filter((item) => item !== option) : [...values, option];
@@ -597,6 +830,9 @@ function ConfigFieldInput({
   onNodeConfigChange: (nodeId: string, key: string, value: unknown) => void;
 }) {
   const value = configValue(node, field);
+  if (field.key === 'providerChain') {
+    return <ProviderChainEditor node={node} value={value} resourceOptions={resourceOptions} onNodeConfigChange={onNodeConfigChange} />;
+  }
   if (field.key === 'resourceRef') {
     const current = typeof value === 'string' ? value : '';
     const exists = !current || resourceOptions.some((resource) => resource.code === current);

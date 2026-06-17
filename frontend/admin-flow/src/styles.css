@@ -21226,6 +21226,86 @@ input:focus-visible {
   line-height: 1.5;
 }
 
+.provider-chain-editor {
+  display: grid;
+  gap: 10px;
+}
+
+.provider-chain-step {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid #dbe4f0;
+  border-radius: 10px;
+  background: #ffffff;
+}
+
+.provider-chain-step.missing-resource {
+  border-color: #fecaca;
+  background: #fff7f7;
+}
+
+.provider-chain-warning {
+  color: #b42318;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.provider-chain-step-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) minmax(92px, 120px);
+  gap: 8px;
+  align-items: center;
+}
+
+.provider-chain-step-head b {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: #eef4ff;
+  color: #3158ff;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.provider-chain-step-head > div {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 6px;
+}
+
+.provider-chain-step-head button,
+.provider-chain-actions button {
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid #dbe4f0;
+  border-radius: 8px;
+  background: #f8fafc;
+  color: #334155;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.provider-chain-step-head button:disabled {
+  opacity: .45;
+}
+
+.provider-chain-step-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 96px;
+  gap: 8px;
+}
+
+.provider-chain-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .node-lua-config-panel {
   display: grid;
   gap: 10px;

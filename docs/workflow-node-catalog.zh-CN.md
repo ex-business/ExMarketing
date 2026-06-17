@@ -50,7 +50,7 @@ event-in -> inbox -> normalize -> match -> fact-query -> activity-state -> quota
 | `inbox` | 幂等收件箱 | 写入事件收件箱，处理重复事件和 payload 冲突 | `event_context` |
 | `normalize` | 事件标准化 | 字段映射、默认值、时间格式、租户和业务主体规范化 | `normalized_event` |
 | `match` | 活动匹配 | 按租户、事件类型、活动状态、时间窗和优先级匹配活动 | `matched_activity` |
-| `fact-query` | 事实查询 | 查询用户、订单、交易、历史参与或外部事实数据 | `facts` |
+| `fact-query` | 事实查询 | 查询用户、订单、交易、历史参与或外部事实数据；详见 [Fact Query 事实查询节点](fact-query-node.zh-CN.md) | `facts` |
 | `activity-state` | 活动状态 | 读取或更新用户活动状态、任务进度、签到状态和插件状态 | `activity_state`, `state_version` |
 | `state-store` | 通用存储 | 通过资源管理读写工作流状态、公共表、Redis 语义资源或 HTTP Provider | `stored_value`, `storage_entry`, `storage_version` |
 | `quota-check` | 次数频控校验 | 对用户、设备、IP、活动或租户维度做次数和频率校验 | `quota_check`, `limit_hold` |

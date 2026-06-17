@@ -108,7 +108,7 @@ outside the default quick-start path.
 | `inbox` | `raw_event` | `idempotencyKeyTemplate`, `duplicatePolicy`, `ttlSeconds` | `event_context` | duplicate policy decides return/reject/reprocess |
 | `normalize` | `raw_event` | `mapping`, `defaults` | `normalized_event` | fail only on invalid mapping |
 | `match` | `event_context`, optional `activity_config` | `mode`, `tenantMatchPolicy`, `fallbackAction` | `matched_activity` | fail/skip according to fallback action |
-| `fact-query` | `subject`, `fact_keys` | `factKeys`, `source`, `timeoutSeconds`, `failureAction` | `facts` | block/use-empty/skip according to failure action |
+| `fact-query` | `subject`, `fact_keys` | `factKeys`, `resourceRef`, `subjectPath`, `timeoutSeconds`, `failureAction` | `facts` | block/use-empty/skip according to failure action; see [Fact Query node guide](fact-query-node.zh-CN.md) |
 | `activity-state` | `event_context`, optional `state_patch` | `operation`, `namespace`, `stateKeyTemplate`, `missingPolicy` | `activity_state`, `state_version` | durable state authority remains ActivityPlugin/StateStore |
 | `quota-check` | `subject`, `activity_id` | `scope`, `scopeKeyTemplate`, `window`, `maxCount`, `consumeMode` | `quota_check`, `limit_hold` | frequency/limit semantics; compatible with `limit` |
 | `qualify` | `event_context`, `matched_activity`, optional `facts` | `ruleCodes`, `evaluationMode`, `riskPolicy`, `blockAction` | `stage_result`, `PASS`, `BLOCK`, `RISK`, `decision` | route by `PASS/BLOCK/RISK` |

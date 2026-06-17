@@ -19,6 +19,7 @@ type ResourceAuditStatus string
 const (
 	ResourceMemory          ResourceType = "MEMORY"
 	ResourceWorkflowContext ResourceType = "WORKFLOW_CONTEXT"
+	ResourceDatabase        ResourceType = "DATABASE"
 	ResourceDatabaseKV      ResourceType = "DATABASE_KV"
 	ResourceDatabaseTable   ResourceType = "DATABASE_TABLE"
 	ResourceRedisKV         ResourceType = "REDIS_KV"
@@ -308,7 +309,7 @@ func (b ResourceBinding) Validate() error {
 
 func validResourceType(value ResourceType) bool {
 	switch value {
-	case ResourceMemory, ResourceWorkflowContext, ResourceDatabaseKV, ResourceDatabaseTable, ResourceRedisKV, ResourceRedisHash, ResourceRedisCounter, ResourceRedisLock, ResourceHTTPProvider, ResourceGRPCProvider, ResourceMQTopic, ResourceObjectStorage, ResourcePluginProvider, ResourceCustomProvider:
+	case ResourceMemory, ResourceWorkflowContext, ResourceDatabase, ResourceDatabaseKV, ResourceDatabaseTable, ResourceRedisKV, ResourceRedisHash, ResourceRedisCounter, ResourceRedisLock, ResourceHTTPProvider, ResourceGRPCProvider, ResourceMQTopic, ResourceObjectStorage, ResourcePluginProvider, ResourceCustomProvider:
 		return true
 	default:
 		return false

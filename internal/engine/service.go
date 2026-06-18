@@ -57,6 +57,14 @@ type userProfileRepository interface {
 	GetUserProfile(ctx context.Context, tenantID string, subjectType string, subjectID string) (marketing.UserProfile, error)
 }
 
+type kycProfileRepository interface {
+	GetKYCProfile(ctx context.Context, tenantID string, subjectType string, subjectID string) (marketing.KYCProfile, error)
+}
+
+type riskProfileRepository interface {
+	GetRiskProfile(ctx context.Context, tenantID string, subjectType string, subjectID string) (marketing.RiskProfile, error)
+}
+
 func (s *Service) MetricsRegistry() *metrics.Registry {
 	return s.metrics
 }
@@ -101,6 +109,109 @@ func (s *Service) GetUserProfileFact(ctx context.Context, tenantID string, subje
 	}
 	if !profile.RegisteredAt.IsZero() {
 		out["registeredAt"] = profile.RegisteredAt.UTC().Format(time.RFC3339Nano)
+	}
+	if len(profile.Attributes) > 0 {
+		out["attributes"] = profile.Attributes
+	}
+	return out, nil
+}
+
+func (s *Service) GetKYCProfileFact(ctx context.Context, tenantID string, subject marketing.EventSubject) (map[string]any, error) {
+	repository, ok := s.repository.(kycProfileRepository)
+	if !ok {
+		return map[string]any{
+			"exists":      false,
+			"verified":    false,
+			"subjectType": subject.Type,
+			"subjectId":   subject.ID,
+			"status":      "MISSING",
+			"reason":      "KYC_PROFILE_REPOSITORY_NOT_CONFIGURED",
+		}, nil
+	}
+	profile, err := repository.GetKYCProfile(ctx, tenantID, subject.Type, subject.ID)
+	if err != nil {
+		if errors.Is(err, marketing.ErrNotFound) {
+			return map[string]any{
+				"exists":      false,
+				"verified":    false,
+				"subjectType": subject.Type,
+				"subjectId":   subject.ID,
+				"status":      "MISSING",
+				"level":       "NONE",
+			}, nil
+		}
+		return nil, err
+	}
+	out := map[string]any{
+		"exists":      true,
+		"verified":    profile.Verified(),
+		"subjectType": profile.SubjectType,
+		"subjectId":   profile.SubjectID,
+		"status":      profile.Status,
+		"level":       profile.Level,
+	}
+	if profile.Country != "" {
+		out["country"] = profile.Country
+	}
+	if profile.Provider != "" {
+		out["provider"] = profile.Provider
+	}
+	if !profile.VerifiedAt.IsZero() {
+		out["verifiedAt"] = profile.VerifiedAt.UTC().Format(time.RFC3339Nano)
+	}
+	if len(profile.Attributes) > 0 {
+		out["attributes"] = profile.Attributes
+	}
+	return out, nil
+}
+
+func (s *Service) GetRiskProfileFact(ctx context.Context, tenantID string, subject marketing.EventSubject) (map[string]any, error) {
+	repository, ok := s.repository.(riskProfileRepository)
+	if !ok {
+		return map[string]any{
+			"exists":      false,
+			"clear":       false,
+			"blacklisted": false,
+			"subjectType": subject.Type,
+			"subjectId":   subject.ID,
+			"status":      "MISSING",
+			"reason":      "RISK_PROFILE_REPOSITORY_NOT_CONFIGURED",
+		}, nil
+	}
+	profile, err := repository.GetRiskProfile(ctx, tenantID, subject.Type, subject.ID)
+	if err != nil {
+		if errors.Is(err, marketing.ErrNotFound) {
+			return map[string]any{
+				"exists":      false,
+				"clear":       false,
+				"blacklisted": false,
+				"subjectType": subject.Type,
+				"subjectId":   subject.ID,
+				"score":       100,
+				"level":       "UNKNOWN",
+				"status":      "MISSING",
+			}, nil
+		}
+		return nil, err
+	}
+	out := map[string]any{
+		"exists":      true,
+		"clear":       profile.Clear(),
+		"subjectType": profile.SubjectType,
+		"subjectId":   profile.SubjectID,
+		"score":       profile.Score,
+		"level":       profile.Level,
+		"status":      profile.Status,
+		"blacklisted": profile.Blacklisted,
+	}
+	if profile.Country != "" {
+		out["country"] = profile.Country
+	}
+	if profile.Provider != "" {
+		out["provider"] = profile.Provider
+	}
+	if !profile.AssessedAt.IsZero() {
+		out["assessedAt"] = profile.AssessedAt.UTC().Format(time.RFC3339Nano)
 	}
 	if len(profile.Attributes) > 0 {
 		out["attributes"] = profile.Attributes

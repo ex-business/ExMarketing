@@ -191,6 +191,21 @@ function initialActivityIdFromLocation(): string {
   return new URLSearchParams(window.location.search).get('activityId') ?? '';
 }
 
+function sameStringList(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((item, index) => item === right[index]);
+}
+
+function emptyWorkflowDiffHighlights() {
+  return {
+    addedNodeIds: new Set<string>(),
+    removedNodeIds: new Set<string>(),
+    changedNodeIds: new Set<string>(),
+    addedEdgeIds: new Set<string>(),
+    removedEdgeIds: new Set<string>(),
+    changedEdgeIds: new Set<string>(),
+  };
+}
+
 type RunHistoryState = {
   open: boolean;
   loading: boolean;
@@ -631,6 +646,7 @@ function DebugRunResult({ result }: { result?: DebugRunResultSummary }) {
 function DebugRunPanel({
   state,
   templates,
+  embedded = false,
   selectedExecutionId,
   selectedNodeId,
   selectedNodeExecution,
@@ -653,6 +669,7 @@ function DebugRunPanel({
 }: {
   state: DebugPanelState;
   templates: DebugPayloadTemplate[];
+  embedded?: boolean;
   selectedExecutionId: string;
   selectedNodeId: string;
   selectedNodeExecution?: WorkflowNodeExecution;
@@ -675,12 +692,12 @@ function DebugRunPanel({
 }) {
   if (!state.open) return null;
   return (
-    <aside className="debug-run-panel">
+    <div className={cx('debug-run-panel', embedded && 'embedded-debug-panel')}>
       <button className="right-panel-resize-handle" type="button" aria-label="调整调试面板宽度" onPointerDown={onResizeStart} />
       <header>
         <div>
-          <b>调试运行</b>
-          <span>默认 Draft 沙箱运行，OpenAPI 会写真实业务数据</span>
+          <b>调试</b>
+          <span>Draft 沙箱 · OpenAPI 真实调用</span>
         </div>
         <button onClick={onClose}>×</button>
       </header>
@@ -817,7 +834,7 @@ function DebugRunPanel({
         <button onClick={onExportTrace} disabled={!selectedExecutionId}>导出 Trace</button>
       </div>
       {state.message ? <p>{state.message}</p> : null}
-    </aside>
+    </div>
   );
 }
 
@@ -917,11 +934,6 @@ function WorkflowTemplatePanel({
     if (!keyword) return true;
     return `${template.name} ${template.description ?? ''} ${template.id} ${template.category ?? ''} ${template.tags?.join(' ') ?? ''}`.toLowerCase().includes(keyword);
   });
-  const grouped = filteredTemplates.reduce<Record<string, WorkflowDraftTemplateSummary[]>>((acc, item) => {
-    const key = item.category || item.source;
-    acc[key] = [...(acc[key] ?? []), item];
-    return acc;
-  }, {});
   const selectedTemplate = templates.find((template) => template.id === selectedTemplateId) ?? filteredTemplates[0] ?? templates[0];
   const versions = templateVersions.filter((template) => template.id === selectedTemplate?.id);
   const selectedVersion = versions.find((template) => template.versionId === selectedVersionId) ?? selectedTemplate;
@@ -965,8 +977,8 @@ function WorkflowTemplatePanel({
       <button className="right-panel-resize-handle" type="button" aria-label="调整模板面板宽度" onPointerDown={onResizeStart} />
       <header>
         <span>
-          <b>Workflow Templates</b>
-          <em>{templates.length} templates · {nodePresets.length} presets</em>
+          <b>模板库</b>
+          <em>{filteredTemplates.length}/{templates.length} 个模板 · {nodePresets.length} 个节点预设</em>
         </span>
         <button onClick={onClose}>×</button>
       </header>
@@ -987,47 +999,45 @@ function WorkflowTemplatePanel({
             <span>来源</span>
             <select data-testid="template-source-filter" value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value as typeof sourceFilter)}>
               <option value="ALL">全部来源</option>
-              <option value="BUILTIN">Builtin</option>
-              <option value="SAVED">Saved</option>
+              <option value="BUILTIN">内置</option>
+              <option value="SAVED">已保存</option>
             </select>
           </label>
           <label>
             <span>状态</span>
             <select data-testid="template-status-filter" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as typeof statusFilter)}>
-              <option value="ACTIVE">Active</option>
-              <option value="ARCHIVED">Archived</option>
+              <option value="ACTIVE">启用中</option>
+              <option value="ARCHIVED">已归档</option>
               <option value="ALL">全部状态</option>
             </select>
           </label>
         </section>
         <div className="workflow-template-layout">
           <section className="workflow-template-catalog">
-            {Object.entries(grouped).map(([category, items]) => (
-              <div key={category}>
-                <h3>{category}</h3>
-                {items.map((template) => {
-                  const validation = workflowTemplateValidation(template);
-                  return (
-                    <button
-                      key={`${template.id}-${template.version}`}
-                      data-testid="template-catalog-item"
-                      className={cx(template.id === selectedTemplate?.id && 'active')}
-                      onClick={() => {
-                        setSelectedTemplateId(template.id);
-                        setSelectedVersionId(template.versionId);
-                        onLoadVersions(template.id);
-                      }}
-                    >
-                      <span>
-                        <b>{template.name}</b>
-                        <em>{template.description || template.id}</em>
-                      </span>
+            {filteredTemplates.length === 0 ? <p className="workflow-template-empty">没有匹配的模板</p> : null}
+            {filteredTemplates.map((template) => {
+              const validation = workflowTemplateValidation(template);
+              return (
+                <button
+                  key={`${template.id}-${template.version}`}
+                  data-testid="template-catalog-item"
+                  className={cx(template.id === selectedTemplate?.id && 'active')}
+                  onClick={() => {
+                    setSelectedTemplateId(template.id);
+                    setSelectedVersionId(template.versionId);
+                    onLoadVersions(template.id);
+                  }}
+                >
+                  <span>
+                    <span className="workflow-template-item-title">
+                      <b>{template.name}</b>
                       <strong className={cx(validation.valid ? 'valid' : 'invalid')}>{validation.valid ? '合法' : '阻塞'} · v{template.version}</strong>
-                    </button>
-                  );
-                })}
-              </div>
-            ))}
+                    </span>
+                    <em>{template.description || template.id}</em>
+                  </span>
+                </button>
+              );
+            })}
           </section>
           <section className="workflow-template-preview">
             <h3>模板预览 / 管理</h3>
@@ -4340,6 +4350,9 @@ export function App() {
     });
     return { addedNodeIds, removedNodeIds, changedNodeIds, addedEdgeIds, removedEdgeIds, changedEdgeIds };
   }, [draftActiveDiff.items]);
+  const canvasDiffHighlights = useMemo(() => (
+    showChecklist ? diffHighlights : emptyWorkflowDiffHighlights()
+  ), [diffHighlights, showChecklist]);
 
   useEffect(() => {
     let cancelled = false;
@@ -4682,6 +4695,20 @@ export function App() {
     }));
   }, [invalidateWorkflowValidation, setNodes]);
 
+  const updateNodeMeta = useCallback((nodeId: string, patch: Partial<ActivityNode['data']>) => {
+    invalidateWorkflowValidation();
+    setNodes((items) => items.map((node) => {
+      if (node.type !== 'activity' || node.id !== nodeId) return node;
+      return {
+        ...node,
+        data: {
+          ...node.data,
+          ...patch,
+        },
+      } as FlowNode;
+    }));
+  }, [invalidateWorkflowValidation, setNodes]);
+
   const updateEdgeRoute = useCallback((edgeId: string, route: WorkflowEdgeRoute) => {
     invalidateWorkflowValidation();
     setEdges((items) => items.map((item) => {
@@ -5017,7 +5044,7 @@ export function App() {
     if (!activeWorkflowVersion?.definition) return [];
     const currentNodeIds = new Set(nodes.map((node) => node.id));
     return activeWorkflowVersion.definition.nodes
-      .filter((node) => diffHighlights.removedNodeIds.has(node.id) && !currentNodeIds.has(node.id))
+      .filter((node) => canvasDiffHighlights.removedNodeIds.has(node.id) && !currentNodeIds.has(node.id))
       .map((node) => {
         const def = getDef(node.type);
         return {
@@ -5039,7 +5066,7 @@ export function App() {
           },
         } as ActivityNode;
       });
-  }, [activeWorkflowVersion?.definition, diffHighlights.removedNodeIds, nodes]);
+  }, [activeWorkflowVersion?.definition, canvasDiffHighlights.removedNodeIds, nodes]);
 
   const visibleNodes = useMemo(() => nodes.map((node) => {
     const validationClass = validationHighlights.blockNodeIds.has(node.id)
@@ -5047,9 +5074,9 @@ export function App() {
       : validationHighlights.warningNodeIds.has(node.id)
         ? 'validation-warning'
         : '';
-    const diffClass = diffHighlights.addedNodeIds.has(node.id)
+    const diffClass = canvasDiffHighlights.addedNodeIds.has(node.id)
       ? 'diff-node-added'
-      : diffHighlights.changedNodeIds.has(node.id)
+      : canvasDiffHighlights.changedNodeIds.has(node.id)
         ? 'diff-node-changed'
         : '';
     if (node.type === 'activity') {
@@ -5080,15 +5107,15 @@ export function App() {
       } as ActivityNode;
     }
     return { ...node, className: cx(node.className, validationClass, diffClass), data: { ...node.data, onDelete: (nodeId: string) => deleteNodes([nodeId]) } } as FlowNode;
-  }).concat(removedDiffNodes), [deleteNodes, diffHighlights.addedNodeIds, diffHighlights.changedNodeIds, nodes, openOutputNodePicker, removedDiffNodes, validationHighlights, workflowValidation]);
+  }).concat(removedDiffNodes), [deleteNodes, canvasDiffHighlights.addedNodeIds, canvasDiffHighlights.changedNodeIds, nodes, openOutputNodePicker, removedDiffNodes, validationHighlights, workflowValidation]);
 
   const removedDiffEdges = useMemo(() => {
     if (!activeWorkflowVersion?.definition) return [];
     const currentEdgeIds = new Set(edges.map((item) => item.id));
     const currentNodeIds = new Set(nodes.map((node) => node.id));
-    const mapNodeId = (nodeId: string) => (currentNodeIds.has(nodeId) ? nodeId : diffHighlights.removedNodeIds.has(nodeId) ? `diff-removed-node-${nodeId}` : nodeId);
+    const mapNodeId = (nodeId: string) => (currentNodeIds.has(nodeId) ? nodeId : canvasDiffHighlights.removedNodeIds.has(nodeId) ? `diff-removed-node-${nodeId}` : nodeId);
     return activeWorkflowVersion.definition.edges
-      .filter((item) => diffHighlights.removedEdgeIds.has(item.id) && !currentEdgeIds.has(item.id))
+      .filter((item) => canvasDiffHighlights.removedEdgeIds.has(item.id) && !currentEdgeIds.has(item.id))
       .map((item): ActivityEdge => ({
         id: `diff-removed-edge-${item.id}`,
         source: mapNodeId(item.source),
@@ -5100,7 +5127,7 @@ export function App() {
         markerEnd: { type: MarkerType.ArrowClosed, width: 5, height: 5, color: '#98a2b3' },
         className: 'diff-edge-removed',
       }));
-  }, [activeWorkflowVersion?.definition, diffHighlights.removedEdgeIds, diffHighlights.removedNodeIds, edges, nodes]);
+  }, [activeWorkflowVersion?.definition, canvasDiffHighlights.removedEdgeIds, canvasDiffHighlights.removedNodeIds, edges, nodes]);
 
   const runTraceEdgeIds = useMemo(() => {
     const selectedExecution = runHistory.executions.find((item) => item.id === runHistory.selectedExecutionId);
@@ -5112,9 +5139,9 @@ export function App() {
     const issues = validationHighlights.edgeIssues.get(item.id) ?? [];
     const edgeHasBlock = validationHighlights.blockEdgeIds.has(item.id);
     const edgeHasWarning = !edgeHasBlock && validationHighlights.warningEdgeIds.has(item.id);
-    const diffClass = diffHighlights.addedEdgeIds.has(item.id)
+    const diffClass = canvasDiffHighlights.addedEdgeIds.has(item.id)
       ? 'diff-edge-added'
-      : diffHighlights.changedEdgeIds.has(item.id)
+      : canvasDiffHighlights.changedEdgeIds.has(item.id)
         ? 'diff-edge-changed'
         : '';
     return {
@@ -5142,7 +5169,7 @@ export function App() {
         selectedNodeIds.some((nodeId) => item.source === nodeId || item.target === nodeId) && 'edge-related',
       ),
     } as ActivityEdge;
-  }).concat(removedDiffEdges), [diffHighlights.addedEdgeIds, diffHighlights.changedEdgeIds, edges, hoveredEdgeId, hoveredNodeId, removedDiffEdges, runTraceEdgeIds, selectedNodeIds, validationHighlights]);
+  }).concat(removedDiffEdges), [canvasDiffHighlights.addedEdgeIds, canvasDiffHighlights.changedEdgeIds, edges, hoveredEdgeId, hoveredNodeId, removedDiffEdges, runTraceEdgeIds, selectedNodeIds, validationHighlights]);
 
   const onConnect = useCallback((params: Connection) => {
     if (!params.source || !params.target) return;
@@ -6583,7 +6610,8 @@ export function App() {
   }, [rightPanelWidth]);
   const rightPanelStyle = useMemo(() => ({ '--diagnostic-panel-width': `${rightPanelWidth}px` } as React.CSSProperties), [rightPanelWidth]);
   const inspectedCount = inspectedNodeIds.length + inspectedEdgeIds.length;
-  const propertyPanelVisible = Boolean(activityId && inspectedCount > 0 && !runHistory.open && !showChecklist && !debugPanel.open);
+  const propertyPanelVisible = Boolean(activityId && inspectedCount > 0 && !runHistory.open && !showChecklist);
+  const debugEmbeddedInProperty = Boolean(propertyPanelVisible && debugPanel.open);
 
   return (
     <div className={cx('flow-shell', propertyPanelVisible && 'property-panel-visible')} style={rightPanelStyle}>
@@ -6742,8 +6770,10 @@ export function App() {
                 setAlignmentGuide({});
               }}
               onSelectionChange={({ nodes: selectedNodes, edges: selectedEdges }) => {
-                setSelectedNodeIds(selectedNodes.map((node) => node.id));
-                setSelectedEdgeIds(selectedEdges.map((item) => item.id));
+                const nextNodeIds = selectedNodes.map((node) => node.id);
+                const nextEdgeIds = selectedEdges.map((item) => item.id);
+                setSelectedNodeIds((items) => (sameStringList(items, nextNodeIds) ? items : nextNodeIds));
+                setSelectedEdgeIds((items) => (sameStringList(items, nextEdgeIds) ? items : nextEdgeIds));
               }}
               defaultViewport={{ x: 24, y: 36, zoom: 1 }}
               minZoom={0.25}
@@ -6894,7 +6924,7 @@ export function App() {
         onFocusEdge={focusRunEdge}
         onReplayStepChange={updateRunReplayStep}
       />
-      <DebugRunPanel
+      {!debugEmbeddedInProperty ? <DebugRunPanel
         state={debugPanel}
         templates={debugPayloadTemplates}
         selectedExecutionId={runHistory.selectedExecutionId}
@@ -6927,7 +6957,7 @@ export function App() {
         onExportTrace={() => {
           void exportSelectedTrace();
         }}
-      />
+      /> : null}
       <WorkflowTemplatePanel
         open={showTemplatePanel}
         templates={workflowTemplates}
@@ -6995,7 +7025,64 @@ export function App() {
           </section>
         </div>
       ) : null}
-      {propertyPanelVisible ? <PropertyPanel nodes={nodes} edges={edges} selectedNodeIds={inspectedNodeIds} selectedEdgeIds={inspectedEdgeIds} nodeConfigSchemas={nodeConfigSchemas} validationIssues={validationHighlights.nodeIssues.get(inspectedNodeIds[0] ?? '') ?? []} edgeValidationIssues={validationHighlights.edgeIssues.get(inspectedEdgeIds[0] ?? '') ?? []} resourceOptions={canvasResources} onNodeConfigChange={updateNodeConfig} onEdgeRouteChange={updateEdgeRoute} onLocateNode={(nodeId) => focusNodeById(nodeId, '已定位变量来源')} onDeleteNodes={deleteNodes} onDeleteEdges={deleteEdges} panelWidth={rightPanelWidth} onResizeStart={beginRightPanelResize} /> : null}
+      {propertyPanelVisible ? (
+        <PropertyPanel
+          nodes={nodes}
+          edges={edges}
+          selectedNodeIds={inspectedNodeIds}
+          selectedEdgeIds={inspectedEdgeIds}
+          nodeConfigSchemas={nodeConfigSchemas}
+          validationIssues={validationHighlights.nodeIssues.get(inspectedNodeIds[0] ?? '') ?? []}
+          edgeValidationIssues={validationHighlights.edgeIssues.get(inspectedEdgeIds[0] ?? '') ?? []}
+          resourceOptions={canvasResources}
+          onNodeConfigChange={updateNodeConfig}
+          onNodeMetaChange={updateNodeMeta}
+          onEdgeRouteChange={updateEdgeRoute}
+          onLocateNode={(nodeId) => focusNodeById(nodeId, '已定位变量来源')}
+          onDeleteNodes={deleteNodes}
+          onDeleteEdges={deleteEdges}
+          panelWidth={rightPanelWidth}
+          onResizeStart={beginRightPanelResize}
+          debugOpen={debugPanel.open}
+          debugContent={debugPanel.open ? (
+            <DebugRunPanel
+              embedded
+              state={debugPanel}
+              templates={debugPayloadTemplates}
+              selectedExecutionId={runHistory.selectedExecutionId}
+              selectedNodeId={selectedNodeIds[0] ?? ''}
+              selectedNodeExecution={selectedRunNodeExecution}
+              resumePreview={debugResumePreview}
+              onResizeStart={beginRightPanelResize}
+              onChange={(patch) => setDebugPanel((state) => ({ ...state, ...patch }))}
+              onClose={() => setDebugPanel((state) => ({ ...state, open: false }))}
+              onLoadTemplate={loadDebugPayloadTemplate}
+              onSaveTemplate={saveCurrentDebugPayloadTemplate}
+              onSaveNodePayloadTemplate={saveSelectedNodePayloadTemplate}
+              onUseNodePayload={useSelectedNodePayload}
+              onUseSelectedExecutionPayload={useSelectedExecutionPayload}
+              onRunDraft={() => {
+                void runDraftDebug('');
+              }}
+              onRunOpenApi={() => {
+                void runOpenAPIEventDebug();
+              }}
+              onBuildSchedulePayload={buildScheduleDebugPayload}
+              onRunScheduleDraft={runScheduleDraftDebug}
+              onRerun={() => {
+                void rerunSelectedExecution();
+              }}
+              onContinueFromNode={() => {
+                const startNodeId = debugPanel.startNodeId.trim() || selectedNodeIds[0] || '';
+                void runDraftDebug(startNodeId);
+              }}
+              onExportTrace={() => {
+                void exportSelectedTrace();
+              }}
+            />
+          ) : undefined}
+        />
+      ) : null}
     </div>
   );
 }

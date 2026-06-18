@@ -395,7 +395,7 @@ func (s *Service) ListWorkflowNodePresets() []marketing.WorkflowNodePreset {
 		nodePreset("inbox-idempotent", "inbox", "幂等收件箱", map[string]any{"idempotencyKeyTemplate": "${tenantId}:${sourceSystem}:${eventType}:${biz.bizType}:${biz.bizId}", "ttlSeconds": 86400}, "store"),
 		nodePreset("normalize-basic", "normalize", "基础标准化", map[string]any{"mapping": map[string]any{}, "defaults": map[string]any{}}, "transform"),
 		nodePreset("match-active-first", "match", "在线活动优先匹配", map[string]any{"mode": "FIRST_MATCH", "requireActiveActivity": true}, "logic"),
-		nodePreset("qualify-risk-block", "qualify", "资格和风控阻断", map[string]any{"ruleCodes": []string{"ELIGIBILITY", "RISK"}, "riskPolicy": "BLOCK"}, "risk"),
+		nodePreset("qualify-risk-block", "qualify", "资格和风控阻断", map[string]any{"riskPolicy": "BLOCK"}, "risk"),
 		nodePreset("user-level-check-vip1", "user-level-check", "用户等级判断", map[string]any{"requireExistingUser": true, "minLevel": 1, "maxLevel": 0, "levelSource": "FACTS_OR_EVENT", "userPaths": []string{"$.facts.USER_PROFILE", "$.event.attributes.USER_PROFILE", "$.attributes.USER_PROFILE"}, "levelPaths": []string{"$.facts.USER_PROFILE.level", "$.facts.USER_PROFILE.vipLevel", "$.event.attributes.userLevel", "$.event.attributes.vipLevel"}, "existsPath": "exists", "failDecision": "BLOCK"}, "user", "vip", "qualify"),
 		nodePreset("fact-query-user-order", "fact-query", "组合事实查询", map[string]any{
 			"factKeys":      []string{"USER_PROFILE", "ORDER_SUMMARY"},
@@ -969,7 +969,7 @@ func workflowTemplateNodeTitle(nodeType string) string {
 }
 
 func workflowTemplateNodeInputs(nodeType string) []string {
-	inputs := map[string][]string{"event-in": {"raw_event"}, "inbox": {"raw_event"}, "normalize": {"raw_event"}, "match": {"event_context"}, "qualify": {"matched_activity"}, "user-level-check": {"facts", "event_context"}, "reward": {"qualified_context"}, "limit": {"subject"}, "quota": {"reward_items"}, "participation": {"qualified_context", "quota_hold"}, "grant-order": {"participation_id", "reward_items"}, "outbox": {"grant_order"}, "callback": {"quota_hold"}, "audit": {"stage_result"}, "fact-query": {"subject"}, "context-query": {"subject"}, "local-cache-query": {"subject"}, "http-query": {"subject"}, "redis-query": {"subject"}, "grpc-query": {"subject"}, "plugin-query": {"subject"}, "custom-query": {"subject"}, "lua-query": {"subject"}, "combine": {"items", "context"}, "split": {"payload", "items"}, "activity-state": {"event_context", "state_patch"}, "state-store": {"value", "state_patch"}, "quota-check": {"subject", "activity_id"}, "candidate-reward": {"qualified_context", "plugin_result"}, "budget-reserve": {"candidate_rewards", "reward_items"}, "approval-gate": {"candidate_rewards", "risk_result"}, "compensation": {"stage_result"}, "random-pick": {"candidate_rewards"}, "plugin-execute": {"event_context", "activity_state"}, "ab-bucket": {"subject"}, "risk-score": {"facts"}, "settlement-window": {"event_context"}, "manual-adjust": {"operator"}, "reconcile": {"date_range"}, "reward-reconcile": {"date_range"}}
+	inputs := map[string][]string{"event-in": {"raw_event"}, "inbox": {"raw_event"}, "normalize": {"raw_event"}, "match": {"event_context"}, "qualify": {"USER_PROFILE", "KYC_PROFILE", "RISK_PROFILE", "DEPOSIT_SUMMARY", "matched_activity"}, "user-level-check": {"facts", "event_context"}, "reward": {"qualified_context"}, "limit": {"subject"}, "quota": {"reward_items"}, "participation": {"qualified_context", "quota_hold"}, "grant-order": {"participation_id", "reward_items"}, "outbox": {"grant_order"}, "callback": {"quota_hold"}, "audit": {"stage_result"}, "fact-query": {"subject"}, "context-query": {"subject"}, "local-cache-query": {"subject"}, "http-query": {"subject"}, "redis-query": {"subject"}, "grpc-query": {"subject"}, "plugin-query": {"subject"}, "custom-query": {"subject"}, "lua-query": {"subject"}, "combine": {"items", "context"}, "split": {"payload", "items"}, "activity-state": {"event_context", "state_patch"}, "state-store": {"value", "state_patch"}, "quota-check": {"subject", "activity_id"}, "candidate-reward": {"qualified_context", "plugin_result"}, "budget-reserve": {"candidate_rewards", "reward_items"}, "approval-gate": {"candidate_rewards", "risk_result"}, "compensation": {"stage_result"}, "random-pick": {"candidate_rewards"}, "plugin-execute": {"event_context", "activity_state"}, "ab-bucket": {"subject"}, "risk-score": {"facts"}, "settlement-window": {"event_context"}, "manual-adjust": {"operator"}, "reconcile": {"date_range"}, "reward-reconcile": {"date_range"}}
 	return inputs[nodeType]
 }
 
@@ -1019,13 +1019,16 @@ func workflowTemplateInputMapping(nodeType string, upstreamNodeTypes []string) m
 	case "match":
 		return map[string]any{"event_context": eventContextRef("")}
 	case "qualify":
-		if !hasUpstream("match") {
-			return map[string]any{"event_context": eventContextRef("")}
+		mapping := map[string]any{}
+		if hasUpstream("fact-query") {
+			for _, key := range []string{"USER_PROFILE", "KYC_PROFILE", "RISK_PROFILE", "DEPOSIT_SUMMARY"} {
+				mapping[key] = ref("fact-query", "facts", "$."+key)
+			}
 		}
-		return map[string]any{
-			"event_context":    eventContextRef(""),
-			"matched_activity": ref("match", "matched_activity", ""),
+		if hasUpstream("match") {
+			mapping["matched_activity"] = ref("match", "matched_activity", "")
 		}
+		return mapping
 	case "activity-state":
 		return map[string]any{"event_context": eventContextRef("")}
 	case "quota-check":
@@ -1152,7 +1155,6 @@ func workflowTemplateNodeConfig(nodeType string) map[string]any {
 			"activityCodePattern":     "",
 		},
 		"qualify": {
-			"ruleCodes":        []string{"ELIGIBILITY"},
 			"evaluationMode":   "ALL_PASS",
 			"stopOnFirstBlock": true,
 			"riskPolicy":       "BLOCK",

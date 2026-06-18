@@ -20,6 +20,8 @@ const (
 	workflowMemoryResource       = "workflow_memory"
 	defaultMarketingDatabase     = "default_marketing_database"
 	defaultUserProfileStore      = "default_user_profile_store"
+	defaultKYCProfileStore       = "default_kyc_profile_store"
+	defaultRiskProfileStore      = "default_risk_profile_store"
 )
 
 func (s *Service) SaveResource(ctx context.Context, resource marketing.Resource) (marketing.Resource, error) {
@@ -664,7 +666,7 @@ func builtInResources(tenantID string) []marketing.Resource {
 			Status:      marketing.ResourceActive,
 			Config: json.RawMessage(`{
 					"connection":"default",
-					"managedStores":["default_user_profile_store"]
+					"managedStores":["default_user_profile_store","default_kyc_profile_store","default_risk_profile_store"]
 				}`),
 			Capabilities:  []marketing.ResourceOperation{marketing.ResourceRead, marketing.ResourceTestConnection},
 			SchemaVersion: 1,
@@ -696,6 +698,84 @@ func builtInResources(tenantID string) []marketing.Resource {
 						"userLevel":"NUMBER",
 						"vipLevel":"NUMBER",
 						"status":"STRING"
+					}},
+					"keyMapping":{
+						"tenantId":{"path":"$.tenantId"},
+						"subjectType":{"path":"$.subject.type"},
+						"subjectId":{"path":"$.subject.id"}
+					}
+				}`),
+			Capabilities:  []marketing.ResourceOperation{marketing.ResourceRead, marketing.ResourceTestConnection},
+			SchemaVersion: 1,
+			CreatedAt:     now,
+			UpdatedAt:     now,
+		},
+		{
+			ID:          "res_builtin_default_kyc_profile_store",
+			TenantID:    tenantID,
+			Code:        defaultKYCProfileStore,
+			Name:        "默认 KYC 资料 Store",
+			Description: "基于 default_marketing_database 创建的 KYC 用户资源，读取 marketing_kyc_profile 并输出 KYC_PROFILE 事实。",
+			Type:        marketing.ResourceDatabaseTable,
+			Driver:      marketing.ResourceDriverPostgres,
+			Scope:       marketing.ResourceScopeSystem,
+			Status:      marketing.ResourceActive,
+			Config: json.RawMessage(`{
+					"databaseRef":"default_marketing_database",
+					"storeKind":"FACT_STORE",
+					"factCode":"KYC_PROFILE",
+					"adapter":"KYC_PROFILE",
+					"physicalTable":"marketing_kyc_profile",
+					"primaryKey":["tenantId","subjectType","subjectId"],
+					"keyTemplate":"${tenantId}:${subject.type}:${subject.id}",
+					"schema":{"columns":{
+						"tenantId":"STRING",
+						"subjectType":"STRING",
+						"subjectId":"STRING",
+						"status":"STRING",
+						"level":"STRING",
+						"verified":"BOOLEAN",
+						"provider":"STRING"
+					}},
+					"keyMapping":{
+						"tenantId":{"path":"$.tenantId"},
+						"subjectType":{"path":"$.subject.type"},
+						"subjectId":{"path":"$.subject.id"}
+					}
+				}`),
+			Capabilities:  []marketing.ResourceOperation{marketing.ResourceRead, marketing.ResourceTestConnection},
+			SchemaVersion: 1,
+			CreatedAt:     now,
+			UpdatedAt:     now,
+		},
+		{
+			ID:          "res_builtin_default_risk_profile_store",
+			TenantID:    tenantID,
+			Code:        defaultRiskProfileStore,
+			Name:        "默认风控资料 Store",
+			Description: "基于 default_marketing_database 创建的风控用户资源，读取 marketing_risk_profile 并输出 RISK_PROFILE 事实。",
+			Type:        marketing.ResourceDatabaseTable,
+			Driver:      marketing.ResourceDriverPostgres,
+			Scope:       marketing.ResourceScopeSystem,
+			Status:      marketing.ResourceActive,
+			Config: json.RawMessage(`{
+					"databaseRef":"default_marketing_database",
+					"storeKind":"FACT_STORE",
+					"factCode":"RISK_PROFILE",
+					"adapter":"RISK_PROFILE",
+					"physicalTable":"marketing_risk_profile",
+					"primaryKey":["tenantId","subjectType","subjectId"],
+					"keyTemplate":"${tenantId}:${subject.type}:${subject.id}",
+					"schema":{"columns":{
+						"tenantId":"STRING",
+						"subjectType":"STRING",
+						"subjectId":"STRING",
+						"score":"NUMBER",
+						"level":"STRING",
+						"status":"STRING",
+						"blacklisted":"BOOLEAN",
+						"clear":"BOOLEAN",
+						"provider":"STRING"
 					}},
 					"keyMapping":{
 						"tenantId":{"path":"$.tenantId"},

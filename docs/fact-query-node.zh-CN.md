@@ -64,6 +64,12 @@ default_marketing_database
   -> default_user_profile_store
        -> marketing_user_profile
        -> USER_PROFILE
+  -> default_kyc_profile_store
+       -> marketing_kyc_profile
+       -> KYC_PROFILE
+  -> default_risk_profile_store
+       -> marketing_risk_profile
+       -> RISK_PROFILE
 ```
 
 含义：
@@ -74,6 +80,12 @@ default_marketing_database
 | `default_user_profile_store` | `DATABASE_TABLE` | 基于默认数据库创建的用户资料 Store |
 | `marketing_user_profile` | 物理表 | 存储用户等级、VIP、国家、渠道、状态等 |
 | `USER_PROFILE` | Fact Code | workflow 中统一读取的事实 key |
+| `default_kyc_profile_store` | `DATABASE_TABLE` | 基于默认数据库创建的 KYC 用户资源 Store |
+| `marketing_kyc_profile` | 物理表 | 存储实名状态、KYC 等级、认证来源等 |
+| `KYC_PROFILE` | Fact Code | 资格校验中读取的实名 / 合规事实 key |
+| `default_risk_profile_store` | `DATABASE_TABLE` | 基于默认数据库创建的风控用户资源 Store |
+| `marketing_risk_profile` | 物理表 | 存储风险分、风险等级、黑名单状态等 |
+| `RISK_PROFILE` | Fact Code | 资格校验中读取的风控事实 key |
 
 节点应该引用 Store：
 
@@ -122,6 +134,83 @@ WHERE tenant_id = :tenantId
   AND subject_id = :subject.id
 ```
 
+## 默认 KYC Store
+
+内置默认 KYC 用户资源：
+
+```json
+{
+  "code": "default_kyc_profile_store",
+  "type": "DATABASE_TABLE",
+  "driver": "POSTGRES",
+  "config": {
+    "databaseRef": "default_marketing_database",
+    "storeKind": "FACT_STORE",
+    "factCode": "KYC_PROFILE",
+    "adapter": "KYC_PROFILE",
+    "physicalTable": "marketing_kyc_profile",
+    "primaryKey": ["tenantId", "subjectType", "subjectId"],
+    "keyTemplate": "${tenantId}:${subject.type}:${subject.id}"
+  }
+}
+```
+
+`marketing_kyc_profile` 由迁移 `010_kyc_profile_fact_provider.sql` 创建。迁移会根据已有 `marketing_user_profile` 初始化数据：
+
+- `status = ACTIVE` 的用户初始化为 `KYC_PROFILE.status = VERIFIED`、`verified = true`。
+- 其它用户初始化为 `UNVERIFIED`。
+- `country` 会从用户资料复制。
+- `vip_level >= 3` 初始化为 `level = STANDARD`，其它为 `BASIC`。
+
+Fact Query 查询 KYC 时推荐配置：
+
+```json
+{
+  "factKeys": ["KYC_PROFILE"],
+  "resourceRef": "default_kyc_profile_store",
+  "table": "marketing_kyc_profile",
+  "keyTemplate": "${tenantId}:${subject.type}:${subject.id}"
+}
+```
+
+## 默认风控 Store
+
+内置默认风控用户资源：
+
+```json
+{
+  "code": "default_risk_profile_store",
+  "type": "DATABASE_TABLE",
+  "driver": "POSTGRES",
+  "config": {
+    "databaseRef": "default_marketing_database",
+    "storeKind": "FACT_STORE",
+    "factCode": "RISK_PROFILE",
+    "adapter": "RISK_PROFILE",
+    "physicalTable": "marketing_risk_profile",
+    "primaryKey": ["tenantId", "subjectType", "subjectId"],
+    "keyTemplate": "${tenantId}:${subject.type}:${subject.id}"
+  }
+}
+```
+
+`marketing_risk_profile` 由迁移 `011_risk_profile_fact_provider.sql` 创建。迁移会根据已有 `marketing_user_profile` 初始化数据：
+
+- `status = ACTIVE` 的用户初始化为 `score = 0`、`level = LOW`、`status = CLEAR`、`blacklisted = false`。
+- 其它用户初始化为 `score = 80`、`level = HIGH`、`status = REVIEW`。
+- `country` 会从用户资料复制。
+
+Fact Query 查询风控时推荐配置：
+
+```json
+{
+  "factKeys": ["RISK_PROFILE"],
+  "resourceRef": "default_risk_profile_store",
+  "table": "marketing_risk_profile",
+  "keyTemplate": "${tenantId}:${subject.type}:${subject.id}"
+}
+```
+
 标准事件：
 
 ```json
@@ -149,30 +238,39 @@ subject_id = u_demo_001
 ```json
 {
   "factKeys": ["USER_PROFILE"],
-  "resourceRef": "default_user_profile_store",
-  "namespace": "facts",
-  "table": "marketing_user_profile",
   "subjectPath": "subject.id",
-  "keyTemplate": "${tenantId}:${subject.type}:${subject.id}",
-  "timeoutSeconds": 3,
-  "cacheTtlSeconds": 0,
-  "failureAction": "BLOCK"
+  "providerChain": [
+    {
+      "source": "FACT_SERVICE",
+      "resourceRef": "default_user_profile_store",
+      "namespace": "facts",
+      "keyTemplate": "${tenantId}:${subject.type}:${subject.id}",
+      "valuePath": "$.facts.USER_PROFILE",
+      "timeoutSeconds": 3,
+      "cacheTtlSeconds": 0,
+      "onMiss": "BLOCK"
+    }
+  ]
 }
 ```
+
+UI 上只分三块：
+
+| 分组 | 内容 | 说明 |
+| --- | --- | --- |
+| 配置参数 | `subjectPath` | 当前 fact-query 的公共主体路径，例如用户 ID、订单 ID 或业务主体 ID |
+| 事实 Key | `factKeys` | 本节点要产出的事实字段，例如 `USER_PROFILE` |
+| 数据提供者 | `providerChain` | 从哪里读、怎么读、用什么资源、key 模板、超时、缓存、miss 策略都在这里配置 |
 
 字段说明：
 
 | 字段 | 必填 | 说明 | 示例 |
 | --- | --- | --- | --- |
 | `factKeys` | 是 | 要查询的事实 key，可一次查多个 | `["USER_PROFILE"]` |
-| `resourceRef` | 推荐必填 | 引用资源管理中的 Store 或 Provider | `default_user_profile_store` |
-| `namespace` | 否 | 资源审计和 key policy 的命名空间 | `facts` |
 | `subjectPath` | 是 | 从输入上下文读取主体 ID 的路径 | `subject.id` |
-| `keyTemplate` | 否 | 逻辑 key 模板，用于资源审计和缓存/Store 查询 | `${tenantId}:${subject.type}:${subject.id}` |
-| `table` | 视 Store 而定 | 显式标识 Store 背后的业务表，方便 UI 和审计展示 | `marketing_user_profile` |
-| `timeoutSeconds` | 否 | 查询超时时间 | `3` |
-| `cacheTtlSeconds` | 否 | 查询成功后的缓存时间；`0` 表示不缓存 | `60` |
-| `failureAction` | 是 | 查询失败时动作 | `BLOCK` |
+| `providerChain` | 是 | 数据提供者列表，所有取数参数都放在 step 内 | 见下方 |
+
+不再推荐在顶层配置 `sourcePath`、`cachePath`、`resourceRef`、`endpoint`、`redisRef`、`grpcTarget`、`pluginCode`、`timeoutSeconds`、`cacheTtlSeconds`、`failureAction`。这些字段属于某一个数据提供者，应放到对应 `providerChain[]` step 中。旧 draft 仍兼容，但新 UI 不再单独展示这些顶层字段。
 
 ## 数据提供者设计
 
@@ -240,6 +338,8 @@ subject_id = u_demo_001
 | `grpcTarget` | 否 | `GRPC` 提供者的服务地址或服务发现名 |
 | `pluginCode` | 否 | `PLUGIN` 提供者的插件编码 |
 | `providerCode` | 否 | 已登记的业务 Fact Provider 编码 |
+| `timeoutSeconds` | 否 | 当前 provider step 的查询超时 |
+| `cacheTtlSeconds` | 否 | 当前 provider step 的缓存时间；`0` 表示不缓存 |
 | `onMiss` | 否 | 当前 step 没查到时动作：`NEXT` 继续下一步，`BLOCK` 立即失败 |
 
 ## 数据提供者目标规则
@@ -346,7 +446,7 @@ UI 推荐：
 
 - 旧配置 `["WORKFLOW_CONTEXT", "LOCAL_CACHE", "HTTP_PROVIDER"]` 仍然有效。
 - 新配置使用对象数组，executor 会在运行前解析为 resolved provider steps。
-- 如果 `providerChain` 非空，executor 优先按数据提供者链执行；只有没有数据提供者链时，顶层 `resourceRef` 才作为单 Provider 快捷配置执行。
+- 新 UI 只推荐使用 `providerChain`。旧 draft 中的顶层 Provider 字段仍由后端兼容读取，但不再作为产品化配置入口。
 
 ### subjectPath
 
@@ -474,25 +574,30 @@ subject.id
 }
 ```
 
-## failureAction
+## onMiss 和失败策略
 
-`failureAction` 只处理“查询失败”，不处理“查到用户不存在”。
+`onMiss` 是数据提供者 step 级别的缺失处理策略，只处理“当前 provider 没查到结果或没有解析出需要的 fact”，不处理“查到用户不存在”。
 
 | 值 | 行为 | 适用场景 |
 | --- | --- | --- |
-| `BLOCK` | 查询失败时节点失败，整体流程失败或阻断 | 生产资格、发奖前强依赖事实 |
-| `USE_EMPTY` | 查询失败时输出空 facts，继续后续节点 | 非关键画像、辅助推荐 |
-| `SKIP` | 查询失败时跳过节点 | 低风险可选增强 |
+| `BLOCK` | 当前 provider 未命中时立即阻断 fact-query | 生产资格、发奖前强依赖事实 |
+| `NEXT` | 当前 provider 未命中时继续下一个 provider | 缓存优先、Store 兜底、HTTP 兜底 |
 
 生产奖励链路推荐：
 
 ```json
 {
-  "failureAction": "BLOCK"
+  "providerChain": [
+    {
+      "source": "FACT_SERVICE",
+      "resourceRef": "default_user_profile_store",
+      "onMiss": "BLOCK"
+    }
+  ]
 }
 ```
 
-因为用户等级、资格、存款摘要等事实一旦查询失败，继续发奖风险较高。
+因为用户等级、资格、存款摘要等事实一旦无法解析，继续发奖风险较高。
 
 ## 常见资源类型
 
@@ -558,11 +663,18 @@ subject.id
 ```json
 {
   "factKeys": ["USER_PROFILE"],
-  "resourceRef": "default_user_profile_store",
-  "namespace": "facts",
-  "table": "marketing_user_profile",
   "subjectPath": "subject.id",
-  "failureAction": "BLOCK"
+  "providerChain": [
+    {
+      "source": "FACT_SERVICE",
+      "resourceRef": "default_user_profile_store",
+      "namespace": "facts",
+      "keyTemplate": "${tenantId}:${subject.type}:${subject.id}",
+      "timeoutSeconds": 3,
+      "cacheTtlSeconds": 0,
+      "onMiss": "BLOCK"
+    }
+  ]
 }
 ```
 
@@ -634,13 +746,18 @@ subject.id
 
 因为“用户不存在”是业务事实，不是查询失败。查询成功返回 `exists=false`，后续资格节点负责阻断。
 
-### resourceRef 应该填数据库还是 Store？
+### 数据提供者里的 resourceRef 应该填数据库还是 Store？
 
 填 Store。
 
 ```json
 {
-  "resourceRef": "default_user_profile_store"
+  "providerChain": [
+    {
+      "source": "FACT_SERVICE",
+      "resourceRef": "default_user_profile_store"
+    }
+  ]
 }
 ```
 
@@ -673,4 +790,4 @@ default_marketing_database -> default_user_profile_store
 3. 节点引用 Store，不直接写数据库连接、Redis 地址、HTTP 密钥。
 4. 查询事实和判断资格分开。
 5. 所有资源访问必须经过资源管理权限校验和审计。
-6. 生产发奖链路中，关键事实查询失败应 `BLOCK`。
+6. 生产发奖链路中，关键事实数据提供者的 `onMiss` 应设置为 `BLOCK`。

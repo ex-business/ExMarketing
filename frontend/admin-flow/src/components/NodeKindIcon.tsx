@@ -63,7 +63,7 @@ const iconById: Record<string, LucideIcon> = {
   condition: Split,
   qualify: ShieldCheck,
   switch: ListTree,
-  'fact-query': FileSearch,
+  'fact-query': Search,
   'user-level-check': UserCheck,
   'context-query': FileSearch,
   'local-cache-query': Database,

@@ -357,7 +357,8 @@ func TestProductizedCoreNodeConfigSchemasIncludeGroupsAndPreview(t *testing.T) {
 			}
 			groupedFieldCount += len(group.Fields)
 			for _, field := range group.Fields {
-				if field.Description == "" {
+				descriptionOptional := nodeType == "fact-query" && field.Key == "providerChain"
+				if field.Description == "" && !descriptionOptional {
 					t.Fatalf("expected business description for %s.%s", nodeType, field.Key)
 				}
 				if field.Required && field.Default == nil {

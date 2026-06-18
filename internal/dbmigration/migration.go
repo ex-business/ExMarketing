@@ -223,6 +223,8 @@ func RequiredTables() []string {
 		"marketing_resource_secret",
 		"marketing_resource_audit",
 		"marketing_user_profile",
+		"marketing_kyc_profile",
+		"marketing_risk_profile",
 	}
 }
 

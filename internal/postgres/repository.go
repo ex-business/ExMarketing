@@ -107,6 +107,75 @@ func (r *Repository) GetUserProfile(ctx context.Context, tenantID string, subjec
 	return profile, nil
 }
 
+func (r *Repository) GetKYCProfile(ctx context.Context, tenantID string, subjectType string, subjectID string) (marketing.KYCProfile, error) {
+	var profile marketing.KYCProfile
+	var attributes []byte
+	var verifiedAt sql.NullTime
+	var country, provider sql.NullString
+	err := r.db.QueryRowContext(ctx, `
+		SELECT tenant_id, subject_type, subject_id, kyc_status, kyc_level, country, provider,
+		       verified_at, attributes_json, created_at, updated_at
+		FROM marketing_kyc_profile
+		WHERE tenant_id = $1 AND subject_type = $2 AND subject_id = $3
+	`, tenantID, subjectType, subjectID).Scan(
+		&profile.TenantID, &profile.SubjectType, &profile.SubjectID, &profile.Status, &profile.Level,
+		&country, &provider, &verifiedAt, &attributes, &profile.CreatedAt, &profile.UpdatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return marketing.KYCProfile{}, marketing.ErrNotFound
+		}
+		return marketing.KYCProfile{}, err
+	}
+	profile.Country = country.String
+	profile.Provider = provider.String
+	if verifiedAt.Valid {
+		profile.VerifiedAt = verifiedAt.Time
+	}
+	if len(attributes) > 0 {
+		_ = json.Unmarshal(attributes, &profile.Attributes)
+	}
+	if profile.Attributes == nil {
+		profile.Attributes = map[string]any{}
+	}
+	return profile, nil
+}
+
+func (r *Repository) GetRiskProfile(ctx context.Context, tenantID string, subjectType string, subjectID string) (marketing.RiskProfile, error) {
+	var profile marketing.RiskProfile
+	var attributes []byte
+	var assessedAt sql.NullTime
+	var country, provider sql.NullString
+	err := r.db.QueryRowContext(ctx, `
+		SELECT tenant_id, subject_type, subject_id, risk_score, risk_level, risk_status, blacklisted,
+		       country, provider, assessed_at, attributes_json, created_at, updated_at
+		FROM marketing_risk_profile
+		WHERE tenant_id = $1 AND subject_type = $2 AND subject_id = $3
+	`, tenantID, subjectType, subjectID).Scan(
+		&profile.TenantID, &profile.SubjectType, &profile.SubjectID, &profile.Score, &profile.Level,
+		&profile.Status, &profile.Blacklisted, &country, &provider, &assessedAt, &attributes,
+		&profile.CreatedAt, &profile.UpdatedAt,
+	)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return marketing.RiskProfile{}, marketing.ErrNotFound
+		}
+		return marketing.RiskProfile{}, err
+	}
+	profile.Country = country.String
+	profile.Provider = provider.String
+	if assessedAt.Valid {
+		profile.AssessedAt = assessedAt.Time
+	}
+	if len(attributes) > 0 {
+		_ = json.Unmarshal(attributes, &profile.Attributes)
+	}
+	if profile.Attributes == nil {
+		profile.Attributes = map[string]any{}
+	}
+	return profile, nil
+}
+
 func (r *Repository) CreateActivity(ctx context.Context, activity marketing.Activity) (marketing.Activity, error) {
 	if activity.Visibility == "" {
 		activity.Visibility = marketing.WorkspaceTeam

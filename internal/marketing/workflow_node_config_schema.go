@@ -300,7 +300,7 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 		)),
 		groupedSchema("qualify", "资格校验", "执行资格、风控和名单规则，输出 PASS / BLOCK / RISK。", groups(
 			fieldGroup("rules", "规则集合", "定义需要执行的资格规则和命中策略。", fields(
-				withOptions(withDefault(arrayField("ruleCodes", "规则编码", true, "要执行的资格规则编码，例如 ELIGIBILITY、KYC、RISK_SCORE。", rules(minItems(1), maxItems(50))), []string{"ELIGIBILITY"}), []string{"ELIGIBILITY", "KYC", "RISK_SCORE", "VIP_LEVEL", "DEPOSIT_REQUIRED", "COUNTRY_ALLOWED", "CHANNEL_ALLOWED", "REGISTER_AGE"}),
+				withDescription(arrayField("qualifyRules", "规则链", false, "按顺序配置资格规则；每条规则可独立设置编码、条件和启用状态。", rules(maxItems(50))), "类似事实查询的数据提供者链，执行器会按顺序转换为 QUALIFY / CONDITION 规则。"),
 				enumField("evaluationMode", "执行模式", true, "ALL_PASS", []string{"ALL_PASS", "ANY_PASS", "FIRST_DECISION"}),
 				booleanField("stopOnFirstBlock", "阻断即停止", false, true),
 			)),
@@ -351,39 +351,20 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 			[]string{"PASS", "BLOCK", "SKIP"},
 			[]string{"画布 route label 应与 cases/defaultCase 保持一致，Executor 按 route rule 决定下一节点。"},
 		)),
-		groupedSchema("fact-query", "事实查询", "查询用户、订单、交易或外部事实数据；统一通过数据提供者读取上下文、缓存、Store、HTTP、Redis、gRPC 或插件。", groups(
-			fieldGroup("query", "查询定义", "定义要查询的事实 key 和查询范围。", fields(
-				withDefault(arrayField("factKeys", "事实 Key", true, "需要查询的事实字段，例如 USER_PROFILE、ORDER_SUMMARY。", rules(minItems(1), maxItems(50))), []string{"USER_PROFILE"}),
+		groupedSchema("fact-query", "事实查询", "查询用户、订单、交易或外部事实数据；顶层只保留配置参数、事实 Key 和数据提供者。", groups(
+			fieldGroup("config", "配置参数", "定义本节点的公共查询参数。", fields(
 				withDescription(stringField("subjectPath", "主体 Path", true, "subject.id", rules(minLength(1), maxLength(160))), "从输入中读取 userId、orderId 或业务主体 ID 的路径。"),
 			)),
-			fieldGroup("data-providers", "数据提供者", "按顺序配置事实数据来源。上下文、缓存、Store、HTTP、Redis、gRPC、Plugin 都是数据提供者 step。", fields(
-				enumField("source", "单提供者来源", true, "FACT_SERVICE", []string{"FACT_SERVICE", "HTTP_PROVIDER", "WORKFLOW_CONTEXT", "LOCAL_CACHE", "REDIS", "GRPC", "PLUGIN", "CUSTOM", "LUA_QUERY"}),
-				withDefault(arrayField("providerChain", "数据提供者列表", false, "按顺序尝试的数据提供者步骤；推荐在 UI 中选择 source、resourceRef、path/key 和 onMiss，不手写字符串。兼容旧格式 WORKFLOW_CONTEXT、LOCAL_CACHE、HTTP_PROVIDER。", rules(maxItems(10))), []any{}),
-				withDescription(stringField("sourcePath", "上下文 Path", false, "$.attributes.USER_PROFILE", rules(maxLength(200))), "WORKFLOW_CONTEXT 提供者使用；从 event/input/outputs/vars/facts 中读取事实。"),
-				withDescription(stringField("cachePath", "缓存 Path", false, "$.vars.execution.facts.USER_PROFILE", rules(maxLength(200))), "LOCAL_CACHE 提供者使用；读取本次 workflow 变量缓存。"),
-				withDescription(stringField("resourceRef", "资源 Ref", false, "default_user_profile_store", rules(maxLength(128))), "Store/HTTP/Redis/gRPC/Plugin 提供者使用；Redis/gRPC/Plugin/Custom/Lua 当前必须引用资源管理中的 resourceRef。"),
-				enumField("operation", "资源操作", false, "READ", []string{"READ", "CALL"}),
-				withDescription(stringField("namespace", "资源命名空间", false, "facts", rules(maxLength(128))), "资源审计和 key policy 使用的命名空间。"),
-				withDescription(stringField("providerCode", "Provider Code", false, "", rules(maxLength(128))), "可选：引用营销域已登记的 fact provider；为空时按节点内配置执行。"),
-				withDescription(stringField("keyTemplate", "Key 模板", false, "marketing:fact:${tenantId}:${factCode}:${subject.id}", rules(maxLength(256))), "资源或缓存查询 key 模板，支持 tenantId、activityId、eventId、subject.id、factCode。"),
-				withDescription(stringField("valuePath", "Value Path", false, "", rules(maxLength(160))), "可选：从资源响应中提取事实值，例如 $.stored_value.profile。"),
-				withDescription(stringField("endpoint", "HTTP Endpoint", false, "", rules(maxLength(2048))), "HTTP_PROVIDER 使用的完整 URL；HTTP/FACT_SERVICE 可以使用 resourceRef、providerCode 或 endpoint 任一目标。"),
-				enumField("method", "HTTP Method", false, "POST", []string{"GET", "POST"}),
-				withDescription(stringField("authRef", "Auth Ref", false, "", rules(maxLength(128))), "HTTP 鉴权配置引用，不在节点里保存密钥。"),
-				objectField("mapping", "响应映射", false, nil),
-				withDescription(stringField("redisRef", "Redis Ref", false, "", rules(maxLength(128))), "REDIS 使用的连接引用，例如 marketing-fact-cache。"),
-				withDescription(stringField("grpcTarget", "gRPC Target", false, "", rules(maxLength(256))), "GRPC 使用的服务地址或服务发现名。"),
-				withDescription(stringField("pluginCode", "Plugin Code", false, "", rules(maxLength(128))), "PLUGIN 使用的插件编码。"),
+			fieldGroup("fact-keys", "事实 Key", "定义本节点要产出的事实字段。", fields(
+				withDefault(arrayField("factKeys", "事实 Key", true, "需要查询的事实字段，例如 USER_PROFILE、ORDER_SUMMARY。", rules(minItems(1), maxItems(50))), []string{"USER_PROFILE"}),
 			)),
-			fieldGroup("runtime", "运行策略", "控制查询超时、缓存和失败时的行为。", fields(
-				numberField("timeoutSeconds", "超时秒数", true, 3, rules(minValue(1), maxValue(30))),
-				numberField("cacheTtlSeconds", "缓存秒数", false, 60, rules(minValue(0), maxValue(86400))),
-				enumField("failureAction", "查询失败动作", true, "BLOCK", []string{"BLOCK", "USE_EMPTY", "SKIP"}),
+			fieldGroup("data-providers", "数据提供者", "", fields(
+				withDefault(arrayField("providerChain", "数据提供者", false, "", rules(maxItems(10))), []any{}),
 			)),
 		), preview(
 			[]string{"subject", "fact_keys", "数据提供者"},
 			[]string{"facts"},
-			[]string{"数据提供者统一承载上下文、缓存和外部资源查询；facts 可供 condition、qualify、reward 等下游节点引用。"},
+			[]string{"facts 可供 condition、qualify、reward 等下游节点引用。"},
 		)),
 		groupedSchema("context-query", "上下文查询", "从当前事件、输入映射、上游输出或流程变量读取事实。", groups(
 			fieldGroup("query", "查询定义", "定义事实 key 和上下文路径。", fields(
@@ -1104,7 +1085,10 @@ func defaultWorkflowNodeInputs(nodeType string) []WorkflowNodeInputVar {
 		)
 	case "qualify":
 		return inputVars(
-			inputVar("event_context", "Event Context", "object", true, "事件上下文。"),
+			inputVar("USER_PROFILE", "USER_PROFILE", "object", false, "用户资料对象；未映射时按空对象处理。"),
+			inputVar("KYC_PROFILE", "KYC_PROFILE", "object", false, "KYC / 实名认证对象；未映射时按空对象处理。"),
+			inputVar("RISK_PROFILE", "RISK_PROFILE", "object", false, "风控画像对象；未映射时按空对象处理。"),
+			inputVar("DEPOSIT_SUMMARY", "DEPOSIT_SUMMARY", "object", false, "充值汇总对象；未映射时按空对象处理。"),
 			inputVar("matched_activity", "Matched Activity", "object", false, "活动匹配结果；活动绑定流程可省略，默认使用当前 activity。"),
 		)
 	case "user-level-check":

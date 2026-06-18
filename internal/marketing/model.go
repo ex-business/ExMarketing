@@ -989,6 +989,44 @@ func (profile UserProfile) Exists() bool {
 	return strings.EqualFold(strings.TrimSpace(profile.Status), "ACTIVE")
 }
 
+type KYCProfile struct {
+	TenantID    string         `json:"tenantId"`
+	SubjectType string         `json:"subjectType"`
+	SubjectID   string         `json:"subjectId"`
+	Status      string         `json:"status"`
+	Level       string         `json:"level"`
+	Country     string         `json:"country,omitempty"`
+	Provider    string         `json:"provider,omitempty"`
+	VerifiedAt  time.Time      `json:"verifiedAt,omitempty"`
+	Attributes  map[string]any `json:"attributes,omitempty"`
+	CreatedAt   time.Time      `json:"createdAt"`
+	UpdatedAt   time.Time      `json:"updatedAt"`
+}
+
+func (profile KYCProfile) Verified() bool {
+	return strings.EqualFold(strings.TrimSpace(profile.Status), "VERIFIED")
+}
+
+type RiskProfile struct {
+	TenantID    string         `json:"tenantId"`
+	SubjectType string         `json:"subjectType"`
+	SubjectID   string         `json:"subjectId"`
+	Score       int            `json:"score"`
+	Level       string         `json:"level"`
+	Status      string         `json:"status"`
+	Blacklisted bool           `json:"blacklisted"`
+	Country     string         `json:"country,omitempty"`
+	Provider    string         `json:"provider,omitempty"`
+	AssessedAt  time.Time      `json:"assessedAt,omitempty"`
+	Attributes  map[string]any `json:"attributes,omitempty"`
+	CreatedAt   time.Time      `json:"createdAt"`
+	UpdatedAt   time.Time      `json:"updatedAt"`
+}
+
+func (profile RiskProfile) Clear() bool {
+	return strings.EqualFold(strings.TrimSpace(profile.Status), "CLEAR") && !profile.Blacklisted
+}
+
 type SimulationResult struct {
 	Event               ActivityEvent              `json:"event"`
 	SimulatedAt         time.Time                  `json:"simulatedAt"`

@@ -68,8 +68,8 @@ docker compose down
 | --- | --- | --- |
 | 事件入口 | OpenAPI、Webhook、MQ Topic、定时事件、人工触发、状态监听 | [事件输入节点设计](docs/event-input-node-design.zh-CN.md) |
 | 流程编排 | 工作区、文件夹、模板、画布、节点属性、调试运行、版本管理 | [Workflow Studio 完善计划](docs/workflow-studio-improvement-plan.zh-CN.md) |
-| 节点体系 | 入口、标准化、幂等、事实查询、资格校验、频控、奖励、发奖、通知、审计 | [Workflow 节点分类清单](docs/workflow-node-catalog.zh-CN.md)、[Fact Query 事实查询节点](docs/fact-query-node.zh-CN.md) |
-| 字段绑定 | 固定值、表达式、Lua 脚本、资源引用、上下文取值 | [字段级表达式与输入解析设计](docs/field-bindings-design.zh-CN.md) |
+| 节点体系 | 入口、标准化、幂等、事实查询、资格校验、频控、奖励、发奖、通知、审计 | [Workflow 节点分类清单](docs/workflow-node-catalog.zh-CN.md)、[Fact Query 事实查询节点](docs/fact-query-node.zh-CN.md)、[Qualify 资格校验节点](docs/qualify-node.zh-CN.md) |
+| Lua 配置 | 固定配置与节点级 Lua 脚本同步，支持资源引用、上下文取值和动态默认值 | [字段级表达式与输入解析设计](docs/field-bindings-design.zh-CN.md) |
 | 资源管理 | 公共内存、数据库 KV、公共表、Redis、MQ、Provider Adapter、权限范围 | [公共资源管理设计](docs/resource-management-design.zh-CN.md) |
 | 活动模板 | 签到、存款、奖励、风控、资格链路等活动模板覆盖 | [业务活动模板](docs/business-activity-templates.md) |
 | 生产执行 | PostgreSQL、幂等收件箱、quota、budget、outbox、DLQ、回调签名、审计 | [架构说明](docs/architecture.md) |
@@ -135,8 +135,9 @@ POST /openapi/v1/reward/callback
 | 数据模型 | [数据模型](docs/data-model.md) |
 | 节点契约 | [Core Node Contract](docs/core-node-contract.md) |
 | 节点分类 | [Workflow 节点分类清单](docs/workflow-node-catalog.zh-CN.md) |
+| 资格校验 | [Qualify 资格校验节点](docs/qualify-node.zh-CN.md) |
 | 活动覆盖 | [节点对活动模板覆盖评估](docs/workflow-node-activity-coverage.zh-CN.md) |
-| 字段绑定 / Lua | [字段级表达式与输入解析设计](docs/field-bindings-design.zh-CN.md) |
+| Lua 配置 / 动态值 | [字段级表达式与输入解析设计](docs/field-bindings-design.zh-CN.md) |
 | 资源管理 | [公共资源管理设计](docs/resource-management-design.zh-CN.md) |
 | 工作台 UI | [Workspace Home UI 执行文档](docs/workspace-home-ui-execution-plan.zh-CN.md) |
 | UI 标准 | [TailAdmin UI 标准](docs/tailadmin-ui-standard.zh-CN.md) |

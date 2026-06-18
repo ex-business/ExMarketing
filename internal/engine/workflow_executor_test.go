@@ -924,6 +924,82 @@ func TestCoreWorkflowNodeHandlersProduceStableOutputs(t *testing.T) {
 	}
 }
 
+func TestQualifyNodeEligibilityRuleConfigExecutesConditions(t *testing.T) {
+	ctx := context.WithValue(context.Background(), workflowNodeExecutionContextKey{}, workflowNodeExecutionContext{
+		ResolvedInput: map[string]any{
+			"facts": map[string]any{
+				"USER_PROFILE": map[string]any{
+					"exists":   true,
+					"status":   "ACTIVE",
+					"vipLevel": 2,
+				},
+			},
+		},
+	})
+	runtime := testWorkflowHandlerRuntime(true)
+	runtime.Activity.Rules = nil
+	runtime.Inbox.Event.EventType = "DEPOSIT_SUCCESS"
+	runtime.Inbox.Event.Subject = marketing.EventSubject{Type: "USER", ID: "user_001"}
+	node := marketing.WorkflowNode{
+		ID:   "qualify",
+		Type: "qualify",
+		Config: json.RawMessage(`{
+			"ruleCodes":["ELIGIBILITY","VIP_LEVEL"],
+			"qualifyRules":[
+				{
+					"ruleCode":"ELIGIBILITY",
+					"enabled":true,
+					"logic":"AND",
+					"conditions":[
+						{"field":"eventType","op":"=","value":"DEPOSIT_SUCCESS"},
+						{"field":"subject.id","op":"!=","value":""},
+						{"field":"facts.USER_PROFILE.exists","op":"=","value":true},
+						{"field":"facts.USER_PROFILE.status","op":"=","value":"ACTIVE"}
+					]
+				},
+				{
+					"ruleCode":"VIP_LEVEL",
+					"enabled":true,
+					"logic":"AND",
+					"conditions":[
+						{"field":"facts.USER_PROFILE.vipLevel","op":">=","value":1}
+					]
+				}
+			]
+		}`),
+	}
+
+	result := decisionWorkflowNodeHandler(ctx, node, runtime)
+	if result.Status != marketing.WorkflowNodeSuccess || result.Output["decision"] != "PASS" || result.Output["PASS"] != true {
+		t.Fatalf("expected eligibility rule to pass, got %+v", result)
+	}
+	ruleResult, _ := result.Output["ruleResult"].(map[string]any)
+	stageResults, _ := ruleResult["stageResults"].([]any)
+	qualifyStage, _ := stageResults[1].(map[string]any)
+	ruleResults, _ := qualifyStage["ruleResults"].([]any)
+	firstRule, _ := ruleResults[0].(map[string]any)
+	secondRule, _ := ruleResults[1].(map[string]any)
+	if len(ruleResults) != 2 || firstRule["ruleCode"] != "ELIGIBILITY" || secondRule["ruleCode"] != "VIP_LEVEL" {
+		t.Fatalf("expected qualify rules to keep configured order, got %+v", ruleResults)
+	}
+
+	blockedCtx := context.WithValue(context.Background(), workflowNodeExecutionContextKey{}, workflowNodeExecutionContext{
+		ResolvedInput: map[string]any{
+			"facts": map[string]any{
+				"USER_PROFILE": map[string]any{
+					"exists":   true,
+					"status":   "SUSPENDED",
+					"vipLevel": 2,
+				},
+			},
+		},
+	})
+	blocked := decisionWorkflowNodeHandler(blockedCtx, node, runtime)
+	if blocked.Status != marketing.WorkflowNodeSuccess || blocked.Output["decision"] != "BLOCK" || blocked.Output["BLOCK"] != true {
+		t.Fatalf("expected eligibility rule to block, got %+v", blocked)
+	}
+}
+
 func TestStandaloneFactQueryWorkflowNodeHandlerFailsInsteadOfPlaceholder(t *testing.T) {
 	result := factQueryWorkflowNodeHandler(context.Background(), marketing.WorkflowNode{
 		ID:     "fact-query",
@@ -2853,12 +2929,30 @@ func TestFactQueryWorkflowNodeHandlerReadsRedisKVResourceRef(t *testing.T) {
 type workflowUserProfileTestRepository struct {
 	marketing.Repository
 	profiles map[string]marketing.UserProfile
+	kyc      map[string]marketing.KYCProfile
+	risk     map[string]marketing.RiskProfile
 }
 
 func (r workflowUserProfileTestRepository) GetUserProfile(_ context.Context, tenantID string, subjectType string, subjectID string) (marketing.UserProfile, error) {
 	profile, ok := r.profiles[tenantID+"|"+subjectType+"|"+subjectID]
 	if !ok {
 		return marketing.UserProfile{}, marketing.ErrNotFound
+	}
+	return profile, nil
+}
+
+func (r workflowUserProfileTestRepository) GetKYCProfile(_ context.Context, tenantID string, subjectType string, subjectID string) (marketing.KYCProfile, error) {
+	profile, ok := r.kyc[tenantID+"|"+subjectType+"|"+subjectID]
+	if !ok {
+		return marketing.KYCProfile{}, marketing.ErrNotFound
+	}
+	return profile, nil
+}
+
+func (r workflowUserProfileTestRepository) GetRiskProfile(_ context.Context, tenantID string, subjectType string, subjectID string) (marketing.RiskProfile, error) {
+	profile, ok := r.risk[tenantID+"|"+subjectType+"|"+subjectID]
+	if !ok {
+		return marketing.RiskProfile{}, marketing.ErrNotFound
 	}
 	return profile, nil
 }
@@ -2904,6 +2998,98 @@ func TestFactQueryWorkflowNodeHandlerReadsUserProfileStoreFromDefaultMarketingDa
 	}
 	if len(logs) != 1 || logs[0].ResourceCode != "default_user_profile_store" || logs[0].Operation != marketing.ResourceRead || logs[0].Status != marketing.ResourceAuditSuccess {
 		t.Fatalf("expected default user profile store audit log, got %+v", logs)
+	}
+}
+
+func TestFactQueryWorkflowNodeHandlerReadsKYCProfileStoreFromDefaultMarketingDatabase(t *testing.T) {
+	ctx := context.Background()
+	baseRepo := marketing.NewMemoryRepository()
+	runtime := testWorkflowHandlerRuntime(true)
+	runtime.Inbox.Event.Subject = marketing.EventSubject{Type: "USER", ID: "u_kyc_001"}
+	repo := workflowUserProfileTestRepository{
+		Repository: baseRepo,
+		kyc: map[string]marketing.KYCProfile{
+			runtime.Activity.TenantID + "|USER|u_kyc_001": {
+				TenantID:    runtime.Activity.TenantID,
+				SubjectType: "USER",
+				SubjectID:   "u_kyc_001",
+				Status:      "VERIFIED",
+				Level:       "STANDARD",
+				Country:     "US",
+				Provider:    "INTERNAL_USER_PROFILE",
+			},
+		},
+	}
+	service := NewService(repo)
+	node := marketing.WorkflowNode{
+		ID:     "kyc-query",
+		Type:   "fact-query",
+		Config: json.RawMessage(`{"resourceRef":"default_kyc_profile_store","factKeys":["KYC_PROFILE"],"namespace":"facts","table":"marketing_kyc_profile","subjectPath":"subject.id","keyTemplate":"${tenantId}:${subject.type}:${subject.id}","failureAction":"BLOCK"}`),
+	}
+	result := service.factQueryWorkflowNodeHandler(ctx, node, runtime)
+	if result.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected default kyc profile resource success, got %+v", result)
+	}
+	if result.Output["source"] != "RESOURCE" || result.Output["resourceRef"] != "default_kyc_profile_store" {
+		t.Fatalf("expected kyc resource-backed fact query, got %+v", result.Output)
+	}
+	profile := result.Output["facts"].(map[string]any)["KYC_PROFILE"].(map[string]any)
+	if profile["exists"] != true || profile["verified"] != true || profile["status"] != "VERIFIED" || profile["level"] != "STANDARD" {
+		t.Fatalf("expected kyc profile facts from resource, got %+v", profile)
+	}
+	logs, err := baseRepo.ListResourceAuditLogs(ctx, marketing.ResourceAuditQuery{ResourceID: "res_builtin_default_kyc_profile_store"})
+	if err != nil {
+		t.Fatalf("list resource audit logs: %v", err)
+	}
+	if len(logs) != 1 || logs[0].ResourceCode != "default_kyc_profile_store" || logs[0].Operation != marketing.ResourceRead || logs[0].Status != marketing.ResourceAuditSuccess {
+		t.Fatalf("expected default kyc profile store audit log, got %+v", logs)
+	}
+}
+
+func TestFactQueryWorkflowNodeHandlerReadsRiskProfileStoreFromDefaultMarketingDatabase(t *testing.T) {
+	ctx := context.Background()
+	baseRepo := marketing.NewMemoryRepository()
+	runtime := testWorkflowHandlerRuntime(true)
+	runtime.Inbox.Event.Subject = marketing.EventSubject{Type: "USER", ID: "u_risk_001"}
+	repo := workflowUserProfileTestRepository{
+		Repository: baseRepo,
+		risk: map[string]marketing.RiskProfile{
+			runtime.Activity.TenantID + "|USER|u_risk_001": {
+				TenantID:    runtime.Activity.TenantID,
+				SubjectType: "USER",
+				SubjectID:   "u_risk_001",
+				Score:       12,
+				Level:       "LOW",
+				Status:      "CLEAR",
+				Blacklisted: false,
+				Country:     "US",
+				Provider:    "INTERNAL_USER_PROFILE",
+			},
+		},
+	}
+	service := NewService(repo)
+	node := marketing.WorkflowNode{
+		ID:     "risk-query",
+		Type:   "fact-query",
+		Config: json.RawMessage(`{"resourceRef":"default_risk_profile_store","factKeys":["RISK_PROFILE"],"namespace":"facts","table":"marketing_risk_profile","subjectPath":"subject.id","keyTemplate":"${tenantId}:${subject.type}:${subject.id}","failureAction":"BLOCK"}`),
+	}
+	result := service.factQueryWorkflowNodeHandler(ctx, node, runtime)
+	if result.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected default risk profile resource success, got %+v", result)
+	}
+	if result.Output["source"] != "RESOURCE" || result.Output["resourceRef"] != "default_risk_profile_store" {
+		t.Fatalf("expected risk resource-backed fact query, got %+v", result.Output)
+	}
+	profile := result.Output["facts"].(map[string]any)["RISK_PROFILE"].(map[string]any)
+	if profile["exists"] != true || profile["clear"] != true || profile["score"] != 12 || profile["level"] != "LOW" || profile["blacklisted"] != false {
+		t.Fatalf("expected risk profile facts from resource, got %+v", profile)
+	}
+	logs, err := baseRepo.ListResourceAuditLogs(ctx, marketing.ResourceAuditQuery{ResourceID: "res_builtin_default_risk_profile_store"})
+	if err != nil {
+		t.Fatalf("list resource audit logs: %v", err)
+	}
+	if len(logs) != 1 || logs[0].ResourceCode != "default_risk_profile_store" || logs[0].Operation != marketing.ResourceRead || logs[0].Status != marketing.ResourceAuditSuccess {
+		t.Fatalf("expected default risk profile store audit log, got %+v", logs)
 	}
 }
 

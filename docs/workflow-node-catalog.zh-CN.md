@@ -54,13 +54,13 @@ event-in -> inbox -> normalize -> match -> fact-query -> activity-state -> quota
 | `activity-state` | 活动状态 | 读取或更新用户活动状态、任务进度、签到状态和插件状态 | `activity_state`, `state_version` |
 | `state-store` | 通用存储 | 通过资源管理读写工作流状态、公共表、Redis 语义资源或 HTTP Provider | `stored_value`, `storage_entry`, `storage_version` |
 | `quota-check` | 次数频控校验 | 对用户、设备、IP、活动或租户维度做次数和频率校验 | `quota_check`, `limit_hold` |
-| `qualify` | 资格校验 | 执行资格、风控、名单、规则判断 | `stage_result`, `PASS`, `BLOCK`, `RISK`, `decision` |
+| `qualify` | 资格校验 | 执行资格、风控、名单、规则判断；详见 [Qualify 资格校验节点](qualify-node.zh-CN.md) | `stage_result`, `PASS`, `BLOCK`, `RISK`, `decision` |
 | `candidate-reward` | 候选奖励 | 生成待发奖励候选，不直接产生资金副作用 | `candidate_rewards`, `reward_items` |
 | `reward` | 奖励计算 | 计算奖励明细 | `reward_items` |
 | `limit` | 次数限制 | 用户、活动、周期、事件维度次数限制 | `limit_hold` |
 | `quota` | 预算库存扣减 | 预算、库存、用户额度预占和扣减 | `quota_hold` |
 | `budget-reserve` | 预算库存锁定 | 在发奖前锁定活动预算、奖品库存或用户额度，避免并发超发 | `budget_reservation`, `quota_hold` |
-| `participation` | 参与记录 | 写入参与流水，关联事件、活动、奖励、quota 和阶段结果 | `participation_id` |
+| `participation` | 参与记录 | 写入参与记录，关联事件、活动、奖励、quota 和阶段结果 | `participation_id` |
 | `grant-order` | 发奖订单 | 生成发奖订单和状态机记录 | `grant_order`, `grant_orders` |
 | `outbox` | 消息发件箱 | 生成可重试投递消息，由 outbox worker 发送 | `HTTP`, `MQ`, `Webhook`, `Failed` |
 

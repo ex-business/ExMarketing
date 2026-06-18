@@ -1153,13 +1153,32 @@ func resolveWorkflowNodeInputs(node marketing.WorkflowNode, runtime workflowRunt
 		}
 		extracted, err := extractWorkflowJSONPath(value, ref.Path)
 		if err != nil {
+			if workflowQualifyOptionalInputObject(node, inputKey) {
+				extracted = map[string]any{}
+				resolved[inputKey] = extracted
+				input[inputKey] = extracted
+				continue
+			}
 			return input, fmt.Errorf("input %q path %q cannot be resolved: %w", inputKey, ref.Path, err)
 		}
 		resolved[inputKey] = extracted
+		input[inputKey] = extracted
 	}
 	input["inputMapping"] = mapping
 	input["resolvedInputs"] = resolved
 	return input, nil
+}
+
+func workflowQualifyOptionalInputObject(node marketing.WorkflowNode, inputKey string) bool {
+	if !strings.EqualFold(nodeHandlerKey(node), "qualify") {
+		return false
+	}
+	switch strings.ToUpper(strings.TrimSpace(inputKey)) {
+	case "USER_PROFILE", "KYC_PROFILE", "RISK_PROFILE", "DEPOSIT_SUMMARY":
+		return true
+	default:
+		return false
+	}
 }
 
 func workflowInputMapping(node marketing.WorkflowNode) map[string]marketing.WorkflowNodeInputMappingRef {
@@ -1246,17 +1265,32 @@ func workflowUpstreamOutput(ctx context.Context, outputKey string) (any, bool) {
 }
 
 func workflowFactsFromContext(ctx context.Context) map[string]any {
+	facts := map[string]any{}
 	if value, ok := workflowResolvedInput(ctx, "facts"); ok {
-		if facts, ok := workflowJSONValue(value).(map[string]any); ok {
-			return facts
+		if mapped, ok := workflowJSONValue(value).(map[string]any); ok {
+			for key, item := range mapped {
+				facts[key] = item
+			}
 		}
 	}
-	if value, ok := workflowUpstreamOutput(ctx, "facts"); ok {
-		if facts, ok := workflowJSONValue(value).(map[string]any); ok {
-			return facts
+	if len(facts) == 0 {
+		if value, ok := workflowUpstreamOutput(ctx, "facts"); ok {
+			if mapped, ok := workflowJSONValue(value).(map[string]any); ok {
+				for key, item := range mapped {
+					facts[key] = item
+				}
+			}
 		}
 	}
-	return nil
+	for _, key := range []string{"USER_PROFILE", "KYC_PROFILE", "RISK_PROFILE", "DEPOSIT_SUMMARY"} {
+		if value, ok := workflowResolvedInput(ctx, key); ok {
+			facts[key] = workflowJSONValue(value)
+		}
+	}
+	if len(facts) == 0 {
+		return nil
+	}
+	return facts
 }
 
 func workflowConditionInput(ctx context.Context, runtime workflowRuntime) map[string]any {
@@ -2901,8 +2935,8 @@ func (s *Service) factQueryResourceRefWorkflowNodeHandler(ctx context.Context, n
 			"audit":       workflowHandlerAudit(node, runtime),
 		})
 	}
-	if workflowResourceHasUserProfileDataset(resource, config, refs) {
-		return s.factQueryUserProfileResourceWorkflowNodeHandler(ctx, node, runtime, config, resource, refs)
+	if workflowResourceHasBuiltinProfileDataset(resource, config, refs) {
+		return s.factQueryBuiltinProfileResourceWorkflowNodeHandler(ctx, node, runtime, config, resource, refs)
 	}
 	facts := map[string]any{}
 	responses := make([]any, 0, len(refs))
@@ -2952,12 +2986,13 @@ func (s *Service) factQueryResourceRefWorkflowNodeHandler(ctx context.Context, n
 	})
 }
 
-func workflowResourceHasUserProfileDataset(resource marketing.Resource, config map[string]any, refs []string) bool {
-	if len(refs) != 1 || !strings.EqualFold(refs[0], "USER_PROFILE") {
+func workflowResourceHasBuiltinProfileDataset(resource marketing.Resource, config map[string]any, refs []string) bool {
+	if len(refs) != 1 {
 		return false
 	}
+	factCode := strings.ToUpper(strings.TrimSpace(refs[0]))
 	resourceConfig := resource.ConfigMap()
-	dataset := workflowResourceDatasetConfig(resourceConfig, "USER_PROFILE")
+	dataset := workflowResourceDatasetConfig(resourceConfig, factCode)
 	table := firstNonEmpty(
 		workflowConfigString(config, "physicalTable"),
 		workflowConfigString(config, "table"),
@@ -2969,8 +3004,19 @@ func workflowResourceHasUserProfileDataset(resource marketing.Resource, config m
 		workflowConfigString(dataset, "table"),
 	)
 	adapter := firstNonEmpty(workflowConfigString(config, "adapter"), workflowConfigString(resourceConfig, "adapter"), workflowConfigString(dataset, "adapter"))
-	return resource.Code == defaultUserProfileStore ||
-		(strings.EqualFold(adapter, "USER_PROFILE") && strings.EqualFold(table, "marketing_user_profile"))
+	switch factCode {
+	case "USER_PROFILE":
+		return resource.Code == defaultUserProfileStore ||
+			(strings.EqualFold(adapter, "USER_PROFILE") && strings.EqualFold(table, "marketing_user_profile"))
+	case "KYC_PROFILE":
+		return resource.Code == defaultKYCProfileStore ||
+			(strings.EqualFold(adapter, "KYC_PROFILE") && strings.EqualFold(table, "marketing_kyc_profile"))
+	case "RISK_PROFILE":
+		return resource.Code == defaultRiskProfileStore ||
+			(strings.EqualFold(adapter, "RISK_PROFILE") && strings.EqualFold(table, "marketing_risk_profile"))
+	default:
+		return false
+	}
 }
 
 func workflowResourceDatasetConfig(resourceConfig map[string]any, factCode string) map[string]any {
@@ -2989,14 +3035,15 @@ func workflowResourceDatasetConfig(resourceConfig map[string]any, factCode strin
 	return mapped
 }
 
-func (s *Service) factQueryUserProfileResourceWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime, config map[string]any, resource marketing.Resource, refs []string) workflowNodeResult {
+func (s *Service) factQueryBuiltinProfileResourceWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime, config map[string]any, resource marketing.Resource, refs []string) workflowNodeResult {
 	facts := map[string]any{}
 	responses := make([]any, 0, len(refs))
 	namespace := firstWorkflowString(workflowConfigString(config, "namespace"), "facts")
 	subject := workflowFactQuerySubject(ctx, config, runtime)
 	for _, factCode := range refs {
-		if !strings.EqualFold(factCode, "USER_PROFILE") {
-			return workflowFactQueryFailure(node, runtime, config, factCode, "FACT_QUERY_RESOURCE_FACT_UNSUPPORTED", "default user profile resource only supports USER_PROFILE", facts, responses)
+		factCode = strings.ToUpper(strings.TrimSpace(factCode))
+		if factCode != "USER_PROFILE" && factCode != "KYC_PROFILE" && factCode != "RISK_PROFILE" {
+			return workflowFactQueryFailure(node, runtime, config, factCode, "FACT_QUERY_RESOURCE_FACT_UNSUPPORTED", "default profile resource only supports USER_PROFILE, KYC_PROFILE or RISK_PROFILE", facts, responses)
 		}
 		resourceConfig := resource.ConfigMap()
 		dataset := workflowResourceDatasetConfig(resourceConfig, factCode)
@@ -3027,7 +3074,7 @@ func (s *Service) factQueryUserProfileResourceWorkflowNodeHandler(ctx context.Co
 		if code := resourceAdapterConfigError(resource); code != "" {
 			return workflowFactQueryFailure(node, runtime, config, factCode, code, code+": resource adapter config is invalid", facts, responses)
 		}
-		value, err := s.GetUserProfileFact(ctx, runtime.Activity.TenantID, subject)
+		value, err := s.workflowProfileFact(ctx, factCode, runtime.Activity.TenantID, subject)
 		response := map[string]any{
 			"success":     err == nil,
 			"factCode":    factCode,
@@ -3038,7 +3085,7 @@ func (s *Service) factQueryUserProfileResourceWorkflowNodeHandler(ctx context.Co
 		if err != nil {
 			response["error"] = err.Error()
 			responses = append(responses, response)
-			result := workflowFactQueryFailure(node, runtime, config, factCode, "FACT_QUERY_USER_PROFILE_FAILED", err.Error(), facts, responses)
+			result := workflowFactQueryFailure(node, runtime, config, factCode, "FACT_QUERY_"+factCode+"_FAILED", err.Error(), facts, responses)
 			_ = s.workflowRecordResourceAudit(ctx, resource, runtime, node, marketing.ResourceRead, result)
 			return result
 		}
@@ -3060,6 +3107,17 @@ func (s *Service) factQueryUserProfileResourceWorkflowNodeHandler(ctx context.Co
 	})
 	_ = s.workflowRecordResourceAudit(ctx, resource, runtime, node, marketing.ResourceRead, result)
 	return result
+}
+
+func (s *Service) workflowProfileFact(ctx context.Context, factCode string, tenantID string, subject marketing.EventSubject) (map[string]any, error) {
+	switch strings.ToUpper(strings.TrimSpace(factCode)) {
+	case "KYC_PROFILE":
+		return s.GetKYCProfileFact(ctx, tenantID, subject)
+	case "RISK_PROFILE":
+		return s.GetRiskProfileFact(ctx, tenantID, subject)
+	default:
+		return s.GetUserProfileFact(ctx, tenantID, subject)
+	}
 }
 
 func workflowFactQueryResourceOperation(resource marketing.Resource, config map[string]any) marketing.ResourceOperation {
@@ -5716,14 +5774,32 @@ func decisionWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNod
 		return failed
 	}
 	ruleResult := runtime.RuleResult
-	if strings.EqualFold(node.Type, "qualify") && len(runtime.Activity.Rules) > 0 {
-		ruleResult = rule.Execute(rule.Context{
-			Event: runtime.Inbox.Event,
-			Facts: workflowFactsFromContext(ctx),
-		}, runtime.Activity.Rules, nil)
-		ruleResult.ActivityID = runtime.Activity.ID
-		ruleResult.ActivityCode = runtime.Activity.Code
-		ruleResult.ActivityVersion = runtime.Activity.Version
+	if strings.EqualFold(node.Type, "qualify") {
+		rules := runtime.Activity.Rules
+		if nodeRules := workflowQualifyNodeRules(config); len(nodeRules) > 0 {
+			nodeRuleCodes := map[string]struct{}{}
+			for _, item := range nodeRules {
+				nodeRuleCodes[strings.TrimSpace(item.Code)] = struct{}{}
+			}
+			rules = make([]marketing.Rule, 0, len(runtime.Activity.Rules)+len(nodeRules))
+			for _, item := range runtime.Activity.Rules {
+				if _, overridden := nodeRuleCodes[strings.TrimSpace(item.Code)]; overridden {
+					continue
+				}
+				rules = append(rules, item)
+			}
+			rules = append(rules, nodeRules...)
+		}
+		if len(rules) > 0 {
+			facts := workflowFactsWithQualifyInputObjects(ctx, config)
+			ruleResult = rule.Execute(rule.Context{
+				Event: runtime.Inbox.Event,
+				Facts: facts,
+			}, rules, nil)
+			ruleResult.ActivityID = runtime.Activity.ID
+			ruleResult.ActivityCode = runtime.Activity.Code
+			ruleResult.ActivityVersion = runtime.Activity.Version
+		}
 	}
 	qualified := runtime.Qualified
 	if ruleResult.Decision != "" {
@@ -5816,6 +5892,144 @@ func decisionWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNod
 		"route":        output["route"],
 		"audit":        workflowHandlerAudit(node, runtime),
 	})
+}
+
+func workflowQualifyNodeRules(config map[string]any) []marketing.Rule {
+	rawRules, _ := workflowJSONValue(config["qualifyRules"]).([]any)
+	rules := make([]marketing.Rule, 0, len(rawRules))
+	for index, raw := range rawRules {
+		item, ok := workflowJSONValue(raw).(map[string]any)
+		if !ok || !workflowConfigBool(item, "enabled", true) {
+			continue
+		}
+		if rule := workflowQualifyConditionRuleFromConfig(item, index); rule.Code != "" {
+			rules = append(rules, rule)
+		}
+	}
+	if len(rules) > 0 {
+		return rules
+	}
+
+	eligibilityRule := workflowConfigMap(config, "eligibilityRule")
+	if len(eligibilityRule) == 0 || !workflowConfigBool(eligibilityRule, "enabled", true) {
+		return nil
+	}
+	eligibilityRule["ruleCode"] = "ELIGIBILITY"
+	rule := workflowQualifyConditionRuleFromConfig(eligibilityRule, 0)
+	if rule.Code == "" {
+		return nil
+	}
+	return []marketing.Rule{rule}
+}
+
+func workflowFactsWithQualifyInputObjects(ctx context.Context, config map[string]any) map[string]any {
+	base := workflowFactsFromContext(ctx)
+	facts := make(map[string]any)
+	for key, value := range base {
+		facts[key] = value
+	}
+	for _, inputObject := range workflowQualifyInputObjects(config) {
+		if inputObject == "" || strings.EqualFold(inputObject, "EVENT_CONTEXT") {
+			continue
+		}
+		if _, ok := facts[inputObject]; !ok {
+			facts[inputObject] = map[string]any{}
+		}
+	}
+	if len(facts) == 0 {
+		return nil
+	}
+	return facts
+}
+
+func workflowQualifyInputObjects(config map[string]any) []string {
+	rawRules, _ := workflowJSONValue(config["qualifyRules"]).([]any)
+	seen := map[string]struct{}{}
+	var out []string
+	for _, raw := range rawRules {
+		item, ok := workflowJSONValue(raw).(map[string]any)
+		if !ok || !workflowConfigBool(item, "enabled", true) {
+			continue
+		}
+		inputObject := strings.ToUpper(strings.TrimSpace(workflowConfigString(item, "inputObject")))
+		if inputObject == "" {
+			inputObject = workflowDefaultQualifyInputObject(workflowConfigString(item, "ruleCode"))
+		}
+		if inputObject == "" {
+			continue
+		}
+		if _, exists := seen[inputObject]; exists {
+			continue
+		}
+		seen[inputObject] = struct{}{}
+		out = append(out, inputObject)
+	}
+	return out
+}
+
+func workflowDefaultQualifyInputObject(ruleCode string) string {
+	switch strings.ToUpper(strings.TrimSpace(ruleCode)) {
+	case "KYC":
+		return "KYC_PROFILE"
+	case "RISK_SCORE":
+		return "RISK_PROFILE"
+	case "VIP_LEVEL", "COUNTRY_ALLOWED", "REGISTER_AGE":
+		return "USER_PROFILE"
+	case "DEPOSIT_REQUIRED":
+		return "DEPOSIT_SUMMARY"
+	case "ELIGIBILITY", "CHANNEL_ALLOWED":
+		return "EVENT_CONTEXT"
+	default:
+		return ""
+	}
+}
+
+func workflowQualifyConditionRuleFromConfig(config map[string]any, sort int) marketing.Rule {
+	code := strings.ToUpper(strings.TrimSpace(firstWorkflowString(workflowConfigString(config, "ruleCode"), "ELIGIBILITY")))
+	if code == "" {
+		return marketing.Rule{}
+	}
+	logic := strings.ToUpper(firstWorkflowString(workflowConfigString(config, "logic"), "AND"))
+	if logic != "AND" && logic != "OR" {
+		logic = "AND"
+	}
+	rawConditions, _ := workflowJSONValue(config["conditions"]).([]any)
+	conditions := make([]marketing.Condition, 0, len(rawConditions))
+	for _, raw := range rawConditions {
+		item, ok := workflowJSONValue(raw).(map[string]any)
+		if !ok {
+			continue
+		}
+		field := strings.TrimSpace(workflowConfigString(item, "field"))
+		op := strings.ToUpper(firstWorkflowString(workflowConfigString(item, "op"), "="))
+		if field == "" || op == "" {
+			continue
+		}
+		conditions = append(conditions, marketing.Condition{
+			Field: field,
+			Op:    op,
+			Value: workflowJSONValue(item["value"]),
+		})
+	}
+	if len(conditions) == 0 {
+		return marketing.Rule{}
+	}
+	configPayload, err := json.Marshal(marketing.ConditionRuleConfig{
+		Logic:      logic,
+		Conditions: conditions,
+	})
+	if err != nil {
+		return marketing.Rule{}
+	}
+	return marketing.Rule{
+		Code:    code,
+		Phase:   marketing.RulePhaseQualify,
+		Type:    marketing.RuleTypeCondition,
+		Config:  configPayload,
+		Sort:    sort,
+		Enabled: true,
+		Version: 1,
+	}
 }
 
 func userLevelCheckWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {

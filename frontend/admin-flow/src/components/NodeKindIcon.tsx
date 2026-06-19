@@ -73,6 +73,8 @@ const iconById: Record<string, LucideIcon> = {
   'plugin-query': Network,
   'custom-query': Code2,
   'lua-query': Code2,
+  'facts-compose': Combine,
+  'facts-normalize': Shuffle,
   code: Code2,
   combine: Combine,
   split: Split,

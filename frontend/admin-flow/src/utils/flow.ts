@@ -12,6 +12,8 @@ export const layoutPositionByDefId: Record<string, { x: number; y: number }> = {
   normalize: { x: 410, y: 540 },
   match: { x: 730, y: 300 },
   'fact-query': { x: 730, y: 300 },
+  'facts-compose': { x: 780, y: 420 },
+  'facts-normalize': { x: 1040, y: 420 },
   code: { x: 720, y: 690 },
   condition: { x: 720, y: 80 },
   qualify: { x: 780, y: 520 },

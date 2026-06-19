@@ -835,6 +835,83 @@ func TestWorkflowExecutorMarksBusinessRejectedRuntime(t *testing.T) {
 	}
 }
 
+func TestWorkflowExecutorWaitsForAllFactBranchesBeforeFactsCompose(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	now := time.Date(2026, 6, 19, 12, 0, 0, 0, time.UTC)
+	service.now = func() time.Time { return now }
+	execution, err := service.executeWorkflowDefinition(ctx, workflowRuntime{
+		Inbox: marketing.EventInbox{
+			ID:             "inbox_facts_join",
+			IdempotencyKey: "idem_facts_join",
+			Event: marketing.ActivityEvent{
+				EventID:      "evt_facts_join",
+				EventType:    "CHECKIN_SUCCESS",
+				SourceSystem: "app",
+				TenantID:     "site_001",
+				Subject:      marketing.EventSubject{Type: "USER", ID: "u_facts_join"},
+				OccurredAt:   now,
+				Attributes: map[string]any{
+					"USER_PROFILE": map[string]any{"vipLevel": "GOLD"},
+					"KYC_PROFILE":  map[string]any{"status": "VERIFIED"},
+				},
+			},
+		},
+		Activity: marketing.Activity{ID: "act_facts_join", TenantID: "site_001"},
+	}, workflowExecutionOptions{
+		WorkflowVersionID: "wfver_facts_join",
+		WorkflowVersion:   1,
+		Definition: json.RawMessage(`{
+			"nodes": [
+				{"id":"event-in","type":"event-in","kind":"entry","title":"事件入口","config":{"eventTypes":["CHECKIN_SUCCESS"],"sourceSystems":["app"]}},
+				{"id":"fact-user","type":"context-query","title":"用户事实","config":{"factKeys":["USER_PROFILE"],"sourcePath":"$.attributes.USER_PROFILE","failureAction":"BLOCK"}},
+				{"id":"fact-kyc","type":"context-query","title":"KYC事实","config":{"factKeys":["KYC_PROFILE"],"sourcePath":"$.attributes.KYC_PROFILE","failureAction":"BLOCK"}},
+				{"id":"facts-compose","type":"facts-compose","title":"事实合并","config":{"mergeUpstreamFacts":true,"conflictPolicy":"BLOCK"}}
+			],
+			"edges": [
+				{"id":"event-user","source":"event-in","sourceHandle":"USER_PROFILE","target":"fact-user"},
+				{"id":"event-kyc","source":"event-in","sourceHandle":"KYC_PROFILE","target":"fact-kyc"},
+				{"id":"user-compose","source":"fact-user","target":"facts-compose"},
+				{"id":"kyc-compose","source":"fact-kyc","target":"facts-compose"}
+			]
+		}`),
+		Mode:            "PRODUCTION",
+		IdempotencyKey:  "idem_facts_join",
+		SkipIdempotency: true,
+	})
+	if err != nil {
+		t.Fatalf("execute workflow: %v", err)
+	}
+	if execution.Status != marketing.WorkflowExecutionSuccess {
+		t.Fatalf("expected success, got %+v", execution)
+	}
+	trace, err := service.ExportWorkflowExecutionTrace(ctx, execution.ID)
+	if err != nil {
+		t.Fatalf("export trace: %v", err)
+	}
+	order := map[string]int{}
+	var composed map[string]any
+	for index, item := range trace.NodeExecutions {
+		order[item.NodeID] = index
+		if item.NodeID == "facts-compose" {
+			if err := json.Unmarshal(item.Output, &composed); err != nil {
+				t.Fatalf("unmarshal facts-compose output: %v", err)
+			}
+		}
+	}
+	if order["facts-compose"] <= order["fact-user"] || order["facts-compose"] <= order["fact-kyc"] {
+		t.Fatalf("facts-compose executed before all fact branches: %+v", order)
+	}
+	facts := composed["facts"].(map[string]any)
+	if _, ok := facts["USER_PROFILE"]; !ok {
+		t.Fatalf("expected USER_PROFILE in composed facts, got %+v", facts)
+	}
+	if _, ok := facts["KYC_PROFILE"]; !ok {
+		t.Fatalf("expected KYC_PROFILE in composed facts, got %+v", facts)
+	}
+}
+
 type cancelAfterNodeUpdateRepository struct {
 	marketing.Repository
 	executionID string
@@ -874,6 +951,11 @@ func TestCoreWorkflowNodeHandlersProduceStableOutputs(t *testing.T) {
 	runtime := testWorkflowHandlerRuntime(true)
 	service := NewService(marketing.NewMemoryRepository())
 	decimalCtx := context.WithValue(ctx, workflowNodeExecutionContextKey{}, workflowNodeExecutionContext{ResolvedInput: map[string]any{"amount_expr": "12.345"}})
+	factsComposeCtx := context.WithValue(ctx, workflowNodeExecutionContextKey{}, workflowNodeExecutionContext{
+		NodeOutputs: map[string]map[string]any{
+			"fact-user": {"facts": map[string]any{"USER_PROFILE": map[string]any{"vipLevel": "GOLD"}}},
+		},
+	})
 	cases := []struct {
 		name      string
 		node      marketing.WorkflowNode
@@ -896,6 +978,7 @@ func TestCoreWorkflowNodeHandlersProduceStableOutputs(t *testing.T) {
 		{name: "grant order", node: marketing.WorkflowNode{ID: "node_grant", Type: "grant-order"}, handler: grantOrderWorkflowNodeHandler, outputKey: "grant_order"},
 		{name: "outbox", node: marketing.WorkflowNode{ID: "node_outbox", Type: "outbox"}, handler: outboxWorkflowNodeHandler, outputKey: "HTTP"},
 		{name: "fact query", node: marketing.WorkflowNode{ID: "node_fact", Type: "fact-query", Config: json.RawMessage(`{"factKeys":["profile.level"],"failureAction":"USE_EMPTY"}`)}, handler: service.factQueryWorkflowNodeHandler, outputKey: "facts"},
+		{name: "facts compose", node: marketing.WorkflowNode{ID: "node_facts_compose", Type: "facts-compose"}, handler: factsComposeWorkflowNodeHandler, outputKey: "facts", ctx: factsComposeCtx},
 		{name: "switch", node: marketing.WorkflowNode{ID: "node_switch", Type: "switch"}, handler: decisionWorkflowNodeHandler, outputKey: "route"},
 		{name: "code", node: marketing.WorkflowNode{ID: "node_code", Type: "code", Config: json.RawMessage(`{"language":"EXPRESSION","source":"$.subject.id","outputPath":"subject_id"}`)}, handler: codeWorkflowNodeHandler, outputKey: "code_result"},
 		{name: "combine", node: marketing.WorkflowNode{ID: "node_combine", Type: "combine", Config: json.RawMessage(`{"language":"LUA","source":"emit({combined = {eventId = ctx.event.eventId}})"}`)}, handler: transformScriptWorkflowNodeHandler("combine", "combined_result"), outputKey: "combined_result"},
@@ -1273,6 +1356,117 @@ func TestQualifyWorkflowNodeHandlerEvaluatesActivityRules(t *testing.T) {
 	ruleResult, ok := result.Output["ruleResult"].(map[string]any)
 	if !ok || ruleResult["failedStage"] != string(marketing.RuleStageQualify) {
 		t.Fatalf("expected structured rule result, got %+v", result.Output["ruleResult"])
+	}
+}
+
+func TestFactsComposeWorkflowNodeHandlerMergesMultipleFactOutputs(t *testing.T) {
+	ctx := context.WithValue(context.Background(), workflowNodeExecutionContextKey{}, workflowNodeExecutionContext{
+		NodeOutputs: map[string]map[string]any{
+			"fact-kyc": {
+				"facts": map[string]any{
+					"KYC_PROFILE": map[string]any{"status": "VERIFIED"},
+				},
+			},
+			"fact-user": {
+				"facts": map[string]any{
+					"USER_PROFILE": map[string]any{"vipLevel": "GOLD"},
+				},
+			},
+		},
+	})
+	node := marketing.WorkflowNode{
+		ID:   "facts-compose",
+		Type: "facts-compose",
+		Config: json.RawMessage(`{
+			"mergeUpstreamFacts": true,
+			"conflictPolicy": "BLOCK"
+		}`),
+	}
+
+	result := factsComposeWorkflowNodeHandler(ctx, node, testWorkflowHandlerRuntime(true))
+	if result.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected success, got %+v", result)
+	}
+	facts, ok := result.Output["facts"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected facts map, got %+v", result.Output["facts"])
+	}
+	if _, ok := facts["USER_PROFILE"]; !ok {
+		t.Fatalf("expected USER_PROFILE in composed facts, got %+v", facts)
+	}
+	if _, ok := facts["KYC_PROFILE"]; !ok {
+		t.Fatalf("expected KYC_PROFILE in composed facts, got %+v", facts)
+	}
+	if result.Output["factCount"] != 2 {
+		t.Fatalf("expected two composed facts, got %+v", result.Output)
+	}
+}
+
+func TestFactsComposeWorkflowNodeHandlerSupportsExplicitMappings(t *testing.T) {
+	ctx := context.WithValue(context.Background(), workflowNodeExecutionContextKey{}, workflowNodeExecutionContext{
+		NodeOutputs: map[string]map[string]any{
+			"risk-query": {
+				"provider_response": map[string]any{
+					"profile": map[string]any{"score": 88, "tier": "MEDIUM"},
+				},
+			},
+		},
+	})
+	node := marketing.WorkflowNode{
+		ID:   "facts-compose",
+		Type: "facts-compose",
+		Config: json.RawMessage(`{
+			"mergeUpstreamFacts": false,
+			"factMappings": [
+				{"factCode":"RISK_PROFILE","sourceNodeId":"risk-query","outputKey":"provider_response","path":"$.profile","required":true}
+			]
+		}`),
+	}
+
+	result := factsComposeWorkflowNodeHandler(ctx, node, testWorkflowHandlerRuntime(true))
+	if result.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected success, got %+v", result)
+	}
+	facts := result.Output["facts"].(map[string]any)
+	risk := facts["RISK_PROFILE"].(map[string]any)
+	if risk["score"] != float64(88) && risk["score"] != 88 {
+		t.Fatalf("expected mapped risk profile, got %+v", facts)
+	}
+}
+
+func TestFactsNormalizeWorkflowNodeHandlerBuildsStandardContext(t *testing.T) {
+	ctx := context.WithValue(context.Background(), workflowNodeExecutionContextKey{}, workflowNodeExecutionContext{
+		ResolvedInput: map[string]any{
+			"facts": map[string]any{
+				"USER_PROFILE":   map[string]any{"exists": true, "vipLevel": 3},
+				"KYC_PROFILE":    map[string]any{"status": "VERIFIED"},
+				"RISK_PROFILE":   map[string]any{"riskLevel": "LOW", "score": 12},
+				"CHECKIN_STREAK": map[string]any{"continuousDays": 7},
+				"UNRELATED_FACT": map[string]any{"kept": true},
+			},
+		},
+	})
+	node := marketing.WorkflowNode{ID: "facts-normalize", Type: "facts-normalize"}
+	result := factsNormalizeWorkflowNodeHandler(ctx, node, testWorkflowHandlerRuntime(true))
+	if result.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected success, got %+v", result)
+	}
+	standard := result.Output["standard_context"].(map[string]any)
+	user := standard["user"].(map[string]any)
+	if user["level"] != float64(3) || user["exists"] != true {
+		t.Fatalf("expected standardized user, got %+v", user)
+	}
+	kyc := standard["kyc"].(map[string]any)
+	if kyc["status"] != "VERIFIED" {
+		t.Fatalf("expected standardized kyc, got %+v", kyc)
+	}
+	risk := standard["risk"].(map[string]any)
+	if risk["level"] != "LOW" || risk["score"] != float64(12) {
+		t.Fatalf("expected standardized risk, got %+v", risk)
+	}
+	checkin := standard["checkin"].(map[string]any)
+	if checkin["streak"] != float64(7) {
+		t.Fatalf("expected standardized checkin streak, got %+v", checkin)
 	}
 }
 
@@ -2046,6 +2240,42 @@ func TestActivityStateWorkflowNodeHandlerPersistsInternalState(t *testing.T) {
 	conflict := service.activityStateWorkflowNodeHandler(casCtx, casNode, runtime)
 	if conflict.Status != marketing.WorkflowNodeFailed || conflict.Output["errorCode"] != "ACTIVITY_STATE_VERSION_CONFLICT" {
 		t.Fatalf("expected cas conflict, got %+v", conflict)
+	}
+}
+
+func TestActivityStateWorkflowNodeHandlerSupportsExternalResourceState(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	runtime := testWorkflowHandlerRuntime(true)
+	writeCtx := context.WithValue(ctx, workflowNodeExecutionContextKey{}, workflowNodeExecutionContext{
+		ResolvedInput: map[string]any{
+			"state_patch": map[string]any{"lastCheckinDate": "2026-06-19", "streakDays": 8},
+		},
+	})
+	upsertNode := marketing.WorkflowNode{
+		ID:     "external-state",
+		Type:   "activity-state",
+		Config: json.RawMessage(`{"storeType":"EXTERNAL","resourceRef":"default_workflow_state","operation":"UPSERT","namespace":"checkin","stateKeyTemplate":"${activityId}:${subject.id}:external","missingPolicy":"EMPTY_STATE"}`),
+	}
+	upsert := service.activityStateWorkflowNodeHandler(writeCtx, upsertNode, runtime)
+	if upsert.Status != marketing.WorkflowNodeSuccess || upsert.Output["storeType"] != "EXTERNAL" || upsert.Output["resourceRef"] != "default_workflow_state" {
+		t.Fatalf("expected external activity state upsert success, got %+v", upsert)
+	}
+	state := upsert.Output["activity_state"].(map[string]any)
+	data := state["data"].(map[string]any)
+	if state["external"] != true || data["lastCheckinDate"] != "2026-06-19" || data["streakDays"] != float64(8) {
+		t.Fatalf("expected external activity state shape, got %+v", state)
+	}
+
+	readNode := marketing.WorkflowNode{
+		ID:     "external-state",
+		Type:   "activity-state",
+		Config: json.RawMessage(`{"storeType":"EXTERNAL","resourceRef":"default_workflow_state","operation":"READ","namespace":"checkin","stateKeyTemplate":"${activityId}:${subject.id}:external","missingPolicy":"BLOCK"}`),
+	}
+	read := service.activityStateWorkflowNodeHandler(ctx, readNode, runtime)
+	if read.Status != marketing.WorkflowNodeSuccess || read.Output["state_version"] != int64(1) {
+		t.Fatalf("expected external activity state read success, got %+v", read)
 	}
 }
 
@@ -3496,6 +3726,29 @@ func TestUserLevelCheckWorkflowNodeHandlerUsesUserProfileFacts(t *testing.T) {
 	blocked := userLevelCheckWorkflowNodeHandler(ctx, node, testWorkflowHandlerRuntime(true))
 	if blocked.Status != marketing.WorkflowNodeSuccess || blocked.Output["decision"] != "BLOCK" || blocked.Output["BLOCK"] != true || blocked.Output["reasonCode"] != "USER_LEVEL_TOO_LOW" {
 		t.Fatalf("expected user level block, got %+v", blocked)
+	}
+}
+
+func TestUserLevelCheckWorkflowNodeHandlerUsesStandardContext(t *testing.T) {
+	ctx := context.WithValue(context.Background(), workflowNodeExecutionContextKey{}, workflowNodeExecutionContext{
+		ResolvedInput: map[string]any{
+			"standard_context": map[string]any{
+				"user": map[string]any{"exists": true, "level": 4},
+			},
+		},
+	})
+	node := marketing.WorkflowNode{
+		ID:     "user-level",
+		Type:   "user-level-check",
+		Config: json.RawMessage(`{"requireExistingUser":true,"minLevel":2,"userPaths":["$.standard_context.user"],"levelPaths":["$.standard_context.user.level"],"existsPath":"exists","failDecision":"BLOCK"}`),
+	}
+	result := userLevelCheckWorkflowNodeHandler(ctx, node, testWorkflowHandlerRuntime(true))
+	if result.Status != marketing.WorkflowNodeSuccess || result.Output["decision"] != "PASS" || result.Output["PASS"] != true {
+		t.Fatalf("expected user level pass from standard context, got %+v", result)
+	}
+	check := result.Output["user_level_check"].(map[string]any)
+	if check["level"] != float64(4) || check["levelPath"] != "$.standard_context.user.level" {
+		t.Fatalf("expected level from standard context, got %+v", check)
 	}
 }
 

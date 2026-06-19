@@ -469,6 +469,18 @@ func (s *Service) ListWorkflowNodePresets() []marketing.WorkflowNodePreset {
 		}, "query", "fact", "custom", "planned"),
 		nodePreset("lua-query-user-profile", "lua-query", "Lua 上下文事实", map[string]any{"factCode": "USER_PROFILE", "source": "emit({facts = {USER_PROFILE = {vipLevel = input('vipLevel')}}})", "failureAction": "BLOCK"}, "query", "fact", "lua"),
 		nodePreset("fact-query-checkin-streak", "fact-query", "签到连续天数事实", map[string]any{"factKeys": []string{"CHECKIN_STREAK"}, "source": "FACT_SERVICE", "subjectPath": "subject.id", "timeoutSeconds": 3, "failureAction": "USE_EMPTY"}, "query", "checkin"),
+		nodePreset("facts-compose-checkin", "facts-compose", "签到事实合并", map[string]any{
+			"mergeInputFacts":    true,
+			"mergeUpstreamFacts": true,
+			"conflictPolicy":     "OVERRIDE",
+			"factMappings": []map[string]any{
+				{"factCode": "USER_PROFILE", "sourceNodeId": "fact-user-profile", "outputKey": "facts", "path": "$.USER_PROFILE", "required": false},
+				{"factCode": "KYC_PROFILE", "sourceNodeId": "fact-kyc-profile", "outputKey": "facts", "path": "$.KYC_PROFILE", "required": false},
+				{"factCode": "RISK_PROFILE", "sourceNodeId": "fact-risk-profile", "outputKey": "facts", "path": "$.RISK_PROFILE", "required": false},
+				{"factCode": "CHECKIN_STREAK", "sourceNodeId": "fact-checkin-streak", "outputKey": "facts", "path": "$.CHECKIN_STREAK", "required": false},
+			},
+		}, "query", "checkin", "compose"),
+		nodePreset("facts-normalize-checkin", "facts-normalize", "签到事实标准化", map[string]any{"contractVersion": "checkin-standard-v1"}, "query", "checkin", "standardize"),
 		nodePreset("activity-state-checkin", "activity-state", "签到活动状态", map[string]any{"storeType": "INTERNAL", "operation": "READ", "namespace": "checkin", "stateKeyTemplate": "${activityId}:${subject.id}", "missingPolicy": "EMPTY_STATE", "requireVersion": true}, "store", "checkin"),
 		nodePreset("state-store-workflow-object", "state-store", "工作流对象存储", map[string]any{"resourceRef": "workflow_memory", "operation": "DEFINE", "namespace": "workflow", "keyTemplate": "${activityId}:${eventId}:${nodeId}", "valueType": "OBJECT", "defaultValue": map[string]any{}, "missingPolicy": "EMPTY"}, "store", "memory"),
 		nodePreset("state-store-database-table", "state-store", "数据库表格存储", map[string]any{"resourceRef": "default_workflow_state", "operation": "UPSERT", "namespace": "workflow", "keyTemplate": "${activityId}:${subject.id}:table", "valueType": "TABLE", "defaultValue": []any{}, "missingPolicy": "EMPTY"}, "store", "database"),
@@ -821,12 +833,24 @@ func builtinWorkflowDraftTemplates(now time.Time) []marketing.WorkflowDraftTempl
 		builtinWorkflowTemplate("risk-qualify-chain", "风控和资格校验链路模板", "风控资格", "强调资格、事实查询、风控限制和审计。", []string{"event-in", "inbox", "fact-query", "qualify", "limit", "audit"}, now),
 		builtinWorkflowTemplate("quota-protected-reward-chain", "Quota 保护奖励链路模板", "Quota 保护", "奖励前后加入次数限制和原子预算扣减。", []string{"event-in", "inbox", "normalize", "match", "fact-query", "qualify", "reward", "limit", "quota", "participation", "grant-order", "outbox", "audit"}, now),
 		builtinWorkflowTemplate("fact-query-enhanced-chain", "Fact Query 数据增强链路模板", "数据增强", "通过 Fact Query 增强上下文后再匹配和发奖。", []string{"event-in", "inbox", "normalize", "fact-query", "match", "qualify", "reward", "limit", "quota", "participation", "grant-order", "outbox", "audit"}, now),
-		builtinWorkflowTemplate("production-checkin-reward-chain", "生产级签到奖励链路模板", "签到奖励", "签到入口、状态读取、用户等级、每日频控、候选奖励、预算锁定、发奖、对账和审计。", []string{"event-in", "inbox", "normalize", "fact-query", "user-level-check", "activity-state", "quota-check", "qualify", "candidate-reward", "budget-reserve", "participation", "grant-order", "outbox", "reward-reconcile", "audit"}, now),
+		builtinWorkflowTemplateFromDefinition("production-checkin-reward-chain", "生产级签到奖励链路模板", "签到奖励", "签到入口、多事实查询、事实合并、用户等级、每日频控、资格校验、候选奖励、预算锁定、发奖、对账和审计。", workflowProductionCheckinRewardTemplateDefinition(), now),
 	}
 }
 
 func builtinWorkflowTemplate(id string, name string, category string, description string, nodeTypes []string, now time.Time) marketing.WorkflowDraftTemplate {
 	raw, _ := json.Marshal(workflowTemplateDefinition(nodeTypes))
+	return builtinWorkflowTemplateFromDefinition(id, name, category, description, raw, now)
+}
+
+func builtinWorkflowTemplateFromDefinition(id string, name string, category string, description string, definition any, now time.Time) marketing.WorkflowDraftTemplate {
+	raw, ok := definition.(json.RawMessage)
+	if !ok {
+		if bytes, bytesOK := definition.([]byte); bytesOK {
+			raw = json.RawMessage(bytes)
+		} else {
+			raw, _ = json.Marshal(definition)
+		}
+	}
 	return marketing.WorkflowDraftTemplate{
 		ID:          id,
 		VersionID:   id + "-v1",
@@ -904,6 +928,155 @@ func workflowTemplateDefinition(nodeTypes []string) map[string]any {
 	}
 }
 
+func workflowProductionCheckinRewardTemplateDefinition() map[string]any {
+	factSubjectMapping := map[string]any{"subject": map[string]any{"sourceNodeId": "normalize", "outputKey": "normalized_event", "path": "$.subject"}}
+	node := func(id string, nodeType string, title string, x float64, y float64, overrides map[string]any) map[string]any {
+		config := workflowTemplateNodeConfig(nodeType)
+		if config == nil {
+			config = map[string]any{}
+		}
+		for key, value := range overrides {
+			config[key] = value
+		}
+		return map[string]any{
+			"id":       id,
+			"type":     nodeType,
+			"kind":     workflowTemplateNodeKind(nodeType),
+			"title":    title,
+			"inputs":   workflowTemplateNodeInputs(nodeType),
+			"outputs":  workflowTemplateNodeOutputs(nodeType),
+			"config":   config,
+			"position": map[string]float64{"x": x, "y": y},
+		}
+	}
+	edge := func(source string, target string) map[string]any {
+		return map[string]any{"id": source + "-" + target, "source": source, "target": target}
+	}
+	edgeWithOutputRoute := func(source string, target string, routeKey string) map[string]any {
+		return map[string]any{
+			"id":           source + "-" + target,
+			"source":       source,
+			"sourceHandle": "output-0",
+			"target":       target,
+			"targetHandle": "input-0",
+			"label":        routeKey,
+			"route": map[string]any{
+				"type":  "OUTPUT",
+				"key":   routeKey,
+				"label": routeKey,
+			},
+		}
+	}
+
+	nodes := []map[string]any{
+		node("event-in", "event-in", "签到成功标准事件入口", 80, 360, map[string]any{
+			"eventTypes":             []string{"CHECKIN_SUCCESS"},
+			"eventTypeMatchMode":     "ANY",
+			"sourceSystems":          []string{"app", "user-center"},
+			"tenantScope":            "CURRENT_TENANT",
+			"payloadSchemaVersion":   "standard-v1",
+			"rejectUnknownEventType": true,
+			"traceKeyPath":           "$.traceId",
+		}),
+		node("inbox", "inbox", "幂等收件箱", 360, 360, map[string]any{"inputMapping": map[string]any{"raw_event": map[string]any{"sourceNodeId": "event-in", "outputKey": "raw_event"}}}),
+		node("normalize", "normalize", "事件标准化", 640, 360, map[string]any{"inputMapping": map[string]any{"raw_event": map[string]any{"sourceNodeId": "event-in", "outputKey": "raw_event"}}}),
+		node("fact-user-profile", "fact-query", "用户资料事实", 920, 140, map[string]any{
+			"factKeys":      []string{"USER_PROFILE"},
+			"source":        "FACT_SERVICE",
+			"failureAction": "BLOCK",
+			"inputMapping":  factSubjectMapping,
+		}),
+		node("fact-kyc-profile", "fact-query", "KYC 资料事实", 920, 300, map[string]any{
+			"factKeys":      []string{"KYC_PROFILE"},
+			"source":        "FACT_SERVICE",
+			"failureAction": "USE_EMPTY",
+			"inputMapping":  factSubjectMapping,
+		}),
+		node("fact-risk-profile", "fact-query", "风控画像事实", 920, 460, map[string]any{
+			"factKeys":      []string{"RISK_PROFILE"},
+			"source":        "FACT_SERVICE",
+			"failureAction": "USE_EMPTY",
+			"inputMapping":  factSubjectMapping,
+		}),
+		node("fact-checkin-streak", "fact-query", "签到连续天数事实", 920, 620, map[string]any{
+			"factKeys":      []string{"CHECKIN_STREAK"},
+			"source":        "FACT_SERVICE",
+			"failureAction": "USE_EMPTY",
+			"inputMapping":  factSubjectMapping,
+		}),
+		node("facts-compose", "facts-compose", "签到事实合并", 1220, 360, map[string]any{
+			"mergeInputFacts":    true,
+			"mergeUpstreamFacts": true,
+			"conflictPolicy":     "OVERRIDE",
+			"factMappings": []map[string]any{
+				{"factCode": "USER_PROFILE", "sourceNodeId": "fact-user-profile", "outputKey": "facts", "path": "$.USER_PROFILE", "required": false},
+				{"factCode": "KYC_PROFILE", "sourceNodeId": "fact-kyc-profile", "outputKey": "facts", "path": "$.KYC_PROFILE", "required": false},
+				{"factCode": "RISK_PROFILE", "sourceNodeId": "fact-risk-profile", "outputKey": "facts", "path": "$.RISK_PROFILE", "required": false},
+				{"factCode": "CHECKIN_STREAK", "sourceNodeId": "fact-checkin-streak", "outputKey": "facts", "path": "$.CHECKIN_STREAK", "required": false},
+			},
+		}),
+		node("facts-normalize", "facts-normalize", "签到事实标准化", 1500, 360, map[string]any{"contractVersion": "checkin-standard-v1", "inputMapping": map[string]any{"facts": map[string]any{"sourceNodeId": "facts-compose", "outputKey": "facts"}, "event_context": map[string]any{"sourceNodeId": "normalize", "outputKey": "normalized_event"}}}),
+		node("user-level-check", "user-level-check", "用户等级判断", 1780, 360, map[string]any{
+			"inputMapping": map[string]any{"standard_context": map[string]any{"sourceNodeId": "facts-normalize", "outputKey": "standard_context"}},
+			"userPaths":    []string{"$.standard_context.user"},
+			"levelPaths":   []string{"$.standard_context.user.level"},
+			"existsPath":   "exists",
+		}),
+		node("activity-state", "activity-state", "签到活动状态", 2060, 360, map[string]any{"namespace": "checkin", "inputMapping": map[string]any{"event_context": map[string]any{"sourceNodeId": "normalize", "outputKey": "normalized_event"}}}),
+		node("quota-check", "quota-check", "每日签到频控", 2340, 360, map[string]any{
+			"scope":            "USER",
+			"scopeKeyTemplate": "${subject.id}:${activityId}",
+			"window":           "DAY",
+			"maxCount":         1,
+			"consumeMode":      "CHECK_ONLY",
+			"exceedAction":     "BLOCK",
+			"inputMapping":     map[string]any{"subject": map[string]any{"sourceNodeId": "normalize", "outputKey": "normalized_event", "path": "$.subject"}},
+		}),
+		node("qualify", "qualify", "资格校验", 2620, 360, map[string]any{"inputMapping": map[string]any{"standard_context": map[string]any{"sourceNodeId": "facts-normalize", "outputKey": "standard_context"}, "facts": map[string]any{"sourceNodeId": "facts-normalize", "outputKey": "facts"}}}),
+		node("candidate-reward", "candidate-reward", "签到候选奖励", 2900, 220, map[string]any{"inputMapping": map[string]any{"qualified_context": map[string]any{"sourceNodeId": "qualify", "outputKey": "PASS"}}}),
+		node("budget-reserve", "budget-reserve", "签到预算库存锁定", 3180, 220, map[string]any{"inputMapping": map[string]any{"candidate_rewards": map[string]any{"sourceNodeId": "candidate-reward", "outputKey": "candidate_rewards"}}}),
+		node("participation", "participation", "参与记录", 3460, 220, map[string]any{"inputMapping": map[string]any{"qualified_context": map[string]any{"sourceNodeId": "qualify", "outputKey": "PASS"}, "quota_hold": map[string]any{"sourceNodeId": "budget-reserve", "outputKey": "quota_hold"}}}),
+		node("grant-order", "grant-order", "发奖订单", 3740, 220, map[string]any{"inputMapping": map[string]any{"participation_id": map[string]any{"sourceNodeId": "participation", "outputKey": "participation_id"}, "reward_items": map[string]any{"sourceNodeId": "candidate-reward", "outputKey": "reward_items"}}}),
+		node("outbox", "outbox", "消息发件箱", 4020, 220, map[string]any{"inputMapping": map[string]any{"grant_order": map[string]any{"sourceNodeId": "grant-order", "outputKey": "grant_order"}}}),
+		node("reward-reconcile", "reward-reconcile", "奖励链路对账", 4300, 220, map[string]any{"inputMapping": map[string]any{"date_range": map[string]any{"sourceNodeId": "outbox", "outputKey": "HTTP"}}}),
+		node("audit", "audit", "审计记录", 2900, 620, map[string]any{"inputMapping": map[string]any{"stage_result": map[string]any{"sourceNodeId": "qualify", "outputKey": "stage_result"}}}),
+	}
+	edges := []map[string]any{
+		edge("event-in", "inbox"),
+		edge("inbox", "normalize"),
+		edgeWithOutputRoute("normalize", "fact-user-profile", "USER_PROFILE"),
+		edgeWithOutputRoute("normalize", "fact-kyc-profile", "KYC_PROFILE"),
+		edgeWithOutputRoute("normalize", "fact-risk-profile", "RISK_PROFILE"),
+		edgeWithOutputRoute("normalize", "fact-checkin-streak", "CHECKIN_STREAK"),
+		edge("fact-user-profile", "facts-compose"),
+		edge("fact-kyc-profile", "facts-compose"),
+		edge("fact-risk-profile", "facts-compose"),
+		edge("fact-checkin-streak", "facts-compose"),
+		edge("facts-compose", "facts-normalize"),
+		edge("facts-normalize", "user-level-check"),
+		workflowTemplateRouteEdge("user-level-check", "activity-state", "PASS", false),
+		workflowTemplateRouteEdge("user-level-check", "audit", "BLOCK", false),
+		workflowTemplateRouteEdge("user-level-check", "audit", "RISK", true),
+		edge("activity-state", "quota-check"),
+		edge("quota-check", "qualify"),
+		workflowTemplateRouteEdge("qualify", "candidate-reward", "PASS", false),
+		workflowTemplateRouteEdge("qualify", "audit", "BLOCK", false),
+		workflowTemplateRouteEdge("qualify", "audit", "RISK", true),
+		edge("candidate-reward", "budget-reserve"),
+		edge("budget-reserve", "participation"),
+		edge("participation", "grant-order"),
+		edge("grant-order", "outbox"),
+		edge("outbox", "reward-reconcile"),
+		edge("reward-reconcile", "audit"),
+	}
+	return map[string]any{
+		"meta":     map[string]any{"activityId": "template", "workspaceId": "template", "folderId": "template"},
+		"viewport": map[string]float64{"x": 24, "y": 36, "zoom": 0.75},
+		"nodes":    nodes,
+		"edges":    edges,
+	}
+}
+
 func workflowTemplateCoreContractEnabled(nodeTypes []string) bool {
 	has := map[string]bool{}
 	for _, nodeType := range nodeTypes {
@@ -958,23 +1131,25 @@ func workflowTemplateNodeKind(nodeType string) string {
 		return "dispatch"
 	case "fact-query", "context-query", "local-cache-query", "http-query", "redis-query", "grpc-query", "plugin-query", "custom-query", "lua-query":
 		return "query"
+	case "facts-compose", "facts-normalize", "combine", "split":
+		return "transform"
 	default:
 		return "logic"
 	}
 }
 
 func workflowTemplateNodeTitle(nodeType string) string {
-	titles := map[string]string{"event-in": "标准事件入口", "inbox": "幂等收件箱", "normalize": "事件标准化", "match": "活动匹配", "qualify": "资格校验", "user-level-check": "用户等级判断", "reward": "奖励计算", "limit": "次数限制", "quota": "预算库存扣减", "participation": "参与记录", "grant-order": "发奖订单", "outbox": "消息发件箱", "callback": "结果回调", "audit": "审计记录", "fact-query": "事实查询", "context-query": "上下文查询", "local-cache-query": "本地缓存查询", "http-query": "HTTP 查询", "redis-query": "Redis 查询", "grpc-query": "gRPC 查询", "plugin-query": "插件查询", "custom-query": "自定义查询", "lua-query": "Lua 查询", "combine": "组合节点", "split": "拆分节点", "activity-state": "活动状态", "state-store": "通用存储", "quota-check": "次数频控校验", "candidate-reward": "候选奖励", "budget-reserve": "预算库存锁定", "approval-gate": "审批网关", "compensation": "业务补偿", "random-pick": "随机抽取", "plugin-execute": "插件执行", "ab-bucket": "AB 分桶", "risk-score": "风险评分", "settlement-window": "结算窗口", "manual-adjust": "人工调整", "reconcile": "对账校验", "reward-reconcile": "奖励对账"}
+	titles := map[string]string{"event-in": "标准事件入口", "inbox": "幂等收件箱", "normalize": "事件标准化", "match": "活动匹配", "qualify": "资格校验", "user-level-check": "用户等级判断", "reward": "奖励计算", "limit": "次数限制", "quota": "预算库存扣减", "participation": "参与记录", "grant-order": "发奖订单", "outbox": "消息发件箱", "callback": "结果回调", "audit": "审计记录", "fact-query": "事实查询", "context-query": "上下文查询", "local-cache-query": "本地缓存查询", "http-query": "HTTP 查询", "redis-query": "Redis 查询", "grpc-query": "gRPC 查询", "plugin-query": "插件查询", "custom-query": "自定义查询", "lua-query": "Lua 查询", "facts-compose": "事实映射合并", "facts-normalize": "事实标准化", "combine": "组合节点", "split": "拆分节点", "activity-state": "活动状态", "state-store": "通用存储", "quota-check": "次数频控校验", "candidate-reward": "候选奖励", "budget-reserve": "预算库存锁定", "approval-gate": "审批网关", "compensation": "业务补偿", "random-pick": "随机抽取", "plugin-execute": "插件执行", "ab-bucket": "AB 分桶", "risk-score": "风险评分", "settlement-window": "结算窗口", "manual-adjust": "人工调整", "reconcile": "对账校验", "reward-reconcile": "奖励对账"}
 	return titles[nodeType]
 }
 
 func workflowTemplateNodeInputs(nodeType string) []string {
-	inputs := map[string][]string{"event-in": {"raw_event"}, "inbox": {"raw_event"}, "normalize": {"raw_event"}, "match": {"event_context"}, "qualify": {"USER_PROFILE", "KYC_PROFILE", "RISK_PROFILE", "DEPOSIT_SUMMARY", "matched_activity"}, "user-level-check": {"facts", "event_context"}, "reward": {"qualified_context"}, "limit": {"subject"}, "quota": {"reward_items"}, "participation": {"qualified_context", "quota_hold"}, "grant-order": {"participation_id", "reward_items"}, "outbox": {"grant_order"}, "callback": {"quota_hold"}, "audit": {"stage_result"}, "fact-query": {"subject"}, "context-query": {"subject"}, "local-cache-query": {"subject"}, "http-query": {"subject"}, "redis-query": {"subject"}, "grpc-query": {"subject"}, "plugin-query": {"subject"}, "custom-query": {"subject"}, "lua-query": {"subject"}, "combine": {"items", "context"}, "split": {"payload", "items"}, "activity-state": {"event_context", "state_patch"}, "state-store": {"value", "state_patch"}, "quota-check": {"subject", "activity_id"}, "candidate-reward": {"qualified_context", "plugin_result"}, "budget-reserve": {"candidate_rewards", "reward_items"}, "approval-gate": {"candidate_rewards", "risk_result"}, "compensation": {"stage_result"}, "random-pick": {"candidate_rewards"}, "plugin-execute": {"event_context", "activity_state"}, "ab-bucket": {"subject"}, "risk-score": {"facts"}, "settlement-window": {"event_context"}, "manual-adjust": {"operator"}, "reconcile": {"date_range"}, "reward-reconcile": {"date_range"}}
+	inputs := map[string][]string{"event-in": {"raw_event"}, "inbox": {"raw_event"}, "normalize": {"raw_event"}, "match": {"event_context"}, "qualify": {"standard_context", "facts", "USER_PROFILE", "KYC_PROFILE", "RISK_PROFILE", "DEPOSIT_SUMMARY", "matched_activity"}, "user-level-check": {"standard_context", "facts", "event_context"}, "reward": {"qualified_context"}, "limit": {"subject"}, "quota": {"reward_items"}, "participation": {"qualified_context", "quota_hold"}, "grant-order": {"participation_id", "reward_items"}, "outbox": {"grant_order"}, "callback": {"quota_hold"}, "audit": {"stage_result"}, "fact-query": {"subject"}, "context-query": {"subject"}, "local-cache-query": {"subject"}, "http-query": {"subject"}, "redis-query": {"subject"}, "grpc-query": {"subject"}, "plugin-query": {"subject"}, "custom-query": {"subject"}, "lua-query": {"subject"}, "facts-compose": {"facts", "USER_PROFILE", "KYC_PROFILE", "RISK_PROFILE", "DEPOSIT_SUMMARY"}, "facts-normalize": {"facts", "event_context"}, "combine": {"items", "context"}, "split": {"payload", "items"}, "activity-state": {"event_context", "state_patch"}, "state-store": {"value", "state_patch"}, "quota-check": {"subject", "activity_id"}, "candidate-reward": {"qualified_context", "plugin_result"}, "budget-reserve": {"candidate_rewards", "reward_items"}, "approval-gate": {"candidate_rewards", "risk_result"}, "compensation": {"stage_result"}, "random-pick": {"candidate_rewards"}, "plugin-execute": {"event_context", "activity_state"}, "ab-bucket": {"subject"}, "risk-score": {"facts"}, "settlement-window": {"event_context"}, "manual-adjust": {"operator"}, "reconcile": {"date_range"}, "reward-reconcile": {"date_range"}}
 	return inputs[nodeType]
 }
 
 func workflowTemplateNodeOutputs(nodeType string) []string {
-	outputs := map[string][]string{"event-in": {"raw_event"}, "inbox": {"event_context"}, "normalize": {"normalized_event"}, "match": {"matched_activity"}, "qualify": {"stage_result", "decision", "PASS", "BLOCK", "RISK"}, "user-level-check": {"user_level_check", "decision", "PASS", "BLOCK", "RISK"}, "reward": {"reward_items"}, "limit": {"limit_hold"}, "quota": {"quota_hold"}, "participation": {"participation_id"}, "grant-order": {"grant_order"}, "outbox": {"HTTP", "MQ", "Webhook", "Failed"}, "callback": {"callback_result"}, "audit": {"audit_log"}, "fact-query": {"facts"}, "context-query": {"facts"}, "local-cache-query": {"facts"}, "http-query": {"facts"}, "redis-query": {"facts"}, "grpc-query": {"facts"}, "plugin-query": {"facts"}, "custom-query": {"facts"}, "lua-query": {"facts"}, "combine": {"combined_result"}, "split": {"split_items", "split_result"}, "activity-state": {"activity_state", "state_version"}, "state-store": {"stored_value", "storage_entry", "storage_version"}, "quota-check": {"quota_check", "limit_hold"}, "candidate-reward": {"candidate_rewards", "reward_items"}, "budget-reserve": {"budget_reservation", "quota_hold"}, "approval-gate": {"approval_decision"}, "compensation": {"compensation_plan"}, "random-pick": {"random_pick", "selected_rewards"}, "plugin-execute": {"plugin_result", "candidate_rewards"}, "ab-bucket": {"ab_bucket"}, "risk-score": {"risk_result"}, "settlement-window": {"settlement_window"}, "manual-adjust": {"manual_adjustment"}, "reconcile": {"reconcile_report"}, "reward-reconcile": {"reward_reconcile_report"}}
+	outputs := map[string][]string{"event-in": {"raw_event"}, "inbox": {"event_context"}, "normalize": {"normalized_event"}, "match": {"matched_activity"}, "qualify": {"stage_result", "decision", "PASS", "BLOCK", "RISK"}, "user-level-check": {"user_level_check", "decision", "PASS", "BLOCK", "RISK"}, "reward": {"reward_items"}, "limit": {"limit_hold"}, "quota": {"quota_hold"}, "participation": {"participation_id"}, "grant-order": {"grant_order"}, "outbox": {"HTTP", "MQ", "Webhook", "Failed"}, "callback": {"callback_result"}, "audit": {"audit_log"}, "fact-query": {"facts"}, "context-query": {"facts"}, "local-cache-query": {"facts"}, "http-query": {"facts"}, "redis-query": {"facts"}, "grpc-query": {"facts"}, "plugin-query": {"facts"}, "custom-query": {"facts"}, "lua-query": {"facts"}, "facts-compose": {"facts"}, "facts-normalize": {"standard_context", "user", "kyc", "risk", "checkin", "facts"}, "combine": {"combined_result"}, "split": {"split_items", "split_result"}, "activity-state": {"activity_state", "state_version"}, "state-store": {"stored_value", "storage_entry", "storage_version"}, "quota-check": {"quota_check", "limit_hold"}, "candidate-reward": {"candidate_rewards", "reward_items"}, "budget-reserve": {"budget_reservation", "quota_hold"}, "approval-gate": {"approval_decision"}, "compensation": {"compensation_plan"}, "random-pick": {"random_pick", "selected_rewards"}, "plugin-execute": {"plugin_result", "candidate_rewards"}, "ab-bucket": {"ab_bucket"}, "risk-score": {"risk_result"}, "settlement-window": {"settlement_window"}, "manual-adjust": {"manual_adjustment"}, "reconcile": {"reconcile_report"}, "reward-reconcile": {"reward_reconcile_report"}}
 	return outputs[nodeType]
 }
 
@@ -1012,7 +1187,11 @@ func workflowTemplateInputMapping(nodeType string, upstreamNodeTypes []string) m
 		return map[string]any{"subject": eventContextRef("$.subject")}
 	case "user-level-check":
 		mapping := map[string]any{"event_context": eventContextRef("")}
-		if hasUpstream("fact-query") {
+		if hasUpstream("facts-normalize") {
+			mapping["standard_context"] = ref("facts-normalize", "standard_context", "")
+		} else if hasUpstream("facts-compose") {
+			mapping["facts"] = ref("facts-compose", "facts", "")
+		} else if hasUpstream("fact-query") {
 			mapping["facts"] = ref("fact-query", "facts", "")
 		}
 		return mapping
@@ -1020,13 +1199,35 @@ func workflowTemplateInputMapping(nodeType string, upstreamNodeTypes []string) m
 		return map[string]any{"event_context": eventContextRef("")}
 	case "qualify":
 		mapping := map[string]any{}
-		if hasUpstream("fact-query") {
+		if hasUpstream("facts-normalize") {
+			mapping["standard_context"] = ref("facts-normalize", "standard_context", "")
+			mapping["facts"] = ref("facts-normalize", "facts", "")
+		} else if hasUpstream("facts-compose") {
+			mapping["facts"] = ref("facts-compose", "facts", "")
+		} else if hasUpstream("fact-query") {
 			for _, key := range []string{"USER_PROFILE", "KYC_PROFILE", "RISK_PROFILE", "DEPOSIT_SUMMARY"} {
 				mapping[key] = ref("fact-query", "facts", "$."+key)
 			}
 		}
 		if hasUpstream("match") {
 			mapping["matched_activity"] = ref("match", "matched_activity", "")
+		}
+		return mapping
+	case "facts-compose":
+		if hasUpstream("fact-query") {
+			return map[string]any{"facts": ref("fact-query", "facts", "")}
+		}
+		return nil
+	case "facts-normalize":
+		mapping := map[string]any{}
+		if hasUpstream("facts-compose") {
+			mapping["facts"] = ref("facts-compose", "facts", "")
+		}
+		if hasUpstream("normalize") {
+			mapping["event_context"] = eventContextRef("")
+		}
+		if len(mapping) == 0 {
+			return nil
 		}
 		return mapping
 	case "activity-state":
@@ -1165,9 +1366,9 @@ func workflowTemplateNodeConfig(nodeType string) map[string]any {
 			"requireExistingUser": true,
 			"minLevel":            1,
 			"maxLevel":            0,
-			"levelSource":         "FACTS_OR_EVENT",
-			"userPaths":           []string{"$.facts.USER_PROFILE", "$.event.attributes.USER_PROFILE", "$.attributes.USER_PROFILE"},
-			"levelPaths":          []string{"$.facts.USER_PROFILE.level", "$.facts.USER_PROFILE.vipLevel", "$.event.attributes.userLevel", "$.event.attributes.vipLevel"},
+			"levelSource":         "STANDARD_CONTEXT",
+			"userPaths":           []string{"$.standard_context.user"},
+			"levelPaths":          []string{"$.standard_context.user.level"},
 			"existsPath":          "exists",
 			"failDecision":        "BLOCK",
 			"blockReason":         "",
@@ -1455,6 +1656,15 @@ func workflowTemplateNodeConfig(nodeType string) map[string]any {
 			"source":         "emit({combined = ctx.node.input})",
 			"outputPath":     "combined_result",
 			"allowNetwork":   false,
+		},
+		"facts-compose": {
+			"mergeInputFacts":    true,
+			"mergeUpstreamFacts": true,
+			"conflictPolicy":     "OVERRIDE",
+			"factMappings":       []any{},
+		},
+		"facts-normalize": {
+			"contractVersion": "checkin-standard-v1",
 		},
 		"split": {
 			"language":       "LUA",

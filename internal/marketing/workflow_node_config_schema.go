@@ -316,7 +316,7 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 		)),
 		groupedSchema("user-level-check", "用户等级判断", "判断用户是否存在，以及用户等级或 VIP 等级是否满足活动门槛。", groups(
 			fieldGroup("source", "等级来源", "定义从事实查询结果或事件属性中读取用户资料和等级。", fields(
-				enumField("levelSource", "等级来源", true, "FACTS_OR_EVENT", []string{"FACTS_OR_EVENT", "FACTS", "EVENT_ATTRIBUTES"}),
+				enumField("levelSource", "等级来源", true, "STANDARD_CONTEXT", []string{"STANDARD_CONTEXT", "FACTS_OR_EVENT", "FACTS", "EVENT_ATTRIBUTES"}),
 				withDefault(arrayField("userPaths", "用户对象 Path", false, "按顺序读取用户对象，例如 facts.USER_PROFILE。", rules(maxItems(20))), []string{"$.facts.USER_PROFILE", "$.event.attributes.USER_PROFILE", "$.attributes.USER_PROFILE"}),
 				withDefault(arrayField("levelPaths", "等级 Path", true, "按顺序读取等级字段，支持 level、vipLevel、userLevel。", rules(minItems(1), maxItems(20))), []string{"$.facts.USER_PROFILE.level", "$.facts.USER_PROFILE.vipLevel", "$.event.attributes.userLevel", "$.event.attributes.vipLevel"}),
 				withDescription(stringField("existsPath", "存在字段", false, "exists", rules(maxLength(160))), "用户对象中的存在标记；为空时只要找到用户对象就认为存在。"),
@@ -365,6 +365,29 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 			[]string{"subject", "fact_keys", "数据提供者"},
 			[]string{"facts"},
 			[]string{"facts 可供 condition、qualify、reward 等下游节点引用。"},
+		)),
+		groupedSchema("facts-compose", "事实映射合并", "把多个事实查询节点输出合并为一个稳定的 facts 对象，供资格校验统一消费。", groups(
+			fieldGroup("merge", "合并策略", "控制是否自动合并输入和上游 facts。", fields(
+				booleanField("mergeInputFacts", "合并输入 facts", false, true),
+				booleanField("mergeUpstreamFacts", "合并上游 facts", false, true),
+				enumField("conflictPolicy", "同名事实冲突", true, "OVERRIDE", []string{"OVERRIDE", "KEEP_FIRST", "BLOCK"}),
+			)),
+			fieldGroup("mapping", "显式映射", "可选映射表，用于指定某个 factCode 从哪个节点、输出和 JSONPath 读取。", fields(
+				withDescription(arrayField("factMappings", "事实映射表", false, "数组项格式：factCode、sourceNodeId、outputKey、path、required。", rules(maxItems(50))), "显式映射会在自动合并后执行，可用于覆盖、重命名或从嵌套字段取值。"),
+			)),
+		), preview(
+			[]string{"多个上游 facts", "可选 factMappings"},
+			[]string{"facts"},
+			[]string{"推荐放在多个 fact-query 节点之后、qualify 节点之前。"},
+		)),
+		groupedSchema("facts-normalize", "事实标准化", "把合并后的 facts 转成稳定的 standard_context，后续节点只读取标准字段。", groups(
+			fieldGroup("contract", "标准字段契约", "固定输出 user / kyc / risk / checkin 等标准对象。", fields(
+				withDescription(stringField("contractVersion", "契约版本", true, "checkin-standard-v1", rules(minLength(1), maxLength(64))), "用于标识 standard_context 的结构版本。"),
+			)),
+		), preview(
+			[]string{"facts.USER_PROFILE", "facts.KYC_PROFILE", "facts.RISK_PROFILE", "facts.CHECKIN_STREAK"},
+			[]string{"standard_context", "user", "kyc", "risk", "checkin"},
+			[]string{"推荐放在 facts-compose 之后，后续节点统一读取 standard_context.user.level 等字段。"},
 		)),
 		groupedSchema("context-query", "上下文查询", "从当前事件、输入映射、上游输出或流程变量读取事实。", groups(
 			fieldGroup("query", "查询定义", "定义事实 key 和上下文路径。", fields(
@@ -504,7 +527,7 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 		)),
 		groupedSchema("activity-state", "活动状态", "读取或更新用户活动状态、任务进度、签到状态和插件状态。", groups(
 			fieldGroup("state-key", "状态 Key", "定义活动状态的主体、命名空间和 key。", fields(
-				enumField("storeType", "状态存储", true, "INTERNAL", []string{"INTERNAL", "CUSTOM"}),
+				enumField("storeType", "状态存储", true, "INTERNAL", []string{"INTERNAL", "EXTERNAL"}),
 				enumField("operation", "操作", true, "READ", []string{"READ", "WRITE", "UPSERT", "CAS"}),
 				withDescription(stringField("namespace", "命名空间", true, "activity", rules(minLength(1), maxLength(128))), "状态命名空间，例如 checkin、task、lottery、red-envelope。"),
 				withDescription(stringField("stateKeyTemplate", "State Key 模板", true, "${activityId}:${subject.id}", rules(minLength(1), maxLength(256))), "必须稳定定位一个用户或业务维度的活动状态。"),
@@ -514,8 +537,9 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 				booleanField("requireVersion", "要求版本", false, true),
 				enumField("missingPolicy", "缺失策略", true, "EMPTY_STATE", []string{"EMPTY_STATE", "BLOCK", "CREATE"}),
 			)),
-			fieldGroup("custom-provider", "自定义 Provider", "storeType=CUSTOM 时使用；当前需要业务 adapter。", fields(
-				withDescription(stringField("providerCode", "Provider Code", false, "", rules(maxLength(128))), "自定义状态 provider 编码。"),
+			fieldGroup("external-store", "外部状态存储", "storeType=EXTERNAL 时使用；必须引用资源管理中的受控资源。", fields(
+				withDescription(stringField("resourceRef", "资源 Ref", false, "", rules(maxLength(128))), "外部状态资源 Code，例如 checkin_state_kv、crm_state_provider。"),
+				withDescription(stringField("providerCode", "Provider Code", false, "", rules(maxLength(128))), "兼容字段；新流程优先使用 resourceRef。"),
 				objectField("requestMapping", "请求映射", false, nil),
 				objectField("responseMapping", "响应映射", false, nil),
 				numberField("timeoutSeconds", "超时秒数", false, 3, rules(minValue(1), maxValue(30))),
@@ -523,7 +547,7 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 		), preview(
 			[]string{"event_context", "facts", "plugin_state"},
 			[]string{"activity_state", "state_version"},
-			[]string{"INTERNAL 使用 ExMarketing PG 权威状态；CUSTOM 需要显式状态 provider adapter。"},
+			[]string{"INTERNAL 使用 ExMarketing PG 权威状态；EXTERNAL 通过 resourceRef 走受控资源、权限和审计。"},
 		)),
 		groupedSchema("state-store", "通用存储", "定义、读取和写入工作流通用数据，支持变量、字符串、数组、对象和表格。", groups(
 			fieldGroup("resource", "资源引用", "优先使用资源管理中的 resourceRef；存储介质、endpoint、表结构和密钥不应放在节点中。", fields(
@@ -1000,6 +1024,8 @@ func defaultWorkflowNodeCategory(nodeType string) string {
 		return "STORAGE"
 	case "condition", "switch", "code", "combine", "split", "decimal", "http-call", "mq-publish", "webhook", "callback", "approval-gate", "compensation", "random-pick", "plugin-execute", "ab-bucket", "risk-score", "settlement-window", "manual-adjust":
 		return "ADVANCED"
+	case "fact-query", "context-query", "local-cache-query", "http-query", "redis-query", "grpc-query", "plugin-query", "custom-query", "lua-query", "facts-compose", "facts-normalize":
+		return "FACT_QUERY"
 	case "retry", "dlq", "audit", "reconcile", "reward-reconcile", "alert":
 		return "OPS"
 	default:
@@ -1085,6 +1111,8 @@ func defaultWorkflowNodeInputs(nodeType string) []WorkflowNodeInputVar {
 		)
 	case "qualify":
 		return inputVars(
+			inputVar("standard_context", "Standard Context", "object", false, "标准化后的上下文，推荐由 facts-normalize 输出。"),
+			inputVar("facts", "Facts", "object", false, "合并后的事实对象；推荐由 facts-compose 输出。"),
 			inputVar("USER_PROFILE", "USER_PROFILE", "object", false, "用户资料对象；未映射时按空对象处理。"),
 			inputVar("KYC_PROFILE", "KYC_PROFILE", "object", false, "KYC / 实名认证对象；未映射时按空对象处理。"),
 			inputVar("RISK_PROFILE", "RISK_PROFILE", "object", false, "风控画像对象；未映射时按空对象处理。"),
@@ -1093,6 +1121,7 @@ func defaultWorkflowNodeInputs(nodeType string) []WorkflowNodeInputVar {
 		)
 	case "user-level-check":
 		return inputVars(
+			inputVar("standard_context", "Standard Context", "object", false, "标准化后的上下文；推荐读取 standard_context.user。"),
 			inputVar("facts", "Facts", "object", false, "事实查询输出，推荐包含 USER_PROFILE。"),
 			inputVar("event_context", "Event Context", "object", false, "事件上下文；可从 attributes.userLevel / vipLevel 读取。"),
 			inputVar("subject", "Subject", "object", false, "用户主体；未配置时使用事件 subject。"),
@@ -1104,6 +1133,19 @@ func defaultWorkflowNodeInputs(nodeType string) []WorkflowNodeInputVar {
 			inputVar("subject", "Subject", "object", false, "业务主体；未配置时使用事件 subject。"),
 			inputVar("fact_keys", "Fact Keys", "array", false, "需要查询的事实 key。"),
 			inputVar("facts", "Facts", "object", false, "上游已查询事实。"),
+		)
+	case "facts-compose":
+		return inputVars(
+			inputVar("facts", "Facts", "object", false, "上游已查询事实，通常来自 fact-query 输出。"),
+			inputVar("USER_PROFILE", "USER_PROFILE", "object", false, "可选显式用户资料对象。"),
+			inputVar("KYC_PROFILE", "KYC_PROFILE", "object", false, "可选显式 KYC 对象。"),
+			inputVar("RISK_PROFILE", "RISK_PROFILE", "object", false, "可选显式风控对象。"),
+			inputVar("DEPOSIT_SUMMARY", "DEPOSIT_SUMMARY", "object", false, "可选显式充值汇总对象。"),
+		)
+	case "facts-normalize":
+		return inputVars(
+			inputVar("facts", "Facts", "object", true, "facts-compose 输出的统一事实对象。"),
+			inputVar("event_context", "Event Context", "object", false, "标准事件上下文。"),
 		)
 	case "activity-state":
 		return inputVars(
@@ -1280,6 +1322,17 @@ func defaultWorkflowNodeOutputs(nodeType string) []WorkflowNodeOutputVar {
 		return outputVars(outputVar("PASS", "PASS", "object", "通过分支。"), outputVar("BLOCK", "BLOCK", "object", "阻断分支。"), outputVar("SKIP", "SKIP", "object", "跳过分支。"))
 	case "fact-query", "context-query", "local-cache-query", "http-query", "redis-query", "grpc-query", "plugin-query", "custom-query", "lua-query":
 		return outputVars(outputVar("facts", "Facts", "object", "事实查询结果。"))
+	case "facts-compose":
+		return outputVars(outputVar("facts", "Facts", "object", "合并后的统一事实对象。"))
+	case "facts-normalize":
+		return outputVars(
+			outputVar("standard_context", "Standard Context", "object", "标准化上下文。"),
+			outputVar("user", "User", "object", "标准用户对象。"),
+			outputVar("kyc", "KYC", "object", "标准 KYC 对象。"),
+			outputVar("risk", "Risk", "object", "标准风控对象。"),
+			outputVar("checkin", "Checkin", "object", "标准签到对象。"),
+			outputVar("facts", "Facts", "object", "原始合并事实。"),
+		)
 	case "activity-state":
 		return outputVars(
 			outputVar("activity_state", "Activity State", "object", "活动状态快照。"),

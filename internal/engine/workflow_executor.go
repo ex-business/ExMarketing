@@ -10,7 +10,9 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"reflect"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -301,6 +303,9 @@ func (s *Service) executeWorkflowDefinition(ctx context.Context, runtime workflo
 			if !ok || seen[target.ID] || queued[target.ID] {
 				continue
 			}
+			if workflowNodeRequiresAllIncoming(target) && !workflowIncomingSourcesReady(plan.Incoming[target.ID], seen) {
+				continue
+			}
 			queue = workflowEnqueueByTopology(queue, target, plan.TopoIndex)
 			queued[target.ID] = true
 		}
@@ -403,6 +408,8 @@ func (s *Service) workflowNodeHandlers() map[string]workflowNodeHandler {
 		"plugin-query":      factAdapterRequiredWorkflowNodeHandler("PLUGIN", "ActivityPlugin/FactProvider", false),
 		"custom-query":      factAdapterRequiredWorkflowNodeHandler("CUSTOM", "CustomFactProvider", false),
 		"lua-query":         s.luaFactQueryWorkflowNodeHandler,
+		"facts-compose":     factsComposeWorkflowNodeHandler,
+		"facts-normalize":   factsNormalizeWorkflowNodeHandler,
 		"activity-state":    s.activityStateWorkflowNodeHandler,
 		"state-store":       s.stateStoreWorkflowNodeHandler,
 		"quota-check":       s.quotaCheckWorkflowNodeHandler,
@@ -670,6 +677,27 @@ func workflowNodeIsBranch(node marketing.WorkflowNode) bool {
 	default:
 		return false
 	}
+}
+
+func workflowNodeRequiresAllIncoming(node marketing.WorkflowNode) bool {
+	switch strings.ToLower(strings.TrimSpace(nodeHandlerKey(node))) {
+	case "facts-compose":
+		return true
+	default:
+		return false
+	}
+}
+
+func workflowIncomingSourcesReady(incoming []marketing.WorkflowEdge, seen map[string]bool) bool {
+	if len(incoming) <= 1 {
+		return true
+	}
+	for _, edge := range incoming {
+		if !seen[edge.Source] {
+			return false
+		}
+	}
+	return true
 }
 
 func workflowEnqueueByTopology(queue []marketing.WorkflowNode, node marketing.WorkflowNode, topoIndex map[string]int) []marketing.WorkflowNode {
@@ -1579,6 +1607,284 @@ func workflowFactOutput(node marketing.WorkflowNode, runtime workflowRuntime, so
 		"source":    source,
 		"audit":     workflowHandlerAudit(node, runtime),
 	}
+}
+
+func factsComposeWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
+	if canceled := workflowHandlerContextCanceled(ctx, node, runtime); canceled.Status != "" {
+		return canceled
+	}
+	config := workflowNodeConfigMap(node)
+	conflictPolicy := strings.ToUpper(firstWorkflowString(workflowConfigString(config, "conflictPolicy"), "OVERRIDE"))
+	if conflictPolicy != "OVERRIDE" && conflictPolicy != "KEEP_FIRST" && conflictPolicy != "BLOCK" {
+		return nodeFailed("FACTS_COMPOSE_CONFLICT_POLICY_INVALID: conflictPolicy must be OVERRIDE, KEEP_FIRST or BLOCK", map[string]any{
+			"errorCode":      "FACTS_COMPOSE_CONFLICT_POLICY_INVALID",
+			"conflictPolicy": conflictPolicy,
+			"audit":          workflowHandlerAudit(node, runtime),
+		})
+	}
+
+	facts := map[string]any{}
+	sources := []map[string]any{}
+	putFact := func(factCode string, value any, source map[string]any) (bool, string) {
+		factCode = strings.ToUpper(strings.TrimSpace(factCode))
+		if factCode == "" {
+			return false, ""
+		}
+		if existing, exists := facts[factCode]; exists {
+			switch conflictPolicy {
+			case "KEEP_FIRST":
+				return false, ""
+			case "BLOCK":
+				if !reflect.DeepEqual(existing, workflowJSONValue(value)) {
+					return false, "FACTS_COMPOSE_FACT_CONFLICT: fact " + factCode + " has multiple different values"
+				}
+				return false, ""
+			}
+		}
+		facts[factCode] = workflowJSONValue(value)
+		source["factCode"] = factCode
+		sources = append(sources, source)
+		return true, ""
+	}
+
+	if workflowConfigBool(config, "mergeInputFacts", true) {
+		if value, ok := workflowResolvedInput(ctx, "facts"); ok {
+			if mapped, ok := workflowJSONValue(value).(map[string]any); ok {
+				for _, factCode := range sortedWorkflowMapKeys(mapped) {
+					if _, errText := putFact(factCode, mapped[factCode], map[string]any{"source": "input", "inputKey": "facts"}); errText != "" {
+						return nodeFailed(errText, map[string]any{"errorCode": "FACTS_COMPOSE_FACT_CONFLICT", "facts": facts, "audit": workflowHandlerAudit(node, runtime)})
+					}
+				}
+			}
+		}
+	}
+
+	execCtx := workflowNodeContext(ctx)
+	if workflowConfigBool(config, "mergeUpstreamFacts", true) {
+		for _, nodeID := range sortedWorkflowNodeOutputIDs(execCtx.NodeOutputs) {
+			output := execCtx.NodeOutputs[nodeID]
+			value, ok := output["facts"]
+			if !ok {
+				continue
+			}
+			mapped, ok := workflowJSONValue(value).(map[string]any)
+			if !ok {
+				continue
+			}
+			for _, factCode := range sortedWorkflowMapKeys(mapped) {
+				if _, errText := putFact(factCode, mapped[factCode], map[string]any{"source": "nodeOutput", "sourceNodeId": nodeID, "outputKey": "facts"}); errText != "" {
+					return nodeFailed(errText, map[string]any{"errorCode": "FACTS_COMPOSE_FACT_CONFLICT", "facts": facts, "audit": workflowHandlerAudit(node, runtime)})
+				}
+			}
+		}
+	}
+
+	for _, mapping := range workflowFactsComposeMappings(config) {
+		factCode := strings.ToUpper(strings.TrimSpace(firstWorkflowString(workflowConfigString(mapping, "factCode"), workflowConfigString(mapping, "key"))))
+		if factCode == "" {
+			continue
+		}
+		value, source, found, errText := workflowFactsComposeMappedValue(execCtx, mapping, factCode)
+		if errText != "" {
+			return nodeFailed(errText, map[string]any{"errorCode": "FACTS_COMPOSE_MAPPING_INVALID", "factCode": factCode, "audit": workflowHandlerAudit(node, runtime)})
+		}
+		if !found {
+			if workflowConfigBool(mapping, "required", false) {
+				return nodeFailed("FACTS_COMPOSE_REQUIRED_FACT_MISSING: required fact "+factCode+" is missing", map[string]any{
+					"errorCode": "FACTS_COMPOSE_REQUIRED_FACT_MISSING",
+					"factCode":  factCode,
+					"mapping":   workflowJSONValue(mapping),
+					"facts":     facts,
+					"audit":     workflowHandlerAudit(node, runtime),
+				})
+			}
+			continue
+		}
+		if _, conflict := putFact(factCode, value, source); conflict != "" {
+			return nodeFailed(conflict, map[string]any{"errorCode": "FACTS_COMPOSE_FACT_CONFLICT", "factCode": factCode, "facts": facts, "audit": workflowHandlerAudit(node, runtime)})
+		}
+	}
+
+	return nodeSuccess(map[string]any{
+		"facts":          facts,
+		"factCount":      len(facts),
+		"factKeys":       sortedWorkflowMapKeys(facts),
+		"sources":        sources,
+		"conflictPolicy": conflictPolicy,
+		"nodeType":       nodeHandlerKey(node),
+		"audit":          workflowHandlerAudit(node, runtime),
+	})
+}
+
+func factsNormalizeWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
+	if canceled := workflowHandlerContextCanceled(ctx, node, runtime); canceled.Status != "" {
+		return canceled
+	}
+	facts := map[string]any{}
+	if value, ok := workflowResolvedInput(ctx, "facts"); ok {
+		if mapped, ok := workflowJSONValue(value).(map[string]any); ok {
+			facts = mapped
+		}
+	}
+	userProfile := workflowFactsNormalizeMap(facts, "USER_PROFILE")
+	kycProfile := workflowFactsNormalizeMap(facts, "KYC_PROFILE")
+	riskProfile := workflowFactsNormalizeMap(facts, "RISK_PROFILE")
+	checkinStreak := workflowFactsNormalizeMap(facts, "CHECKIN_STREAK")
+
+	event := workflowJSONValue(runtime.Inbox.Event)
+	subject := workflowJSONValue(runtime.Inbox.Event.Subject)
+	user := map[string]any{
+		"id":      firstWorkflowString(workflowFactsNormalizeString(userProfile, "id", "userId", "uid"), runtime.Inbox.Event.Subject.ID),
+		"type":    runtime.Inbox.Event.Subject.Type,
+		"exists":  workflowFactsNormalizeBool(userProfile, "exists", true),
+		"profile": userProfile,
+	}
+	if level, ok := workflowFactsNormalizeNumber(userProfile, "level", "vipLevel", "userLevel"); ok {
+		user["level"] = level
+	}
+
+	kyc := map[string]any{"profile": kycProfile}
+	if status := workflowFactsNormalizeString(kycProfile, "status", "kycStatus", "verificationStatus"); status != "" {
+		kyc["status"] = status
+	}
+	risk := map[string]any{"profile": riskProfile}
+	if level := workflowFactsNormalizeString(riskProfile, "level", "riskLevel", "tier"); level != "" {
+		risk["level"] = level
+	}
+	if score, ok := workflowFactsNormalizeNumber(riskProfile, "score", "riskScore"); ok {
+		risk["score"] = score
+	}
+	checkin := map[string]any{"profile": checkinStreak}
+	if streak, ok := workflowFactsNormalizeNumber(checkinStreak, "streak", "days", "continuousDays", "checkinStreak"); ok {
+		checkin["streak"] = streak
+	}
+
+	standardContext := map[string]any{
+		"user":    user,
+		"kyc":     kyc,
+		"risk":    risk,
+		"checkin": checkin,
+		"event":   event,
+		"subject": subject,
+		"facts":   facts,
+	}
+	return nodeSuccess(map[string]any{
+		"standard_context": standardContext,
+		"facts":            facts,
+		"user":             user,
+		"kyc":              kyc,
+		"risk":             risk,
+		"checkin":          checkin,
+		"audit":            workflowHandlerAudit(node, runtime),
+	})
+}
+
+func workflowFactsNormalizeMap(facts map[string]any, factCode string) map[string]any {
+	if facts == nil {
+		return map[string]any{}
+	}
+	if mapped, ok := workflowJSONValue(facts[strings.ToUpper(factCode)]).(map[string]any); ok {
+		return mapped
+	}
+	return map[string]any{}
+}
+
+func workflowFactsNormalizeString(source map[string]any, keys ...string) string {
+	for _, key := range keys {
+		if source[key] == nil {
+			continue
+		}
+		if value := workflowOutputString(source[key]); strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func workflowFactsNormalizeNumber(source map[string]any, keys ...string) (float64, bool) {
+	for _, key := range keys {
+		if value, ok := workflowRouteNumber(source[key]); ok {
+			return value, true
+		}
+	}
+	return 0, false
+}
+
+func workflowFactsNormalizeBool(source map[string]any, key string, defaultValue bool) bool {
+	if value, ok := source[key]; ok {
+		switch typed := value.(type) {
+		case bool:
+			return typed
+		case string:
+			return strings.EqualFold(strings.TrimSpace(typed), "true")
+		}
+	}
+	return defaultValue
+}
+
+func sortedWorkflowNodeOutputIDs(outputs map[string]map[string]any) []string {
+	ids := make([]string, 0, len(outputs))
+	for id := range outputs {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+func workflowFactsComposeMappings(config map[string]any) []map[string]any {
+	rawItems, _ := workflowJSONValue(config["factMappings"]).([]any)
+	mappings := make([]map[string]any, 0, len(rawItems))
+	for _, raw := range rawItems {
+		if mapped, ok := workflowJSONValue(raw).(map[string]any); ok {
+			mappings = append(mappings, mapped)
+		}
+	}
+	return mappings
+}
+
+func workflowFactsComposeMappedValue(execCtx workflowNodeExecutionContext, mapping map[string]any, factCode string) (any, map[string]any, bool, string) {
+	inputKey := strings.TrimSpace(workflowConfigString(mapping, "inputKey"))
+	if inputKey != "" {
+		value, ok := execCtx.ResolvedInput[inputKey]
+		if !ok {
+			return nil, nil, false, ""
+		}
+		path := strings.TrimSpace(workflowConfigString(mapping, "path"))
+		if path != "" {
+			extracted, err := extractWorkflowJSONPath(value, path)
+			if err != nil {
+				return nil, nil, false, ""
+			}
+			value = extracted
+		}
+		return value, map[string]any{"source": "input", "inputKey": inputKey, "path": path}, true, ""
+	}
+
+	sourceNodeID := strings.TrimSpace(firstWorkflowString(workflowConfigString(mapping, "sourceNodeId"), workflowConfigString(mapping, "nodeId")))
+	if sourceNodeID == "" {
+		return nil, nil, false, "FACTS_COMPOSE_SOURCE_NODE_REQUIRED: sourceNodeId is required when inputKey is not set"
+	}
+	output, ok := execCtx.NodeOutputs[sourceNodeID]
+	if !ok {
+		return nil, nil, false, ""
+	}
+	outputKey := firstWorkflowString(workflowConfigString(mapping, "outputKey"), "facts")
+	value, ok := output[outputKey]
+	if !ok {
+		return nil, nil, false, ""
+	}
+	path := strings.TrimSpace(workflowConfigString(mapping, "path"))
+	if path == "" && outputKey == "facts" {
+		path = "$." + factCode
+	}
+	if path != "" {
+		extracted, err := extractWorkflowJSONPath(value, path)
+		if err != nil {
+			return nil, nil, false, ""
+		}
+		value = extracted
+	}
+	return value, map[string]any{"source": "nodeOutput", "sourceNodeId": sourceNodeID, "outputKey": outputKey, "path": path}, true, ""
 }
 
 func workflowFactQuerySubject(ctx context.Context, config map[string]any, runtime workflowRuntime) marketing.EventSubject {
@@ -3860,15 +4166,11 @@ func (s *Service) activityStateWorkflowNodeHandler(ctx context.Context, node mar
 		return failed
 	}
 	storeType := strings.ToUpper(firstWorkflowString(workflowConfigString(config, "storeType"), "INTERNAL"))
+	if storeType == "CUSTOM" {
+		storeType = "EXTERNAL"
+	}
 	if storeType != "INTERNAL" {
-		return nodeFailed("STATE_PROVIDER_ADAPTER_REQUIRED: custom activity state provider is not registered", map[string]any{
-			"errorCode":          "STATE_PROVIDER_ADAPTER_REQUIRED",
-			"storeType":          storeType,
-			"providerCode":       workflowConfigString(config, "providerCode"),
-			"executionMode":      "CUSTOM_PROVIDER_REQUIRED",
-			"executionAuthority": "ActivityStateProvider",
-			"audit":              workflowHandlerAudit(node, runtime),
-		})
+		return s.externalActivityStateWorkflowNodeHandler(ctx, node, runtime, config, storeType)
 	}
 	operation := strings.ToUpper(firstWorkflowString(workflowConfigString(config, "operation"), "READ"))
 	stateKey := workflowRenderTemplate(firstWorkflowString(workflowConfigString(config, "stateKeyTemplate"), "${activityId}:${subject.id}"), runtime)
@@ -3945,6 +4247,69 @@ func (s *Service) activityStateWorkflowNodeHandler(ctx context.Context, node mar
 			"operation": operation,
 			"audit":     workflowHandlerAudit(node, runtime),
 		})
+	}
+}
+
+func (s *Service) externalActivityStateWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime, config map[string]any, storeType string) workflowNodeResult {
+	if strings.TrimSpace(workflowExplicitConfigString(node, "resourceRef")) == "" {
+		return nodeFailed("ACTIVITY_STATE_EXTERNAL_RESOURCE_REF_REQUIRED: resourceRef is required for EXTERNAL activity state", map[string]any{
+			"errorCode":          "ACTIVITY_STATE_EXTERNAL_RESOURCE_REF_REQUIRED",
+			"storeType":          storeType,
+			"providerCode":       workflowConfigString(config, "providerCode"),
+			"executionMode":      "RESOURCE_REF_REQUIRED",
+			"executionAuthority": "WorkflowExecutor/StateStoreResource",
+			"audit":              workflowHandlerAudit(node, runtime),
+		})
+	}
+	externalConfig := workflowCopyMap(config)
+	externalConfig["keyTemplate"] = firstNonEmpty(workflowConfigString(config, "stateKeyTemplate"), workflowConfigString(config, "keyTemplate"), "${activityId}:${subject.id}")
+	externalConfig["valueType"] = firstWorkflowString(workflowConfigString(config, "valueType"), "OBJECT")
+	externalConfig["storageType"] = "EXTERNAL"
+	if valuePath := strings.TrimSpace(workflowConfigString(config, "valuePath")); valuePath == "" || valuePath == "$.state" {
+		externalConfig["valuePath"] = "$.input.state_patch"
+	}
+	delete(externalConfig, "stateKeyTemplate")
+	rawConfig, _ := json.Marshal(externalConfig)
+	externalNode := node
+	externalNode.Config = rawConfig
+	result := s.stateStoreWorkflowNodeHandler(ctx, externalNode, runtime)
+	if result.Output == nil {
+		result.Output = map[string]any{}
+	}
+	result.Output["storeType"] = "EXTERNAL"
+	result.Output["activity_state"] = workflowExternalActivityStateOutput(runtime, config, result.Output)
+	result.Output["state_version"] = workflowInt64(result.Output["storage_version"])
+	result.Output["executionAuthority"] = "WorkflowExecutor/ActivityStateExternalStore"
+	return result
+}
+
+func workflowCopyMap(input map[string]any) map[string]any {
+	out := make(map[string]any, len(input))
+	for key, value := range input {
+		out[key] = value
+	}
+	return out
+}
+
+func workflowExternalActivityStateOutput(runtime workflowRuntime, config map[string]any, output map[string]any) map[string]any {
+	entry, _ := workflowJSONValue(output["storage_entry"]).(map[string]any)
+	namespace := firstNonEmpty(workflowOutputString(entry["namespace"]), workflowConfigString(config, "namespace"), "activity")
+	stateKey := firstWorkflowString(workflowOutputString(entry["key"]), workflowRenderTemplate(firstWorkflowString(workflowConfigString(config, "stateKeyTemplate"), "${activityId}:${subject.id}"), runtime))
+	exists := false
+	if value, ok := entry["exists"].(bool); ok {
+		exists = value
+	}
+	return map[string]any{
+		"tenantId":    runtime.Activity.TenantID,
+		"activityId":  runtime.Activity.ID,
+		"namespace":   namespace,
+		"stateKey":    stateKey,
+		"subject":     workflowJSONValue(runtime.Inbox.Event.Subject),
+		"exists":      exists,
+		"data":        workflowJSONValue(output["stored_value"]),
+		"version":     workflowInt64(output["storage_version"]),
+		"external":    true,
+		"resourceRef": output["resourceRef"],
 	}
 }
 
@@ -6042,6 +6407,11 @@ func userLevelCheckWorkflowNodeHandler(ctx context.Context, node marketing.Workf
 		return failed
 	}
 	base := workflowFactQueryBaseContext(ctx, runtime)
+	for key, value := range workflowNodeContext(ctx).ResolvedInput {
+		if _, exists := base[key]; !exists {
+			base[key] = workflowJSONValue(value)
+		}
+	}
 	user, userPath, userFound := workflowUserLevelCheckUser(base, config)
 	exists := userFound
 	if configuredExists, ok := workflowUserLevelCheckBool(user, workflowConfigString(config, "existsPath")); ok {

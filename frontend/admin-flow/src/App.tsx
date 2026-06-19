@@ -163,6 +163,8 @@ type PublishState = 'idle' | 'publishing' | 'published' | 'failed';
 type WorkflowDraftResponse = {
   activityId: string;
   definition: WorkflowDefinition;
+  createdAt?: string;
+  updatedAt?: string;
 };
 
 type UnsavedDraftNavigation =
@@ -4213,6 +4215,7 @@ export function App() {
   const [unsavedDraftNavigation, setUnsavedDraftNavigation] = useState<UnsavedDraftNavigation | null>(null);
   const draftRevisionRef = useRef(0);
   const savedDraftRevisionRef = useRef(0);
+  const loadedDraftUpdatedAtRef = useRef('');
   const initialRunQueryRef = useRef((() => {
     const params = new URLSearchParams(window.location.search);
     const replayStep = Number(params.get('replayStep') ?? '0');
@@ -4543,13 +4546,17 @@ export function App() {
       setActivityLabel(`${activity.activityName} / ${activity.activityCode}`);
       replaceUrlParams({ activityId: activity.id });
     }
-    fetchJSON<{ definition: WorkflowDefinition }>(`/admin/v1/activities/${activityId}/workflow/draft`)
+    fetchJSON<WorkflowDraftResponse>(`/admin/v1/activities/${activityId}/workflow/draft`)
       .then((draft) => {
         if (cancelled || !draft.definition) return;
         const next = hydrateWorkflowDefinition(draft.definition);
         const shouldUseTemplateLayout = /资格校验|风控/.test(activity?.activityName ?? '') && next.nodes.some((node) => node.type === 'activity' && node.data.id === 'qualify');
-        setNodes(shouldUseTemplateLayout ? layoutFlowNodes(next.nodes) : next.nodes);
+        const loadedNodes = shouldUseTemplateLayout ? layoutFlowNodes(next.nodes) : next.nodes;
+        setNodes(loadedNodes);
         setEdges(next.edges);
+        if (loadedNodes.length > 0) {
+          window.requestAnimationFrame(() => reactFlowInstance?.fitView({ padding: 0.16, duration: 240 }));
+        }
         setWorkflowStatus(next.nodes.length === 0 && next.edges.length === 0 ? '空 draft 已保存，等待添加节点' : '已加载草稿');
         setDraftDirty(false);
         setDraftSaveState('saved');
@@ -4558,6 +4565,7 @@ export function App() {
         setPublishError('');
         draftRevisionRef.current = 0;
         savedDraftRevisionRef.current = 0;
+        loadedDraftUpdatedAtRef.current = draft.updatedAt ?? '';
       })
       .catch((error: Error) => {
         if (cancelled) return;
@@ -4573,6 +4581,7 @@ export function App() {
           setPublishError('');
           draftRevisionRef.current = 0;
           savedDraftRevisionRef.current = 0;
+          loadedDraftUpdatedAtRef.current = '';
           return;
         }
         setWorkflowStatus(`草稿加载失败：${error.message}`);
@@ -4580,7 +4589,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [activities, activityId, setEdges, setNodes]);
+  }, [activities, activityId, reactFlowInstance, setEdges, setNodes]);
 
   const refreshWorkflowVersions = useCallback(async (nextActivityId = activityId) => {
     if (!nextActivityId) {
@@ -5334,19 +5343,33 @@ export function App() {
     if (nodeConfigSchemas.length === 0) {
       return failSave('节点配置 schema 尚未加载，稍后再保存');
     }
-    const definition = serializeWorkflowDefinition(nodes, edges, nodeConfigSchemas, reactFlowInstance?.getViewport(), {
-      workspaceId: placement.workspaceId,
-      folderId: placement.folderId,
-      activityId,
-    });
     const revisionAtStart = draftRevisionRef.current;
     try {
       setDraftSaveState('saving');
       setDraftSaveError('');
-      await fetchJSON(`/admin/v1/activities/${activityId}/workflow/draft`, {
+      if (loadedDraftUpdatedAtRef.current) {
+        const currentDraft = await fetchJSON<WorkflowDraftResponse>(`/admin/v1/activities/${activityId}/workflow/draft`);
+        const localLoadedAt = Date.parse(loadedDraftUpdatedAtRef.current);
+        const serverUpdatedAt = Date.parse(currentDraft.updatedAt ?? '');
+        if (Number.isFinite(localLoadedAt) && Number.isFinite(serverUpdatedAt) && serverUpdatedAt > localLoadedAt + 1000) {
+          const message = '保存已停止：服务端 draft 已被更新，请刷新后再编辑，避免覆盖新链路。';
+          setDraftSaveState('failed');
+          setDraftSaveError(message);
+          setWorkflowStatus(message);
+          setDraftDirty(true);
+          return false;
+        }
+      }
+      const definition = serializeWorkflowDefinition(nodes, edges, nodeConfigSchemas, reactFlowInstance?.getViewport(), {
+        workspaceId: placement.workspaceId,
+        folderId: placement.folderId,
+        activityId,
+      });
+      const savedDraft = await fetchJSON<WorkflowDraftResponse>(`/admin/v1/activities/${activityId}/workflow/draft`, {
         method: 'PUT',
         body: JSON.stringify({ operator: 'admin-flow', definition }),
       });
+      loadedDraftUpdatedAtRef.current = savedDraft.updatedAt ?? loadedDraftUpdatedAtRef.current;
       if (!options.silent) setWorkflowStatus('草稿已保存');
       savedDraftRevisionRef.current = revisionAtStart;
       if (draftRevisionRef.current === revisionAtStart) {
@@ -6483,6 +6506,12 @@ export function App() {
       setSelectedNodeIds([]);
       setSelectedEdgeIds([]);
       setDraftDirty(false);
+      setDraftSaveState('saved');
+      setDraftSaveError('');
+      setLastSavedAt(draft.updatedAt ?? new Date().toISOString());
+      loadedDraftUpdatedAtRef.current = draft.updatedAt ?? '';
+      draftRevisionRef.current = 0;
+      savedDraftRevisionRef.current = 0;
       setTemplateMessage('模板已应用，生成的 draft 已保存');
       setWorkflowStatus('已从模板创建 workflow draft');
       window.requestAnimationFrame(() => reactFlowInstance?.fitView({ padding: 0.16, duration: 360 }));

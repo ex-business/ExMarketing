@@ -45,6 +45,51 @@ func TestBuiltinWorkflowDraftTemplatesFollowCoreContract(t *testing.T) {
 	}
 }
 
+func TestProductionCheckinTemplateComposesFactsBeforeQualify(t *testing.T) {
+	var checkin marketing.WorkflowDraftTemplate
+	for _, template := range builtinWorkflowDraftTemplates(time.Date(2026, 6, 13, 0, 0, 0, 0, time.UTC)) {
+		if template.ID == "production-checkin-reward-chain" {
+			checkin = template
+			break
+		}
+	}
+	if checkin.ID == "" {
+		t.Fatalf("production checkin template not found")
+	}
+	definition, err := marketing.ParseWorkflowDefinition(checkin.Definition)
+	if err != nil {
+		t.Fatalf("parse definition: %v", err)
+	}
+	nodeByID := map[string]marketing.WorkflowNode{}
+	for _, node := range definition.Nodes {
+		nodeByID[node.ID] = node
+	}
+	for _, nodeID := range []string{"fact-user-profile", "fact-kyc-profile", "fact-risk-profile", "fact-checkin-streak", "facts-compose", "facts-normalize", "user-level-check", "qualify"} {
+		if nodeByID[nodeID].ID == "" {
+			t.Fatalf("expected node %s in checkin template", nodeID)
+		}
+	}
+	if nodeByID["facts-compose"].Type != "facts-compose" {
+		t.Fatalf("expected facts-compose node type, got %+v", nodeByID["facts-compose"])
+	}
+	if nodeByID["facts-normalize"].Type != "facts-normalize" {
+		t.Fatalf("expected facts-normalize node type, got %+v", nodeByID["facts-normalize"])
+	}
+	assertTemplateInputMapping(t, nodeByID["facts-normalize"], "facts", "facts-compose", "facts")
+	assertTemplateInputMapping(t, nodeByID["user-level-check"], "standard_context", "facts-normalize", "standard_context")
+	assertTemplateInputMapping(t, nodeByID["qualify"], "standard_context", "facts-normalize", "standard_context")
+	assertTemplateEdge(t, definition.Edges, "normalize", "fact-user-profile")
+	assertTemplateEdge(t, definition.Edges, "normalize", "fact-kyc-profile")
+	assertTemplateEdge(t, definition.Edges, "normalize", "fact-risk-profile")
+	assertTemplateEdge(t, definition.Edges, "normalize", "fact-checkin-streak")
+	assertTemplateEdge(t, definition.Edges, "fact-user-profile", "facts-compose")
+	assertTemplateEdge(t, definition.Edges, "fact-kyc-profile", "facts-compose")
+	assertTemplateEdge(t, definition.Edges, "fact-risk-profile", "facts-compose")
+	assertTemplateEdge(t, definition.Edges, "fact-checkin-streak", "facts-compose")
+	assertTemplateEdge(t, definition.Edges, "facts-compose", "facts-normalize")
+	assertTemplateEdge(t, definition.Edges, "facts-normalize", "user-level-check")
+}
+
 func assertTemplateRoute(t *testing.T, edges []marketing.WorkflowEdge, source string, routeKey string) {
 	t.Helper()
 	for _, edge := range edges {
@@ -56,6 +101,35 @@ func assertTemplateRoute(t *testing.T, edges []marketing.WorkflowEdge, source st
 		}
 	}
 	t.Fatalf("expected %s route from %s", routeKey, source)
+}
+
+func assertTemplateEdge(t *testing.T, edges []marketing.WorkflowEdge, source string, target string) {
+	t.Helper()
+	for _, edge := range edges {
+		if edge.Source == source && edge.Target == target {
+			return
+		}
+	}
+	t.Fatalf("expected edge %s -> %s", source, target)
+}
+
+func assertTemplateInputMapping(t *testing.T, node marketing.WorkflowNode, inputKey string, sourceNodeID string, outputKey string) {
+	t.Helper()
+	config := map[string]any{}
+	if err := json.Unmarshal(node.Config, &config); err != nil {
+		t.Fatalf("unmarshal node config for %s: %v", node.ID, err)
+	}
+	rawMapping, ok := config["inputMapping"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected inputMapping on node %s, got %+v", node.ID, config)
+	}
+	rawRef, ok := rawMapping[inputKey].(map[string]any)
+	if !ok {
+		t.Fatalf("expected inputMapping.%s on node %s, got %+v", inputKey, node.ID, rawMapping)
+	}
+	if rawRef["sourceNodeId"] != sourceNodeID || rawRef["outputKey"] != outputKey {
+		t.Fatalf("expected %s.%s from %s.%s, got %+v", node.ID, inputKey, sourceNodeID, outputKey, rawRef)
+	}
 }
 
 func TestCompareWorkflowDraftTemplateVersionsReturnsNodeAndEdgeConfigDiff(t *testing.T) {

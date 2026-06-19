@@ -263,6 +263,9 @@ func (s WorkflowValidationService) ValidateDefinition(raw json.RawMessage) Workf
 		if len(edgeIDs) <= 1 {
 			continue
 		}
+		if workflowNodeUsesAllIncoming(nodeByID[target]) {
+			continue
+		}
 		result.addIssue(
 			WorkflowValidationWarning,
 			"WORKFLOW_JOIN_OR_SEMANTICS",
@@ -700,6 +703,15 @@ func workflowEdgeRouteRequiresCondition(route *WorkflowEdgeRoute) bool {
 		return false
 	}
 	return route.RequiresCondition()
+}
+
+func workflowNodeUsesAllIncoming(node WorkflowNode) bool {
+	switch strings.ToLower(strings.TrimSpace(node.Type)) {
+	case "facts-compose":
+		return true
+	default:
+		return false
+	}
 }
 
 func workflowEdgeRouteIsDefault(edge WorkflowEdge) bool {

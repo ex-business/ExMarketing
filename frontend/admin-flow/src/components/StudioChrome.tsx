@@ -1261,7 +1261,7 @@ export function StudioChrome({
       <header className="studio-head">
         <div>
           <h1>活动数据流设计器</h1>
-          <p>事件进入、规则判断、奖励计算、额度扣减、发奖、回调、审计和重试。</p>
+          <p>事件进入、规则判断、候选奖励、预算锁定、发奖、回调、审计和重试。</p>
         </div>
         <div className="head-actions">
           {lastAdded ? <span className="status-pill green">已添加：{lastAdded}</span> : null}

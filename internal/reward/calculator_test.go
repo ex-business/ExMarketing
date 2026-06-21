@@ -189,6 +189,26 @@ func TestConfigCalculatorProbabilityZeroItemSkipsReward(t *testing.T) {
 	}
 }
 
+func TestConfigCalculatorProbabilitySupportsMixedPrizeItems(t *testing.T) {
+	cfg := rewardConfig(marketing.CalculateProbability, `{
+		"items":[
+			{"itemCode":"COUPON_5","weight":"100","rewardType":"COUPON","quantity":"1","couponTemplateId":"tpl_5","faceValue":"5","currency":"USDT","label":"5 USDT coupon"},
+			{"itemCode":"POINT_100","weight":"0","rewardType":"POINT","points":"100","unit":"LOYALTY_POINT","label":"100 points"}
+		],
+		"targetRef":"https://reward.example.com/grant"
+	}`)
+	result, err := ConfigCalculator{}.Calculate(baseContext(), cfg)
+	if err != nil {
+		t.Fatalf("calculate mixed probability: %v", err)
+	}
+	if result.Type != marketing.RewardCoupon || result.Amount != "0.0000" || result.Payload["couponTemplateId"] != "tpl_5" {
+		t.Fatalf("expected coupon prize selected, got %+v payload=%#v", result, result.Payload)
+	}
+	if result.Payload["quantity"] != 1 {
+		t.Fatalf("expected coupon quantity payload, got %#v", result.Payload)
+	}
+}
+
 func TestConfigCalculatorProbabilityRejectsTotalWeightNot100(t *testing.T) {
 	cfg := rewardConfig(marketing.CalculateProbability, `{
 		"items":[

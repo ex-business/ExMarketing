@@ -501,11 +501,6 @@ func TestCreateActivityCommandValidatesRewardSchemaBoundaries(t *testing.T) {
 			calculateType: CalculateRandom,
 			config:        `{"giftSkuId":"SKU_1","quantity":"1","minAmount":"1","maxAmount":"2","step":"1","targetRef":"https://gift.example.com/reward"}`,
 		},
-		"draw chance probability": {
-			rewardType:    RewardDrawChance,
-			calculateType: CalculateProbability,
-			config:        `{"drawPoolCode":"POOL_1","chanceCount":"1","items":[{"itemCode":"A","weight":"100","amount":"0"}],"targetRef":"https://draw.example.com/reward"}`,
-		},
 		"membership pool split": {
 			rewardType:    RewardMembership,
 			calculateType: CalculatePoolSplit,
@@ -581,6 +576,31 @@ func TestCreateActivityCommandValidatesRewardSchemaBoundaries(t *testing.T) {
 				t.Fatal("expected reward schema validation error")
 			}
 		})
+	}
+}
+
+func TestCreateActivityCommandAllowsMixedProbabilityPrizePool(t *testing.T) {
+	now := time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)
+	cmd := validPrelaunchActivity()
+	cmd.Rewards[0] = Reward{
+		Code:          "MIXED_PROBABILITY_POOL",
+		Type:          RewardDrawChance,
+		CalculateType: CalculateProbability,
+		Config: []byte(`{
+			"items":[
+				{"itemCode":"USDT_1","weight":"40","rewardType":"CASH","amount":"1","currency":"USDT"},
+				{"itemCode":"POINT_100","weight":"40","rewardType":"POINT","points":"100","unit":"LOYALTY_POINT"},
+				{"itemCode":"COUPON_5","weight":"20","rewardType":"COUPON","quantity":"1","couponTemplateId":"tpl_5","faceValue":"5","currency":"USDT"}
+			],
+			"targetRef":"https://reward.example.com/grant"
+		}`),
+		GrantMode:    GrantAuto,
+		GrantChannel: GrantHTTP,
+		Enabled:      true,
+		Version:      1,
+	}
+	if err := cmd.Validate(now); err != nil {
+		t.Fatalf("expected mixed probability prize pool to validate: %v", err)
 	}
 }
 

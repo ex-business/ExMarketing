@@ -11,7 +11,7 @@ Workflow Studio 的节点面板推荐按产品使用方式分为 4 类。这个�
 | `基础节点` | 生产活动主链路和最常用业务节点 | 默认展开 |
 | `高级节点` | 可选增强能力，例如用户分层、事实标准化、风控、插件、审批、对账 | 默认折叠 |
 | `组合节点` | 数据组合、脚本处理、条件分支和表达式编排 | 默认折叠 |
-| `其他节点` | 事件适配、底层查询、兼容旧节点、投递边界和运维辅助 | 默认折叠 |
+| `其他节点` | 事件适配、底层查询、投递边界和运维辅助 | 默认折叠 |
 
 说明：下文的 `EVENT_INPUT`、`CORE`、`ADVANCED`、`OPS` 是执行域和历史实现分类，用于解释节点边界；Studio 节点面板和节点介绍应优先使用上面的产品展示分类。
 
@@ -32,7 +32,7 @@ Workflow Studio 的节点面板推荐按产品使用方式分为 4 类。这个�
 | `quota-check` | 次数频控校验 | 通过 RESOURCE 读取或占用计数器 |
 | `qualify` | 资格校验 | 输出 PASS/BLOCK/RISK 等业务决策 |
 | `candidate-reward` | 候选奖励 | 从奖励来源生成待发奖励候选 |
-| `budget-reserve` | 预算库存锁定 | 发奖前锁定预算、库存或额度 |
+| `budget-reserve` | 预算库存锁定 | 发奖前锁定预算或库存 |
 | `participation` | 参与记录 | 写入参与事实 |
 | `grant-order` | 发奖订单 | 创建发奖订单和状态机记录 |
 | `outbox` | 消息发件箱 | 生成可重试投递消息 |
@@ -74,7 +74,7 @@ Workflow Studio 的节点面板推荐按产品使用方式分为 4 类。这个�
 
 #### 其他节点
 
-其他节点不是不能用，而是默认不应摆在主链路第一层。它们包括事件适配、底层查询、兼容旧链路、投递边界和运维辅助。
+其他节点不是不能用，而是默认不应摆在主链路第一层。它们包括事件适配、底层查询、投递边界和运维辅助。
 
 | 节点类型 | 中文名 | 说明 |
 | --- | --- | --- |
@@ -86,9 +86,6 @@ Workflow Studio 的节点面板推荐按产品使用方式分为 4 类。这个�
 | `grpc-query` | gRPC 查询 | 低层事实查询能力 |
 | `plugin-query` | 插件查询 | 低层事实查询能力 |
 | `custom-query` | 自定义查询 | 低层事实查询能力 |
-| `reward` | 奖励计算 | 旧链路奖励节点，新链路优先用 `candidate-reward` |
-| `limit` | 次数限制 | 旧链路频控节点，新链路优先用 `quota-check` |
-| `quota` | 预算库存扣减 | 旧链路 quota 节点，新链路优先用 `budget-reserve` |
 | `http-call` | HTTP 发奖 | 投递意图，真实发送由 outbox worker 完成 |
 | `mq-publish` | MQ 发奖 | MQ 投递意图 |
 | `webhook` | Webhook 通知 | Webhook 投递意图 |
@@ -126,13 +123,13 @@ Workflow Studio 的节点面板推荐按产品使用方式分为 4 类。这个�
 基础奖励链路：
 
 ```text
-event-in -> inbox -> normalize -> match -> fact-query -> qualify -> reward -> limit -> quota -> participation -> grant-order -> outbox
+event-in -> inbox -> normalize -> match -> fact-query -> activity-state -> quota-check -> qualify -> candidate-reward -> budget-reserve -> participation -> grant-order -> outbox
 ```
 
-生产活动链路：
+多事实生产活动链路：
 
 ```text
-event-in -> inbox -> normalize -> match -> fact-query -> activity-state -> quota-check -> qualify -> candidate-reward -> budget-reserve -> participation -> grant-order -> outbox
+event-in -> inbox -> normalize -> match -> fact-query -> facts-compose -> facts-normalize -> activity-state -> quota-check -> qualify -> candidate-reward -> budget-reserve -> participation -> grant-order -> outbox
 ```
 
 | 节点类型 | 中文名 | 职责 | 关键输出 |
@@ -146,10 +143,7 @@ event-in -> inbox -> normalize -> match -> fact-query -> activity-state -> quota
 | `quota-check` | 次数频控校验 | 通过 RESOURCE 操作块读取或占用计数器，对用户、设备、IP、活动或租户维度做次数和频率校验 | `quota_check`, `limit_hold` |
 | `qualify` | 资格校验 | 执行资格、风控、名单、规则判断；详见 [Qualify 资格校验节点](qualify-node.zh-CN.md) | `stage_result`, `PASS`, `BLOCK`, `RISK`, `decision` |
 | `candidate-reward` | 候选奖励 | 通过 RESOURCE 操作块读取奖励来源并生成待发奖励候选，不直接产生资金副作用 | `candidate_rewards`, `reward_items` |
-| `reward` | 奖励计算 | 计算奖励明细 | `reward_items` |
-| `limit` | 次数限制 | 用户、活动、周期、事件维度次数限制 | `limit_hold` |
-| `quota` | 预算库存扣减 | 预算、库存、用户额度预占和扣减 | `quota_hold` |
-| `budget-reserve` | 预算库存锁定 | 在发奖前锁定活动预算、奖品库存或用户额度，避免并发超发 | `budget_reservation`, `quota_hold` |
+| `budget-reserve` | 预算库存锁定 | 在发奖前锁定活动预算或奖品库存，避免并发超发 | `budget_reservation`, `quota_hold` |
 | `participation` | 参与记录 | 写入参与记录，关联事件、活动、奖励、quota 和阶段结果 | `participation_id` |
 | `grant-order` | 发奖订单 | 生成发奖订单和状态机记录 | `grant_order`, `grant_orders` |
 | `outbox` | 消息发件箱 | 生成可重试投递消息，由 outbox worker 发送 | `HTTP`, `MQ`, `Webhook`, `Failed` |
@@ -560,7 +554,7 @@ qualify(PASS) -> candidate-reward -> budget-reserve -> participation -> grant-or
 | 节点 | 负责什么 | 不负责什么 |
 | --- | --- | --- |
 | `candidate-reward` | 生成候选奖励数组，说明“可能要发什么” | 不扣预算、不发奖、不保证库存 |
-| `budget-reserve` | 锁定预算、库存或用户额度 | 不计算候选奖励 |
+| `budget-reserve` | 锁定预算或库存 | 不计算候选奖励，不做领取次数频控 |
 | `grant-order` | 生成发奖订单 | 不决定用户是否有资格 |
 | `outbox` | 生成可重试投递消息 | 不计算奖励金额 |
 
@@ -571,7 +565,7 @@ qualify(PASS) -> candidate-reward -> budget-reserve -> participation -> grant-or
 | `qualified_context` | `qualify.PASS` | 资格通过上下文。生产模板中从 `qualify` 的 `PASS` 输出映射过来 |
 | `plugin_result` | `plugin-execute` 或上游节点 | 当 `source=PLUGIN_RESULT` 时，可从插件结果中读取候选奖励 |
 | `candidate_rewards` / `reward_items` / `selected_rewards` | 上游节点输出 | 当 `source=INPUT` 或 `PLUGIN_RESULT` 时，可透传上游奖励数组 |
-| 活动奖励配置资源 | `providerChain[0].resourceRef=default_activity_reward_config` | 默认来源。节点通过 RESOURCE 操作块读取当前活动奖励配置并生成候选奖励 |
+| 签到奖励配置 Redis Ref | `providerChain[0].resourceRef=checkin_reward_config_ref` | 签到默认来源。节点通过 RESOURCE 操作块读取 Redis 中的 `reward_items` 并生成候选奖励 |
 
 #### 配置项
 
@@ -579,6 +573,7 @@ qualify(PASS) -> candidate-reward -> budget-reserve -> participation -> grant-or
 | --- | --- | --- |
 | `providerChain` | 奖励来源资源操作块。第一项 RESOURCE 操作用于指定从哪里读取奖励配置或候选奖励 | 见下方示例 |
 | `includeDisabledRewards` | 是否包含活动配置中 disabled 的奖励。默认不包含 | `false` |
+| `candidatePolicy` | 多个候选奖励命中时的选择策略 | `ALL_MATCHED` |
 | `notQualifiedAction` | 用户未通过资格时的动作。`SKIP` 表示跳过候选生成；`BLOCK` 表示阻断 | `SKIP` |
 | `emptyAction` | 候选为空时的动作。`BLOCK` 表示阻断；`SKIP` 表示跳过 | `BLOCK` |
 | `includeTrace` | 是否保留 trace 配置。当前主要用于 UI 和审计语义 | `true` |
@@ -592,7 +587,7 @@ qualify(PASS) -> candidate-reward -> budget-reserve -> participation -> grant-or
   "providerChain": [
     {
       "source": "RESOURCE",
-      "resourceRef": "default_activity_reward_config",
+      "resourceRef": "checkin_reward_config_ref",
       "keyTemplate": "${activityId}",
       "namespace": "reward",
       "valuePath": "$.reward_items",
@@ -607,10 +602,10 @@ qualify(PASS) -> candidate-reward -> budget-reserve -> participation -> grant-or
 | 字段 | 含义 | 示例 |
 | --- | --- | --- |
 | `source` | 固定使用 `RESOURCE`，表示通过资源管理层访问受控奖励来源 | `RESOURCE` |
-| `resourceRef` | 奖励来源资源 Code。默认使用 `default_activity_reward_config`，表示当前活动奖励配置 | `default_activity_reward_config` |
+| `resourceRef` | 奖励来源资源 Code。签到默认使用 `checkin_reward_config_ref`，表示 Redis 中的签到奖励配置；通用活动可使用 `default_activity_reward_config` | `checkin_reward_config_ref` |
 | `keyTemplate` | 奖励配置 key。默认按活动读取 | `${activityId}` |
 | `namespace` | 奖励来源命名空间 | `reward` |
-| `valuePath` | 外部资源返回候选数组时的路径。默认活动奖励配置资源由执行器适配成候选数组 | `$.reward_items` |
+| `valuePath` | 外部资源返回候选数组时的路径。Redis 推荐存 `{ "reward_items": [...] }` | `$.reward_items` |
 | `outputAs` | 资源操作输出别名 | `rewardConfig` |
 
 说明：候选奖励来源只读取配置或候选数组，底层操作固定按 `READ` 推断，UI 不再展示 `operation` 或 `miss`。
@@ -622,8 +617,9 @@ qualify(PASS) -> candidate-reward -> budget-reserve -> participation -> grant-or
 | 输出 | 类型 | 说明 |
 | --- | --- | --- |
 | `candidate_rewards` | array | 标准候选奖励数组，供 `budget-reserve` 使用 |
-| `reward_items` | array | 与 `candidate_rewards` 同值，兼容后续 `grant-order` 或老节点 |
+| `reward_items` | array | 与 `candidate_rewards` 同值，供后续 `grant-order` 使用 |
 | `candidateCount` | number | 候选奖励数量 |
+| `candidatePolicy` | string | 本次使用的候选选择策略 |
 | `source` | string | 实际候选来源 |
 
 候选奖励 item 的常见字段：
@@ -632,16 +628,150 @@ qualify(PASS) -> candidate-reward -> budget-reserve -> participation -> grant-or
 | --- | --- |
 | `rewardId` | 活动奖励配置 ID |
 | `rewardCode` | 奖励编码，例如 `DAILY_CHECKIN_BONUS` |
-| `rewardType` | 奖励类型，例如 `BONUS`、`POINTS`、`COUPON` |
-| `calculateType` | 计算方式，例如 `FIXED`、`RATIO`、`LADDER` |
+| `rewardType` | 奖品类型，例如 `CASH`、`POINT`、`COUPON`、`GIFT`、`DRAW_CHANCE`、`MEMBERSHIP` |
+| `calculateType` | 产生方式，例如 `FIXED`、`RATIO`、`LADDER`、`RANDOM`、`PROBABILITY`、`POOL_SPLIT` |
 | `amount` | 预计算金额。来源于 reward calculator |
 | `currency` | 币种 |
+| `points` | 积分数量，适用于 `POINT` |
+| `quantity` | 券、实物、权益份数，适用于 `COUPON` / `GIFT` |
+| `chanceCount` | 活动参与次数或抽奖机会，适用于 `DRAW_CHANCE` |
 | `grantMode` | 发放模式 |
 | `grantChannel` | 发放渠道 |
 | `candidate` | 固定为 `true`，表示这还是候选，不是已发奖励 |
 | `payload` | 计算器输出的扩展数据 |
 | `reasonCode` / `reason` | 计算原因或跳过原因 |
 | `skipped` | 计算器是否标记跳过 |
+
+#### 奖品模块
+
+`candidate-reward` 可以视为“奖品模块”的入口。业界常见活动奖品建议按三层定义：
+
+| 层 | 字段 | 说明 |
+| --- | --- | --- |
+| 奖品是什么 | `rewardType` | 现金、积分、优惠券、实物、抽奖机会、会员权益等 |
+| 怎么产生 | `calculateType` | 固定、按比例、阶梯、随机金额、概率奖池、奖池瓜分 |
+| 怎么发放 | `grantMode` / `grantChannel` | 自动发放、人工发放、导出；HTTP/MQ/Webhook/内部渠道 |
+
+推荐支持的奖品类型：
+
+| rewardType | 中文含义 | 常见字段 | 库存/预算 |
+| --- | --- | --- | --- |
+| `CASH` | 现金、USDT、红包金额 | `amount`, `currency` | 通常锁 `BUDGET` |
+| `BONUS` | 体验金、彩金、平台奖励金 | `amount`, `currency`, `flowMultiple` | 通常锁 `BUDGET` |
+| `POINT` | 积分、成长值、任务分 | `points`, `unit` / `pointType` | 可不锁预算，或锁积分预算 |
+| `COUPON` | 优惠券、抵扣券、折扣券 | `quantity`, `couponTemplateId`, `faceValue`, `discountRate` | 通常锁 `STOCK` |
+| `GIFT` | 实物、周边、礼包 | `quantity`, `giftSkuId`, `deliveryMode`, `valuationAmount` | 通常锁 `STOCK` |
+| `DRAW_CHANCE` | 参加活动次数、抽奖机会、转盘次数 | `chanceCount`, `drawPoolCode` / `lotteryCode` | 可锁次数额度或活动库存 |
+| `MEMBERSHIP` | VIP、会员、权益包 | `durationDays` / `durationType`, `membershipTier`, `benefitPackageId` | 可锁权益库存 |
+
+推荐支持的产生方式：
+
+| calculateType | 中文含义 | 例子 |
+| --- | --- | --- |
+| `FIXED` | 固定奖品 | 每天签到固定 `1 USDT`、`100` 积分、`1` 张券 |
+| `RATIO` | 按比例 | 充值金额的 `1%` 返现，最多 `10 USDT` |
+| `LADDER` | 阶梯 | 连续签到 3/7/30 天给不同金额 |
+| `RANDOM` | 随机金额 | 红包金额在 `0.1` 到 `5 USDT` 中按步长随机 |
+| `PROBABILITY` | 概率奖池 | 90% 积分、9% 券、1% 实物大奖 |
+| `POOL_SPLIT` | 奖池瓜分 | 活动结束后按人数或权重瓜分总奖池 |
+
+示例：一个签到奖品配置 Ref 可以这样存：
+
+```json
+{
+  "reward_items": [
+    {
+      "rewardCode": "DAILY_CHECKIN_1_USDT",
+      "rewardType": "CASH",
+      "calculateType": "FIXED",
+      "amount": "1",
+      "currency": "USDT",
+      "grantMode": "AUTO",
+      "grantChannel": "WALLET"
+    },
+    {
+      "rewardCode": "CHECKIN_100_POINTS",
+      "rewardType": "POINT",
+      "calculateType": "FIXED",
+      "points": "100",
+      "unit": "LOYALTY_POINT",
+      "grantMode": "AUTO",
+      "grantChannel": "INTERNAL"
+    },
+    {
+      "rewardCode": "CHECKIN_RANDOM_USDT",
+      "rewardType": "CASH",
+      "calculateType": "RANDOM",
+      "minAmount": "0.1",
+      "maxAmount": "5",
+      "step": "0.1",
+      "currency": "USDT",
+      "grantMode": "AUTO",
+      "grantChannel": "WALLET"
+    },
+    {
+      "rewardCode": "CHECKIN_DRAW_CHANCE",
+      "rewardType": "DRAW_CHANCE",
+      "calculateType": "FIXED",
+      "chanceCount": "1",
+      "drawPoolCode": "daily_checkin_lottery",
+      "grantMode": "AUTO",
+      "grantChannel": "INTERNAL"
+    },
+    {
+      "rewardCode": "CHECKIN_MIXED_POOL",
+      "rewardType": "DRAW_CHANCE",
+      "calculateType": "PROBABILITY",
+      "grantMode": "AUTO",
+      "grantChannel": "INTERNAL",
+      "items": [
+        {
+          "itemCode": "POINT_100",
+          "weight": "70",
+          "rewardType": "POINT",
+          "points": "100",
+          "unit": "LOYALTY_POINT"
+        },
+        {
+          "itemCode": "COUPON_5",
+          "weight": "25",
+          "rewardType": "COUPON",
+          "quantity": "1",
+          "couponTemplateId": "tpl_checkin_5",
+          "faceValue": "5",
+          "currency": "USDT"
+        },
+        {
+          "itemCode": "GIFT_TSHIRT",
+          "weight": "5",
+          "rewardType": "GIFT",
+          "quantity": "1",
+          "giftSkuId": "sku_tshirt",
+          "deliveryMode": "ADDRESS_REQUIRED",
+          "valuationAmount": "20",
+          "currency": "USDT"
+        }
+      ]
+    }
+  ]
+}
+```
+
+这里 `CHECKIN_MIXED_POOL` 是混合概率奖池：外层 `rewardType` 只是奖池默认类型，真正抽中的奖品类型由 item 的 `rewardType` 决定。`candidate-reward` 只生成候选，`budget-reserve` 再根据奖品类型决定锁预算还是锁库存。例如现金锁 `checkin_reward_budget_ref`，券/实物/权益锁 `checkin_prize_stock_ref`。
+
+#### 候选选择策略
+
+`candidatePolicy` 控制资源返回多条奖励时如何输出：
+
+| 策略 | 说明 | 适用场景 |
+| --- | --- | --- |
+| `ALL_MATCHED` | 输出全部候选奖励 | 每日基础奖励 + 连续签到加奖 + VIP 加奖可以叠加 |
+| `FIRST_MATCHED` | 只输出第一条候选奖励 | 普通/VIP 二选一，配置顺序即优先级 |
+| `HIGHEST_VALUE` | 只输出金额最高的一条 | 多档奖励只给最高档 |
+| `WEIGHTED_RANDOM` | 按 item 的 `weight` 稳定随机选一条 | 抽奖、随机券包 |
+| `RANDOM_ONE` | 等概率稳定随机选一条 | 多个固定奖品随机给一个 |
+
+每日签到默认推荐 `ALL_MATCHED`，这样基础签到奖励和额外奖励可以同时进入后续预算锁定。
 
 #### 资格未通过和空候选
 
@@ -678,13 +808,14 @@ qualify(PASS) -> candidate-reward -> budget-reserve -> participation -> grant-or
     "providerChain": [
       {
         "source": "RESOURCE",
-        "resourceRef": "default_activity_reward_config",
+        "resourceRef": "checkin_reward_config_ref",
 	        "keyTemplate": "${activityId}",
 	        "namespace": "reward",
 	        "valuePath": "$.reward_items",
 	        "outputAs": "rewardConfig"
       }
     ],
+    "candidatePolicy": "ALL_MATCHED",
     "notQualifiedAction": "SKIP",
     "emptyAction": "BLOCK",
     "includeTrace": true,
@@ -695,6 +826,30 @@ qualify(PASS) -> candidate-reward -> budget-reserve -> participation -> grant-or
       }
     }
   }
+}
+```
+
+`checkin_reward_config_ref` 是 Redis KV 语义资源。Redis 中建议按活动存对象，key 由资源前缀和节点 key 组合：
+
+```text
+reward:checkin:${activityId}
+```
+
+值示例：
+
+```json
+{
+  "reward_items": [
+    {
+      "rewardCode": "DAILY_CHECKIN_1_USDT",
+      "rewardType": "CASH",
+      "calculateType": "FIXED",
+      "amount": "1",
+      "currency": "USDT",
+      "grantMode": "AUTO",
+      "grantChannel": "WALLET"
+    }
+  ]
 }
 ```
 
@@ -755,7 +910,7 @@ candidate-reward.reward_items      -> grant-order.reward_items
 
 #### 示例：插件输出候选奖励
 
-当奖励由插件决定，例如抽奖插件、红包插件、任务插件，也建议通过 RESOURCE 操作块接入插件写出的候选奖励资源，或者保留旧的 `PLUGIN_RESULT` 兼容方式。RESOURCE 写法如下：
+当奖励由插件决定，例如抽奖插件、红包插件、任务插件，也建议通过 RESOURCE 操作块接入插件写出的候选奖励资源。RESOURCE 写法如下：
 
 ```json
 {
@@ -772,6 +927,7 @@ candidate-reward.reward_items      -> grant-order.reward_items
 	        "outputAs": "pluginRewardCandidates"
       }
     ],
+    "candidatePolicy": "ALL_MATCHED",
     "notQualifiedAction": "SKIP",
     "emptyAction": "SKIP",
     "inputMapping": {
@@ -805,10 +961,192 @@ candidate-reward.reward_items      -> grant-order.reward_items
 #### 推荐实践
 
 1. `candidate-reward` 应只放在 `qualify.PASS` 之后，不要让未资格通过用户进入预算锁定。
-2. 固定奖励、阶梯奖励、比例奖励优先用 `default_activity_reward_config`，不要把金额硬编码在节点里。
-3. 抽奖、红包、插件玩法可以用插件写出的候选奖励资源，旧的 `PLUGIN_RESULT` 仅作为兼容；预算库存仍应由 `budget-reserve` 统一锁定。
+2. 签到固定奖励、阶梯奖励、比例奖励优先用 `checkin_reward_config_ref`，不要把金额硬编码在节点里。
+3. 抽奖、红包、插件玩法可以用插件写出的候选奖励资源；预算库存仍应由 `budget-reserve` 统一锁定。
 4. 资格通过但候选为空，生产环境建议 `emptyAction=BLOCK`，这样能尽早暴露活动奖励配置缺失。
 5. 候选奖励只是计划，不是发奖事实。真正发奖事实以 `grant-order/outbox/callback` 为准。
+
+### `budget-reserve` 预算库存锁定
+
+`budget-reserve` 只做领奖前的预算/库存锁定。它读取 `candidate-reward` 输出的候选奖励数量，然后到预算或库存资源池里做原子锁定。
+
+它不负责用户资格、每日签到频控、每用户领取次数。这些应分别放在 `qualify` 和 `quota-check`：
+
+| 逻辑 | 推荐节点 |
+| --- | --- |
+| 用户等级、KYC、风控、活动状态 | `qualify` |
+| 每日签到一次、每用户最多 N 次、周期窗口频控 | `quota-check` |
+| 现金预算、券/实物/权益库存并发占用 | `budget-reserve` |
+
+节点只需要选择 `reserveProviderRef`。`quotaCode`、`quotaType`、`scope`、`scopeKeyTemplate`、默认 `amountField` 都由 Ref 内部配置。这样用户不用关心内部 bucket 定位，只需要知道这次调用的是哪一个预算/库存锁定服务。
+
+和 `candidate-reward` 的结合方式：
+
+1. `candidate-reward` 先输出 `candidate_rewards`，里面包含 `rewardCode`、`rewardType`、`amount`、`quantity`、`currency` 等候选奖励参数。
+2. `budget-reserve` 通过输入映射接收 `candidate_rewards`。
+3. `reserveProviderRef` 指向锁定服务。锁定服务内部配置决定锁活动预算、奖品库存，或调用外部 HTTP/gRPC 服务。
+4. 锁定服务按 `amountField` 和 `scopeKeyTemplate` 从 `candidate_rewards` 取值，例如用 `candidate_rewards[0].amount` 锁现金预算，用 `candidate_rewards[0].quantity` 锁奖品库存。
+
+内置 Ref：
+
+| reserveProviderRef | 用途 | 默认锁定类型 | 默认 scopeKey |
+| --- | --- | --- | --- |
+| `checkin_reward_budget_ref` | 每日签到现金/USDT 奖励预算 | `BUDGET` | `${activityId}` |
+| `checkin_prize_stock_ref` | 每日签到券、实物、权益等奖品库存 | `STOCK` | `${activityId}:${candidate_rewards[0].rewardCode}` |
+
+#### 锁定类型
+
+| quotaType | 中文含义 | 常见 amountField |
+| --- | --- | --- |
+| `BUDGET` | 活动预算，适合现金、USDT、Bonus 金额 | `candidate_rewards[0].amount` |
+| `STOCK` | 奖品库存，适合优惠券、实物、抽奖次数、权益名额 | `candidate_rewards[0].quantity` |
+
+`USER_LIMIT` 和 `DAILY_LIMIT` 不属于 `budget-reserve` 的职责，应该在 `quota-check` 中配置。
+
+#### 发钱：锁活动预算
+
+```json
+{
+  "reserveProviderRef": "checkin_reward_budget_ref",
+  "failAction": "BLOCK",
+  "releaseOnFailure": true
+}
+```
+
+Ref 内部配置：
+
+```json
+{
+  "quotaCode": "DAILY_CHECKIN_REWARD",
+  "quotaType": "BUDGET",
+  "scope": "ACTIVITY",
+  "scopeKeyTemplate": "${activityId}",
+  "amountField": "candidate_rewards[0].amount",
+  "reserveMode": "ATOMIC"
+}
+```
+
+#### 发券或奖品：锁奖品库存
+
+```json
+{
+  "reserveProviderRef": "checkin_prize_stock_ref",
+  "failAction": "BLOCK",
+  "releaseOnFailure": true
+}
+```
+
+Ref 内部配置：
+
+```json
+{
+  "quotaCode": "CHECKIN_COUPON_STOCK",
+  "quotaType": "STOCK",
+  "scope": "ACTIVITY",
+  "scopeKeyTemplate": "${activityId}:${candidate_rewards[0].rewardCode}",
+  "amountField": "candidate_rewards[0].quantity",
+  "reserveMode": "ATOMIC"
+}
+```
+
+这里的 `STOCK` 就是奖品库存。系统会按 `quotaType + scope + scopeKey` 找到对应库存池，检查 `total - used - frozen` 是否足够，足够就增加 frozen，不足就按 `failAction` 处理。`quotaCode` 用于业务识别和审计。
+
+#### 外部预算/库存 Provider
+
+`reserveProviderRef` 不限于内部 quota。只要遵守 `QUOTA_RESERVE_V1`，Ref 可以指向外部 HTTP 或 gRPC 服务。旧字段 `resourceRef` 仍作为兼容别名支持，但新流程统一使用 `reserveProviderRef`：
+
+```json
+{
+  "code": "external_stock_http_ref",
+  "type": "HTTP_PROVIDER",
+  "config": {
+    "contract": "QUOTA_RESERVE_V1",
+    "reserveMode": "EXTERNAL_PROVIDER",
+    "endpoint": "https://inventory.example.com/reserve",
+    "httpMethod": "POST",
+    "quotaCode": "CHECKIN_COUPON_STOCK",
+    "quotaType": "STOCK",
+    "scope": "ACTIVITY",
+    "scopeKeyTemplate": "${activityId}:${candidate_rewards[0].rewardCode}",
+    "amountField": "candidate_rewards[0].quantity"
+  }
+}
+```
+
+HTTP Provider 会收到统一请求体，核心字段如下：
+
+```json
+{
+  "operation": "RESERVE",
+  "tenantId": "site_001",
+  "activityId": "act_001",
+  "eventId": "evt_001",
+  "idempotencyKey": "site_001:evt_001",
+  "quotaCode": "CHECKIN_COUPON_STOCK",
+  "quotaType": "STOCK",
+  "scope": "ACTIVITY",
+  "scopeKey": "act_001:COUPON_5",
+  "amount": "1",
+  "candidateRewards": [
+    {
+      "rewardCode": "COUPON_5",
+      "rewardType": "COUPON",
+      "quantity": 1
+    }
+  ],
+  "rewardItems": []
+}
+```
+
+外部服务建议返回：
+
+```json
+{
+  "allowed": true,
+  "reservationId": "resv_001",
+  "status": "RESERVED",
+  "quotaType": "STOCK",
+  "scope": "ACTIVITY",
+  "scopeKey": "act_001:COUPON_5",
+  "amount": "1"
+}
+```
+
+如果 `allowed=false`，`budget-reserve` 会按锁定失败处理。外部服务必须自己保证幂等和并发安全。
+
+gRPC Ref 也使用同一个 `QUOTA_RESERVE_V1` 契约，内部配置类似：
+
+```json
+{
+  "code": "external_budget_grpc_ref",
+  "type": "GRPC_PROVIDER",
+  "config": {
+    "contract": "QUOTA_RESERVE_V1",
+    "reserveMode": "EXTERNAL_PROVIDER",
+    "grpcTarget": "dns:///budget-reserve:9090",
+    "grpcMethod": "Reserve",
+    "quotaCode": "CHECKIN_USDT_BUDGET",
+    "quotaType": "BUDGET",
+    "scope": "ACTIVITY",
+    "scopeKeyTemplate": "${activityId}",
+    "amountField": "candidate_rewards[0].amount"
+  }
+}
+```
+
+当前执行器已经识别 gRPC reserve Ref，并会要求接入具体 gRPC adapter/client；没有 adapter 时不会伪造成功锁定。
+
+#### 并发安全要求
+
+`budget-reserve` 的核心不是普通读取，而是原子 reservation：
+
+1. 不允许先读库存再写库存。
+2. Postgres quota 使用单条条件更新：只有 `used + frozen + amount <= total` 时才增加 `frozen`。
+3. Redis 类型 Ref 后续必须使用 Lua/CAS 脚本完成同样的 check-and-freeze。
+4. 外部 HTTP/gRPC Provider 必须提供带幂等键的 reserve 接口，失败重试不能重复锁定。
+5. 发奖成功后确认占用，发奖失败或超时后释放 frozen。
+
+因此自定义扩展时，只要新的 Ref 遵守 `QUOTA_RESERVE_V1` 契约，就可以替换底层存储，但不能绕过原子锁定语义。
 
 ## ADVANCED 高级集成
 
@@ -853,10 +1191,10 @@ candidate-reward.reward_items      -> grant-order.reward_items
 1. `基础节点` 是默认活动编排的第一层节点，普通奖励、签到、任务、通知链路应优先从这里选择。
 2. `高级节点` 用于增强基础链路，例如事实标准化、用户分层、风控、插件、审批和对账，不应让普通模板默认强依赖。
 3. `组合节点` 只负责数据整形、脚本处理和条件路由，不应伪装成业务状态、资格、频控或发奖节点。
-4. `其他节点` 主要承载事件适配、底层查询、旧链路兼容、投递边界和运维辅助；只有需要明确底层能力时才直接暴露给活动配置用户。
+4. `其他节点` 主要承载事件适配、底层查询、投递边界和运维辅助；只有需要明确底层能力时才直接暴露给活动配置用户。
 5. `activity-state` 应保留并暴露为所有活动状态获取的基础节点；底层 `state-store` 作为通用存储能力放在其他节点。
-6. `http-query`、`redis-query`、`grpc-query`、`plugin-query` 只作为旧链路兼容；新链路不直接填写 endpoint、redisRef、grpcTarget、pluginCode，而是通过 `PROVIDER` 或 `RESOURCE` Ref 间接接入。
-7. 新链路优先使用 `activity-state`、`quota-check`、`candidate-reward`、`budget-reserve`，旧的 `limit`、`quota`、`reward` 继续兼容但不作为首选介绍。
+6. `http-query`、`redis-query`、`grpc-query`、`plugin-query` 作为底层接入能力；新链路不直接填写 endpoint、redisRef、grpcTarget、pluginCode，而是通过 `PROVIDER` 或 `RESOURCE` Ref 间接接入。
+7. 生产奖励链路统一使用 `activity-state`、`quota-check`、`candidate-reward`、`budget-reserve`。
 8. 解释型节点必须明确 `executionMode` 和 `executionAuthority`，不能让用户误以为 workflow 节点本身完成了外部投递、MQ 消费、回调处理或告警发送。
 
 ## 资源化能力状态

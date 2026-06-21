@@ -615,7 +615,14 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 				withDefault(withDescription(arrayField("providerChain", "资源操作", false, "数组项格式：source、resourceRef、namespace、keyTemplate、valuePath、operation、outputAs、onMiss。", rules(maxItems(5))), "第一项 RESOURCE 操作用于确定奖励配置或候选奖励来源。"), []any{}),
 				booleanField("includeDisabledRewards", "包含禁用奖励", false, false),
 			)),
-			fieldGroup("decision", "候选策略", "控制未通过资格、空候选和审计字段。", fields(
+			fieldGroup("selection", "候选选择", "控制多条奖励命中时如何选择候选奖励。", fields(
+				enumField("candidatePolicy", "候选策略", true, "ALL_MATCHED", []string{"ALL_MATCHED", "FIRST_MATCHED", "HIGHEST_VALUE", "WEIGHTED_RANDOM", "RANDOM_ONE"}),
+			)),
+			fieldGroup("prize-model", "奖品模型", "候选奖励支持现金、积分、券、实物、活动次数、会员权益等类型；固定、随机、阶梯、概率、奖池拆分等产生方式由奖励配置 Ref 提供。", fields(
+				enumField("defaultRewardType", "默认奖品类型", false, "CASH", []string{"BONUS", "CASH", "POINT", "COUPON", "GIFT", "DRAW_CHANCE", "MEMBERSHIP"}),
+				enumField("defaultCalculateType", "默认产生方式", false, "FIXED", []string{"FIXED", "RATIO", "LADDER", "RANDOM", "PROBABILITY", "POOL_SPLIT"}),
+			)),
+			fieldGroup("decision", "边界动作", "控制未通过资格、空候选和审计字段。", fields(
 				enumField("notQualifiedAction", "未通过动作", true, "SKIP", []string{"SKIP", "BLOCK"}),
 				enumField("emptyAction", "空候选动作", true, "BLOCK", []string{"BLOCK", "SKIP"}),
 				booleanField("includeTrace", "包含 Trace", false, true),
@@ -682,7 +689,7 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 		groupedSchema("reward", "奖励计算", "根据资格结果生成 reward_items。", groups(
 			fieldGroup("reward-definition", "奖励定义", "定义奖励编码、类型和金额计算方式。", fields(
 				withDescription(stringField("rewardCode", "奖励 Code", true, "STUDIO_DEFAULT_REWARD", rules(minLength(2), maxLength(128), pattern(`^[A-Z0-9._-]+$`, "奖励 Code 只能包含大写字母、数字、点、下划线和短横线。"))), "用于后续发奖、审计和对账。"),
-				enumField("rewardType", "奖励类型", true, "BONUS", []string{"BONUS", "CASH", "POINT", "COUPON"}),
+				enumField("rewardType", "奖励类型", true, "BONUS", []string{"BONUS", "CASH", "POINT", "COUPON", "GIFT", "DRAW_CHANCE", "MEMBERSHIP"}),
 				enumField("calculateType", "计算类型", true, "FIXED", []string{"FIXED", "RATIO", "LADDER", "RANDOM", "PROBABILITY", "POOL_SPLIT"}),
 			)),
 			fieldGroup("amount", "金额和币种", "固定奖励或比例奖励的基础参数。", fields(
@@ -736,16 +743,11 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 			[]string{"quota_hold"},
 			[]string{"ATOMIC 模式会在 Executor 中记录 quota_hold，失败时走 BLOCK/RISK/SKIP 分支。"},
 		)),
-		groupedSchema("budget-reserve", "预算库存锁定", "在发奖前锁定活动预算、奖品库存或用户额度，避免并发超发。", groups(
-			fieldGroup("reserve-target", "锁定对象", "定义要锁定的预算、库存或额度维度。", fields(
-				withDescription(stringField("quotaCode", "Quota Code", true, "DEFAULT_REWARD_BUDGET", rules(minLength(2), maxLength(128))), "后端 quota 资源编码。"),
-				enumField("quotaType", "Quota 类型", true, "BUDGET", []string{"BUDGET", "STOCK", "USER_LIMIT", "DAILY_LIMIT"}),
-				enumField("scope", "作用范围", true, "ACTIVITY", []string{"ACTIVITY", "USER", "TENANT", "WORKSPACE"}),
-				withDescription(stringField("scopeKeyTemplate", "Scope Key 模板", true, "${activityId}", rules(minLength(1), maxLength(256))), "用于组成锁定 bucket。"),
+		groupedSchema("budget-reserve", "预算库存锁定", "在发奖前锁定活动预算或奖品库存，避免并发超发。", groups(
+			fieldGroup("reserve-target", "锁定服务", "选择负责预算或库存原子预占的服务 Ref。", fields(
+				withDescription(stringField("reserveProviderRef", "锁定服务 Ref", false, "checkin_reward_budget_ref", rules(maxLength(128))), "选择预算或库存锁定服务；quotaType、quotaCode、scope、scopeKeyTemplate 由 Ref 内部配置，节点从 candidate_rewards 取奖励参数。"),
 			)),
-			fieldGroup("reserve-policy", "锁定策略", "控制锁定数量、释放策略和失败动作。", fields(
-				withDescription(stringField("amountField", "锁定数量字段", true, "candidate_rewards[0].amount", rules(minLength(1), maxLength(160))), "从 candidate_rewards/reward_items 或上下文读取锁定金额/数量。"),
-				enumField("reserveMode", "锁定模式", true, "ATOMIC", []string{"ATOMIC", "RESERVE_ONLY", "CHECK_ONLY"}),
+			fieldGroup("reserve-policy", "锁定策略", "控制释放策略和失败动作；锁定数量字段由 Ref 内部配置。", fields(
 				enumField("failAction", "锁定失败动作", true, "BLOCK", []string{"BLOCK", "RISK", "SKIP"}),
 				booleanField("releaseOnFailure", "失败释放", false, true),
 			)),
@@ -1233,7 +1235,7 @@ func defaultWorkflowNodeInputs(nodeType string) []WorkflowNodeInputVar {
 	case "dlq":
 		return inputVars(inputVar("failed_message", "Failed Message", "object", true, "失败消息。"))
 	case "audit":
-		return inputVars(inputVar("stage_result", "Stage Result", "object", true, "待审计阶段结果。"))
+		return inputVars(inputVar("routed_payload", "Routed Payload", "object", false, "可选路由载荷；多分支终点不要求固定 inputMapping。"))
 	case "reconcile", "reward-reconcile":
 		return inputVars(inputVar("date_range", "Date Range", "object", true, "对账时间范围。"))
 	case "alert":

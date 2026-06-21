@@ -80,6 +80,7 @@ type ConfigCalculator struct{}
 type amountResult struct {
 	amount     decimal.Decimal
 	rewardType marketing.RewardType
+	currency   string
 	payload    map[string]any
 	payable    bool
 }
@@ -93,8 +94,10 @@ func (c ConfigCalculator) Calculate(ctx Context, configuredReward marketing.Rewa
 	if err != nil {
 		return Result{}, rewardError(ReasonInvalidRewardConfig, "rewardConfig must be non-empty object", "rewardConfig")
 	}
-	if err := validateCurrency(configuredReward.Type, config.Currency); err != nil {
-		return Result{}, err
+	if configuredReward.CalculateType != marketing.CalculateProbability {
+		if err := validateCurrency(configuredReward.Type, config.Currency); err != nil {
+			return Result{}, err
+		}
 	}
 
 	calculated, err := calculateAmount(ctx, configuredReward, config)
@@ -105,7 +108,7 @@ func (c ConfigCalculator) Calculate(ctx Context, configuredReward marketing.Rewa
 	if rewardType == "" {
 		rewardType = configuredReward.Type
 	}
-	currency := config.Currency
+	currency := firstNonEmpty(calculated.currency, config.Currency)
 	if calculated.payload == nil {
 		calculated.payload = map[string]any{}
 	}
@@ -429,19 +432,16 @@ func calculateProbability(ctx Context, configuredReward marketing.Reward, config
 		if err != nil {
 			return amountResult{}, err
 		}
-		amount, err := parseConfigDecimal(item.Amount, fmt.Sprintf("rewardConfig.items[%d].amount", i), ReasonProbabilityItemInvalid)
-		if err != nil {
-			return amountResult{}, err
-		}
 		if item.Currency != "" && config.Currency != "" && item.Currency != config.Currency {
 			return amountResult{}, rewardError(ReasonProbabilityItemInvalid, "item currency must match reward currency", fmt.Sprintf("rewardConfig.items[%d].currency", i))
 		}
-		if item.RewardType != "" && item.RewardType != marketing.RewardBonus && item.RewardType != marketing.RewardCash && item.RewardType != marketing.RewardPoint {
-			return amountResult{}, rewardError(ReasonProbabilityItemInvalid, "item rewardType is unsupported", fmt.Sprintf("rewardConfig.items[%d].rewardType", i))
-		}
 		totalWeight = totalWeight.Add(weight)
 		weights[i] = weight
-		amounts[i] = amount
+		if amount, err := probabilityItemAmount(configuredReward.Type, item, i); err != nil {
+			return amountResult{}, err
+		} else {
+			amounts[i] = amount
+		}
 	}
 	if totalWeight.Cmp(decimal.MustParse("100")) != 0 {
 		return amountResult{}, rewardError(ReasonProbabilityTotalInvalid, "total weight must equal 100.0000", "rewardConfig.items")
@@ -462,15 +462,119 @@ func calculateProbability(ctx Context, configuredReward marketing.Reward, config
 	if rewardType == "" {
 		rewardType = configuredReward.Type
 	}
-	return amountResult{amount: amounts[selected], rewardType: rewardType, payload: map[string]any{
-		"itemCode":      item.ItemCode,
-		"selectedIndex": selected,
-		"weight":        weights[selected].String(),
-		"totalWeight":   totalWeight.String(),
-		"seedSource":    seedMaterial,
-		"seedSalt":      config.SeedSalt,
-		"label":         item.Label,
-	}}, nil
+	payload, err := probabilityItemPayload(rewardType, item, amounts[selected], selected)
+	if err != nil {
+		return amountResult{}, err
+	}
+	payload["itemCode"] = item.ItemCode
+	payload["selectedIndex"] = selected
+	payload["weight"] = weights[selected].String()
+	payload["totalWeight"] = totalWeight.String()
+	payload["seedSource"] = seedMaterial
+	payload["seedSalt"] = config.SeedSalt
+	payload["label"] = item.Label
+	return amountResult{amount: amounts[selected], rewardType: rewardType, currency: firstNonEmpty(item.Currency, config.Currency), payload: payload}, nil
+}
+
+func probabilityItemAmount(defaultType marketing.RewardType, item marketing.ProbabilityItem, index int) (decimal.Decimal, error) {
+	rewardType := item.RewardType
+	if rewardType == "" {
+		rewardType = defaultType
+	}
+	switch rewardType {
+	case marketing.RewardBonus, marketing.RewardCash:
+		return parseConfigDecimal(item.Amount, fmt.Sprintf("rewardConfig.items[%d].amount", index), ReasonProbabilityItemInvalid)
+	case marketing.RewardPoint:
+		value := firstNonEmpty(item.Points, item.Amount)
+		if _, err := parsePositiveInt(value, fmt.Sprintf("rewardConfig.items[%d].points", index)); err != nil {
+			return decimal.Decimal{}, err
+		}
+		return decimal.Zero(), nil
+	case marketing.RewardCoupon, marketing.RewardGift, marketing.RewardDrawChance, marketing.RewardMembership:
+		return decimal.Zero(), nil
+	default:
+		return decimal.Decimal{}, rewardError(ReasonProbabilityItemInvalid, "item rewardType is unsupported", fmt.Sprintf("rewardConfig.items[%d].rewardType", index))
+	}
+}
+
+func probabilityItemPayload(rewardType marketing.RewardType, item marketing.ProbabilityItem, amount decimal.Decimal, index int) (map[string]any, error) {
+	payload := map[string]any{}
+	switch rewardType {
+	case marketing.RewardBonus, marketing.RewardCash:
+		payload["amount"] = amount.String()
+		copyIfNotEmpty(payload, "currency", item.Currency)
+	case marketing.RewardPoint:
+		points, err := parsePositiveInt(firstNonEmpty(item.Points, item.Amount), fmt.Sprintf("rewardConfig.items[%d].points", index))
+		if err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(firstNonEmpty(item.Unit, item.PointType)) == "" {
+			return nil, rewardError(ReasonProbabilityItemInvalid, "unit is required", fmt.Sprintf("rewardConfig.items[%d].unit", index))
+		}
+		payload["points"] = points
+		payload["unit"] = firstNonEmpty(item.Unit, item.PointType)
+		payload["pointType"] = firstNonEmpty(item.PointType, item.Unit)
+	case marketing.RewardCoupon:
+		if strings.TrimSpace(item.CouponTemplateID) == "" {
+			return nil, rewardError(ReasonProbabilityItemInvalid, "couponTemplateId is required", fmt.Sprintf("rewardConfig.items[%d].couponTemplateId", index))
+		}
+		quantity, err := parsePositiveInt(item.Quantity, fmt.Sprintf("rewardConfig.items[%d].quantity", index))
+		if err != nil {
+			return nil, err
+		}
+		payload["quantity"] = quantity
+		copyIfNotEmpty(payload, "couponTemplateId", item.CouponTemplateID)
+		copyIfNotEmpty(payload, "couponType", item.CouponType)
+		copyIfNotEmpty(payload, "faceValue", item.FaceValue)
+		copyIfNotEmpty(payload, "discountRate", item.DiscountRate)
+		copyIfNotEmpty(payload, "currency", item.Currency)
+	case marketing.RewardGift:
+		if strings.TrimSpace(firstNonEmpty(item.GiftSkuID, item.GiftCode)) == "" {
+			return nil, rewardError(ReasonProbabilityItemInvalid, "giftSkuId or giftCode is required", fmt.Sprintf("rewardConfig.items[%d].giftSkuId", index))
+		}
+		quantity, err := parsePositiveInt(item.Quantity, fmt.Sprintf("rewardConfig.items[%d].quantity", index))
+		if err != nil {
+			return nil, err
+		}
+		payload["quantity"] = quantity
+		copyIfNotEmpty(payload, "giftSkuId", item.GiftSkuID)
+		copyIfNotEmpty(payload, "giftCode", item.GiftCode)
+		copyIfNotEmpty(payload, "deliveryMode", item.DeliveryMode)
+		copyIfNotEmpty(payload, "valuationAmount", item.ValuationAmount)
+		copyIfNotEmpty(payload, "currency", item.Currency)
+	case marketing.RewardDrawChance:
+		if strings.TrimSpace(firstNonEmpty(item.DrawPoolCode, item.LotteryCode)) == "" {
+			return nil, rewardError(ReasonProbabilityItemInvalid, "drawPoolCode or lotteryCode is required", fmt.Sprintf("rewardConfig.items[%d].drawPoolCode", index))
+		}
+		chanceCount, err := parsePositiveInt(item.ChanceCount, fmt.Sprintf("rewardConfig.items[%d].chanceCount", index))
+		if err != nil {
+			return nil, err
+		}
+		payload["chanceCount"] = chanceCount
+		copyIfNotEmpty(payload, "drawPoolCode", item.DrawPoolCode)
+		copyIfNotEmpty(payload, "lotteryCode", item.LotteryCode)
+	case marketing.RewardMembership:
+		if strings.TrimSpace(firstNonEmpty(item.MembershipTier, item.MembershipPlanID, item.BenefitPackageID)) == "" {
+			return nil, rewardError(ReasonProbabilityItemInvalid, "membershipTier, membershipPlanId, or benefitPackageId is required", fmt.Sprintf("rewardConfig.items[%d].membershipTier", index))
+		}
+		if strings.EqualFold(strings.TrimSpace(item.DurationType), "PERMANENT") {
+			payload["durationType"] = "PERMANENT"
+		} else {
+			durationDays, err := parsePositiveInt(item.DurationDays, fmt.Sprintf("rewardConfig.items[%d].durationDays", index))
+			if err != nil {
+				return nil, err
+			}
+			payload["durationDays"] = durationDays
+		}
+		copyIfNotEmpty(payload, "membershipTier", item.MembershipTier)
+		copyIfNotEmpty(payload, "membershipPlanId", item.MembershipPlanID)
+		copyIfNotEmpty(payload, "benefitPackageId", item.BenefitPackageID)
+		copyIfNotEmpty(payload, "valuationAmount", item.ValuationAmount)
+		copyIfNotEmpty(payload, "currency", item.Currency)
+	default:
+		return nil, rewardError(ReasonProbabilityItemInvalid, "item rewardType is unsupported", fmt.Sprintf("rewardConfig.items[%d].rewardType", index))
+	}
+	return payload, nil
 }
 
 func calculatePoolSplit(ctx Context, config marketing.RewardConfig) (amountResult, error) {

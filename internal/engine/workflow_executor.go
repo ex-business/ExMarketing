@@ -425,7 +425,7 @@ func (s *Service) workflowNodeHandlers() map[string]workflowNodeHandler {
 		"decimal":           decimalWorkflowNodeHandler,
 		"limit":             limitWorkflowNodeHandler,
 		"quota":             quotaWorkflowNodeHandler,
-		"budget-reserve":    budgetReserveWorkflowNodeHandler,
+		"budget-reserve":    s.budgetReserveWorkflowNodeHandler,
 		"lock":              s.lockWorkflowNodeHandler,
 		"participation":     participationWorkflowNodeHandler,
 		"audit":             auditWorkflowNodeHandler,
@@ -804,6 +804,17 @@ func workflowNodeConfigMap(node marketing.WorkflowNode) map[string]any {
 		return nil
 	}
 	return workflowNodeConfigWithDefaults(node, config)
+}
+
+func workflowRawNodeConfigMap(node marketing.WorkflowNode) map[string]any {
+	config := map[string]any{}
+	if len(node.Config) == 0 {
+		return config
+	}
+	if err := json.Unmarshal(node.Config, &config); err != nil {
+		return nil
+	}
+	return config
 }
 
 func workflowNodeConfigWithDefaults(node marketing.WorkflowNode, config map[string]any) map[string]any {
@@ -1981,10 +1992,10 @@ func workflowQuotaScope(value string, fallback marketing.QuotaScope) marketing.Q
 	}
 }
 
-func workflowQuotaScopeKey(config map[string]any, runtime workflowRuntime) string {
+func workflowQuotaScopeKey(ctx context.Context, node marketing.WorkflowNode, config map[string]any, runtime workflowRuntime) string {
 	template := workflowConfigString(config, "scopeKeyTemplate")
 	if template != "" {
-		return workflowRenderTemplate(template, runtime)
+		return workflowRenderContextTemplate(ctx, template, runtime, node)
 	}
 	scope := workflowQuotaScope(workflowConfigString(config, "scope"), marketing.QuotaScopeActivity)
 	if scope == marketing.QuotaScopeUser {
@@ -1996,6 +2007,11 @@ func workflowQuotaScopeKey(config map[string]any, runtime workflowRuntime) strin
 func workflowQuotaPlannedAmount(ctx context.Context, runtime workflowRuntime, config map[string]any) string {
 	amountField := firstWorkflowString(workflowConfigString(config, "amountField"), "reward_items[0].amount")
 	if value, ok := workflowRouteOutputValue(workflowNodeContext(ctx).ResolvedInput, amountField); ok {
+		if text := workflowOutputString(value); text != "" {
+			return text
+		}
+	}
+	if value, ok := workflowRouteOutputValue(workflowContextOutputRoot(ctx), amountField); ok {
 		if text := workflowOutputString(value); text != "" {
 			return text
 		}
@@ -2170,6 +2186,39 @@ func workflowRenderNodeTemplate(template string, runtime workflowRuntime, node m
 	return strings.ReplaceAll(workflowRenderTemplate(template, runtime), "${nodeId}", node.ID)
 }
 
+func workflowRenderContextTemplate(ctx context.Context, template string, runtime workflowRuntime, node marketing.WorkflowNode) string {
+	out := workflowRenderNodeTemplate(template, runtime, node)
+	root := workflowContextOutputRoot(ctx)
+	return regexp.MustCompile(`\$\{([^}]+)\}`).ReplaceAllStringFunc(out, func(token string) string {
+		expr := strings.TrimSuffix(strings.TrimPrefix(token, "${"), "}")
+		if value, ok := workflowRouteOutputValue(root, expr); ok {
+			return workflowOutputString(value)
+		}
+		return token
+	})
+}
+
+func workflowContextOutputRoot(ctx context.Context) map[string]any {
+	execCtx := workflowNodeContext(ctx)
+	root := map[string]any{}
+	for key, value := range execCtx.ResolvedInput {
+		root[key] = value
+	}
+	for _, output := range execCtx.NodeOutputs {
+		for key, value := range output {
+			if _, exists := root[key]; !exists {
+				root[key] = value
+			}
+		}
+	}
+	for key, value := range execCtx.Variables {
+		if _, exists := root[key]; !exists {
+			root[key] = value
+		}
+	}
+	return root
+}
+
 func extractWorkflowJSONPath(value any, path string) (any, error) {
 	path = strings.TrimSpace(path)
 	if path == "" || path == "$" {
@@ -2193,6 +2242,40 @@ func extractWorkflowJSONPath(value any, path string) (any, error) {
 }
 
 func extractWorkflowPathSegment(value any, segment string) (any, error) {
+	if strings.Contains(segment, "[") {
+		field, rest, _ := strings.Cut(segment, "[")
+		current := value
+		var err error
+		if field != "" {
+			current, err = extractWorkflowPathSegment(current, field)
+			if err != nil {
+				return nil, err
+			}
+		}
+		for rest != "" {
+			indexText, next, ok := strings.Cut(rest, "]")
+			if !ok {
+				return nil, fmt.Errorf("invalid array segment %q", segment)
+			}
+			index, err := strconv.Atoi(strings.TrimPrefix(indexText, "["))
+			if err != nil {
+				return nil, fmt.Errorf("segment %q is not an array index", segment)
+			}
+			items, ok := workflowJSONValue(current).([]any)
+			if !ok {
+				return nil, fmt.Errorf("cannot index %q from %T", segment, current)
+			}
+			if index < 0 || index >= len(items) {
+				return nil, fmt.Errorf("array index %d out of range", index)
+			}
+			current = items[index]
+			if next == "" {
+				return current, nil
+			}
+			rest = next
+		}
+		return current, nil
+	}
 	switch typed := value.(type) {
 	case map[string]any:
 		next, ok := typed[segment]
@@ -4567,6 +4650,14 @@ func (s *Service) externalActivityStateWorkflowNodeHandler(ctx context.Context, 
 func workflowCopyMap(input map[string]any) map[string]any {
 	out := make(map[string]any, len(input))
 	for key, value := range input {
+		out[key] = value
+	}
+	return out
+}
+
+func workflowMergeMaps(base map[string]any, override map[string]any) map[string]any {
+	out := workflowCopyMap(base)
+	for key, value := range override {
 		out[key] = value
 	}
 	return out
@@ -7029,6 +7120,18 @@ func (s *Service) candidateRewardWorkflowNodeHandler(ctx context.Context, node m
 			"audit":              workflowHandlerAudit(node, runtime),
 		})
 	}
+	items, err = workflowEvaluateCandidateRewards(ctx, runtime, items)
+	if err != nil {
+		return nodeFailed("CANDIDATE_REWARD_CALCULATION_FAILED: "+err.Error(), map[string]any{
+			"errorCode": "CANDIDATE_REWARD_CALCULATION_FAILED",
+			"audit":     workflowHandlerAudit(node, runtime),
+		})
+	}
+	if !workflowConfigBool(config, "includeDisabledRewards", false) {
+		items = workflowFilterEnabledCandidateRewards(items)
+	}
+	policy := workflowCandidateRewardPolicy(config)
+	items = workflowSelectCandidateRewards(items, policy, runtime)
 	if len(items) == 0 {
 		output := map[string]any{"errorCode": "CANDIDATE_REWARD_EMPTY", "candidate_rewards": []any{}, "reward_items": []any{}, "audit": workflowHandlerAudit(node, runtime)}
 		if strings.EqualFold(workflowConfigString(config, "emptyAction"), "SKIP") {
@@ -7040,6 +7143,7 @@ func (s *Service) candidateRewardWorkflowNodeHandler(ctx context.Context, node m
 		"candidate_rewards": items,
 		"reward_items":      items,
 		"candidateCount":    len(items),
+		"candidatePolicy":   policy,
 		"source":            firstWorkflowString(workflowConfigString(config, "source"), "ACTIVITY_REWARD_CONFIG"),
 		"resource_result":   resourceOutput,
 		"audit":             workflowHandlerAudit(node, runtime),
@@ -7442,6 +7546,16 @@ func (s *Service) workflowCandidateRewardItems(ctx context.Context, node marketi
 		if items := workflowCandidateRewardItemsFromResourceOutput(output, workflowConfigString(step, "valuePath")); len(items) > 0 {
 			return items, output, nil
 		}
+		if resourceRef == defaultCheckinRewardConfig {
+			if items := s.workflowCandidateRewardDefaultItems(ctx, runtime, resourceRef, config); len(items) > 0 {
+				if output == nil {
+					output = map[string]any{}
+				}
+				output["adapterMode"] = "CHECKIN_REWARD_CONFIG_DEFAULT"
+				output["defaulted"] = true
+				return items, output, nil
+			}
+		}
 		return nil, output, nil
 	}
 	return workflowCandidateRewardItemsFromLegacySource(ctx, runtime, config), nil, nil
@@ -7479,6 +7593,20 @@ func workflowCandidateRewardItemsFromResourceOutput(output map[string]any, value
 				return items
 			}
 		}
+		for _, key := range []string{"stored_value", "value"} {
+			if value, err := extractWorkflowJSONPath(workflowJSONValue(output[key]), valuePath); err == nil {
+				if items := workflowAnyArray(value); len(items) > 0 {
+					return items
+				}
+			}
+		}
+		if storageEntry, ok := workflowJSONValue(output["storage_entry"]).(map[string]any); ok {
+			if value, err := extractWorkflowJSONPath(workflowJSONValue(storageEntry["value"]), valuePath); err == nil {
+				if items := workflowAnyArray(value); len(items) > 0 {
+					return items
+				}
+			}
+		}
 	}
 	for _, key := range []string{"candidate_rewards", "reward_items", "selected_rewards", "stored_value", "value"} {
 		if items := workflowAnyArray(output[key]); len(items) > 0 {
@@ -7491,6 +7619,228 @@ func workflowCandidateRewardItemsFromResourceOutput(output map[string]any, value
 		}
 	}
 	return nil
+}
+
+func (s *Service) workflowCandidateRewardDefaultItems(ctx context.Context, runtime workflowRuntime, resourceRef string, config map[string]any) []any {
+	resource, err := s.GetResource(ctx, runtime.Activity.TenantID, resourceRef)
+	if err != nil {
+		return nil
+	}
+	resourceConfig := resource.ConfigMap()
+	if value, ok := resourceConfig["defaultValue"]; ok {
+		if items := workflowCandidateRewardItemsFromResourceOutput(map[string]any{"stored_value": value}, "$.reward_items"); len(items) > 0 {
+			return items
+		}
+	}
+	if value, ok := resourceConfig["defaultRewardItems"]; ok {
+		if items := workflowAnyArray(value); len(items) > 0 {
+			return items
+		}
+	}
+	return workflowCandidateRewardItemsFromActivityConfig(ctx, runtime, config)
+}
+
+func workflowCandidateRewardPolicy(config map[string]any) string {
+	policy := strings.ToUpper(strings.TrimSpace(firstWorkflowString(workflowConfigString(config, "candidatePolicy"), workflowConfigString(config, "selectionPolicy"))))
+	switch policy {
+	case "FIRST_MATCHED", "HIGHEST_VALUE", "WEIGHTED_RANDOM", "RANDOM_ONE":
+		return policy
+	default:
+		return "ALL_MATCHED"
+	}
+}
+
+func workflowSelectCandidateRewards(items []any, policy string, runtime workflowRuntime) []any {
+	if len(items) <= 1 {
+		return items
+	}
+	switch policy {
+	case "FIRST_MATCHED":
+		return []any{items[0]}
+	case "HIGHEST_VALUE":
+		bestIndex := 0
+		bestAmount := workflowCandidateRewardAmount(items[0])
+		for index := 1; index < len(items); index++ {
+			amount := workflowCandidateRewardAmount(items[index])
+			if amount > bestAmount {
+				bestIndex = index
+				bestAmount = amount
+			}
+		}
+		return []any{items[bestIndex]}
+	case "WEIGHTED_RANDOM":
+		total := 0
+		weights := make([]int, len(items))
+		for index, item := range items {
+			weight := workflowCandidateRewardWeight(item)
+			weights[index] = weight
+			total += weight
+		}
+		if total <= 0 {
+			return []any{items[0]}
+		}
+		seed := firstWorkflowString(runtime.Inbox.IdempotencyKey, firstWorkflowString(runtime.Inbox.Event.EventID, runtime.Activity.ID))
+		point := workflowStableIndex(seed, total)
+		acc := 0
+		for index, weight := range weights {
+			acc += weight
+			if point < acc {
+				return []any{items[index]}
+			}
+		}
+		return []any{items[len(items)-1]}
+	case "RANDOM_ONE":
+		seed := firstWorkflowString(runtime.Inbox.IdempotencyKey, firstWorkflowString(runtime.Inbox.Event.EventID, runtime.Activity.ID))
+		return []any{items[workflowStableIndex(seed, len(items))]}
+	default:
+		return items
+	}
+}
+
+func workflowEvaluateCandidateRewards(ctx context.Context, runtime workflowRuntime, items []any) ([]any, error) {
+	if len(items) == 0 {
+		return items, nil
+	}
+	out := make([]any, 0, len(items))
+	calculator := rewardcalc.ConfigCalculator{}
+	for _, item := range items {
+		object, ok := workflowJSONValue(item).(map[string]any)
+		if !ok {
+			out = append(out, item)
+			continue
+		}
+		reward, ok := workflowCandidateRewardConfigObject(object)
+		if !ok {
+			out = append(out, object)
+			continue
+		}
+		calculated, err := calculator.Calculate(rewardcalc.Context{
+			Event:          runtime.Inbox.Event,
+			TenantID:       runtime.Activity.TenantID,
+			ActivityID:     runtime.Activity.ID,
+			IdempotencyKey: runtime.Inbox.IdempotencyKey,
+			Facts:          workflowFactsFromContext(ctx),
+		}, reward)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", reward.Code, err)
+		}
+		next := workflowCopyMap(object)
+		next["rewardCode"] = reward.Code
+		next["rewardType"] = calculated.Type
+		next["calculateType"] = reward.CalculateType
+		next["amount"] = calculated.Amount
+		next["currency"] = calculated.Currency
+		next["payload"] = calculated.Payload
+		next["reasonCode"] = calculated.ReasonCode
+		next["reason"] = calculated.Reason
+		next["skipped"] = calculated.Skipped
+		for key, value := range calculated.Payload {
+			if _, exists := next[key]; !exists {
+				next[key] = value
+			}
+		}
+		out = append(out, next)
+	}
+	return out, nil
+}
+
+func workflowFilterEnabledCandidateRewards(items []any) []any {
+	out := make([]any, 0, len(items))
+	for _, item := range items {
+		object, ok := workflowJSONValue(item).(map[string]any)
+		if !ok {
+			out = append(out, item)
+			continue
+		}
+		if workflowConfigBool(object, "disabled", false) {
+			continue
+		}
+		if enabled, exists := object["enabled"]; exists && !workflowTruthy(enabled) {
+			continue
+		}
+		out = append(out, object)
+	}
+	return out
+}
+
+func workflowCandidateRewardConfigObject(item map[string]any) (marketing.Reward, bool) {
+	code := firstNonEmpty(workflowOutputString(item["rewardCode"]), workflowOutputString(item["code"]), workflowOutputString(item["itemCode"]))
+	rewardType := marketing.RewardType(strings.ToUpper(firstNonEmpty(workflowOutputString(item["rewardType"]), workflowOutputString(item["type"]))))
+	calculateType := marketing.CalculateType(strings.ToUpper(firstNonEmpty(workflowOutputString(item["calculateType"]), workflowOutputString(item["calcType"]))))
+	if code == "" || rewardType == "" || calculateType == "" {
+		return marketing.Reward{}, false
+	}
+	config := workflowCandidateRewardConfigMap(item)
+	if len(config) == 0 {
+		return marketing.Reward{}, false
+	}
+	raw, err := json.Marshal(workflowJSONValue(config))
+	if err != nil {
+		return marketing.Reward{}, false
+	}
+	grantMode := marketing.GrantMode(strings.ToUpper(firstNonEmpty(workflowOutputString(item["grantMode"]), string(marketing.GrantAuto))))
+	grantChannel := marketing.GrantChannel(strings.ToUpper(firstNonEmpty(workflowOutputString(item["grantChannel"]), string(marketing.GrantHTTP))))
+	enabled := !workflowConfigBool(item, "disabled", false)
+	if value, exists := item["enabled"]; exists {
+		enabled = workflowTruthy(value)
+	}
+	return marketing.Reward{
+		ID:            workflowOutputString(item["rewardId"]),
+		Code:          code,
+		Type:          rewardType,
+		CalculateType: calculateType,
+		Config:        raw,
+		GrantMode:     grantMode,
+		GrantChannel:  grantChannel,
+		FlowMultiple:  workflowOutputString(item["flowMultiple"]),
+		Enabled:       enabled,
+	}, true
+}
+
+func workflowCandidateRewardConfigMap(item map[string]any) map[string]any {
+	if config, ok := workflowJSONValue(item["rewardConfig"]).(map[string]any); ok && len(config) > 0 {
+		return config
+	}
+	config := map[string]any{}
+	for _, key := range []string{
+		"amount", "points", "quantity", "chanceCount", "durationDays", "baseField", "rate", "maxAmount",
+		"field", "ladders", "minAmount", "step", "seedSalt", "items", "poolAmount", "splitBy", "splitMode",
+		"countField", "participantCountField", "weightField", "totalWeightField", "currency", "unit", "pointType",
+		"couponTemplateId", "couponType", "faceValue", "discountRate", "giftSkuId", "giftCode", "deliveryMode",
+		"drawPoolCode", "lotteryCode", "membershipTier", "membershipPlanId", "benefitPackageId", "durationType",
+		"valuationAmount", "expireAt", "flowMultiple", "targetRef", "rewardPayload",
+	} {
+		if value, ok := item[key]; ok && !workflowConfigValueEmpty(value) {
+			config[key] = value
+		}
+	}
+	return config
+}
+
+func workflowCandidateRewardAmount(item any) float64 {
+	object, ok := workflowJSONValue(item).(map[string]any)
+	if !ok {
+		return 0
+	}
+	for _, key := range []string{"amount", "value", "rewardAmount"} {
+		if amount, ok := workflowRouteNumber(object[key]); ok {
+			return amount
+		}
+	}
+	return 0
+}
+
+func workflowCandidateRewardWeight(item any) int {
+	object, ok := workflowJSONValue(item).(map[string]any)
+	if !ok {
+		return 1
+	}
+	for _, key := range []string{"weight", "probabilityWeight"} {
+		if number, ok := workflowRouteNumber(object[key]); ok && number > 0 {
+			return int(number)
+		}
+	}
+	return 1
 }
 
 func workflowCandidateRewardItemsFromLegacySource(ctx context.Context, runtime workflowRuntime, config map[string]any) []any {
@@ -7672,7 +8022,7 @@ func quotaWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, 
 		"quotaCode":       workflowConfigString(config, "quotaCode"),
 		"quotaType":       firstWorkflowString(workflowConfigString(config, "quotaType"), string(marketing.QuotaBudget)),
 		"scope":           firstWorkflowString(workflowConfigString(config, "scope"), string(marketing.QuotaScopeActivity)),
-		"scopeKey":        workflowQuotaScopeKey(config, runtime),
+		"scopeKey":        workflowQuotaScopeKey(ctx, node, config, runtime),
 		"consumeMode":     firstWorkflowString(workflowConfigString(config, "consumeMode"), "ATOMIC"),
 		"amountField":     firstWorkflowString(workflowConfigString(config, "amountField"), "reward_items[0].amount"),
 		"plannedAmount":   workflowQuotaPlannedAmount(ctx, runtime, config),
@@ -7684,7 +8034,7 @@ func quotaWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, 
 	hold["reservations"] = []any{workflowJSONValue(marketing.QuotaReservation{
 		Type:     workflowQuotaType(workflowConfigString(config, "quotaType"), marketing.QuotaBudget),
 		Scope:    workflowQuotaScope(workflowConfigString(config, "scope"), marketing.QuotaScopeActivity),
-		ScopeKey: workflowQuotaScopeKey(config, runtime),
+		ScopeKey: workflowQuotaScopeKey(ctx, node, config, runtime),
 		Amount:   workflowOutputString(hold["plannedAmount"]),
 		Status:   marketing.QuotaReservationFrozen,
 	})}
@@ -7715,6 +8065,262 @@ func budgetReserveWorkflowNodeHandler(ctx context.Context, node marketing.Workfl
 	result.Output["reserveMode"] = workflowConfigString(workflowNodeConfigMap(node), "reserveMode")
 	result.Output["releaseOnFailure"] = workflowConfigBool(workflowNodeConfigMap(node), "releaseOnFailure", true)
 	return result
+}
+
+func (s *Service) budgetReserveWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
+	config, failed, ok := workflowRequireNodeConfig(node)
+	if !ok {
+		failed.Output["audit"] = workflowHandlerAudit(node, runtime)
+		return failed
+	}
+	rawConfig := workflowRawNodeConfigMap(node)
+	if rawConfig == nil {
+		rawConfig = map[string]any{}
+	}
+	config = workflowQuotaResourceConfig(config)
+	rawConfig = workflowQuotaResourceConfig(rawConfig)
+	config, reserveResource, err := s.workflowBudgetReserveResourceConfig(ctx, runtime, config, rawConfig)
+	if err != nil {
+		return nodeFailed(err.Error(), map[string]any{
+			"errorCode": "BUDGET_RESERVE_RESOURCE_FAILED",
+			"audit":     workflowHandlerAudit(node, runtime),
+		})
+	}
+	if reserveResource != nil && workflowBudgetReserveExternalResource(*reserveResource, config) {
+		return s.workflowBudgetReserveExternal(ctx, node, runtime, config, *reserveResource)
+	}
+	quotaType := workflowQuotaType(workflowConfigString(config, "quotaType"), marketing.QuotaBudget)
+	if quotaType != marketing.QuotaBudget && quotaType != marketing.QuotaStock {
+		return nodeFailed("BUDGET_RESERVE_QUOTA_TYPE_UNSUPPORTED: budget-reserve only supports BUDGET or STOCK; use quota-check for USER_LIMIT or DAILY_LIMIT", map[string]any{
+			"errorCode": "BUDGET_RESERVE_QUOTA_TYPE_UNSUPPORTED",
+			"quotaType": string(quotaType),
+			"audit":     workflowHandlerAudit(node, runtime),
+		})
+	}
+	resolvedNode := node
+	resolvedNode.Config = workflowRawJSON(config)
+	result := budgetReserveWorkflowNodeHandler(ctx, resolvedNode, runtime)
+	if result.Output == nil {
+		result.Output = map[string]any{}
+	}
+	if reserveResource != nil {
+		result.Output["reserveProviderRef"] = reserveResource.Code
+		result.Output["resourceRef"] = reserveResource.Code
+		result.Output["reserveResource"] = map[string]any{
+			"code":     reserveResource.Code,
+			"name":     reserveResource.Name,
+			"type":     reserveResource.Type,
+			"driver":   reserveResource.Driver,
+			"contract": firstWorkflowString(workflowConfigString(reserveResource.ConfigMap(), "contract"), "QUOTA_RESERVE_V1"),
+		}
+		result.Output["executionAuthority"] = "WorkflowExecutor/QuotaReserveResource"
+	}
+	return result
+}
+
+func workflowBudgetReserveExternalResource(resource marketing.Resource, config map[string]any) bool {
+	if resource.Type == marketing.ResourceHTTP || resource.Type == marketing.ResourceHTTPProvider || resource.Type == marketing.ResourceGRPCProvider {
+		return true
+	}
+	mode := strings.ToUpper(firstNonEmpty(workflowConfigString(config, "reserveMode"), workflowConfigString(config, "adapterMode"), workflowConfigString(config, "providerType")))
+	return mode == "EXTERNAL_PROVIDER" || mode == "HTTP" || mode == "GRPC"
+}
+
+func (s *Service) workflowBudgetReserveExternal(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime, config map[string]any, resource marketing.Resource) workflowNodeResult {
+	target := resource
+	if resource.Type == marketing.ResourceProvider {
+		targetRef := firstNonEmpty(workflowConfigString(config, "targetResourceRef"), workflowConfigString(resource.ConfigMap(), "targetResourceRef"))
+		if targetRef != "" {
+			if resolved, err := s.GetResource(ctx, runtime.Activity.TenantID, targetRef); err == nil {
+				target = resolved
+			}
+		}
+	}
+	if target.Type == marketing.ResourceGRPCProvider {
+		return nodeFailed("BUDGET_RESERVE_GRPC_ADAPTER_REQUIRED: gRPC reserve provider requires a concrete adapter/client", map[string]any{
+			"errorCode":          "BUDGET_RESERVE_GRPC_ADAPTER_REQUIRED",
+			"reserveProviderRef": resource.Code,
+			"resourceRef":        resource.Code,
+			"targetResourceRef":  target.Code,
+			"grpcTarget":         firstNonEmpty(workflowConfigString(config, "grpcTarget"), workflowConfigString(target.ConfigMap(), "grpcTarget")),
+			"executionMode":      "EXTERNAL_PROVIDER",
+			"executionAuthority": "WorkflowExecutor/ExternalReserveProvider",
+			"audit":              workflowHandlerAudit(node, runtime),
+		})
+	}
+	if target.Type != marketing.ResourceHTTP && target.Type != marketing.ResourceHTTPProvider {
+		return nodeFailed("BUDGET_RESERVE_EXTERNAL_RESOURCE_UNSUPPORTED: reserve Ref must target HTTP or gRPC provider", map[string]any{
+			"errorCode":          "BUDGET_RESERVE_EXTERNAL_RESOURCE_UNSUPPORTED",
+			"reserveProviderRef": resource.Code,
+			"resourceRef":        resource.Code,
+			"targetType":         target.Type,
+			"audit":              workflowHandlerAudit(node, runtime),
+		})
+	}
+	quotaType := workflowQuotaType(workflowConfigString(config, "quotaType"), marketing.QuotaBudget)
+	if quotaType != marketing.QuotaBudget && quotaType != marketing.QuotaStock {
+		return nodeFailed("BUDGET_RESERVE_QUOTA_TYPE_UNSUPPORTED: budget-reserve only supports BUDGET or STOCK; use quota-check for USER_LIMIT or DAILY_LIMIT", map[string]any{
+			"errorCode": "BUDGET_RESERVE_QUOTA_TYPE_UNSUPPORTED",
+			"quotaType": string(quotaType),
+			"audit":     workflowHandlerAudit(node, runtime),
+		})
+	}
+	scopeKey := workflowQuotaScopeKey(ctx, node, config, runtime)
+	amount := workflowQuotaPlannedAmount(ctx, runtime, config)
+	payload := map[string]any{
+		"contract":         firstWorkflowString(workflowConfigString(config, "contract"), "QUOTA_RESERVE_V1"),
+		"operation":        "RESERVE",
+		"tenantId":         runtime.Activity.TenantID,
+		"activityId":       runtime.Activity.ID,
+		"eventId":          runtime.Inbox.Event.EventID,
+		"idempotencyKey":   runtime.Inbox.IdempotencyKey,
+		"subject":          workflowJSONValue(runtime.Inbox.Event.Subject),
+		"quotaCode":        workflowConfigString(config, "quotaCode"),
+		"quotaType":        string(quotaType),
+		"scope":            firstWorkflowString(workflowConfigString(config, "scope"), string(marketing.QuotaScopeActivity)),
+		"scopeKey":         scopeKey,
+		"amount":           amount,
+		"candidateRewards": workflowContextOutputRoot(ctx)["candidate_rewards"],
+		"rewardItems":      workflowContextOutputRoot(ctx)["reward_items"],
+		"failAction":       firstWorkflowString(workflowConfigString(config, "failAction"), "BLOCK"),
+		"releaseOnFailure": workflowConfigBool(config, "releaseOnFailure", true),
+	}
+	output, err := s.workflowExecuteResourceAPI(ctx, node, runtime, workflowResourceAPIRequest{
+		Operation:   marketing.ResourceCall,
+		ResourceRef: target.Code,
+		Namespace:   firstWorkflowString(workflowConfigString(config, "namespace"), "reserve"),
+		Key:         firstWorkflowString(scopeKey, "${activityId}:${eventId}:${nodeId}"),
+		Value:       payload,
+		ValueType:   "OBJECT",
+		Options: map[string]any{
+			"httpMethod": firstNonEmpty(workflowConfigString(config, "httpMethod"), workflowConfigString(target.ConfigMap(), "httpMethod"), "POST"),
+		},
+	})
+	if err != nil {
+		if output == nil {
+			output = map[string]any{}
+		}
+		output["errorCode"] = firstWorkflowString(workflowConfigString(output, "errorCode"), "BUDGET_RESERVE_EXTERNAL_FAILED")
+		output["reserveProviderRef"] = resource.Code
+		output["resourceRef"] = resource.Code
+		output["targetResourceRef"] = target.Code
+		output["audit"] = workflowHandlerAudit(node, runtime)
+		return nodeFailed("BUDGET_RESERVE_EXTERNAL_FAILED: "+err.Error(), output)
+	}
+	hold, ok := workflowExternalReserveHold(output, payload, resource, target)
+	if !ok {
+		return nodeFailed("BUDGET_RESERVE_EXTERNAL_DENIED: external reserve provider denied reservation", map[string]any{
+			"errorCode":          "BUDGET_RESERVE_EXTERNAL_DENIED",
+			"reserveProviderRef": resource.Code,
+			"resourceRef":        resource.Code,
+			"resource_result":    output,
+			"audit":              workflowHandlerAudit(node, runtime),
+		})
+	}
+	return nodeSuccess(map[string]any{
+		"quota_hold":         hold,
+		"budget_reservation": hold,
+		"resource_result":    output,
+		"reserveProviderRef": resource.Code,
+		"resourceRef":        resource.Code,
+		"targetResourceRef":  target.Code,
+		"nodeType":           nodeHandlerKey(node),
+		"reserveMode":        "EXTERNAL_PROVIDER",
+		"releaseOnFailure":   payload["releaseOnFailure"],
+		"executionMode":      "EXTERNAL_PROVIDER",
+		"executionAuthority": "WorkflowExecutor/ExternalReserveProvider",
+		"audit":              workflowHandlerAudit(node, runtime),
+	})
+}
+
+func workflowExternalReserveHold(output map[string]any, payload map[string]any, resource marketing.Resource, target marketing.Resource) (map[string]any, bool) {
+	response := workflowExternalReserveResponse(output)
+	if allowed, exists := response["allowed"]; exists && !workflowTruthy(allowed) {
+		return nil, false
+	}
+	status := firstNonEmpty(workflowOutputString(response["status"]), workflowOutputString(response["reservationStatus"]), "external_reserved")
+	reservationID := firstNonEmpty(workflowOutputString(response["reservationId"]), workflowOutputString(response["holdId"]), workflowOutputString(response["id"]))
+	quotaType := firstNonEmpty(workflowOutputString(response["quotaType"]), workflowOutputString(payload["quotaType"]))
+	scope := firstNonEmpty(workflowOutputString(response["scope"]), workflowOutputString(payload["scope"]))
+	scopeKey := firstNonEmpty(workflowOutputString(response["scopeKey"]), workflowOutputString(payload["scopeKey"]))
+	amount := firstNonEmpty(workflowOutputString(response["amount"]), workflowOutputString(payload["amount"]))
+	hold := map[string]any{
+		"status":             status,
+		"quotaCode":          firstNonEmpty(workflowOutputString(response["quotaCode"]), workflowOutputString(payload["quotaCode"])),
+		"quotaType":          quotaType,
+		"scope":              scope,
+		"scopeKey":           scopeKey,
+		"plannedAmount":      amount,
+		"external":           true,
+		"reservationId":      reservationID,
+		"reserveProviderRef": resource.Code,
+		"resourceRef":        resource.Code,
+		"targetResourceRef":  target.Code,
+		"commitAuthority":    "ExternalReserveProvider",
+	}
+	hold["reservations"] = []any{map[string]any{
+		"quotaType":         quotaType,
+		"scope":             scope,
+		"scopeKey":          scopeKey,
+		"amount":            amount,
+		"reservationStatus": firstNonEmpty(workflowOutputString(response["reservationStatus"]), "FROZEN"),
+		"external":          true,
+		"reservationId":     reservationID,
+	}}
+	if trace := response["trace"]; trace != nil {
+		hold["trace"] = workflowJSONValue(trace)
+	}
+	return hold, true
+}
+
+func workflowExternalReserveResponse(output map[string]any) map[string]any {
+	for _, key := range []string{"provider_response", "stored_value", "value", "data", "result"} {
+		if mapped, ok := workflowJSONValue(output[key]).(map[string]any); ok && len(mapped) > 0 {
+			return mapped
+		}
+	}
+	return output
+}
+
+func (s *Service) workflowBudgetReserveResourceConfig(ctx context.Context, runtime workflowRuntime, config map[string]any, explicitConfig map[string]any) (map[string]any, *marketing.Resource, error) {
+	resourceRef := strings.TrimSpace(firstNonEmpty(workflowConfigString(explicitConfig, "reserveProviderRef"), workflowConfigString(explicitConfig, "resourceRef"), workflowConfigString(explicitConfig, "reserveRef")))
+	if resourceRef == "" {
+		resourceRef = strings.TrimSpace(firstNonEmpty(workflowConfigString(config, "reserveProviderRef"), workflowConfigString(config, "resourceRef"), workflowConfigString(config, "reserveRef")))
+	}
+	if resourceRef == "" {
+		return config, nil, nil
+	}
+	resource, err := s.GetResource(ctx, runtime.Activity.TenantID, resourceRef)
+	if err != nil {
+		return config, nil, fmt.Errorf("BUDGET_RESERVE_RESOURCE_NOT_FOUND: %w", err)
+	}
+	resourceConfig := resource.ConfigMap()
+	if reserveConfig, ok := workflowJSONValue(resourceConfig["reserve"]).(map[string]any); ok {
+		resourceConfig = workflowMergeMaps(resourceConfig, reserveConfig)
+	}
+	if quotaConfig, ok := workflowJSONValue(resourceConfig["quota"]).(map[string]any); ok {
+		resourceConfig = workflowMergeMaps(resourceConfig, quotaConfig)
+	}
+	next := workflowCopyMap(resourceConfig)
+	for key, value := range explicitConfig {
+		if value != nil {
+			next[key] = value
+		}
+	}
+	for key, value := range config {
+		if _, exists := next[key]; !exists && value != nil {
+			next[key] = value
+		}
+	}
+	if keyTemplate := firstNonEmpty(workflowConfigString(next, "scopeKeyTemplate"), workflowConfigString(next, "keyTemplate"), workflowConfigString(next, "key")); keyTemplate != "" {
+		next["scopeKeyTemplate"] = keyTemplate
+	}
+	if workflowConfigString(next, "consumeMode") == "" {
+		next["consumeMode"] = firstWorkflowString(workflowConfigString(next, "reserveMode"), "ATOMIC")
+	}
+	next["reserveProviderRef"] = resourceRef
+	next["resourceRef"] = resourceRef
+	return next, &resource, nil
 }
 
 func participationWorkflowNodeHandler(_ context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {

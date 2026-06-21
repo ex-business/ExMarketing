@@ -12,10 +12,10 @@
 event-in -> inbox -> normalize -> fact-query -> user-level-check -> quota-check -> qualify -> candidate-reward -> budget-reserve -> participation -> grant-order -> outbox -> audit
 ```
 
-基础链路也可以是：
+不需要用户等级判断时，可以省略 `user-level-check`，但奖励和频控仍使用新节点：
 
 ```text
-event-in -> inbox -> normalize -> match -> fact-query -> qualify -> reward -> limit -> quota -> participation -> grant-order -> outbox
+event-in -> inbox -> normalize -> match -> fact-query -> activity-state -> quota-check -> qualify -> candidate-reward -> budget-reserve -> participation -> grant-order -> outbox
 ```
 
 职责边界：
@@ -26,8 +26,8 @@ event-in -> inbox -> normalize -> match -> fact-query -> qualify -> reward -> li
 | `user-level-check` | 专门判断用户是否存在、用户等级/VIP 是否满足门槛 |
 | `quota-check` | 做次数、频率和计数器校验，必要时原子占用次数 |
 | `qualify` | 执行业务资格、风控、名单、渠道、活动条件等规则判断 |
-| `candidate-reward` / `reward` | 生成或计算奖励 |
-| `budget-reserve` / `quota` | 锁定预算、库存、额度 |
+| `candidate-reward` | 生成或计算奖励候选 |
+| `budget-reserve` | 锁定预算、库存、额度 |
 | `participation` | 写参与记录 |
 | `grant-order` / `outbox` | 生成发奖单和投递消息 |
 
@@ -477,7 +477,7 @@ event-in -> inbox -> normalize -> match -> fact-query -> qualify -> reward -> li
 
 ### 奖励前置 / 库存预算类
 
-预算、库存的真实锁定建议放到 `budget-reserve` 或 `quota`，但 `qualify` 可以做轻量预判断。
+预算、库存的真实锁定建议放到 `budget-reserve`，但 `qualify` 可以做轻量预判断。
 
 | 规则编码 | 作用 | 常用判断 |
 | --- | --- | --- |

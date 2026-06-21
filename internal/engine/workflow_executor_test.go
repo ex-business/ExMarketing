@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -1572,6 +1573,119 @@ func TestCandidateRewardWorkflowNodeHandlerUsesProviderChainRewardConfig(t *test
 	}
 }
 
+func TestCandidateRewardWorkflowNodeHandlerUsesCheckinRewardRedisRefDefault(t *testing.T) {
+	runtime := testWorkflowHandlerRuntime(true)
+	runtime.Activity.Rewards = nil
+	node := marketing.WorkflowNode{
+		ID:   "candidate-reward",
+		Type: "candidate-reward",
+		Config: json.RawMessage(`{
+			"providerChain":[
+				{"source":"RESOURCE","resourceRef":"checkin_reward_config_ref","namespace":"reward","operation":"READ","keyTemplate":"${activityId}","valuePath":"$.reward_items","outputAs":"rewardConfig","onMiss":"BLOCK"}
+			],
+			"notQualifiedAction":"SKIP",
+			"emptyAction":"BLOCK"
+		}`),
+	}
+	result := NewService(marketing.NewMemoryRepository()).candidateRewardWorkflowNodeHandler(context.Background(), node, runtime)
+	if result.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected candidate reward success, got %+v", result)
+	}
+	items := result.Output["candidate_rewards"].([]any)
+	item := items[0].(map[string]any)
+	if item["rewardCode"] != "DAILY_CHECKIN_1_USDT" || item["amount"] != "1.0000" || item["currency"] != "USDT" {
+		t.Fatalf("expected checkin redis default reward, got %+v", item)
+	}
+	resourceResult := result.Output["resource_result"].(map[string]any)
+	if resourceResult["resourceRef"] != "checkin_reward_config_ref" || resourceResult["adapterMode"] != "CHECKIN_REWARD_CONFIG_DEFAULT" {
+		t.Fatalf("expected checkin reward config default result, got %+v", resourceResult)
+	}
+}
+
+func TestCandidateRewardWorkflowNodeHandlerAppliesCandidatePolicy(t *testing.T) {
+	runtime := testWorkflowHandlerRuntime(true)
+	runtime.Activity.Rewards = []marketing.Reward{
+		{ID: "reward_small", Code: "SMALL", Type: marketing.RewardCash, CalculateType: marketing.CalculateFixed, Config: json.RawMessage(`{"amount":"1","currency":"USDT"}`), GrantMode: marketing.GrantAuto, GrantChannel: marketing.GrantHTTP, Enabled: true},
+		{ID: "reward_large", Code: "LARGE", Type: marketing.RewardCash, CalculateType: marketing.CalculateFixed, Config: json.RawMessage(`{"amount":"3","currency":"USDT"}`), GrantMode: marketing.GrantAuto, GrantChannel: marketing.GrantHTTP, Enabled: true},
+	}
+	cases := []struct {
+		policy string
+		code   string
+	}{
+		{policy: "FIRST_MATCHED", code: "SMALL"},
+		{policy: "HIGHEST_VALUE", code: "LARGE"},
+	}
+	for _, tt := range cases {
+		t.Run(tt.policy, func(t *testing.T) {
+			node := marketing.WorkflowNode{
+				ID:     "candidate-reward",
+				Type:   "candidate-reward",
+				Config: json.RawMessage(fmt.Sprintf(`{"source":"ACTIVITY_REWARD_CONFIG","candidatePolicy":%q,"notQualifiedAction":"SKIP","emptyAction":"BLOCK"}`, tt.policy)),
+			}
+			result := NewService(marketing.NewMemoryRepository()).candidateRewardWorkflowNodeHandler(context.Background(), node, runtime)
+			if result.Status != marketing.WorkflowNodeSuccess {
+				t.Fatalf("expected candidate reward success, got %+v", result)
+			}
+			items := result.Output["candidate_rewards"].([]any)
+			if len(items) != 1 {
+				t.Fatalf("expected one selected candidate, got %+v", items)
+			}
+			item := items[0].(map[string]any)
+			if item["rewardCode"] != tt.code || result.Output["candidatePolicy"] != tt.policy {
+				t.Fatalf("expected policy %s to select %s, got item=%+v output=%+v", tt.policy, tt.code, item, result.Output)
+			}
+		})
+	}
+}
+
+func TestCandidateRewardEvaluationSupportsPrizeModuleRewardTypes(t *testing.T) {
+	runtime := testWorkflowHandlerRuntime(true)
+	runtime.Inbox.IdempotencyKey = "idem_prize_module"
+	items := []any{
+		map[string]any{"rewardCode": "RANDOM_USDT", "rewardType": "CASH", "calculateType": "RANDOM", "minAmount": "1", "maxAmount": "3", "step": "1", "currency": "USDT"},
+		map[string]any{"rewardCode": "POINTS", "rewardType": "POINT", "calculateType": "FIXED", "points": "100", "unit": "LOYALTY_POINT"},
+		map[string]any{"rewardCode": "COUPON", "rewardType": "COUPON", "calculateType": "FIXED", "quantity": "2", "couponTemplateId": "tpl_coupon", "faceValue": "5", "currency": "USDT"},
+		map[string]any{"rewardCode": "DRAW", "rewardType": "DRAW_CHANCE", "calculateType": "FIXED", "chanceCount": "1", "drawPoolCode": "daily_draw"},
+	}
+	evaluated, err := workflowEvaluateCandidateRewards(context.Background(), runtime, items)
+	if err != nil {
+		t.Fatalf("expected prize module rewards to evaluate, got %v", err)
+	}
+	randomCash := evaluated[0].(map[string]any)
+	if randomCash["amount"] == "" || randomCash["currency"] != "USDT" {
+		t.Fatalf("expected random cash amount, got %+v", randomCash)
+	}
+	points := evaluated[1].(map[string]any)
+	if workflowOutputString(points["points"]) != "100" {
+		t.Fatalf("expected point payload copied to candidate, got %+v", points)
+	}
+	coupon := evaluated[2].(map[string]any)
+	if workflowOutputString(coupon["quantity"]) != "2" {
+		t.Fatalf("expected coupon quantity copied to candidate, got %+v", coupon)
+	}
+	draw := evaluated[3].(map[string]any)
+	if workflowOutputString(draw["chanceCount"]) != "1" {
+		t.Fatalf("expected draw chance copied to candidate, got %+v", draw)
+	}
+}
+
+func TestCandidateRewardFiltersDisabledAndSupportsRandomOnePolicy(t *testing.T) {
+	items := []any{
+		map[string]any{"rewardCode": "A", "amount": "1"},
+		map[string]any{"rewardCode": "B", "amount": "2", "enabled": false},
+		map[string]any{"rewardCode": "C", "amount": "3", "disabled": true},
+		map[string]any{"rewardCode": "D", "amount": "4"},
+	}
+	filtered := workflowFilterEnabledCandidateRewards(items)
+	if len(filtered) != 2 {
+		t.Fatalf("expected disabled rewards filtered, got %+v", filtered)
+	}
+	selected := workflowSelectCandidateRewards(filtered, "RANDOM_ONE", workflowRuntime{Activity: marketing.Activity{ID: "activity_random"}, Inbox: marketing.EventInbox{IdempotencyKey: "idem_random"}})
+	if len(selected) != 1 {
+		t.Fatalf("expected RANDOM_ONE to select one reward, got %+v", selected)
+	}
+}
+
 func TestServiceFactQueryWorkflowNodeHandlerHonorsUseEmptyFailureAction(t *testing.T) {
 	service := NewService(marketing.NewMemoryRepository())
 	node := marketing.WorkflowNode{
@@ -1862,6 +1976,146 @@ func TestLimitAndQuotaWorkflowNodeHandlersEmitReservationPlans(t *testing.T) {
 	quotaReservation := quotaReservations[0].(map[string]any)
 	if quotaReservation["quotaType"] != string(marketing.QuotaBudget) || quotaReservation["scopeKey"] != "activity_handler" || quotaReservation["amount"] != "12.50" {
 		t.Fatalf("unexpected quota reservation: %+v", quotaReservation)
+	}
+}
+
+func TestBudgetReserveWorkflowNodeHandlerUsesReserveRefConfig(t *testing.T) {
+	service := NewService(marketing.NewMemoryRepository())
+	runtime := workflowRuntime{
+		Activity:      marketing.Activity{ID: "activity_handler", TenantID: "site_001"},
+		Participation: marketing.Participation{ID: "participation_handler"},
+		Qualified:     true,
+		RuleResult:    marketing.ActivityRuleResult{Decision: marketing.RuleDecisionPassed},
+	}
+	ctx := context.WithValue(context.Background(), workflowNodeExecutionContextKey{}, workflowNodeExecutionContext{
+		NodeOutputs: map[string]map[string]any{
+			"candidate-reward": {"candidate_rewards": []any{map[string]any{"rewardCode": "COUPON_A", "quantity": "2"}}},
+		},
+	})
+	result := service.budgetReserveWorkflowNodeHandler(ctx, marketing.WorkflowNode{
+		ID:     "budget-reserve",
+		Type:   "budget-reserve",
+		Config: json.RawMessage(`{"reserveProviderRef":"checkin_prize_stock_ref"}`),
+	}, runtime)
+	if result.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected budget reserve success, got %+v", result)
+	}
+	hold := result.Output["quota_hold"].(map[string]any)
+	if hold["quotaCode"] != "CHECKIN_PRIZE_STOCK" || hold["quotaType"] != string(marketing.QuotaStock) {
+		t.Fatalf("expected stock quota from reserve ref, got %+v", hold)
+	}
+	if hold["scopeKey"] != "activity_handler:COUPON_A" || hold["plannedAmount"] != "2" {
+		t.Fatalf("unexpected stock reservation hold: %+v", hold)
+	}
+	if result.Output["resourceRef"] != defaultCheckinPrizeStock {
+		t.Fatalf("expected reserve resource output, got %+v", result.Output)
+	}
+	if result.Output["reserveProviderRef"] != defaultCheckinPrizeStock {
+		t.Fatalf("expected reserve provider output, got %+v", result.Output)
+	}
+}
+
+func TestBudgetReserveWorkflowNodeHandlerRejectsLimitQuotaTypes(t *testing.T) {
+	service := NewService(marketing.NewMemoryRepository())
+	result := service.budgetReserveWorkflowNodeHandler(context.Background(), marketing.WorkflowNode{
+		ID:     "budget-reserve",
+		Type:   "budget-reserve",
+		Config: json.RawMessage(`{"quotaType":"DAILY_LIMIT","scope":"USER","scopeKeyTemplate":"${subject.id}:${activityId}"}`),
+	}, testWorkflowHandlerRuntime(true))
+	if result.Status != marketing.WorkflowNodeFailed || result.Output["errorCode"] != "BUDGET_RESERVE_QUOTA_TYPE_UNSUPPORTED" {
+		t.Fatalf("expected daily limit to be rejected by budget-reserve, got %+v", result)
+	}
+}
+
+func TestBudgetReserveWorkflowNodeHandlerCallsExternalHTTPReserveRef(t *testing.T) {
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	runtime := workflowRuntime{
+		Activity:      marketing.Activity{ID: "activity_handler", TenantID: "site_001"},
+		Inbox:         marketing.EventInbox{IdempotencyKey: "idem_external", Event: marketing.ActivityEvent{EventID: "event_external", Subject: marketing.EventSubject{Type: "USER", ID: "user_001"}}},
+		Participation: marketing.Participation{ID: "participation_handler"},
+		Qualified:     true,
+	}
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode provider body: %v", err)
+		}
+		value := body["value"].(map[string]any)
+		if value["quotaType"] != "STOCK" || value["scopeKey"] != "activity_handler:COUPON_A" || value["amount"] != "2" {
+			t.Fatalf("unexpected reserve payload: %+v", value)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"allowed":true,"reservationId":"resv_http_1","status":"RESERVED","quotaType":"STOCK","scope":"ACTIVITY","scopeKey":"activity_handler:COUPON_A","amount":"2"}`))
+	}))
+	defer provider.Close()
+	if _, err := service.SaveResource(context.Background(), marketing.Resource{
+		TenantID: "site_001",
+		Code:     "external_stock_http_ref",
+		Name:     "External Stock Reserve HTTP Ref",
+		Type:     marketing.ResourceHTTPProvider,
+		Driver:   marketing.ResourceDriverHTTP,
+		Scope:    marketing.ResourceScopeWorkspace,
+		Status:   marketing.ResourceActive,
+		Config: json.RawMessage(fmt.Sprintf(`{
+			"contract":"QUOTA_RESERVE_V1",
+			"reserveMode":"EXTERNAL_PROVIDER",
+			"endpoint":%q,
+			"httpMethod":"POST",
+			"quotaCode":"EXT_STOCK",
+			"quotaType":"STOCK",
+			"scope":"ACTIVITY",
+			"scopeKeyTemplate":"${activityId}:${candidate_rewards[0].rewardCode}",
+			"amountField":"candidate_rewards[0].quantity"
+		}`, provider.URL)),
+		Capabilities: []marketing.ResourceOperation{marketing.ResourceCall, marketing.ResourceTestConnection},
+	}); err != nil {
+		t.Fatalf("save external http reserve resource: %v", err)
+	}
+	ctx := context.WithValue(context.Background(), workflowNodeExecutionContextKey{}, workflowNodeExecutionContext{
+		NodeOutputs: map[string]map[string]any{
+			"candidate-reward": {"candidate_rewards": []any{map[string]any{"rewardCode": "COUPON_A", "quantity": "2"}}},
+		},
+	})
+	result := service.budgetReserveWorkflowNodeHandler(ctx, marketing.WorkflowNode{
+		ID:     "budget-reserve",
+		Type:   "budget-reserve",
+		Config: json.RawMessage(`{"reserveProviderRef":"external_stock_http_ref","failAction":"BLOCK","releaseOnFailure":true}`),
+	}, runtime)
+	if result.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected external http reserve success, got %+v", result)
+	}
+	hold := result.Output["quota_hold"].(map[string]any)
+	if hold["reservationId"] != "resv_http_1" || hold["external"] != true || hold["commitAuthority"] != "ExternalReserveProvider" {
+		t.Fatalf("unexpected external quota hold: %+v", hold)
+	}
+	if result.Output["reserveMode"] != "EXTERNAL_PROVIDER" || result.Output["targetResourceRef"] != "external_stock_http_ref" || result.Output["reserveProviderRef"] != "external_stock_http_ref" {
+		t.Fatalf("unexpected external reserve metadata: %+v", result.Output)
+	}
+}
+
+func TestBudgetReserveWorkflowNodeHandlerRequiresGRPCReserveAdapter(t *testing.T) {
+	service := NewService(marketing.NewMemoryRepository())
+	if _, err := service.SaveResource(context.Background(), marketing.Resource{
+		TenantID:     "site_001",
+		Code:         "external_budget_grpc_ref",
+		Name:         "External Budget Reserve gRPC Ref",
+		Type:         marketing.ResourceGRPCProvider,
+		Driver:       marketing.ResourceDriverInternal,
+		Scope:        marketing.ResourceScopeWorkspace,
+		Status:       marketing.ResourceActive,
+		Config:       json.RawMessage(`{"contract":"QUOTA_RESERVE_V1","reserveMode":"EXTERNAL_PROVIDER","grpcTarget":"dns:///budget-reserve:9090","grpcMethod":"Reserve","quotaCode":"EXT_BUDGET","quotaType":"BUDGET","scope":"ACTIVITY","scopeKeyTemplate":"${activityId}","amountField":"candidate_rewards[0].amount"}`),
+		Capabilities: []marketing.ResourceOperation{marketing.ResourceCall, marketing.ResourceTestConnection},
+	}); err != nil {
+		t.Fatalf("save external grpc reserve resource: %v", err)
+	}
+	result := service.budgetReserveWorkflowNodeHandler(context.Background(), marketing.WorkflowNode{
+		ID:     "budget-reserve",
+		Type:   "budget-reserve",
+		Config: json.RawMessage(`{"reserveProviderRef":"external_budget_grpc_ref"}`),
+	}, testWorkflowHandlerRuntime(true))
+	if result.Status != marketing.WorkflowNodeFailed || result.Output["errorCode"] != "BUDGET_RESERVE_GRPC_ADAPTER_REQUIRED" {
+		t.Fatalf("expected gRPC adapter boundary failure, got %+v", result)
 	}
 }
 

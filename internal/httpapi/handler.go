@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -283,6 +284,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /v1/campaigns", h.listActivities)
 	mux.HandleFunc("POST /v1/campaigns", h.createActivity)
 	mux.HandleFunc("POST /openapi/v1/events", h.createEvent)
+	mux.HandleFunc("GET /openapi/v1/checkin/status", h.getCheckinStatus)
 	mux.HandleFunc("POST /openapi/v1/webhooks/{receiverCode}", h.createWebhookEvent)
 	mux.HandleFunc("POST /openapi/v1/webhooks/", h.missingWebhookReceiver)
 	mux.HandleFunc("POST /openapi/v1/facts/query", h.queryFacts)
@@ -1799,6 +1801,205 @@ func (h *Handler) createEvent(w http.ResponseWriter, r *http.Request) {
 	}
 	record("success", "ok")
 	writeJSON(w, http.StatusAccepted, result)
+}
+
+type checkinStatusResponse struct {
+	TenantID            string                 `json:"tenantId"`
+	ActivityCode        string                 `json:"activityCode,omitempty"`
+	Subject             marketing.EventSubject `json:"subject"`
+	Date                string                 `json:"date"`
+	Signed              bool                   `json:"signed"`
+	Rewarded            bool                   `json:"rewarded"`
+	ParticipationStatus string                 `json:"participationStatus,omitempty"`
+	GrantStatus         string                 `json:"grantStatus,omitempty"`
+	RewardType          string                 `json:"rewardType,omitempty"`
+	RewardCode          string                 `json:"rewardCode,omitempty"`
+	RewardAmount        string                 `json:"rewardAmount,omitempty"`
+	LastUpdatedAt       *time.Time             `json:"lastUpdatedAt,omitempty"`
+	Records             []checkinStatusRecord  `json:"records,omitempty"`
+}
+
+type checkinStatusRecord struct {
+	ParticipationStatus string     `json:"participationStatus,omitempty"`
+	GrantStatus         string     `json:"grantStatus,omitempty"`
+	RewardType          string     `json:"rewardType,omitempty"`
+	RewardCode          string     `json:"rewardCode,omitempty"`
+	RewardAmount        string     `json:"rewardAmount,omitempty"`
+	OccurredAt          *time.Time `json:"occurredAt,omitempty"`
+	UpdatedAt           time.Time  `json:"updatedAt"`
+}
+
+func (h *Handler) getCheckinStatus(w http.ResponseWriter, r *http.Request) {
+	tenantID := strings.TrimSpace(r.URL.Query().Get("tenantId"))
+	activityID := strings.TrimSpace(r.URL.Query().Get("activityId"))
+	activityCode := strings.TrimSpace(r.URL.Query().Get("activityCode"))
+	subjectType := strings.TrimSpace(r.URL.Query().Get("subjectType"))
+	subjectID := strings.TrimSpace(r.URL.Query().Get("subjectId"))
+	date := strings.TrimSpace(r.URL.Query().Get("date"))
+	if tenantID == "" || (activityID == "" && activityCode == "") || subjectType == "" || subjectID == "" {
+		writeErrorCode(w, http.StatusBadRequest, "INVALID_CHECKIN_STATUS_QUERY", "tenantId, activityId or activityCode, subjectType and subjectId are required")
+		return
+	}
+	if !h.authorizeOpenAPIStatusRequest(w, r, tenantID) {
+		return
+	}
+	if date == "" {
+		date = time.Now().UTC().Format(time.DateOnly)
+	}
+	if _, err := time.Parse(time.DateOnly, date); err != nil {
+		writeErrorCode(w, http.StatusBadRequest, "INVALID_CHECKIN_STATUS_QUERY", "date must be YYYY-MM-DD")
+		return
+	}
+	if activityID == "" {
+		activity, err := h.findActivityByCode(r, tenantID, activityCode)
+		if err != nil {
+			if errors.Is(err, marketing.ErrNotFound) {
+				writeErrorCode(w, http.StatusNotFound, "CHECKIN_ACTIVITY_NOT_FOUND", "checkin activity not found")
+				return
+			}
+			writeErrorCode(w, http.StatusBadRequest, "INVALID_CHECKIN_STATUS_QUERY", err.Error())
+			return
+		}
+		activityID = activity.ID
+	}
+	items, err := h.engine.ListRewardReconciliation(r.Context(), marketing.RewardReconciliationQuery{
+		TenantID:    tenantID,
+		ActivityID:  activityID,
+		SubjectType: subjectType,
+		SubjectID:   subjectID,
+		Limit:       100,
+	})
+	if err != nil {
+		writeErrorCode(w, http.StatusBadRequest, "INVALID_CHECKIN_STATUS_QUERY", err.Error())
+		return
+	}
+	records := make([]checkinStatusRecord, 0, len(items))
+	for _, item := range items {
+		record := checkinStatusRecordFromReconciliation(item)
+		if record.OccurredAt != nil && record.OccurredAt.UTC().Format(time.DateOnly) != date {
+			continue
+		}
+		if record.OccurredAt == nil && record.UpdatedAt.UTC().Format(time.DateOnly) != date {
+			continue
+		}
+		records = append(records, record)
+	}
+	sort.SliceStable(records, func(i, j int) bool {
+		return records[i].UpdatedAt.After(records[j].UpdatedAt)
+	})
+	response := checkinStatusResponse{
+		TenantID:     tenantID,
+		ActivityCode: activityCode,
+		Subject:      marketing.EventSubject{Type: subjectType, ID: subjectID},
+		Date:         date,
+		Records:      records,
+	}
+	for _, record := range records {
+		if record.ParticipationStatus == string(marketing.ParticipationRewardable) ||
+			record.ParticipationStatus == string(marketing.ParticipationGranted) ||
+			record.GrantStatus != "" {
+			response.Signed = true
+			response.ParticipationStatus = record.ParticipationStatus
+			response.GrantStatus = record.GrantStatus
+			response.RewardType = record.RewardType
+			response.RewardCode = record.RewardCode
+			response.RewardAmount = record.RewardAmount
+			response.LastUpdatedAt = &record.UpdatedAt
+			response.Rewarded = record.GrantStatus != "" && record.GrantStatus != string(marketing.GrantFailed)
+			break
+		}
+	}
+	if !response.Signed && len(records) > 0 {
+		record := records[0]
+		response.ParticipationStatus = record.ParticipationStatus
+		response.GrantStatus = record.GrantStatus
+		response.RewardType = record.RewardType
+		response.RewardCode = record.RewardCode
+		response.RewardAmount = record.RewardAmount
+		response.LastUpdatedAt = &record.UpdatedAt
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (h *Handler) authorizeOpenAPIStatusRequest(w http.ResponseWriter, r *http.Request, tenantID string) bool {
+	if !h.openAPIEventCfg.RequireAuth {
+		return true
+	}
+	token, ok := bearerToken(r.Header.Get("Authorization"))
+	if !ok {
+		writeEventError(w, http.StatusUnauthorized, "UNAUTHORIZED", "unauthorized")
+		return false
+	}
+	credential, ok := h.openAPIEventCfg.Credentials[token]
+	if !ok {
+		writeEventError(w, http.StatusUnauthorized, "UNAUTHORIZED", "unauthorized")
+		return false
+	}
+	if _, ok := credential.TenantIDs[tenantID]; !ok {
+		writeEventError(w, http.StatusForbidden, "TENANT_FORBIDDEN", "tenant forbidden")
+		return false
+	}
+	return true
+}
+
+func (h *Handler) findActivityByCode(r *http.Request, tenantID string, activityCode string) (marketing.Activity, error) {
+	activities, err := h.engine.ListActivitiesByQuery(r.Context(), marketing.ActivityQuery{TenantID: tenantID, Limit: 500})
+	if err != nil {
+		return marketing.Activity{}, err
+	}
+	for _, activity := range activities {
+		if activity.Code == activityCode {
+			return activity, nil
+		}
+	}
+	return marketing.Activity{}, marketing.ErrNotFound
+}
+
+func checkinStatusRecordFromReconciliation(item marketing.RewardReconciliationItem) checkinStatusRecord {
+	record := checkinStatusRecord{
+		ParticipationStatus: string(item.ParticipationStatus),
+		GrantStatus:         string(item.GrantStatus),
+		RewardType:          string(item.RewardType),
+		RewardAmount:        item.RewardAmount,
+		UpdatedAt:           item.ServerUpdatedAt,
+	}
+	if item.EventInbox != nil {
+		occurredAt := item.EventInbox.Event.OccurredAt
+		record.OccurredAt = &occurredAt
+	}
+	if item.Participation != nil {
+		record.ParticipationStatus = firstCheckinStatusNonEmpty(record.ParticipationStatus, string(item.Participation.Status))
+	}
+	if item.GrantOrder != nil {
+		record.GrantStatus = firstCheckinStatusNonEmpty(record.GrantStatus, string(item.GrantOrder.GrantStatus))
+		record.RewardType = firstCheckinStatusNonEmpty(record.RewardType, string(item.GrantOrder.RewardType))
+		record.RewardAmount = firstCheckinStatusNonEmpty(record.RewardAmount, item.GrantOrder.RewardAmount)
+		record.RewardCode = rewardCodeFromPayload(item.GrantOrder.RewardPayload)
+	}
+	return record
+}
+
+func rewardCodeFromPayload(payload json.RawMessage) string {
+	if len(payload) == 0 {
+		return ""
+	}
+	var body map[string]any
+	if err := json.Unmarshal(payload, &body); err != nil {
+		return ""
+	}
+	if code, ok := body["rewardCode"].(string); ok {
+		return code
+	}
+	return ""
+}
+
+func firstCheckinStatusNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func processEventResultRejected(result marketing.ProcessEventResult) bool {

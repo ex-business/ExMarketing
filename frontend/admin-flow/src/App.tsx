@@ -1231,7 +1231,7 @@ function WorkflowTemplatePanel({
                     ['rewardAmount', '奖励金额'],
                     ['currency', '币种'],
                     ['quotaCode', 'Quota Code'],
-                    ['limitMaxCount', '次数限制'],
+                    ['limitMaxCount', '频控上限'],
                     ['callbackProvider', '回调 Provider'],
                   ].map(([key, label]) => (
                     <label key={key}>
@@ -2416,8 +2416,8 @@ function StudioActivityStart({
           '新用户奖励链路',
           '高风险策略',
           '活动匹配链路',
-          'Reward 计算',
-          'Limit 次数限制',
+          '候选奖励链路',
+          '每日频控链路',
         ];
         for (const [index, name] of workflowNames.entries()) {
           await onCreateActivity({

@@ -83,7 +83,7 @@ func TestProductionCheckinTemplateComposesFactsBeforeQualify(t *testing.T) {
 	assertTemplateProviderChainValue(t, nodeByID["quota-check"], 0, "source", "RESOURCE")
 	assertTemplateProviderChainValue(t, nodeByID["quota-check"], 0, "resourceRef", defaultCheckinQuotaCounter)
 	assertTemplateProviderChainValue(t, nodeByID["candidate-reward"], 0, "source", "RESOURCE")
-	assertTemplateProviderChainValue(t, nodeByID["candidate-reward"], 0, "resourceRef", defaultActivityRewardConfig)
+	assertTemplateProviderChainValue(t, nodeByID["candidate-reward"], 0, "resourceRef", defaultCheckinRewardConfig)
 	assertTemplateEdge(t, definition.Edges, "normalize", "fact-user-profile")
 	assertTemplateEdge(t, definition.Edges, "normalize", "fact-kyc-profile")
 	assertTemplateEdge(t, definition.Edges, "normalize", "fact-risk-profile")
@@ -134,6 +134,46 @@ func TestBuiltInResourcesIncludeDefaultActivityRewardConfig(t *testing.T) {
 	}
 	if !resource.Supports(marketing.ResourceRead) {
 		t.Fatalf("expected activity reward config read capability, got %+v", resource.Capabilities)
+	}
+}
+
+func TestBuiltInResourcesIncludeCheckinRewardConfigRef(t *testing.T) {
+	resource, ok := builtInResource("site_001", defaultCheckinRewardConfig)
+	if !ok {
+		t.Fatalf("expected built-in checkin reward config ref")
+	}
+	if resource.Type != marketing.ResourceRedis {
+		t.Fatalf("expected REDIS resource, got %s", resource.Type)
+	}
+	config := resource.ConfigMap()
+	if config["mode"] != "KV" || config["keyPrefix"] != "reward:checkin" {
+		t.Fatalf("expected checkin reward redis config, got %+v", config)
+	}
+	if !resource.Supports(marketing.ResourceRead) || !resource.Supports(marketing.ResourceUpsert) {
+		t.Fatalf("expected checkin reward config read/upsert capabilities, got %+v", resource.Capabilities)
+	}
+}
+
+func TestBuiltInResourcesIncludeCheckinReserveRefs(t *testing.T) {
+	cases := map[string]marketing.QuotaType{
+		defaultCheckinRewardBudget: marketing.QuotaBudget,
+		defaultCheckinPrizeStock:   marketing.QuotaStock,
+	}
+	for code, quotaType := range cases {
+		resource, ok := builtInResource("site_001", code)
+		if !ok {
+			t.Fatalf("expected built-in reserve ref %s", code)
+		}
+		if resource.Type != marketing.ResourceProvider {
+			t.Fatalf("expected PROVIDER resource for %s, got %s", code, resource.Type)
+		}
+		config := resource.ConfigMap()
+		if config["contract"] != "QUOTA_RESERVE_V1" || config["quotaType"] != string(quotaType) {
+			t.Fatalf("unexpected reserve ref config for %s: %+v", code, config)
+		}
+		if !resource.Supports(marketing.ResourceCAS) {
+			t.Fatalf("expected reserve ref %s to support CAS, got %+v", code, resource.Capabilities)
+		}
 	}
 }
 
@@ -436,7 +476,7 @@ func TestApplyBuiltinRewardTemplatePublishesAndRunsEndToEnd(t *testing.T) {
 	for _, node := range trace.NodeExecutions {
 		statusByNode[node.NodeID] = node.Status
 	}
-	for _, nodeID := range []string{"event-in", "inbox", "normalize", "match", "qualify", "reward", "limit", "quota", "participation", "grant-order", "outbox", "audit"} {
+	for _, nodeID := range []string{"event-in", "inbox", "normalize", "match", "fact-query", "activity-state", "quota-check", "qualify", "candidate-reward", "budget-reserve", "participation", "grant-order", "outbox", "audit"} {
 		if statusByNode[nodeID] != marketing.WorkflowNodeSuccess {
 			t.Fatalf("expected node %s to succeed, got %+v", nodeID, statusByNode)
 		}
@@ -446,7 +486,7 @@ func TestApplyBuiltinRewardTemplatePublishesAndRunsEndToEnd(t *testing.T) {
 	}
 	var quotaOutput map[string]any
 	for _, node := range trace.NodeExecutions {
-		if node.NodeID == "quota" {
+		if node.NodeID == "budget-reserve" {
 			if err := json.Unmarshal(node.Output, &quotaOutput); err != nil {
 				t.Fatalf("unmarshal quota output: %v", err)
 			}
@@ -499,7 +539,7 @@ func TestBuiltinTemplateAuditRunsOnQualifyBlockRoute(t *testing.T) {
 			Reason:     "qualification failed",
 		},
 	}
-	definitionBytes, _ := json.Marshal(workflowTemplateDefinition([]string{"event-in", "inbox", "normalize", "match", "qualify", "reward", "limit", "quota", "participation", "grant-order", "outbox", "audit"}))
+	definitionBytes, _ := json.Marshal(workflowTemplateDefinition([]string{"event-in", "inbox", "normalize", "match", "fact-query", "activity-state", "quota-check", "qualify", "candidate-reward", "budget-reserve", "participation", "grant-order", "outbox", "audit"}))
 	execution, err := service.executeWorkflowDefinition(ctx, runtime, workflowExecutionOptions{
 		WorkflowVersionID: "wfver_builtin_template_block",
 		WorkflowVersion:   1,
@@ -527,7 +567,7 @@ func TestBuiltinTemplateAuditRunsOnQualifyBlockRoute(t *testing.T) {
 	if statusByNode["qualify"] != marketing.WorkflowNodeSuccess || statusByNode["audit"] != marketing.WorkflowNodeSuccess {
 		t.Fatalf("expected qualify and audit success, got %+v", statusByNode)
 	}
-	if statusByNode["reward"] == marketing.WorkflowNodeSuccess {
-		t.Fatalf("reward should not succeed on BLOCK route, got %+v", statusByNode)
+	if statusByNode["candidate-reward"] == marketing.WorkflowNodeSuccess {
+		t.Fatalf("candidate-reward should not succeed on BLOCK route, got %+v", statusByNode)
 	}
 }

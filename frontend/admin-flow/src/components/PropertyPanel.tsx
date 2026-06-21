@@ -846,6 +846,32 @@ function providerChainProviderOptions(resources: ResourceSummary[]): ResourceSum
   return resources.filter((resource) => resource.type === 'PROVIDER');
 }
 
+function resourceContract(resource: ResourceSummary): string {
+  const config = resource.config ?? {};
+  const contract = config.contract;
+  if (typeof contract === 'string') return contract.trim().toUpperCase();
+  const reserve = config.reserve;
+  if (reserve && typeof reserve === 'object' && !Array.isArray(reserve)) {
+    const nested = (reserve as Record<string, unknown>).contract;
+    if (typeof nested === 'string') return nested.trim().toUpperCase();
+  }
+  const quota = config.quota;
+  if (quota && typeof quota === 'object' && !Array.isArray(quota)) {
+    const nested = (quota as Record<string, unknown>).contract;
+    if (typeof nested === 'string') return nested.trim().toUpperCase();
+  }
+  return '';
+}
+
+function reserveProviderResourceOptions(resources: ResourceSummary[]): ResourceSummary[] {
+  return resources.filter((resource) => {
+    if (resourceContract(resource) === 'QUOTA_RESERVE_V1') return true;
+    const type = resource.type.toUpperCase();
+    return (type === 'PROVIDER' || type === 'HTTP' || type === 'HTTP_PROVIDER' || type === 'GRPC_PROVIDER')
+      && resource.capabilities?.includes('CALL');
+  });
+}
+
 function providerChainSourceOptions(node: ActivityNode, currentSource: string): string[] {
   const baseSources = usesResourceOperationEditor(node) ? RESOURCE_OPERATION_CHAIN_SOURCES : FACT_PROVIDER_CHAIN_SOURCES;
   const normalizedCurrent = currentSource.trim().toUpperCase();
@@ -1060,7 +1086,7 @@ function defaultFactServiceStepFor(node: ActivityNode): ProviderChainStepValue {
     return {
       ...emptyProviderChainStep('RESOURCE'),
       namespace: 'reward',
-      resourceRef: 'default_activity_reward_config',
+      resourceRef: 'checkin_reward_config_ref',
       keyTemplate: '${activityId}',
       valuePath: '$.reward_items',
       outputAs: 'rewardConfig',
@@ -1410,14 +1436,15 @@ function ConfigFieldInput({
   if (field.key === 'qualifyRules') {
     return <QualifyRulesEditor node={node} value={value} onNodeConfigChange={onNodeConfigChange} />;
   }
-  if (field.key === 'resourceRef') {
+  if (field.key === 'resourceRef' || field.key === 'reserveProviderRef') {
     const current = typeof value === 'string' ? value : '';
-    const exists = !current || resourceOptions.some((resource) => resource.code === current);
+    const selectableResources = field.key === 'reserveProviderRef' ? reserveProviderResourceOptions(resourceOptions) : resourceOptions;
+    const exists = !current || selectableResources.some((resource) => resource.code === current);
     return (
       <select className={exists ? '' : 'invalid'} value={current} onChange={(event) => onNodeConfigChange(node.id, field.key, event.target.value)}>
-        <option value="">选择资源</option>
+        <option value="">{field.key === 'reserveProviderRef' ? '选择锁定服务' : '选择资源'}</option>
         {!exists ? <option value={current}>{current}（未加载或无权限）</option> : null}
-        {resourceOptions.map((resource) => (
+        {selectableResources.map((resource) => (
           <option key={resource.id || resource.code} value={resource.code}>
             {resource.name || resource.code} · {resource.code} · {resource.type}
           </option>
@@ -1441,7 +1468,7 @@ function ConfigFieldInput({
     return (
       <select value={typeof value === 'string' ? value : ''} onChange={(event) => onNodeConfigChange(node.id, field.key, event.target.value)}>
         <option value="">选择</option>
-        {(field.options ?? []).map((option) => <option key={option} value={option}>{option}</option>)}
+        {(field.options ?? []).map((option) => <option key={option} value={option}>{enumOptionLabel(field.key, option)}</option>)}
       </select>
     );
   }
@@ -1510,6 +1537,50 @@ function ConfigFieldInput({
       onChange={(event) => onNodeConfigChange(node.id, field.key, event.target.value)}
     />
   );
+}
+
+function enumOptionLabel(fieldKey: string, option: string): string {
+  if (fieldKey === 'quotaType') {
+    const labels: Record<string, string> = {
+      BUDGET: 'BUDGET · 活动预算',
+      STOCK: 'STOCK · 奖品库存',
+    };
+    return labels[option] ?? option;
+  }
+  if (fieldKey === 'candidatePolicy') {
+    const labels: Record<string, string> = {
+      ALL_MATCHED: 'ALL_MATCHED · 全部命中',
+      FIRST_MATCHED: 'FIRST_MATCHED · 第一个命中',
+      HIGHEST_VALUE: 'HIGHEST_VALUE · 最高价值',
+      WEIGHTED_RANDOM: 'WEIGHTED_RANDOM · 权重随机',
+      RANDOM_ONE: 'RANDOM_ONE · 等概率随机一个',
+    };
+    return labels[option] ?? option;
+  }
+  if (fieldKey === 'rewardType' || fieldKey === 'defaultRewardType') {
+    const labels: Record<string, string> = {
+      BONUS: 'BONUS · 体验金/彩金',
+      CASH: 'CASH · 现金/USDT',
+      POINT: 'POINT · 积分',
+      COUPON: 'COUPON · 优惠券',
+      GIFT: 'GIFT · 实物/礼品',
+      DRAW_CHANCE: 'DRAW_CHANCE · 活动次数/抽奖机会',
+      MEMBERSHIP: 'MEMBERSHIP · 会员/权益',
+    };
+    return labels[option] ?? option;
+  }
+  if (fieldKey === 'calculateType' || fieldKey === 'defaultCalculateType') {
+    const labels: Record<string, string> = {
+      FIXED: 'FIXED · 固定',
+      RATIO: 'RATIO · 按比例',
+      LADDER: 'LADDER · 阶梯',
+      RANDOM: 'RANDOM · 随机金额',
+      PROBABILITY: 'PROBABILITY · 概率奖池',
+      POOL_SPLIT: 'POOL_SPLIT · 奖池瓜分',
+    };
+    return labels[option] ?? option;
+  }
+  return option;
 }
 
 function ConfigFieldRow({
@@ -1988,7 +2059,62 @@ function QualifyRuleDetails({ node }: { node: ActivityNode }) {
   );
 }
 
-function NodeConfigPreviewBody({ schema }: { schema: WorkflowNodeConfigSchema }) {
+function nodeConfigString(node: ActivityNode, key: string, fallback = ''): string {
+  const value = node.data.config?.[key];
+  return typeof value === 'string' && value.trim() ? value.trim() : fallback;
+}
+
+function CandidateRewardConfigPreview({ node, resourceOptions }: { node: ActivityNode; resourceOptions: ResourceSummary[] }) {
+  const chain = providerChainValueFor(node, node.data.config?.providerChain);
+  const step = chain[0] ?? defaultFactServiceStepFor(node);
+  const resourceRef = step.resourceRef?.trim() || 'checkin_reward_config_ref';
+  const resource = resourceOptions.find((item) => item.code === resourceRef);
+  const candidatePolicy = nodeConfigString(node, 'candidatePolicy', 'ALL_MATCHED');
+  const emptyAction = nodeConfigString(node, 'emptyAction', 'BLOCK');
+  const notQualifiedAction = nodeConfigString(node, 'notQualifiedAction', 'SKIP');
+  const rewardType = nodeConfigString(node, 'defaultRewardType', 'CASH');
+  const calculateType = nodeConfigString(node, 'defaultCalculateType', 'FIXED');
+  const includeDisabled = node.data.config?.includeDisabledRewards === true;
+  const rows = [
+    { label: '来源', value: `${step.source || 'RESOURCE'} / ${resourceRef}` },
+    { label: '资源', value: resource ? `${resource.name} · ${resource.type}` : '未加载或无权限' },
+    { label: 'Key', value: step.keyTemplate || '${activityId}' },
+    { label: 'Namespace', value: step.namespace || 'reward' },
+    { label: 'Value Path', value: step.valuePath || '$.reward_items' },
+    { label: '候选策略', value: candidatePolicy },
+    { label: '未通过动作', value: notQualifiedAction },
+    { label: '空候选动作', value: emptyAction },
+    { label: '默认奖品模型', value: `${rewardType} / ${calculateType}` },
+    { label: '禁用奖励', value: includeDisabled ? '包含' : '过滤' },
+  ];
+
+  return (
+    <section className="candidate-reward-preview">
+      <div className="candidate-reward-preview-head">
+        <b>候选奖励配置</b>
+        <span>修改入口：奖励来源、候选策略、奖品模型、边界动作</span>
+      </div>
+      <div className="candidate-reward-preview-grid">
+        {rows.map((row) => (
+          <div key={row.label}>
+            <span>{row.label}</span>
+            <b title={row.value}>{row.value}</b>
+          </div>
+        ))}
+      </div>
+      <div className="candidate-reward-preview-flow">
+        <span>输出给后续节点</span>
+        <div>
+          <b>candidate_rewards → budget-reserve</b>
+          <b>reward_items → grant-order</b>
+        </div>
+      </div>
+      <p>实际奖励明细来自奖励配置 Ref 的 reward_items；节点这里只决定如何读取、筛选和输出候选奖励。</p>
+    </section>
+  );
+}
+
+function NodeConfigPreviewBody({ node, schema, resourceOptions }: { node: ActivityNode; schema: WorkflowNodeConfigSchema; resourceOptions: ResourceSummary[] }) {
   const reads = schema.preview?.reads?.length
     ? schema.preview.reads
     : schema.inputs.map((input) => `${input.key}${input.required ? ' *' : ''}`);
@@ -1997,6 +2123,7 @@ function NodeConfigPreviewBody({ schema }: { schema: WorkflowNodeConfigSchema })
     : schema.outputs.map((output) => output.key);
   return (
     <div className="node-config-preview">
+      {node.data.id === 'candidate-reward' ? <CandidateRewardConfigPreview node={node} resourceOptions={resourceOptions} /> : null}
       <div>
         <span>读取</span>
         <div>{reads.length ? reads.map((item) => <b key={item}>{item}</b>) : <em>无需输入</em>}</div>
@@ -3053,7 +3180,7 @@ export function PropertyPanel({ nodes, edges, selectedNodeIds, selectedEdgeIds, 
                 <b>配置预览</b>
                 <button type="button" aria-label="关闭配置预览" onClick={() => setConfigPreviewOpen(false)}>×</button>
               </div>
-              <NodeConfigPreviewBody schema={selectedNodeSchema} />
+              <NodeConfigPreviewBody node={selectedNode} schema={selectedNodeSchema} resourceOptions={resourceOptions} />
             </div>
           ) : null}
           <NodeConfigForm node={selectedNode} schema={selectedNodeSchema} validationIssues={validationIssues} resourceOptions={resourceOptions} onNodeConfigChange={onNodeConfigChange} />

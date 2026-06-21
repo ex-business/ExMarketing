@@ -27,6 +27,9 @@ const (
 	defaultRiskProvider          = "risk-provider"
 	defaultCheckinQuotaCounter   = "default_checkin_quota_counter"
 	defaultActivityRewardConfig  = "default_activity_reward_config"
+	defaultCheckinRewardConfig   = "checkin_reward_config_ref"
+	defaultCheckinRewardBudget   = "checkin_reward_budget_ref"
+	defaultCheckinPrizeStock     = "checkin_prize_stock_ref"
 )
 
 func (s *Service) SaveResource(ctx context.Context, resource marketing.Resource) (marketing.Resource, error) {
@@ -700,6 +703,97 @@ func builtInResources(tenantID string) []marketing.Resource {
 					"contextPath":"$.activity.rewards"
 				}`),
 			Capabilities:  []marketing.ResourceOperation{marketing.ResourceRead, marketing.ResourceTestConnection},
+			SchemaVersion: 1,
+			CreatedAt:     now,
+			UpdatedAt:     now,
+		},
+		{
+			ID:          "res_builtin_checkin_reward_config_ref",
+			TenantID:    tenantID,
+			Code:        defaultCheckinRewardConfig,
+			Name:        "签到奖励配置 Redis Ref",
+			Description: "每日签到奖励配置资源，Redis KV 语义，key 通常为 activityId，供 candidate-reward 读取 reward_items。",
+			Type:        marketing.ResourceRedis,
+			Driver:      marketing.ResourceDriverInternal,
+			Scope:       marketing.ResourceScopeSystem,
+			Status:      marketing.ResourceActive,
+			Config: json.RawMessage(`{
+					"keyPrefix":"reward:checkin",
+					"mode":"KV",
+					"valueType":"OBJECT",
+					"contract":"PRIZE_CATALOG_V1",
+					"supportedRewardTypes":["BONUS","CASH","POINT","COUPON","GIFT","DRAW_CHANCE","MEMBERSHIP"],
+					"supportedCalculateTypes":["FIXED","RATIO","LADDER","RANDOM","PROBABILITY","POOL_SPLIT"],
+					"defaultValue":{
+						"reward_items":[
+							{"rewardCode":"DAILY_CHECKIN_1_USDT","rewardType":"CASH","calculateType":"FIXED","amount":"1","currency":"USDT","grantMode":"AUTO","grantChannel":"WALLET"}
+						],
+						"examples":{
+							"fixedPoint":{"rewardCode":"CHECKIN_100_POINTS","rewardType":"POINT","calculateType":"FIXED","points":"100","unit":"LOYALTY_POINT","grantMode":"AUTO","grantChannel":"INTERNAL"},
+							"coupon":{"rewardCode":"CHECKIN_COUPON_5","rewardType":"COUPON","calculateType":"FIXED","quantity":"1","couponTemplateId":"tpl_checkin_5","faceValue":"5","currency":"USDT","grantMode":"AUTO","grantChannel":"INTERNAL"},
+							"gift":{"rewardCode":"CHECKIN_TSHIRT","rewardType":"GIFT","calculateType":"FIXED","quantity":"1","giftSkuId":"sku_tshirt","deliveryMode":"ADDRESS_REQUIRED","valuationAmount":"20","currency":"USDT","grantMode":"MANUAL","grantChannel":"MANUAL_FILE"},
+							"drawChance":{"rewardCode":"CHECKIN_DRAW_CHANCE","rewardType":"DRAW_CHANCE","calculateType":"FIXED","chanceCount":"1","drawPoolCode":"daily_checkin_lottery","grantMode":"AUTO","grantChannel":"INTERNAL"},
+							"randomCash":{"rewardCode":"CHECKIN_RANDOM_USDT","rewardType":"CASH","calculateType":"RANDOM","minAmount":"0.1","maxAmount":"5","step":"0.1","currency":"USDT","grantMode":"AUTO","grantChannel":"WALLET"},
+							"mixedProbabilityPool":{"rewardCode":"CHECKIN_MIXED_POOL","rewardType":"DRAW_CHANCE","calculateType":"PROBABILITY","grantMode":"AUTO","grantChannel":"INTERNAL","items":[
+								{"itemCode":"POINT_100","weight":"70","rewardType":"POINT","points":"100","unit":"LOYALTY_POINT","label":"100 points"},
+								{"itemCode":"COUPON_5","weight":"25","rewardType":"COUPON","quantity":"1","couponTemplateId":"tpl_checkin_5","faceValue":"5","currency":"USDT","label":"5 USDT coupon"},
+								{"itemCode":"GIFT_TSHIRT","weight":"5","rewardType":"GIFT","quantity":"1","giftSkuId":"sku_tshirt","deliveryMode":"ADDRESS_REQUIRED","valuationAmount":"20","currency":"USDT","label":"T-shirt"}
+							]},
+							"membership":{"rewardCode":"CHECKIN_VIP_7D","rewardType":"MEMBERSHIP","calculateType":"FIXED","durationDays":"7","membershipTier":"VIP","grantMode":"AUTO","grantChannel":"INTERNAL"}
+						}
+					}
+				}`),
+			Capabilities:  []marketing.ResourceOperation{marketing.ResourceRead, marketing.ResourceWrite, marketing.ResourceUpsert, marketing.ResourceDelete, marketing.ResourceTestConnection},
+			SchemaVersion: 1,
+			CreatedAt:     now,
+			UpdatedAt:     now,
+		},
+		{
+			ID:          "res_builtin_checkin_reward_budget_ref",
+			TenantID:    tenantID,
+			Code:        defaultCheckinRewardBudget,
+			Name:        "签到奖励预算 Ref",
+			Description: "每日签到发现金类奖励前使用的预算锁定资源，budget-reserve 会读取该 Ref 并走原子 quota reservation。",
+			Type:        marketing.ResourceProvider,
+			Driver:      marketing.ResourceDriverInternal,
+			Scope:       marketing.ResourceScopeSystem,
+			Status:      marketing.ResourceActive,
+			Config: json.RawMessage(`{
+					"contract":"QUOTA_RESERVE_V1",
+					"quotaCode":"DAILY_CHECKIN_REWARD",
+					"quotaType":"BUDGET",
+					"scope":"ACTIVITY",
+					"scopeKeyTemplate":"${activityId}",
+					"amountField":"candidate_rewards[0].amount",
+					"reserveMode":"ATOMIC",
+					"releaseOnFailure":true
+				}`),
+			Capabilities:  []marketing.ResourceOperation{marketing.ResourceRead, marketing.ResourceCAS, marketing.ResourceTestConnection},
+			SchemaVersion: 1,
+			CreatedAt:     now,
+			UpdatedAt:     now,
+		},
+		{
+			ID:          "res_builtin_checkin_prize_stock_ref",
+			TenantID:    tenantID,
+			Code:        defaultCheckinPrizeStock,
+			Name:        "签到奖品库存 Ref",
+			Description: "每日签到发券、实物或权益类奖励前使用的库存锁定资源，scopeKey 默认按 activityId + rewardCode 分桶。",
+			Type:        marketing.ResourceProvider,
+			Driver:      marketing.ResourceDriverInternal,
+			Scope:       marketing.ResourceScopeSystem,
+			Status:      marketing.ResourceActive,
+			Config: json.RawMessage(`{
+					"contract":"QUOTA_RESERVE_V1",
+					"quotaCode":"CHECKIN_PRIZE_STOCK",
+					"quotaType":"STOCK",
+					"scope":"ACTIVITY",
+					"scopeKeyTemplate":"${activityId}:${candidate_rewards[0].rewardCode}",
+					"amountField":"candidate_rewards[0].quantity",
+					"reserveMode":"ATOMIC",
+					"releaseOnFailure":true
+				}`),
+			Capabilities:  []marketing.ResourceOperation{marketing.ResourceRead, marketing.ResourceCAS, marketing.ResourceTestConnection},
 			SchemaVersion: 1,
 			CreatedAt:     now,
 			UpdatedAt:     now,

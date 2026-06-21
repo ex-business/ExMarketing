@@ -533,19 +533,45 @@ func (l *RewardLadder) UnmarshalJSON(data []byte) error {
 }
 
 type ProbabilityItem struct {
-	ItemCode   string     `json:"itemCode"`
-	Weight     string     `json:"weight"`
-	RewardType RewardType `json:"rewardType,omitempty"`
-	Amount     string     `json:"amount"`
-	Currency   string     `json:"currency,omitempty"`
-	Label      string     `json:"label,omitempty"`
+	ItemCode         string     `json:"itemCode"`
+	Weight           string     `json:"weight"`
+	RewardType       RewardType `json:"rewardType,omitempty"`
+	Amount           string     `json:"amount,omitempty"`
+	Points           string     `json:"points,omitempty"`
+	Quantity         string     `json:"quantity,omitempty"`
+	ChanceCount      string     `json:"chanceCount,omitempty"`
+	DurationDays     string     `json:"durationDays,omitempty"`
+	Currency         string     `json:"currency,omitempty"`
+	Unit             string     `json:"unit,omitempty"`
+	PointType        string     `json:"pointType,omitempty"`
+	CouponTemplateID string     `json:"couponTemplateId,omitempty"`
+	CouponType       string     `json:"couponType,omitempty"`
+	FaceValue        string     `json:"faceValue,omitempty"`
+	DiscountRate     string     `json:"discountRate,omitempty"`
+	GiftSkuID        string     `json:"giftSkuId,omitempty"`
+	GiftCode         string     `json:"giftCode,omitempty"`
+	DeliveryMode     string     `json:"deliveryMode,omitempty"`
+	DrawPoolCode     string     `json:"drawPoolCode,omitempty"`
+	LotteryCode      string     `json:"lotteryCode,omitempty"`
+	MembershipTier   string     `json:"membershipTier,omitempty"`
+	MembershipPlanID string     `json:"membershipPlanId,omitempty"`
+	BenefitPackageID string     `json:"benefitPackageId,omitempty"`
+	DurationType     string     `json:"durationType,omitempty"`
+	ValuationAmount  string     `json:"valuationAmount,omitempty"`
+	Label            string     `json:"label,omitempty"`
 }
 
 func (i *ProbabilityItem) UnmarshalJSON(data []byte) error {
 	normalized, err := normalizeRawDecimalFields(data, map[string]struct{}{
-		"itemCode": {}, "weight": {}, "rewardType": {}, "amount": {}, "currency": {}, "label": {},
+		"itemCode": {}, "weight": {}, "rewardType": {}, "amount": {}, "points": {}, "quantity": {},
+		"chanceCount": {}, "durationDays": {}, "currency": {}, "unit": {}, "pointType": {},
+		"couponTemplateId": {}, "couponType": {}, "faceValue": {}, "discountRate": {},
+		"giftSkuId": {}, "giftCode": {}, "deliveryMode": {}, "drawPoolCode": {}, "lotteryCode": {},
+		"membershipTier": {}, "membershipPlanId": {}, "benefitPackageId": {}, "durationType": {},
+		"valuationAmount": {}, "label": {},
 	}, map[string]struct{}{
-		"weight": {}, "amount": {},
+		"weight": {}, "amount": {}, "points": {}, "quantity": {}, "chanceCount": {}, "durationDays": {},
+		"faceValue": {}, "discountRate": {}, "valuationAmount": {},
 	})
 	if err != nil {
 		return err
@@ -2189,11 +2215,13 @@ func validateReward(index int, reward Reward, pluginCode string) error {
 			return err
 		}
 	}
-	if (reward.Type == RewardBonus || reward.Type == RewardCash) && strings.TrimSpace(cfg.Currency) == "" {
+	if reward.CalculateType != CalculateProbability && (reward.Type == RewardBonus || reward.Type == RewardCash) && strings.TrimSpace(cfg.Currency) == "" {
 		return invalidActivityf("rewards[%d].rewardConfig.currency is required", index)
 	}
-	if err := validateRewardTypeSchema(index, reward.Type, cfg); err != nil {
-		return err
+	if reward.CalculateType != CalculateProbability {
+		if err := validateRewardTypeSchema(index, reward.Type, cfg); err != nil {
+			return err
+		}
 	}
 	if reward.FlowMultiple != "" && cfg.FlowMultiple != "" && reward.FlowMultiple != cfg.FlowMultiple {
 		return invalidActivityf("rewards[%d].flowMultiple conflicts with rewardConfig.flowMultiple", index)
@@ -2389,6 +2417,9 @@ func rejectRewardFields(index int, cfg RewardConfig, fields map[string]string) e
 }
 
 func supportedRewardCalculateCombo(rewardType RewardType, calculateType CalculateType) bool {
+	if calculateType == CalculateProbability {
+		return true
+	}
 	switch rewardType {
 	case RewardBonus, RewardCash:
 		return true
@@ -2529,18 +2560,17 @@ func validateProbabilityRewardConfig(index int, reward Reward, cfg RewardConfig)
 			return invalidActivityf("rewards[%d].rewardConfig.items[%d].weight must be non-negative decimal", index, i)
 		}
 		total = total.Add(weight)
-		if err := validateNonNegativeDecimal(fmt.Sprintf("rewards[%d].rewardConfig.items[%d].amount", index, i), item.Amount); err != nil {
-			return err
+		itemType := item.RewardType
+		if itemType == "" {
+			itemType = reward.Type
 		}
-		if item.RewardType != "" {
-			if item.RewardType != reward.Type {
-				return invalidActivityf("rewards[%d].rewardConfig.items[%d].rewardType must match rewardType", index, i)
-			}
+		if err := validateProbabilityItemConfig(index, i, itemType, item); err != nil {
+			return err
 		}
 		if item.Currency != "" && cfg.Currency != "" && item.Currency != cfg.Currency {
 			return invalidActivityf("rewards[%d].rewardConfig.items[%d].currency conflicts with rewardConfig.currency", index, i)
 		}
-		if (item.RewardType == RewardBonus || item.RewardType == RewardCash || item.RewardType == "" && (reward.Type == RewardBonus || reward.Type == RewardCash)) && cfg.Currency == "" {
+		if (itemType == RewardBonus || itemType == RewardCash) && cfg.Currency == "" && item.Currency == "" {
 			return invalidActivityf("rewards[%d].rewardConfig.currency is required", index)
 		}
 	}
@@ -2548,6 +2578,47 @@ func validateProbabilityRewardConfig(index int, reward Reward, cfg RewardConfig)
 		return invalidActivityf("rewards[%d].rewardConfig.items total weight must equal 100.0000", index)
 	}
 	return nil
+}
+
+func validateProbabilityItemConfig(rewardIndex int, itemIndex int, rewardType RewardType, item ProbabilityItem) error {
+	prefix := fmt.Sprintf("rewards[%d].rewardConfig.items[%d]", rewardIndex, itemIndex)
+	switch rewardType {
+	case RewardBonus, RewardCash:
+		return validateNonNegativeDecimal(prefix+".amount", item.Amount)
+	case RewardPoint:
+		if strings.TrimSpace(firstNonEmptyString(item.Unit, item.PointType)) == "" {
+			return invalidActivityf("%s.unit is required", prefix)
+		}
+		return validatePositiveIntConfig(prefix+".points", firstNonEmptyString(item.Points, item.Amount))
+	case RewardCoupon:
+		if strings.TrimSpace(item.CouponTemplateID) == "" {
+			return invalidActivityf("%s.couponTemplateId is required", prefix)
+		}
+		if item.FaceValue != "" && item.DiscountRate != "" {
+			return invalidActivityf("%s.faceValue and discountRate cannot both be set", prefix)
+		}
+		return validatePositiveIntConfig(prefix+".quantity", item.Quantity)
+	case RewardGift:
+		if strings.TrimSpace(firstNonEmptyString(item.GiftSkuID, item.GiftCode)) == "" {
+			return invalidActivityf("%s.giftSkuId or giftCode is required", prefix)
+		}
+		return validatePositiveIntConfig(prefix+".quantity", item.Quantity)
+	case RewardDrawChance:
+		if strings.TrimSpace(firstNonEmptyString(item.DrawPoolCode, item.LotteryCode)) == "" {
+			return invalidActivityf("%s.drawPoolCode or lotteryCode is required", prefix)
+		}
+		return validatePositiveIntConfig(prefix+".chanceCount", item.ChanceCount)
+	case RewardMembership:
+		if strings.TrimSpace(firstNonEmptyString(item.MembershipTier, item.MembershipPlanID, item.BenefitPackageID)) == "" {
+			return invalidActivityf("%s.membershipTier, membershipPlanId, or benefitPackageId is required", prefix)
+		}
+		if strings.ToUpper(strings.TrimSpace(item.DurationType)) == "PERMANENT" {
+			return nil
+		}
+		return validatePositiveIntConfig(prefix+".durationDays", item.DurationDays)
+	default:
+		return invalidActivityf("%s.rewardType is unsupported", prefix)
+	}
 }
 
 func validatePoolSplitRewardConfig(index int, cfg RewardConfig, pluginCode string) error {

@@ -33,6 +33,7 @@ const NODE_ORDER = [
   'lua-query',
   'facts-compose',
   'facts-normalize',
+  'user-level-check',
   'activity-state',
   'state-store',
   'quota-check',
@@ -40,9 +41,6 @@ const NODE_ORDER = [
   'candidate-reward',
   'combine',
   'split',
-  'reward',
-  'limit',
-  'quota',
   'budget-reserve',
   'participation',
   'grant-order',
@@ -93,6 +91,7 @@ const NODE_KIND_BY_TYPE: Record<string, NodeKind> = {
   'lua-query': 'query',
   'facts-compose': 'transform',
   'facts-normalize': 'transform',
+  'user-level-check': 'logic',
   'activity-state': 'store',
   'state-store': 'store',
   'quota-check': 'quota',
@@ -153,6 +152,7 @@ const NODE_CODE_BY_TYPE: Record<string, string> = {
   'lua-query': 'Lua Query',
   'facts-compose': 'Facts Compose',
   'facts-normalize': 'Facts Normalize',
+  'user-level-check': 'User Level Check',
   'activity-state': 'Activity State',
   'state-store': 'State Store',
   'quota-check': 'Quota Check',
@@ -191,6 +191,8 @@ const NODE_CODE_BY_TYPE: Record<string, string> = {
   alert: 'Alert',
 };
 
+const HIDDEN_LEGACY_NODE_TYPES = new Set(['reward', 'limit', 'quota']);
+
 function nodeDef(id: string, category: ActivityNodeData['category'], code: string, title: string, kind: ActivityNodeData['kind'], desc: string, inputs: string[], outputs: string[]): ActivityNodeData {
   return { id, category, code, title, kind, desc, inputs, outputs };
 }
@@ -217,10 +219,7 @@ export const nodeCatalog: CatalogGroup[] = [
       nodeDef('quota-check', 'CORE', 'Quota Check', '次数频控校验', 'quota', '用户、活动、租户、IP、设备和业务维度次数/频率限制', ['subject', 'activity_id'], ['quota_check', 'limit_hold']),
       nodeDef('qualify', 'CORE', 'QUALIFY', '资格校验', 'logic', '用户资格、活动门槛、参与范围、黑白名单和风险规则校验', ['event_context', 'matched_activity'], ['PASS', 'BLOCK', 'RISK']),
       nodeDef('candidate-reward', 'CORE', 'Candidate Reward', '候选奖励', 'reward', '生成待发奖励候选，不直接产生资金副作用', ['qualified_context', 'plugin_result'], ['candidate_rewards', 'reward_items']),
-      nodeDef('reward', 'CORE', 'REWARD', '奖励计算', 'reward', '支持 FIXED / RATIO / LADDER / RANDOM / PROBABILITY / POOL_SPLIT', ['qualified_context', 'reward_config'], ['reward_items']),
-      nodeDef('limit', 'CORE', 'LIMIT', '次数限制', 'quota', '用户、活动、周期、事件维度参与次数限制', ['subject', 'activity_id'], ['limit_hold']),
-      nodeDef('quota', 'CORE', 'Quota', '预算库存扣减', 'quota', '预算、库存、次数限制冻结/确认/释放，保证并发原子性', ['reward_items', 'limit_hold'], ['quota_hold']),
-      nodeDef('budget-reserve', 'CORE', 'Budget Reserve', '预算库存锁定', 'quota', '发奖前锁定预算、库存或用户额度，避免并发超发', ['candidate_rewards', 'reward_items'], ['budget_reservation', 'quota_hold']),
+      nodeDef('budget-reserve', 'CORE', 'Budget Reserve', '预算库存锁定', 'quota', '发奖前根据候选奖励锁定活动预算或奖品库存，避免并发超发', ['candidate_rewards', 'reward_items'], ['budget_reservation', 'quota_hold']),
       nodeDef('participation', 'CORE', 'Participation', '参与记录', 'store', '写入参与流水，关联事件、活动、奖励、quota 和阶段结果', ['qualified_context', 'quota_hold'], ['participation_id']),
       nodeDef('grant-order', 'CORE', 'GrantOrder', '发奖订单', 'grant', '生成发奖订单，状态流转 CREATED / SENT / SUCCESS / FAILED', ['participation_id', 'reward_items'], ['grant_order']),
       nodeDef('outbox', 'CORE', 'Outbox', '消息发件箱', 'dispatch', '写入 outbox，后续 worker 发送 HTTP / MQ / Webhook', ['grant_order'], ['HTTP', 'MQ', 'Webhook', 'Failed']),
@@ -247,6 +246,7 @@ export const nodeCatalog: CatalogGroup[] = [
       nodeDef('lua-query', 'FACT_QUERY', 'Lua Query', 'Lua 查询', 'query', '用受控 Lua 从当前上下文生成 facts，不允许网络或文件访问', ['subject'], ['facts']),
       nodeDef('facts-compose', 'FACT_QUERY', 'Facts Compose', '事实映射合并', 'transform', '把多个事实查询节点输出合并为统一 facts，供资格校验节点消费', ['facts', 'USER_PROFILE', 'KYC_PROFILE', 'RISK_PROFILE', 'DEPOSIT_SUMMARY'], ['facts']),
       nodeDef('facts-normalize', 'FACT_QUERY', 'Facts Normalize', '事实标准化', 'transform', '把统一 facts 转成 standard_context.user/kyc/risk/checkin，后续节点只读标准字段', ['facts', 'event_context'], ['standard_context', 'user', 'kyc', 'risk', 'checkin', 'facts']),
+      nodeDef('user-level-check', 'FACT_QUERY', 'User Level Check', '用户等级判断', 'logic', '根据 standard_context.user 判断用户是否存在、等级或 VIP 是否满足活动门槛', ['standard_context', 'facts', 'event_context'], ['user_level_check', 'decision', 'PASS', 'BLOCK', 'RISK']),
     ],
   },
   {
@@ -277,7 +277,7 @@ export const nodeCatalog: CatalogGroup[] = [
     items: [
       nodeDef('retry', 'OPS', 'Retry', '失败重试', 'reliable', '指数退避、最大次数、可重入执行和最后错误保存', ['failed_message'], ['retry_message']),
       nodeDef('dlq', 'OPS', 'DLQ', '死信队列', 'reliable', '超过重试次数进入 DLQ，支持人工修复和重新投递', ['failed_message'], ['dlq_record']),
-      nodeDef('audit', 'OPS', 'Audit', '审计记录', 'audit', '记录事件、规则、奖励、quota、outbox、callback 全链路证据', ['stage_result'], ['audit_log']),
+      nodeDef('audit', 'OPS', 'Audit', '审计记录', 'audit', '记录事件、规则、奖励、quota、outbox、callback 全链路证据，可作为多条分支的终点', [], ['audit_log']),
       nodeDef('reward-reconcile', 'OPS', 'Reward Reconcile', '奖励对账', 'audit', '对发奖订单、预算锁定、回调和 outbox 做奖励链路一致性校验', ['date_range'], ['reward_reconcile_report']),
       nodeDef('reconcile', 'OPS', 'Reconcile', '对账校验', 'audit', '对 grant、quota、callback、outbox 做一致性扫描和修复建议', ['date_range'], ['reconcile_report']),
       nodeDef('alert', 'OPS', 'Alert', '告警通知', 'reliable', '关键失败、DLQ 增长、回调失败和预算异常告警', ['metric_event'], ['alert_event']),
@@ -289,6 +289,7 @@ export function catalogFromSchemas(schemas: WorkflowNodeConfigSchema[]): Catalog
   if (schemas.length === 0) return nodeCatalog;
   const grouped = new Map<string, ActivityNodeData[]>();
   schemas.forEach((schema) => {
+    if (HIDDEN_LEGACY_NODE_TYPES.has(schema.nodeType)) return;
     const category = (schema.category || 'CORE').toUpperCase();
     const label = CATEGORY_LABELS[category] ?? category;
     const item: ActivityNodeData = {
@@ -323,7 +324,7 @@ export function catalogFromSchemas(schemas: WorkflowNodeConfigSchema[]): Catalog
 }
 
 export function flatCatalog(): ActivityNodeData[] {
-  return nodeCatalog.flatMap((group) => group.items);
+  return nodeCatalog.flatMap((group) => group.items).filter((item) => !HIDDEN_LEGACY_NODE_TYPES.has(item.id));
 }
 
 export function getDef(id: string): ActivityNodeData {

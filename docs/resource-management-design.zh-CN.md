@@ -2,6 +2,8 @@
 
 本文档设计 ExMarketing 的公共资源管理能力，用于统一管理工作流节点需要访问的内存、数据库、公共表、Redis、HTTP/gRPC Provider、MQ、对象存储和插件资源。
 
+更上层的服务、接口、提供者和资源关系见 [ExMarketing 服务、接口、提供者和资源设计](service-interface-provider-resource-design.zh-CN.md)。本文档重点描述其中 `Resource` 的治理和执行细节。
+
 核心原则：
 
 ```text

@@ -1164,9 +1164,8 @@ func TestActivityWorkflowHTTPAPI(t *testing.T) {
 		if applyTemplate.Code != http.StatusOK ||
 			!strings.Contains(applyTemplate.Body.String(), `"activityId":"`+activityID+`"`) ||
 			!strings.Contains(applyTemplate.Body.String(), `"eventTypes":["SIGNUP_SUCCESS"]`) ||
-			!strings.Contains(applyTemplate.Body.String(), `"amount":25`) ||
-			!strings.Contains(applyTemplate.Body.String(), `"currency":"EUR"`) ||
-			!strings.Contains(applyTemplate.Body.String(), `"quotaCode":"WELCOME_QUOTA"`) {
+			!strings.Contains(applyTemplate.Body.String(), `"resourceRef":"checkin_reward_config_ref"`) ||
+			!strings.Contains(applyTemplate.Body.String(), `"reserveProviderRef":"checkin_reward_budget_ref"`) {
 			t.Fatalf("expected template draft apply, got %d: %s", applyTemplate.Code, applyTemplate.Body.String())
 		}
 
@@ -2315,6 +2314,85 @@ func TestActivityEventOpenAPIAuthTenantAndSourceAuthorization(t *testing.T) {
 	rec = postAuthorizedRawEvent(t, handler, sourceEvent, "site_001:order:DEPOSIT_SUCCESS:DEPOSIT:pay_source_forbidden", "secret-token")
 	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"errorCode":"SOURCE_FORBIDDEN"`) {
 		t.Fatalf("expected source forbidden, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCheckinStatusOpenAPIAuthAndTenantAuthorization(t *testing.T) {
+	handler := newAuthTestHandler("secret-token", []string{"site_001"}, []string{"payment"}, defaultEventMaxBodyBytes)
+	path := "/openapi/v1/checkin/status?tenantId=site_001&activityCode=FIRST_DEPOSIT_BONUS&subjectType=USER&subjectId=10001&date=2026-05-24"
+
+	rec := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+	if rec.Code != http.StatusUnauthorized || !strings.Contains(rec.Body.String(), `"errorCode":"UNAUTHORIZED"`) {
+		t.Fatalf("expected unauthorized status query, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	req := httptest.NewRequest(http.MethodGet, strings.Replace(path, "tenantId=site_001", "tenantId=site_002", 1), nil)
+	req.Header.Set("Authorization", "Bearer secret-token")
+	rec = httptest.NewRecorder()
+	handler.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden || !strings.Contains(rec.Body.String(), `"errorCode":"TENANT_FORBIDDEN"`) {
+		t.Fatalf("expected tenant forbidden status query, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCheckinStatusReturnsSafeSummary(t *testing.T) {
+	handler := newTestHandler()
+	createActivity(t, handler)
+	path := "/openapi/v1/checkin/status?tenantId=site_001&activityCode=FIRST_DEPOSIT_BONUS&subjectType=USER&subjectId=10001&date=2026-05-24"
+
+	rec := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected empty status query OK, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"signed":false`) || strings.Contains(rec.Body.String(), `"records"`) {
+		t.Fatalf("expected unsigned empty status, got: %s", rec.Body.String())
+	}
+
+	eventRec := postRawEvent(t, handler, depositEventJSON("evt_checkin_status", "pay_checkin_status", `"amount":"299.00","vipLevel":3,"isFirstDeposit":true`), "site_001:payment:DEPOSIT_SUCCESS:DEPOSIT:pay_checkin_status")
+	if eventRec.Code != http.StatusAccepted {
+		t.Fatalf("expected event accepted, got %d: %s", eventRec.Code, eventRec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	handler.Routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected signed status query OK, got %d: %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, want := range []string{`"signed":true`, `"rewarded":true`, `"participationStatus":"REWARDABLE"`, `"grantStatus":"PENDING"`, `"rewardCode":"FIRST_DEPOSIT_RATIO"`, `"rewardAmount":"59.8000"`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("expected %s in status response, got: %s", want, body)
+		}
+	}
+	for _, leaked := range []string{`participationId`, `grantOrderId`, `eventId`, `idempotencyKey`, eventRec.Body.String()} {
+		if strings.Contains(body, leaked) {
+			t.Fatalf("status response leaked internal detail %q: %s", leaked, body)
+		}
+	}
+}
+
+func TestCheckinStatusValidationErrors(t *testing.T) {
+	handler := newTestHandler()
+	tests := []struct {
+		name string
+		path string
+		want int
+		code string
+	}{
+		{name: "missing params", path: "/openapi/v1/checkin/status?tenantId=site_001", want: http.StatusBadRequest, code: "INVALID_CHECKIN_STATUS_QUERY"},
+		{name: "bad date", path: "/openapi/v1/checkin/status?tenantId=site_001&activityCode=missing&subjectType=USER&subjectId=10001&date=bad", want: http.StatusBadRequest, code: "INVALID_CHECKIN_STATUS_QUERY"},
+		{name: "activity not found", path: "/openapi/v1/checkin/status?tenantId=site_001&activityCode=missing&subjectType=USER&subjectId=10001&date=2026-05-24", want: http.StatusNotFound, code: "CHECKIN_ACTIVITY_NOT_FOUND"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			handler.Routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, tt.path, nil))
+			if rec.Code != tt.want || !strings.Contains(rec.Body.String(), tt.code) {
+				t.Fatalf("expected %d/%s, got %d: %s", tt.want, tt.code, rec.Code, rec.Body.String())
+			}
+		})
 	}
 }
 

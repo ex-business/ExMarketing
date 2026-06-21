@@ -6,18 +6,17 @@ across schema, handler behavior, validation, templates, and run history.
 
 ## Scope
 
-The production main chain is intentionally small:
-
-```text
-event-in -> inbox -> normalize -> match -> fact-query -> qualify -> reward -> limit -> quota -> participation -> grant-order -> outbox
-```
-
-The production activity chain may use the stricter P0 nodes when the activity
-needs explicit state, frequency, candidate reward, and budget-reservation
-semantics:
+The production main chain is intentionally explicit:
 
 ```text
 event-in -> inbox -> normalize -> match -> fact-query -> activity-state -> quota-check -> qualify -> candidate-reward -> budget-reserve -> participation -> grant-order -> outbox
+```
+
+Activities that need multi-source facts can insert compose/normalize nodes
+before `qualify`:
+
+```text
+event-in -> inbox -> normalize -> match -> fact-query -> facts-compose -> facts-normalize -> activity-state -> quota-check -> qualify -> candidate-reward -> budget-reserve -> participation -> grant-order -> outbox
 ```
 
 `audit` is a mandatory sidecar/terminal node for blocked, risk, skipped, and
@@ -43,12 +42,11 @@ Node schema categories are:
 - `组合节点`: controlled branch, expression, script, and data-shaping nodes
   such as `condition`, `switch`, `code`, `lua-query`, `combine`, `split`, and
   `decimal`.
-- `其他节点`: trigger/adaptor, low-level query, legacy, delivery-boundary, and
+- `其他节点`: trigger/adaptor, low-level query, delivery-boundary, and
   operational helper nodes such as `http-event`, `webhook-event`, `mq-event`,
   `schedule-event`, `state-event`, `manual-event`, `state-store`,
-  `context-query`, `http-query`, `redis-query`, `reward`, `limit`, `quota`,
-  `http-call`, `mq-publish`, `webhook`, `callback`, `retry`, `dlq`, and
-  `alert`.
+  `context-query`, `http-query`, `redis-query`, `http-call`, `mq-publish`,
+  `webhook`, `callback`, `retry`, `dlq`, and `alert`.
 
 The node library should group by this product-facing category and keep
 `高级节点`, `组合节点`, and `其他节点` outside the default quick-start path.
@@ -113,17 +111,14 @@ The node library should group by this product-facing category and keep
 | `match` | `event_context`, optional `activity_config` | `mode`, `tenantMatchPolicy`, `fallbackAction` | `matched_activity` | fail/skip according to fallback action |
 | `fact-query` | `subject`, `fact_keys` | `factKeys`, `resourceRef`, `subjectPath`, `timeoutSeconds`, `failureAction` | `facts` | block/use-empty/skip according to failure action; see [Fact Query node guide](fact-query-node.zh-CN.md) |
 | `activity-state` | `event_context`, optional `state_patch` | `providerChain[0].source=INTERNAL`, `keyTemplate`, `namespace`, `operation`, `outputAs`; `resourceRef` only when `source=RESOURCE` | `activity_state`, `state_version` | durable state authority remains ActivityPlugin/StateStore |
-| `quota-check` | `subject`, `activity_id` | `providerChain[0].source=RESOURCE`, `resourceRef`, `keyTemplate`, `namespace`, `scope`, `scopeKeyTemplate`, `window`, `maxCount`, `consumeMode` | `quota_check`, `limit_hold` | frequency/limit semantics; compatible with `limit` |
+| `quota-check` | `subject`, `activity_id` | `providerChain[0].source=RESOURCE`, `resourceRef`, `keyTemplate`, `namespace`, `scope`, `scopeKeyTemplate`, `window`, `maxCount`, `consumeMode` | `quota_check`, `limit_hold` | frequency/limit semantics; emits `limit_hold` as a stable downstream field |
 | `qualify` | `event_context`, `matched_activity`, optional `facts` | `ruleCodes`, `evaluationMode`, `riskPolicy`, `blockAction` | `stage_result`, `PASS`, `BLOCK`, `RISK`, `decision` | route by `PASS/BLOCK/RISK` |
-| `candidate-reward` | `qualified_context`, optional `plugin_result` | `providerChain[0].source=RESOURCE`, `resourceRef`, `keyTemplate`, `namespace`, `notQualifiedAction`, `emptyAction` | `candidate_rewards`, `reward_items` | skip/block when not qualified or empty |
-| `reward` | `qualified_context`, optional `reward_config` | `rewardCode`, `rewardType`, `calculateType`, `amount`, `currency` | `reward_items` | skip when not qualified; fail on invalid reward config |
-| `limit` | `subject`, `activity_id` | `scope`, `scopeKeyTemplate`, `period`, `maxCount`, `consumeMode` | `limit_hold` | route/fail by `exceedAction` |
-| `quota` | `reward_items`, optional `limit_hold` | `quotaCode`, `quotaType`, `scope`, `consumeMode`, `amountField` | `quota_hold` | route/fail by `failAction` |
-| `budget-reserve` | `candidate_rewards`, optional `reward_items` | `quotaCode`, `quotaType`, `scope`, `reserveMode`, `amountField` | `budget_reservation`, `quota_hold` | budget/inventory reservation semantics; compatible with `quota` |
+| `candidate-reward` | `qualified_context`, optional `plugin_result` | `providerChain[0].source=RESOURCE`, `resourceRef`, `keyTemplate`, `namespace`, `candidatePolicy`, `notQualifiedAction`, `emptyAction` | `candidate_rewards`, `reward_items` | apply candidate policy; skip/block when not qualified or empty |
+| `budget-reserve` | `candidate_rewards`, optional `reward_items` | `reserveProviderRef`, `failAction`, `releaseOnFailure` | `budget_reservation`, `quota_hold` | budget/inventory reservation semantics; internal quota fields live in the selected reserve Ref |
 | `participation` | `qualified_context`, optional `quota_hold` | `status`, `deduplicate` | `participation_id`, `commitMode`, `commitAuthority` | fail if participation snapshot cannot be created |
 | `grant-order` | `participation_id`, `reward_items` | `provider`, `expireSeconds` | `grant_order`, `grant_orders`, `commitMode`, `commitAuthority` | skip if no reward; fail on state-machine violation |
 | `outbox` | `grant_order` | `channel`, `maxAttempts` | `HTTP`, `MQ`, `Webhook`, `Failed`, `commitMode`, `commitAuthority` | failed dispatch must remain replayable |
-| `audit` | `stage_result` | `action`, `severity`, `targetType`, `includePayload`, `retentionPolicy` | `audit_log` | audit write failure must be visible |
+| `audit` | optional routed payload | `action`, `severity`, `targetType`, `includePayload`, `retentionPolicy` | `audit_log` | can terminate multiple PASS/BLOCK/RISK branches without a fixed upstream input |
 
 ## Template Requirements
 
@@ -131,7 +126,7 @@ Built-in workflow templates must:
 
 - use the core chain above as their default production path;
 - include explicit `qualify` routes for `PASS`, `BLOCK`, and `RISK`;
-- route `PASS` to `reward`;
+- route `PASS` to `candidate-reward`;
 - route `BLOCK` and `RISK` to `audit`;
 - mark exactly one branch route as default;
 - end the successful path at `audit` after `outbox`;

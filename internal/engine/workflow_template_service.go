@@ -819,12 +819,13 @@ func workflowTemplateSlug(value string) string {
 }
 
 func builtinWorkflowDraftTemplates(now time.Time) []marketing.WorkflowDraftTemplate {
+	productionChain := []string{"event-in", "inbox", "normalize", "match", "fact-query", "activity-state", "quota-check", "qualify", "candidate-reward", "budget-reserve", "participation", "grant-order", "outbox", "audit"}
 	return []marketing.WorkflowDraftTemplate{
-		builtinWorkflowTemplate("complete-activity-chain", "完整活动链路模板", "完整活动链路", "入口、幂等、标准化、匹配、事实查询、资格、奖励、限制、预算、参与、发奖单、发件箱、审计。", []string{"event-in", "inbox", "normalize", "match", "fact-query", "qualify", "reward", "limit", "quota", "participation", "grant-order", "outbox", "audit"}, now),
-		builtinWorkflowTemplate("simple-reward-chain", "简化奖励链路模板", "简化奖励链路", "用于快速搭建最短奖励链路。", []string{"event-in", "inbox", "normalize", "match", "fact-query", "qualify", "reward", "limit", "quota", "participation", "grant-order", "outbox", "audit"}, now),
-		builtinWorkflowTemplate("risk-qualify-chain", "风控和资格校验链路模板", "风控资格", "强调资格、事实查询、风控限制和审计。", []string{"event-in", "inbox", "fact-query", "qualify", "limit", "audit"}, now),
-		builtinWorkflowTemplate("quota-protected-reward-chain", "Quota 保护奖励链路模板", "Quota 保护", "奖励前后加入次数限制和原子预算扣减。", []string{"event-in", "inbox", "normalize", "match", "fact-query", "qualify", "reward", "limit", "quota", "participation", "grant-order", "outbox", "audit"}, now),
-		builtinWorkflowTemplate("fact-query-enhanced-chain", "Fact Query 数据增强链路模板", "数据增强", "通过 Fact Query 增强上下文后再匹配和发奖。", []string{"event-in", "inbox", "normalize", "fact-query", "match", "qualify", "reward", "limit", "quota", "participation", "grant-order", "outbox", "audit"}, now),
+		builtinWorkflowTemplate("complete-activity-chain", "完整活动链路模板", "完整活动链路", "入口、幂等、标准化、匹配、事实查询、活动状态、频控、资格、候选奖励、预算锁定、参与、发奖单、发件箱、审计。", productionChain, now),
+		builtinWorkflowTemplate("simple-reward-chain", "简化奖励链路模板", "简化奖励链路", "用于快速搭建最短奖励链路。", productionChain, now),
+		builtinWorkflowTemplate("risk-qualify-chain", "风控和资格校验链路模板", "风控资格", "强调事实查询、活动状态、频控、资格和审计。", []string{"event-in", "inbox", "normalize", "fact-query", "activity-state", "quota-check", "qualify", "audit"}, now),
+		builtinWorkflowTemplate("quota-protected-reward-chain", "Quota 保护奖励链路模板", "Quota 保护", "奖励前后加入次数频控和预算库存锁定。", productionChain, now),
+		builtinWorkflowTemplate("fact-query-enhanced-chain", "Fact Query 数据增强链路模板", "数据增强", "通过 Fact Query 增强上下文后再匹配和发奖。", productionChain, now),
 		builtinWorkflowTemplateFromDefinition("production-checkin-reward-chain", "生产级签到奖励链路模板", "签到奖励", "签到入口、多事实查询、事实合并、用户等级、每日频控、资格校验、候选奖励、预算锁定、发奖、对账和审计。", workflowProductionCheckinRewardTemplateDefinition(), now),
 	}
 }
@@ -1040,31 +1041,33 @@ func workflowProductionCheckinRewardTemplateDefinition() map[string]any {
 		node("qualify", "qualify", "资格校验", 2620, 360, map[string]any{"inputMapping": map[string]any{"standard_context": map[string]any{"sourceNodeId": "facts-normalize", "outputKey": "standard_context"}, "facts": map[string]any{"sourceNodeId": "facts-normalize", "outputKey": "facts"}}}),
 		node("candidate-reward", "candidate-reward", "签到候选奖励", 2900, 220, map[string]any{
 			"providerChain": []map[string]any{
-				{"source": "RESOURCE", "resourceRef": defaultActivityRewardConfig, "operation": "READ", "namespace": "reward", "keyTemplate": "${activityId}", "valuePath": "$.reward_items", "outputAs": "rewardConfig", "onMiss": "BLOCK"},
+				{"source": "RESOURCE", "resourceRef": defaultCheckinRewardConfig, "operation": "READ", "namespace": "reward", "keyTemplate": "${activityId}", "valuePath": "$.reward_items", "outputAs": "rewardConfig", "onMiss": "BLOCK"},
 			},
 			"includeDisabledRewards": false,
+			"candidatePolicy":        "ALL_MATCHED",
 			"notQualifiedAction":     "SKIP",
 			"emptyAction":            "BLOCK",
 			"includeTrace":           true,
 			"inputMapping":           map[string]any{"qualified_context": map[string]any{"sourceNodeId": "qualify", "outputKey": "PASS"}},
 		}),
 		node("budget-reserve", "budget-reserve", "签到预算库存锁定", 3180, 220, map[string]any{
-			"quotaCode":        "DAILY_CHECKIN_REWARD",
-			"quotaType":        "BUDGET",
-			"scope":            "ACTIVITY",
-			"scopeKeyTemplate": "${activityId}",
-			"consumeMode":      "ATOMIC",
-			"amountField":      "candidate_rewards[0].amount",
-			"reserveMode":      "ATOMIC",
-			"failAction":       "BLOCK",
-			"releaseOnFailure": true,
-			"inputMapping":     map[string]any{"candidate_rewards": map[string]any{"sourceNodeId": "candidate-reward", "outputKey": "candidate_rewards"}},
+			"reserveProviderRef": defaultCheckinRewardBudget,
+			"failAction":         "BLOCK",
+			"releaseOnFailure":   true,
+			"inputMapping":       map[string]any{"candidate_rewards": map[string]any{"sourceNodeId": "candidate-reward", "outputKey": "candidate_rewards"}},
 		}),
 		node("participation", "participation", "参与记录", 3460, 220, map[string]any{"inputMapping": map[string]any{"qualified_context": map[string]any{"sourceNodeId": "qualify", "outputKey": "PASS"}, "quota_hold": map[string]any{"sourceNodeId": "budget-reserve", "outputKey": "quota_hold"}}}),
 		node("grant-order", "grant-order", "发奖订单", 3740, 220, map[string]any{"inputMapping": map[string]any{"participation_id": map[string]any{"sourceNodeId": "participation", "outputKey": "participation_id"}, "reward_items": map[string]any{"sourceNodeId": "candidate-reward", "outputKey": "reward_items"}}}),
 		node("outbox", "outbox", "消息发件箱", 4020, 220, map[string]any{"inputMapping": map[string]any{"grant_order": map[string]any{"sourceNodeId": "grant-order", "outputKey": "grant_order"}}}),
 		node("reward-reconcile", "reward-reconcile", "奖励链路对账", 4300, 220, map[string]any{"inputMapping": map[string]any{"date_range": map[string]any{"sourceNodeId": "outbox", "outputKey": "HTTP"}}}),
-		node("audit", "audit", "审计记录", 2900, 620, map[string]any{"inputMapping": map[string]any{"stage_result": map[string]any{"sourceNodeId": "qualify", "outputKey": "stage_result"}}}),
+		node("audit", "audit", "审计记录", 2900, 620, map[string]any{
+			"action":          "WORKFLOW_TEMPLATE",
+			"includePayload":  true,
+			"redactPaths":     []string{"$.token", "$.password"},
+			"retentionPolicy": "STANDARD",
+			"severity":        "INFO",
+			"targetType":      "WORKFLOW_NODE",
+		}),
 	}
 	edges := []map[string]any{
 		edge("event-in", "inbox"),
@@ -1107,7 +1110,7 @@ func workflowTemplateCoreContractEnabled(nodeTypes []string) bool {
 	for _, nodeType := range nodeTypes {
 		has[nodeType] = true
 	}
-	for _, required := range []string{"event-in", "inbox", "normalize", "match", "fact-query", "qualify", "reward", "limit", "quota", "participation", "grant-order", "outbox", "audit"} {
+	for _, required := range []string{"event-in", "inbox", "normalize", "match", "fact-query", "activity-state", "quota-check", "qualify", "candidate-reward", "budget-reserve", "participation", "grant-order", "outbox", "audit"} {
 		if !has[required] {
 			return false
 		}
@@ -1169,7 +1172,7 @@ func workflowTemplateNodeTitle(nodeType string) string {
 }
 
 func workflowTemplateNodeInputs(nodeType string) []string {
-	inputs := map[string][]string{"event-in": {"raw_event"}, "inbox": {"raw_event"}, "normalize": {"raw_event"}, "match": {"event_context"}, "qualify": {"standard_context", "facts", "USER_PROFILE", "KYC_PROFILE", "RISK_PROFILE", "DEPOSIT_SUMMARY", "matched_activity"}, "user-level-check": {"standard_context", "facts", "event_context"}, "reward": {"qualified_context"}, "limit": {"subject"}, "quota": {"reward_items"}, "participation": {"qualified_context", "quota_hold"}, "grant-order": {"participation_id", "reward_items"}, "outbox": {"grant_order"}, "callback": {"quota_hold"}, "audit": {"stage_result"}, "fact-query": {"subject"}, "context-query": {"subject"}, "local-cache-query": {"subject"}, "http-query": {"subject"}, "redis-query": {"subject"}, "grpc-query": {"subject"}, "plugin-query": {"subject"}, "custom-query": {"subject"}, "lua-query": {"subject"}, "facts-compose": {"facts", "USER_PROFILE", "KYC_PROFILE", "RISK_PROFILE", "DEPOSIT_SUMMARY"}, "facts-normalize": {"facts", "event_context"}, "combine": {"items", "context"}, "split": {"payload", "items"}, "activity-state": {"event_context", "state_patch"}, "state-store": {"value", "state_patch"}, "quota-check": {"subject", "activity_id"}, "candidate-reward": {"qualified_context", "plugin_result"}, "budget-reserve": {"candidate_rewards", "reward_items"}, "approval-gate": {"candidate_rewards", "risk_result"}, "compensation": {"stage_result"}, "random-pick": {"candidate_rewards"}, "plugin-execute": {"event_context", "activity_state"}, "ab-bucket": {"subject"}, "risk-score": {"facts"}, "settlement-window": {"event_context"}, "manual-adjust": {"operator"}, "reconcile": {"date_range"}, "reward-reconcile": {"date_range"}}
+	inputs := map[string][]string{"event-in": {"raw_event"}, "inbox": {"raw_event"}, "normalize": {"raw_event"}, "match": {"event_context"}, "qualify": {"standard_context", "facts", "USER_PROFILE", "KYC_PROFILE", "RISK_PROFILE", "DEPOSIT_SUMMARY", "matched_activity"}, "user-level-check": {"standard_context", "facts", "event_context"}, "reward": {"qualified_context"}, "limit": {"subject"}, "quota": {"reward_items"}, "participation": {"qualified_context", "quota_hold"}, "grant-order": {"participation_id", "reward_items"}, "outbox": {"grant_order"}, "callback": {"quota_hold"}, "audit": {}, "fact-query": {"subject"}, "context-query": {"subject"}, "local-cache-query": {"subject"}, "http-query": {"subject"}, "redis-query": {"subject"}, "grpc-query": {"subject"}, "plugin-query": {"subject"}, "custom-query": {"subject"}, "lua-query": {"subject"}, "facts-compose": {"facts", "USER_PROFILE", "KYC_PROFILE", "RISK_PROFILE", "DEPOSIT_SUMMARY"}, "facts-normalize": {"facts", "event_context"}, "combine": {"items", "context"}, "split": {"payload", "items"}, "activity-state": {"event_context", "state_patch"}, "state-store": {"value", "state_patch"}, "quota-check": {"subject", "activity_id"}, "candidate-reward": {"qualified_context", "plugin_result"}, "budget-reserve": {"candidate_rewards", "reward_items"}, "approval-gate": {"candidate_rewards", "risk_result"}, "compensation": {"stage_result"}, "random-pick": {"candidate_rewards"}, "plugin-execute": {"event_context", "activity_state"}, "ab-bucket": {"subject"}, "risk-score": {"facts"}, "settlement-window": {"event_context"}, "manual-adjust": {"operator"}, "reconcile": {"date_range"}, "reward-reconcile": {"date_range"}}
 	return inputs[nodeType]
 }
 
@@ -1337,18 +1340,7 @@ func workflowTemplateInputMapping(nodeType string, upstreamNodeTypes []string) m
 		}
 		return nil
 	case "audit":
-		if hasUpstream("qualify") {
-			return map[string]any{"stage_result": ref("qualify", "stage_result", "")}
-		}
-		if len(upstreamNodeTypes) == 0 {
-			return nil
-		}
-		source := upstreamNodeTypes[len(upstreamNodeTypes)-1]
-		outputs := workflowTemplateNodeOutputs(source)
-		if len(outputs) == 0 {
-			return nil
-		}
-		return map[string]any{"stage_result": ref(source, outputs[0], "")}
+		return map[string]any{}
 	default:
 		return nil
 	}
@@ -1541,7 +1533,7 @@ func workflowTemplateNodeConfig(nodeType string) map[string]any {
 		},
 		"activity-state": {
 			"providerChain": []map[string]any{
-				{"source": "INTERNAL", "operation": "READ", "namespace": "activity", "keyTemplate": "${activityId}:${subject.id}", "valuePath": "$.state", "outputAs": "currentState", "onMiss": "BLOCK"},
+				{"source": "INTERNAL", "operation": "READ", "namespace": "activity", "keyTemplate": "${activityId}:${subject.id}", "valuePath": "$.state", "outputAs": "currentState", "onMiss": "NEXT"},
 			},
 		},
 		"state-store": {
@@ -1578,22 +1570,18 @@ func workflowTemplateNodeConfig(nodeType string) map[string]any {
 		},
 		"candidate-reward": {
 			"providerChain": []map[string]any{
-				{"source": "RESOURCE", "resourceRef": defaultActivityRewardConfig, "operation": "READ", "namespace": "reward", "keyTemplate": "${activityId}", "valuePath": "$.reward_items", "outputAs": "rewardConfig", "onMiss": "BLOCK"},
+				{"source": "RESOURCE", "resourceRef": defaultCheckinRewardConfig, "operation": "READ", "namespace": "reward", "keyTemplate": "${activityId}", "valuePath": "$.reward_items", "outputAs": "rewardConfig", "onMiss": "BLOCK"},
 			},
 			"includeDisabledRewards": false,
+			"candidatePolicy":        "ALL_MATCHED",
 			"notQualifiedAction":     "SKIP",
 			"emptyAction":            "BLOCK",
 			"includeTrace":           true,
 		},
 		"budget-reserve": {
-			"quotaCode":        "DEFAULT_REWARD_BUDGET",
-			"quotaType":        "BUDGET",
-			"scope":            "ACTIVITY",
-			"scopeKeyTemplate": "${activityId}",
-			"amountField":      "candidate_rewards[0].amount",
-			"reserveMode":      "ATOMIC",
-			"failAction":       "BLOCK",
-			"releaseOnFailure": true,
+			"reserveProviderRef": defaultCheckinRewardBudget,
+			"failAction":         "BLOCK",
+			"releaseOnFailure":   true,
 		},
 		"approval-gate": {
 			"mode":               "AUTO_BELOW_THRESHOLD",

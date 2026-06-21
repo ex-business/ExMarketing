@@ -19,8 +19,27 @@ const WORKSPACE_ROLE_RANK: Record<WorkspaceRole, number> = {
   OWNER: 4,
 };
 
+function readLocalStorage(key: string): string {
+  if (typeof window === 'undefined') return '';
+  try {
+    return window.localStorage.getItem(key) || '';
+  } catch {
+    return '';
+  }
+}
+
+function writeLocalStorage(key: string, value: string) {
+  if (typeof window === 'undefined') return;
+  try {
+    if (value) window.localStorage.setItem(key, value);
+    else window.localStorage.removeItem(key);
+  } catch {
+    // Workspace selection is a convenience; ignore storage failures.
+  }
+}
+
 export function studioActorId(): string {
-  return window.localStorage.getItem('exmarketing.studio.actorId') || 'admin-flow';
+  return readLocalStorage('exmarketing.studio.actorId') || 'admin-flow';
 }
 
 export function shouldSeedDemoWorkspace(): boolean {
@@ -50,8 +69,8 @@ export function formatBytes(value: number): string {
 
 export function loadStoredWorkspaceSelection(): { workspaceId: string; folderId: string } {
   return {
-    workspaceId: window.localStorage.getItem(LAST_WORKSPACE_ID_STORAGE_KEY) || '',
-    folderId: window.localStorage.getItem(LAST_FOLDER_ID_STORAGE_KEY) || '',
+    workspaceId: readLocalStorage(LAST_WORKSPACE_ID_STORAGE_KEY),
+    folderId: readLocalStorage(LAST_FOLDER_ID_STORAGE_KEY),
   };
 }
 
@@ -64,16 +83,8 @@ export function loadInitialWorkspaceSelectionFromLocation(): { workspaceId: stri
 }
 
 export function persistWorkspaceSelection(workspaceId: string, folderId = '') {
-  if (workspaceId) {
-    window.localStorage.setItem(LAST_WORKSPACE_ID_STORAGE_KEY, workspaceId);
-  } else {
-    window.localStorage.removeItem(LAST_WORKSPACE_ID_STORAGE_KEY);
-  }
-  if (folderId) {
-    window.localStorage.setItem(LAST_FOLDER_ID_STORAGE_KEY, folderId);
-  } else {
-    window.localStorage.removeItem(LAST_FOLDER_ID_STORAGE_KEY);
-  }
+  writeLocalStorage(LAST_WORKSPACE_ID_STORAGE_KEY, workspaceId);
+  writeLocalStorage(LAST_FOLDER_ID_STORAGE_KEY, folderId);
 }
 
 export function isTestActivity(activity: ActivitySummary): boolean {
@@ -189,6 +200,5 @@ export function buildStudioActivityPayload(input: CreateStudioActivityInput) {
         version: 1,
       },
     ],
-    workflowDraft: input.definition,
   };
 }

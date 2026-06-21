@@ -40,9 +40,23 @@ const ROUTE_EXPRESSION_HINTS = [
 ];
 
 function loadPropertyPanelTab(): PropertyPanelTab {
-  const stored = window.localStorage.getItem(PROPERTY_PANEL_TAB_STORAGE_KEY);
+  let stored = '';
+  try {
+    stored = typeof window === 'undefined' ? '' : window.localStorage.getItem(PROPERTY_PANEL_TAB_STORAGE_KEY) || '';
+  } catch {
+    stored = '';
+  }
   if (stored === 'settings') return 'config';
   return stored === 'basic' || stored === 'config' || stored === 'lua' || stored === 'other' || stored === 'run' || stored === 'debug' ? stored : 'basic';
+}
+
+function persistPropertyPanelTab(tab: PropertyPanelTab) {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(PROPERTY_PANEL_TAB_STORAGE_KEY, tab);
+  } catch {
+    // Remembering the tab is best-effort when storage is unavailable.
+  }
 }
 
 function PropertyDisclosure({
@@ -3131,7 +3145,7 @@ export function PropertyPanel({ nodes, edges, selectedNodeIds, selectedEdgeIds, 
   const changeActiveTab = (tab: PropertyPanelTab) => {
     setActiveTab(tab);
     setConfigPreviewOpen(false);
-    window.localStorage.setItem(PROPERTY_PANEL_TAB_STORAGE_KEY, tab);
+    persistPropertyPanelTab(tab);
   };
   return (
     <aside className={cx('property-panel', hasSelection && 'open')} style={{ width: panelWidth }}>

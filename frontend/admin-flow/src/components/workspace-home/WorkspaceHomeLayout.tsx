@@ -7,9 +7,10 @@ type WorkspaceHomeLayoutProps = {
   sidebar: ReactNode;
   content: ReactNode;
   detail: ReactNode;
+  sidebarCollapsed?: boolean;
 };
 
-export function WorkspaceHomeLayout({ sidebar, content, detail }: WorkspaceHomeLayoutProps) {
+export function WorkspaceHomeLayout({ sidebar, content, detail, sidebarCollapsed = false }: WorkspaceHomeLayoutProps) {
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [mobileDetailOpen, setMobileDetailOpen] = useState(false);
 
@@ -18,6 +19,7 @@ export function WorkspaceHomeLayout({ sidebar, content, detail }: WorkspaceHomeL
       'exm-workspace-layout',
       mobileSidebarOpen ? 'sidebar-open' : '',
       mobileDetailOpen ? 'detail-open' : '',
+      sidebarCollapsed ? 'sidebar-collapsed' : '',
     ].filter(Boolean).join(' ')}>
       <TaButton
         className="exm-mobile-sidebar-toggle"
@@ -41,7 +43,9 @@ export function WorkspaceHomeLayout({ sidebar, content, detail }: WorkspaceHomeL
       </TaButton>
       <button className="exm-mobile-sidebar-backdrop" type="button" aria-label="关闭导航" onClick={() => setMobileSidebarOpen(false)} />
       <button className="exm-mobile-detail-backdrop" type="button" aria-label="关闭详情" onClick={() => setMobileDetailOpen(false)} />
-      <aside className="exm-workspace-sidebar" onClick={() => setMobileSidebarOpen(false)}>{sidebar}</aside>
+      <aside className="exm-workspace-sidebar" onClick={() => setMobileSidebarOpen(false)}>
+        {sidebar}
+      </aside>
       <main className="exm-workspace-main">{content}</main>
       <aside className="exm-workspace-detail">{detail}</aside>
     </div>

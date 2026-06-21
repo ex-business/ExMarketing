@@ -108,6 +108,20 @@ type OpsToast = {
   tone: 'success' | 'error' | 'info';
 };
 
+type ExmThemeMode = 'light' | 'dark';
+const EXM_THEME_STORAGE_KEY = 'exmarketing.adminFlow.theme';
+
+function initialExmTheme(): ExmThemeMode {
+  if (typeof window === 'undefined') return 'light';
+  try {
+    const stored = window.localStorage.getItem(EXM_THEME_STORAGE_KEY);
+    if (stored === 'dark' || stored === 'light') return stored;
+  } catch {
+    return 'light';
+  }
+  return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+
 function opsToastTone(message: string): OpsToast['tone'] {
   if (/(失败|错误|不可用|不能|需要|先选择|不存在|无权限)/.test(message)) return 'error';
   if (/(正在|处理中|加载)/.test(message)) return 'info';
@@ -283,13 +297,32 @@ const DEFAULT_RIGHT_PANEL_WIDTH = 480;
 const MIN_RIGHT_PANEL_WIDTH = 340;
 const MAX_RIGHT_PANEL_WIDTH = 760;
 
+function readStudioStorage(key: string): string {
+  if (typeof window === 'undefined') return '';
+  try {
+    return window.localStorage.getItem(key) || '';
+  } catch {
+    return '';
+  }
+}
+
+function writeStudioStorage(key: string, value: string) {
+  if (typeof window === 'undefined') return;
+  try {
+    if (value) window.localStorage.setItem(key, value);
+    else window.localStorage.removeItem(key);
+  } catch {
+    // User preferences are best-effort when browser storage is unavailable.
+  }
+}
+
 function clampRightPanelWidth(value: number): number {
   const viewportMax = typeof window === 'undefined' ? MAX_RIGHT_PANEL_WIDTH : Math.max(MIN_RIGHT_PANEL_WIDTH, Math.min(MAX_RIGHT_PANEL_WIDTH, window.innerWidth - 280));
   return Math.min(viewportMax, Math.max(MIN_RIGHT_PANEL_WIDTH, Math.round(value)));
 }
 
 function loadRightPanelWidth(): number {
-  const parsed = Number(window.localStorage.getItem(RIGHT_PANEL_WIDTH_STORAGE_KEY));
+  const parsed = Number(readStudioStorage(RIGHT_PANEL_WIDTH_STORAGE_KEY));
   if (!Number.isFinite(parsed)) return DEFAULT_RIGHT_PANEL_WIDTH;
   return clampRightPanelWidth(parsed);
 }
@@ -357,7 +390,7 @@ function builtinDebugPayloadTemplate(activity?: ActivitySummary): string {
 
 function loadDebugPayloadTemplates(): DebugPayloadTemplate[] {
   try {
-    const parsed = JSON.parse(window.localStorage.getItem(DEBUG_PAYLOAD_TEMPLATE_STORAGE_KEY) || '[]');
+    const parsed = JSON.parse(readStudioStorage(DEBUG_PAYLOAD_TEMPLATE_STORAGE_KEY) || '[]');
     return Array.isArray(parsed) ? parsed.filter((item): item is DebugPayloadTemplate => Boolean(item?.id && item?.name && item?.payloadText)) : [];
   } catch {
     return [];
@@ -365,12 +398,12 @@ function loadDebugPayloadTemplates(): DebugPayloadTemplate[] {
 }
 
 function saveDebugPayloadTemplates(items: DebugPayloadTemplate[]) {
-  window.localStorage.setItem(DEBUG_PAYLOAD_TEMPLATE_STORAGE_KEY, JSON.stringify(items.slice(0, 30)));
+  writeStudioStorage(DEBUG_PAYLOAD_TEMPLATE_STORAGE_KEY, JSON.stringify(items.slice(0, 30)));
 }
 
 function loadStudioStringSet(key: string): Set<string> {
   try {
-    const parsed = JSON.parse(window.localStorage.getItem(key) || '[]');
+    const parsed = JSON.parse(readStudioStorage(key) || '[]');
     return new Set(Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : []);
   } catch {
     return new Set();
@@ -378,7 +411,7 @@ function loadStudioStringSet(key: string): Set<string> {
 }
 
 function saveStudioStringSet(key: string, value: Set<string>) {
-  window.localStorage.setItem(key, JSON.stringify([...value].slice(0, 200)));
+  writeStudioStorage(key, JSON.stringify([...value].slice(0, 200)));
 }
 
 function uniqueFlowNodeId(base: string, nodes: FlowNode[]): string {
@@ -2251,8 +2284,10 @@ function StudioActivityStart({
   hiddenTestActivityCount,
   workflowStatus,
   workspaceDataReady,
+  themeMode,
   initialWorkspaceId,
   initialFolderId,
+  onThemeToggle,
   onWorkspaceSelectionChange,
   onSelectActivity,
   onCreateWorkspace,
@@ -2287,8 +2322,10 @@ function StudioActivityStart({
   hiddenTestActivityCount: number;
   workflowStatus: string;
   workspaceDataReady: boolean;
+  themeMode: ExmThemeMode;
   initialWorkspaceId: string;
   initialFolderId: string;
+  onThemeToggle: () => void;
   onWorkspaceSelectionChange: (workspaceId: string, folderId: string) => void;
   onSelectActivity: (activityId: string) => void;
   onCreateWorkspace: (input: CreateStudioWorkspaceInput) => Promise<WorkspaceSummary>;
@@ -2339,6 +2376,7 @@ function StudioActivityStart({
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [selectedWorkspaceId, setSelectedWorkspaceId] = useState(() => initialWorkspaceId || loadStoredWorkspaceSelection().workspaceId);
   const [selectedFolderId, setSelectedFolderId] = useState(() => initialFolderId || (initialWorkspaceId ? '' : loadStoredWorkspaceSelection().folderId));
+  const [desktopSidebarCollapsed, setDesktopSidebarCollapsed] = useState(false);
   const [memberUserId, setMemberUserId] = useState('');
   const [memberEmail, setMemberEmail] = useState('');
   const [memberRole, setMemberRole] = useState<WorkspaceRole>('EDITOR');
@@ -2679,6 +2717,8 @@ function StudioActivityStart({
       .sort((a, b) => activityTimestamp(b) - activityTimestamp(a))
       .slice(0, 5)
   ), [activities, archivedActivityIds, placements, selectedWorkspace]);
+  const contentFolders = workspaceHomeNav === 'workspace' ? selectedChildFolders : [];
+  const contentWorkflows = workspaceHomeNav === 'recent' ? recentWorkflows : selectedWorkflows;
   const sharedWorkflowCount = useMemo(() => (
     selectedWorkspace ? selectedShareLinks.filter((link) => link.enabled && link.scope === 'ACTIVITY').length : 0
   ), [selectedShareLinks, selectedWorkspace]);
@@ -3413,7 +3453,11 @@ function StudioActivityStart({
           searchResults={globalSearchResults}
           actorInitial={currentActorId || 'D'}
           isLoading={!workspaceDataReady}
+          sidebarCollapsed={desktopSidebarCollapsed}
+          themeMode={themeMode}
           onSearchChange={setSearch}
+          onSidebarCollapseToggle={() => setDesktopSidebarCollapsed((value) => !value)}
+          onThemeToggle={onThemeToggle}
           onSearchResultSelect={(result) => {
             if (result.type === 'workspace') {
               setSelectedWorkspaceId(result.workspaceId || result.id);
@@ -3454,6 +3498,7 @@ function StudioActivityStart({
           onSettings={openWorkspaceSettings}
         />
         <WorkspaceHomeLayout
+          sidebarCollapsed={desktopSidebarCollapsed}
           sidebar={(
             <WorkspaceSidebar
               workspaces={activeWorkspaces}
@@ -3525,8 +3570,8 @@ function StudioActivityStart({
             <WorkspaceContent
               folderVisibility={selectedFolder?.visibility ?? selectedWorkspace?.visibility ?? 'Private'}
               homeView={workspaceHomeNav === 'shared' ? 'workspace' : workspaceHomeNav}
-              folders={selectedChildFolders}
-              workflows={selectedWorkflows}
+              folders={contentFolders}
+              workflows={contentWorkflows}
               templates={templates}
               workflowCountByFolder={workflowCountByFolder}
               searchValue={search}
@@ -3555,18 +3600,37 @@ function StudioActivityStart({
                   setOpsMessage('模板不存在或尚未加载');
                   return;
                 }
-                if (!selectedWorkspace?.id || !selectedFolder?.id) {
+                const targetFolder = selectedFolder ?? selectedWorkspaceFolders[0];
+                if (!selectedWorkspace?.id || !targetFolder?.id) {
                   setOpsMessage('先选择目标 workspace 和 folder 后再从模板创建');
                   return;
                 }
-                void onCreateActivity({
-                  tenantId: selectedWorkspace.tenantId,
-                  activityName: template.name,
-                  activityCode: normalizeActivityCode(template.name),
-                  workspaceId: selectedWorkspace.id,
-                  folderId: selectedFolder.id,
-                  definition: template.definition,
-                });
+                setOpsMessage(`正在从模板创建：${template.name}`);
+                void (async () => {
+                  try {
+                    const created = await onCreateActivity({
+                      tenantId: selectedWorkspace.tenantId,
+                      activityName: template.name,
+                      activityCode: `${normalizeActivityCode(template.name)}_${Date.now().toString(36).toUpperCase()}`,
+                      workspaceId: selectedWorkspace.id,
+                      folderId: targetFolder.id,
+                      definition: template.definition,
+                    });
+                    setSelectedFolderId(targetFolder.id);
+                    setSelectedDetail({
+                      id: created.id,
+                      type: 'Workflow',
+                      name: created.activityName || created.activityCode,
+                      visibility: created.visibility || 'TEAM',
+                      status: created.status,
+                      version: 'v1',
+                      owner: currentActorId,
+                    });
+                    setOpsMessage(`已从模板创建 workflow：${created.activityName || created.activityCode}`);
+                  } catch (error) {
+                    setOpsMessage(`从模板创建失败：${(error as Error).message}`);
+                  }
+                })();
               }}
               onToggleFavorite={toggleFavorite}
               onToggleArchived={toggleArchived}
@@ -4156,6 +4220,7 @@ function StudioActivityStart({
 
 export function App() {
   const initialActivityId = useMemo(initialActivityIdFromLocation, []);
+  const [themeMode, setThemeMode] = useState<ExmThemeMode>(() => initialExmTheme());
   const [nodes, setNodes, onNodesChange] = useNodesState<FlowNode>([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState<ActivityEdge>([]);
   const [selectedTemplate, setSelectedTemplate] = useState<'default' | 'simple'>('default');
@@ -4164,6 +4229,16 @@ export function App() {
   const [selectedEdgeIds, setSelectedEdgeIds] = useState<string[]>([]);
   const [inspectedNodeIds, setInspectedNodeIds] = useState<string[]>([]);
   const [inspectedEdgeIds, setInspectedEdgeIds] = useState<string[]>([]);
+
+  useEffect(() => {
+    document.documentElement.dataset.exmTheme = themeMode;
+    document.documentElement.style.colorScheme = themeMode === 'dark' ? 'dark' : 'light';
+    try {
+      window.localStorage.setItem(EXM_THEME_STORAGE_KEY, themeMode);
+    } catch {
+      // Keep the session theme even when browser storage is unavailable.
+    }
+  }, [themeMode]);
   const [contextMenu, setContextMenu] = useState<FlowContextMenu | null>(null);
   const [nodePicker, setNodePicker] = useState<NodePickerState | null>(null);
   const [nodeSearch, setNodeSearch] = useState('');
@@ -5819,23 +5894,28 @@ export function App() {
       method: 'POST',
       body: JSON.stringify(payload),
     });
+    let draftSaveErrorMessage = '';
     if (input.definition) {
-      await fetchJSON(`/admin/v1/activities/${created.id}/workflow/draft`, {
-        method: 'PUT',
-        body: JSON.stringify({
-          operator: currentActorId,
-          definition: {
-            ...input.definition,
-            meta: {
-              ...(input.definition.meta ?? {}),
-              activityId: created.id,
-              workspaceId: created.workspaceId || input.workspaceId,
-              folderId: created.folderId || input.folderId,
-              importedAt: new Date().toISOString(),
+      try {
+        await fetchJSON(`/admin/v1/activities/${created.id}/workflow/draft`, {
+          method: 'PUT',
+          body: JSON.stringify({
+            operator: currentActorId,
+            definition: {
+              ...input.definition,
+              meta: {
+                ...(input.definition.meta ?? {}),
+                activityId: created.id,
+                workspaceId: created.workspaceId || input.workspaceId,
+                folderId: created.folderId || input.folderId,
+                importedAt: new Date().toISOString(),
+              },
             },
-          },
-        }),
-      });
+          }),
+        });
+      } catch (error) {
+        draftSaveErrorMessage = (error as Error).message;
+      }
     }
     setActivities((items) => [created, ...items.filter((item) => item.id !== created.id)]);
     setActivityPlacements((items) => ({
@@ -5851,16 +5931,22 @@ export function App() {
     setSelectedEdgeIds([]);
     setContextMenu(null);
     setNodePicker(null);
-    setNodes([]);
-    setEdges([]);
+    if (input.definition) {
+      const hydrated = hydrateWorkflowDefinition(input.definition);
+      setNodes(hydrated.nodes);
+      setEdges(hydrated.edges);
+    } else {
+      setNodes([]);
+      setEdges([]);
+    }
     setSelectedTemplate('default');
-    setWorkflowStatus(input.definition ? '活动已创建，导入 draft 已保存' : '活动已创建，空 draft 已保存');
+    setWorkflowStatus(draftSaveErrorMessage ? `活动已创建，但 draft 保存失败：${draftSaveErrorMessage}` : input.definition ? '活动已创建，导入 draft 已保存' : '活动已创建，空 draft 已保存');
     setWorkflowVersionLabel('workflow 未发布');
-    setDraftDirty(false);
-    setDraftSaveState('saved');
-    setDraftSaveError('');
-    setLastSavedAt(new Date().toISOString());
-    draftRevisionRef.current = 0;
+    setDraftDirty(Boolean(draftSaveErrorMessage));
+    setDraftSaveState(draftSaveErrorMessage ? 'failed' : 'saved');
+    setDraftSaveError(draftSaveErrorMessage);
+    setLastSavedAt(draftSaveErrorMessage ? '' : new Date().toISOString());
+    draftRevisionRef.current = draftSaveErrorMessage ? 1 : 0;
     savedDraftRevisionRef.current = 0;
     setIsPublished(false);
     return created;
@@ -6615,6 +6701,9 @@ export function App() {
     const query = new URLSearchParams({ leftVersionId, rightVersionId });
     return fetchJSON<WorkflowDraftTemplateCompareResult>(`/admin/v1/workflow/draft-templates/${templateId}/compare?${query.toString()}`);
   }, []);
+  const toggleThemeMode = useCallback(() => {
+    setThemeMode((value) => (value === 'dark' ? 'light' : 'dark'));
+  }, []);
   const beginRightPanelResize = useCallback((event: React.PointerEvent<HTMLButtonElement>) => {
     event.preventDefault();
     const startX = event.clientX;
@@ -6627,7 +6716,7 @@ export function App() {
     const stopResize = () => {
       document.body.classList.remove('property-panel-resizing');
       document.body.classList.remove('right-panel-resizing');
-      window.localStorage.setItem(RIGHT_PANEL_WIDTH_STORAGE_KEY, String(latestWidth));
+      writeStudioStorage(RIGHT_PANEL_WIDTH_STORAGE_KEY, String(latestWidth));
       window.removeEventListener('pointermove', updateWidth);
       window.removeEventListener('pointerup', stopResize);
     };
@@ -6895,8 +6984,10 @@ export function App() {
                 hiddenTestActivityCount={hiddenTestActivityCount}
                 workflowStatus={workflowStatus}
                 workspaceDataReady={workspaceDataReady}
+                themeMode={themeMode}
                 initialWorkspaceId={homeWorkspaceId}
                 initialFolderId={homeFolderId}
+                onThemeToggle={toggleThemeMode}
                 onWorkspaceSelectionChange={syncWorkspaceHomeSelection}
                 onSelectActivity={changeActivity}
                 onCreateWorkspace={createStudioWorkspace}

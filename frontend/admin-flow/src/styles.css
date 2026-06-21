@@ -3442,6 +3442,7 @@ input:focus-visible {
 }
 
 .exm-workspace-sidebar {
+  position: relative;
   border-right: 1px solid #edf0f5;
   background: #fbfcfe;
 }
@@ -26880,5 +26881,1188 @@ input:focus-visible {
 
   .checkin-days {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* Workspace home responsive polish: keep the worklist readable on laptop widths. */
+@media (max-width: 1280px) and (min-width: 761px) {
+  .exm-mobile-detail-toggle.ta-btn {
+    top: auto !important;
+    right: 22px !important;
+    bottom: 22px !important;
+    height: 38px !important;
+    border-color: #155eef !important;
+    background: #155eef !important;
+    color: #fff !important;
+    box-shadow: 0 14px 30px rgba(21, 94, 239, 0.24) !important;
+  }
+
+  .exm-content-tools.ta-card {
+    padding-right: 8px;
+  }
+
+  .exm-table-view.ta-table {
+    overflow-x: hidden;
+  }
+
+  .exm-table-row.ta-table-row {
+    grid-template-columns: 30px minmax(250px, 1fr) 78px 92px 96px 68px;
+    gap: 10px;
+  }
+
+  .exm-table-row.ta-table-row > span:nth-child(3),
+  .exm-table-row.ta-table-row > span:nth-child(5),
+  .exm-table-row.ta-table-row > span:nth-child(8) {
+    display: none;
+  }
+
+  .exm-table-row.ta-table-row .actions {
+    justify-content: flex-end;
+  }
+}
+
+@media (max-width: 1040px) and (min-width: 761px) {
+  .exm-workspace-layout {
+    grid-template-columns: 216px minmax(0, 1fr);
+  }
+
+  .exm-sidebar {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+
+  .exm-content {
+    padding: 12px;
+  }
+
+  .exm-table-row.ta-table-row {
+    grid-template-columns: 28px minmax(220px, 1fr) 76px 84px 64px;
+  }
+
+  .exm-table-row.ta-table-row > span:nth-child(7) {
+    display: none;
+  }
+}
+
+/* Workspace home minimal pass: align the page with the simplified image direction. */
+.exm-workspace-topbar {
+  grid-template-columns: 250px minmax(360px, 520px) minmax(0, 1fr);
+}
+
+.exm-workspace-topbar .exm-breadcrumb {
+  display: none;
+}
+
+.exm-global-search {
+  border-radius: 10px;
+  box-shadow: none;
+}
+
+.exm-topbar-actions {
+  justify-content: flex-end;
+}
+
+.exm-topbar-actions .ta-btn:not(.exm-primary-action):not(.exm-user-menu) {
+  width: 44px;
+  padding: 0;
+}
+
+.exm-topbar-actions .ta-btn:not(.exm-primary-action):not(.exm-user-menu) span {
+  display: none;
+}
+
+.exm-topbar-actions .exm-primary-action {
+  padding: 0 18px;
+}
+
+.exm-sidebar {
+  padding-top: 18px;
+}
+
+.exm-sidebar .exm-workspace-switcher {
+  border-radius: 10px;
+  box-shadow: none;
+}
+
+.exm-content-tools.ta-card {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  display: grid;
+  grid-template-columns: minmax(360px, 1fr) 144px 44px 136px;
+  padding: 0 0 8px;
+}
+
+.exm-content-tools .exm-content-tabs {
+  grid-column: 1 / -1;
+  width: fit-content;
+  min-height: 38px;
+  background: #f5f7fb;
+  border: 1px solid #e4e7ec;
+  border-radius: 12px;
+  gap: 3px;
+  padding: 3px;
+}
+
+.exm-content-tabs .ta-tab {
+  min-height: 30px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: #475467;
+  padding: 0 14px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.exm-content-tabs .ta-tab.active {
+  background: #fff;
+  color: #155eef;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.08), inset 0 0 0 1px #e4e7ec;
+}
+
+.exm-content-tools .exm-folder-search {
+  flex: none;
+  height: 42px;
+}
+
+.exm-content-tools > .ta-select {
+  height: 42px;
+  min-height: 42px;
+}
+
+.exm-content-tools > .ta-btn {
+  width: 44px;
+  min-width: 44px;
+  height: 42px;
+  padding: 0;
+  font-size: 0;
+  justify-content: center;
+}
+
+.exm-content-tools > .ta-btn svg {
+  margin: 0;
+}
+
+.exm-content-tools .exm-view-toggle {
+  margin-left: 0;
+  justify-self: end;
+}
+
+.exm-content-tools .exm-view-toggle .ta-btn {
+  width: 42px;
+  min-width: 42px;
+  height: 42px;
+  padding: 0;
+  font-size: 0;
+  justify-content: center;
+}
+
+.exm-table-view.ta-table {
+  border-radius: 10px;
+  box-shadow: none;
+}
+
+.exm-table-row.ta-table-row {
+  grid-template-columns: 32px minmax(280px, 1fr) 94px 108px 112px 54px;
+  min-height: 52px;
+}
+
+.exm-table-row.ta-table-row > span:nth-child(3),
+.exm-table-row.ta-table-row > span:nth-child(5),
+.exm-table-row.ta-table-row > span:nth-child(8) {
+  display: none;
+}
+
+.exm-table-row.ta-table-row .actions em {
+  display: none;
+}
+
+.exm-table-row.ta-table-row .actions {
+  justify-content: center;
+}
+
+.exm-table-row.ta-table-row .actions svg {
+  width: 20px;
+  height: 20px;
+}
+
+.exm-pagination.ta-pagination {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  padding-left: 0;
+  padding-right: 0;
+}
+
+@media (max-width: 1280px) and (min-width: 761px) {
+  .exm-content-tools.ta-card {
+    grid-template-columns: minmax(260px, 1fr) 128px 42px 132px;
+  }
+
+  .exm-table-row.ta-table-row {
+    grid-template-columns: 30px minmax(220px, 1fr) 80px 88px 92px 46px;
+  }
+}
+
+@media (max-width: 1040px) and (min-width: 761px) {
+  .exm-content-tools.ta-card {
+    grid-template-columns: minmax(220px, 1fr) 120px 42px 42px;
+  }
+
+  .exm-content-tools .exm-view-toggle .ta-btn:not(.active) {
+    display: none;
+  }
+
+  .exm-table-row.ta-table-row {
+    grid-template-columns: 28px minmax(210px, 1fr) 76px 84px 44px;
+  }
+}
+
+/* Collapsible workspace sidebar. */
+.exm-sidebar-collapse-toggle.ta-btn {
+  position: static;
+  width: 34px;
+  min-width: 34px;
+  height: 34px;
+  min-height: 34px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: #475467;
+  display: inline-grid;
+  place-items: center;
+  padding: 0;
+  box-shadow: none;
+}
+
+.exm-sidebar-collapse-toggle.ta-btn:hover {
+  color: #155eef;
+  border-color: #d6e0ff;
+  background: #f5f8ff;
+  box-shadow: 0 4px 12px rgba(21, 94, 239, 0.1);
+}
+
+.exm-sidebar-collapse-toggle.ta-btn svg {
+  width: 17px;
+  height: 17px;
+  min-width: 17px;
+  stroke-width: 2.7;
+}
+
+.exm-workspace-layout.sidebar-collapsed {
+  grid-template-columns: 76px minmax(0, 1fr) 336px;
+}
+
+.exm-workspace-layout.sidebar-collapsed .exm-sidebar-collapse-toggle.ta-btn {
+  background: #f8fafc;
+  border-color: #d0d5dd;
+}
+
+.exm-workspace-layout.sidebar-collapsed .exm-sidebar {
+  padding: 14px 10px;
+}
+
+.exm-workspace-layout.sidebar-collapsed .exm-workspace-switcher {
+  justify-content: center;
+  padding: 8px;
+}
+
+.exm-workspace-layout.sidebar-collapsed .exm-workspace-switcher > span {
+  margin: 0;
+}
+
+.exm-workspace-layout.sidebar-collapsed .exm-workspace-switcher-trigger,
+.exm-workspace-layout.sidebar-collapsed .exm-sidebar-section-head,
+.exm-workspace-layout.sidebar-collapsed .exm-sidebar-storage {
+  display: none;
+}
+
+.exm-workspace-layout.sidebar-collapsed .exm-sidebar-nav,
+.exm-workspace-layout.sidebar-collapsed .exm-sidebar-folders {
+  gap: 8px;
+}
+
+.exm-workspace-layout.sidebar-collapsed .exm-sidebar-section,
+.exm-workspace-layout.sidebar-collapsed .exm-sidebar-secondary {
+  border-top: 1px solid #edf1f5;
+  padding-top: 10px;
+}
+
+.exm-workspace-layout.sidebar-collapsed .exm-sidebar-nav button,
+.exm-workspace-layout.sidebar-collapsed .exm-sidebar-folders button {
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  min-height: 44px;
+  justify-content: center;
+  grid-template-columns: 1fr;
+  padding: 0;
+}
+
+.exm-workspace-layout.sidebar-collapsed .exm-sidebar-nav button svg,
+.exm-workspace-layout.sidebar-collapsed .exm-sidebar-folders button svg {
+  margin: 0;
+}
+
+.exm-workspace-layout.sidebar-collapsed .exm-sidebar-nav button span,
+.exm-workspace-layout.sidebar-collapsed .exm-sidebar-folders button span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.exm-workspace-layout.sidebar-collapsed .exm-sidebar-nav button strong,
+.exm-workspace-layout.sidebar-collapsed .exm-sidebar-folders button strong {
+  position: absolute;
+  right: -4px;
+  top: -4px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  font-size: 10px;
+}
+
+@media (max-width: 1280px) and (min-width: 761px) {
+  .exm-workspace-layout.sidebar-collapsed {
+    grid-template-columns: 76px minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 760px) {
+  .exm-sidebar-collapse-toggle.ta-btn {
+    display: none;
+  }
+
+  .exm-workspace-layout.sidebar-collapsed {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Workspace grid cards: override generic button height so cards cannot collapse. */
+.exm-grid-view {
+  min-height: 0;
+  overflow: auto;
+  align-content: start;
+  grid-template-columns: repeat(auto-fill, minmax(236px, 1fr));
+  gap: 12px;
+  padding: 2px 2px 4px;
+}
+
+.exm-template-grid {
+  max-width: none;
+  grid-template-columns: repeat(auto-fill, minmax(236px, 1fr));
+}
+
+.exm-grid-card,
+.exm-grid-view > button,
+.exm-grid-view > .ta-btn,
+.exm-template-card.ta-btn {
+  height: auto;
+  min-height: 156px;
+  align-items: stretch;
+  grid-template-rows: 34px minmax(40px, auto) 20px 24px;
+  gap: 8px;
+  padding: 18px 16px 14px;
+  border-radius: 12px;
+  white-space: normal;
+}
+
+.exm-grid-view .icon {
+  align-self: start;
+}
+
+.exm-grid-view b {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  align-self: start;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  color: #182230;
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: normal;
+}
+
+.exm-grid-view em {
+  min-width: 0;
+  overflow: hidden;
+  color: #667085;
+  font-size: 12px;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.exm-grid-view footer {
+  min-width: 0;
+  align-self: end;
+  margin-top: 0;
+  overflow: hidden;
+  color: #667085;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.exm-grid-view footer span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.exm-grid-view .more {
+  top: 14px;
+  right: 14px;
+}
+
+.exm-grid-view .grid-check {
+  top: 14px;
+  left: 14px;
+}
+
+/* Day / night theme for the admin flow shell. */
+:root[data-exm-theme="dark"] {
+  --app-bg: #0b1220;
+  --panel-bg: #111827;
+  --panel-border: #243244;
+  --muted-border: #1f2a3a;
+  --text-strong: #f8fafc;
+  --text-main: #e5e7eb;
+  --text-muted: #94a3b8;
+  --text-soft: #64748b;
+  --brand-blue: #8ba4ff;
+  --brand-blue-soft: rgba(139, 164, 255, 0.10);
+  --btn-bg: #111827;
+  --btn-text: #e5e7eb;
+  --btn-border: #334155;
+  --btn-hover-bg: #182235;
+  --btn-hover-border: #46566f;
+  --btn-active-bg: rgba(139, 164, 255, 0.10);
+  --btn-active-border: rgba(139, 164, 255, 0.28);
+  --btn-active-text: #c5d1ff;
+  --exm-line: #243244;
+  --exm-line-soft: #1f2a3a;
+  --exm-bg-subtle: #111827;
+  --exm-bg-hover: #172033;
+  --exm-bg-active: rgba(139, 164, 255, 0.10);
+  --exm-text: #f8fafc;
+  --exm-muted: #94a3b8;
+  --exm-saas-page: #0b1220;
+  --exm-saas-card: #111827;
+  --exm-saas-border: #243244;
+  --exm-saas-border-soft: #1f2a3a;
+  --exm-saas-heading: #f8fafc;
+  --exm-saas-body: #cbd5e1;
+  --exm-saas-muted: #94a3b8;
+  --exm-saas-brand: #8ba4ff;
+  --exm-saas-brand-hover: #a7b8ff;
+  --exm-saas-brand-soft: rgba(139, 164, 255, 0.10);
+  --ta-gray-25: #0b1220;
+  --ta-gray-50: #0f172a;
+  --ta-gray-100: #172033;
+  --ta-gray-200: #243244;
+  --ta-gray-300: #334155;
+  --ta-gray-400: #64748b;
+  --ta-gray-500: #94a3b8;
+  --ta-gray-600: #cbd5e1;
+  --ta-gray-700: #e2e8f0;
+  --ta-gray-800: #f1f5f9;
+  --ta-gray-900: #f8fafc;
+  --ta-shadow-xs: none;
+  --ta-shadow-sm: none;
+}
+
+:root[data-exm-theme="dark"] body,
+:root[data-exm-theme="dark"] .flow-shell,
+:root[data-exm-theme="dark"] .studio,
+:root[data-exm-theme="dark"] .studio-start-overlay,
+:root[data-exm-theme="dark"] .exm-workspace-main,
+:root[data-exm-theme="dark"] .exm-content {
+  background: #0b1220;
+  color: #e5e7eb;
+}
+
+:root[data-exm-theme="dark"] .exm-workspace-topbar,
+:root[data-exm-theme="dark"] .exm-workspace-sidebar,
+:root[data-exm-theme="dark"] .exm-workspace-detail,
+:root[data-exm-theme="dark"] .exm-detail-panel,
+:root[data-exm-theme="dark"] .property-panel,
+:root[data-exm-theme="dark"] .studio-start-shell {
+  border-color: #243244;
+  background: #111827;
+  color: #e5e7eb;
+}
+
+:root[data-exm-theme="dark"] .exm-brand-mark strong,
+:root[data-exm-theme="dark"] .exm-brand-icon,
+:root[data-exm-theme="dark"] .exm-workspace-switcher-trigger strong,
+:root[data-exm-theme="dark"] .exm-sidebar-nav span,
+:root[data-exm-theme="dark"] .exm-sidebar-folders span,
+:root[data-exm-theme="dark"] .exm-table-row b,
+:root[data-exm-theme="dark"] .exm-grid-view b,
+:root[data-exm-theme="dark"] .exm-detail-head h2,
+:root[data-exm-theme="dark"] .activity-node strong {
+  color: #f8fafc;
+}
+
+:root[data-exm-theme="dark"] .exm-workspace-switcher,
+:root[data-exm-theme="dark"] .exm-content-tools,
+:root[data-exm-theme="dark"] .exm-content-tabs,
+:root[data-exm-theme="dark"] .exm-folder-search,
+:root[data-exm-theme="dark"] .exm-global-search,
+:root[data-exm-theme="dark"] .exm-table-view,
+:root[data-exm-theme="dark"] .exm-grid-card,
+:root[data-exm-theme="dark"] .exm-template-card,
+:root[data-exm-theme="dark"] .exm-pagination,
+:root[data-exm-theme="dark"] .exm-detail-section,
+:root[data-exm-theme="dark"] .exm-detail-summary,
+:root[data-exm-theme="dark"] .exm-detail-stats,
+:root[data-exm-theme="dark"] .activity-node,
+:root[data-exm-theme="dark"] .studio-create-dialog,
+:root[data-exm-theme="dark"] .workflow-template-panel,
+:root[data-exm-theme="dark"] .debug-run-panel,
+:root[data-exm-theme="dark"] .run-history-panel {
+  border-color: #243244;
+  background: #111827;
+  color: #e5e7eb;
+  box-shadow: none;
+}
+
+:root[data-exm-theme="dark"] .exm-content-tabs .ta-tab.active,
+:root[data-exm-theme="dark"] .exm-sidebar-nav button.active,
+:root[data-exm-theme="dark"] .exm-sidebar-folders button.active,
+:root[data-exm-theme="dark"] .exm-view-toggle .ta-btn.active,
+:root[data-exm-theme="dark"] .exm-content-tools button.active {
+  border-color: #334155 !important;
+  background: #1e293b !important;
+  color: #c5d1ff !important;
+  box-shadow: none !important;
+}
+
+:root[data-exm-theme="dark"] input,
+:root[data-exm-theme="dark"] textarea,
+:root[data-exm-theme="dark"] select,
+:root[data-exm-theme="dark"] .ta-input,
+:root[data-exm-theme="dark"] .ta-select {
+  border-color: #334155;
+  background-color: #0f172a;
+  color: #e5e7eb;
+}
+
+:root[data-exm-theme="dark"] input::placeholder,
+:root[data-exm-theme="dark"] textarea::placeholder {
+  color: #64748b;
+}
+
+:root[data-exm-theme="dark"] .ta-btn:not(.exm-primary-action),
+:root[data-exm-theme="dark"] .exm-sidebar-collapse-toggle,
+:root[data-exm-theme="dark"] .exm-theme-toggle {
+  border-color: #334155;
+  background: #111827;
+  color: #cbd5e1;
+}
+
+:root[data-exm-theme="dark"] .ta-btn:not(.exm-primary-action):hover,
+:root[data-exm-theme="dark"] .exm-sidebar-collapse-toggle:hover,
+:root[data-exm-theme="dark"] .exm-theme-toggle:hover {
+  border-color: #46566f;
+  background: #182235;
+  color: #f8fafc;
+}
+
+:root[data-exm-theme="dark"] .exm-table-row {
+  border-bottom-color: #1f2a3a;
+}
+
+:root[data-exm-theme="dark"] .react-flow,
+:root[data-exm-theme="dark"] .react-flow__renderer,
+:root[data-exm-theme="dark"] .react-flow__pane {
+  background: #0b1220;
+}
+
+:root[data-exm-theme="dark"] .react-flow__controls,
+:root[data-exm-theme="dark"] .react-flow__minimap {
+  border-color: #243244;
+  background: #111827;
+  color: #cbd5e1;
+}
+
+:root[data-exm-theme="dark"] .exm-sidebar,
+:root[data-exm-theme="dark"] .exm-workspace-sidebar .exm-sidebar {
+  background: #111827 !important;
+  color: #e5e7eb !important;
+}
+
+:root[data-exm-theme="dark"] .exm-table-row,
+:root[data-exm-theme="dark"] .ta-table-row,
+:root[data-exm-theme="dark"] .exm-table-row.ta-table-row {
+  background: #111827 !important;
+  color: #cbd5e1 !important;
+  border-color: #1f2a3a !important;
+}
+
+:root[data-exm-theme="dark"] .exm-table-row.head,
+:root[data-exm-theme="dark"] .ta-table-row.head {
+  background: #0f172a !important;
+  color: #94a3b8 !important;
+}
+
+:root[data-exm-theme="dark"] .exm-table-row:not(.head):hover,
+:root[data-exm-theme="dark"] .ta-table-row:not(.head):hover,
+:root[data-exm-theme="dark"] .exm-table-row.selected,
+:root[data-exm-theme="dark"] .ta-table-row.selected {
+  background: #172033 !important;
+}
+
+:root[data-exm-theme="dark"] .exm-sidebar-nav button,
+:root[data-exm-theme="dark"] .exm-sidebar-folders button,
+:root[data-exm-theme="dark"] .exm-detail-tabs button {
+  color: #cbd5e1 !important;
+}
+
+:root[data-exm-theme="dark"] .exm-sidebar-nav button:not(.active):hover,
+:root[data-exm-theme="dark"] .exm-sidebar-folders button:not(.active):hover {
+  background: #172033 !important;
+}
+
+:root[data-exm-theme="dark"] .exm-workspace-switcher-trigger small,
+:root[data-exm-theme="dark"] .exm-grid-view em,
+:root[data-exm-theme="dark"] .exm-grid-view footer,
+:root[data-exm-theme="dark"] .exm-table-row span,
+:root[data-exm-theme="dark"] .exm-detail-head p,
+:root[data-exm-theme="dark"] .exm-detail-head span {
+  color: #94a3b8;
+}
+
+:root[data-exm-theme="dark"] .exm-status-pill.draft,
+:root[data-exm-theme="dark"] .exm-sidebar-nav strong,
+:root[data-exm-theme="dark"] .exm-sidebar-folders strong {
+  border-color: rgba(148, 163, 184, 0.16) !important;
+  background: rgba(148, 163, 184, 0.12) !important;
+  color: #cbd5e1 !important;
+}
+
+:root[data-exm-theme="dark"] .exm-detail-head,
+:root[data-exm-theme="dark"] .exm-detail-stats div,
+:root[data-exm-theme="dark"] .exm-detail-create-actions .ta-btn,
+:root[data-exm-theme="dark"] .exm-pagination .ta-icon-btn,
+:root[data-exm-theme="dark"] .exm-pagination .ta-select {
+  border-color: #243244 !important;
+  background: #111827 !important;
+  color: #e5e7eb !important;
+}
+
+:root[data-exm-theme="dark"] .exm-detail-stats b,
+:root[data-exm-theme="dark"] .exm-pagination strong {
+  color: #f8fafc !important;
+}
+
+:root[data-exm-theme="dark"] .exm-detail-tabs button.active,
+:root[data-exm-theme="dark"] .exm-pagination strong {
+  border-color: #334155 !important;
+  background: #1e293b !important;
+  color: #c5d1ff !important;
+}
+
+:root[data-exm-theme="dark"] .exm-grid-view .workflow.icon,
+:root[data-exm-theme="dark"] .exm-table-row .name-cell svg,
+:root[data-exm-theme="dark"] .exm-template-card .template.icon,
+:root[data-exm-theme="dark"] .exm-folder-icon,
+:root[data-exm-theme="dark"] .exm-table-row svg,
+:root[data-exm-theme="dark"] .exm-detail-head svg,
+:root[data-exm-theme="dark"] .exm-detail-head .icon,
+:root[data-exm-theme="dark"] .folder.icon {
+  color: #94a3b8 !important;
+}
+
+:root[data-exm-theme="dark"] .exm-status-pill.active {
+  background: rgba(34, 197, 94, 0.11) !important;
+  color: #74d99f !important;
+}
+
+:root[data-exm-theme="dark"] .exm-table-row i,
+:root[data-exm-theme="dark"] .exm-grid-view footer strong,
+:root[data-exm-theme="dark"] .exm-user-menu span {
+  background: #243244 !important;
+  color: #cbd5e1 !important;
+}
+
+:root[data-exm-theme="dark"] .exm-detail-actions .ta-btn,
+:root[data-exm-theme="dark"] .exm-detail-head .ta-btn {
+  color: #cbd5e1 !important;
+}
+
+:root[data-exm-theme="dark"] .exm-detail-actions .ta-btn svg,
+:root[data-exm-theme="dark"] .exm-detail-head .ta-btn svg,
+:root[data-exm-theme="dark"] .exm-topbar-actions .ta-btn svg,
+:root[data-exm-theme="dark"] .exm-sidebar-collapse-toggle svg,
+:root[data-exm-theme="dark"] .exm-theme-toggle svg {
+  color: currentColor !important;
+}
+
+:root[data-exm-theme="dark"] .exm-folder-icon,
+:root[data-exm-theme="dark"] .exm-workspace-switcher > span {
+  background: #3b82f6 !important;
+  color: #ffffff !important;
+}
+
+:root[data-exm-theme="dark"] .exm-sidebar-folders button.active svg,
+:root[data-exm-theme="dark"] .exm-sidebar-nav button.active svg {
+  color: #c5d1ff !important;
+}
+
+:root[data-exm-theme="dark"] .exm-detail-tabs button.active {
+  box-shadow: none !important;
+}
+
+:root[data-exm-theme="dark"] .exm-detail-tabs .ta-tab.active,
+:root[data-exm-theme="dark"] .exm-detail-tabs button.ta-tab.active,
+:root[data-exm-theme="dark"] .exm-detail-tabs button[aria-selected="true"] {
+  border-color: transparent !important;
+  background: transparent !important;
+  color: #e5e7eb !important;
+  box-shadow: none !important;
+}
+
+/* Detail tabs should read as inspector tabs, not a heavy segmented control. */
+.exm-detail-tabs.ta-tabs {
+  height: 34px;
+  margin: 0 0 12px;
+  border: 0;
+  border-bottom: 1px solid #e4e7ec;
+  border-radius: 0;
+  background: transparent;
+  display: flex;
+  gap: 18px;
+  padding: 0;
+}
+
+.exm-detail-tabs.ta-tabs .ta-tab {
+  position: relative;
+  min-width: 0;
+  min-height: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: #667085;
+  padding: 0;
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: 650;
+  box-shadow: none;
+}
+
+.exm-detail-tabs.ta-tabs .ta-tab.active {
+  background: transparent;
+  color: #155eef;
+  box-shadow: none;
+}
+
+.exm-detail-tabs.ta-tabs .ta-tab.active::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: -1px;
+  left: 0;
+  height: 2px;
+  border-radius: 999px;
+  background: #155eef;
+}
+
+:root[data-exm-theme="dark"] .exm-detail-tabs.ta-tabs {
+  border-bottom-color: #243244 !important;
+  background: transparent !important;
+}
+
+:root[data-exm-theme="dark"] .exm-detail-tabs.ta-tabs .ta-tab {
+  background: transparent !important;
+  color: #94a3b8 !important;
+  border: 0 !important;
+}
+
+:root[data-exm-theme="dark"] .exm-detail-tabs.ta-tabs .ta-tab.active {
+  color: #e5e7eb !important;
+}
+
+:root[data-exm-theme="dark"] .exm-detail-tabs.ta-tabs .ta-tab.active::after {
+  background: #8ba4ff;
+}
+
+/* Final detail inspector rhythm: compact vertical flow with no large empty gaps. */
+.exm-workspace-detail .exm-detail-panel {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  align-content: start;
+}
+
+.exm-workspace-detail .exm-detail-head {
+  margin: 12px 22px 8px;
+  padding: 0 0 12px;
+  border-radius: 0;
+  border-bottom: 1px solid #e4e7ec;
+  background: transparent;
+}
+
+.exm-workspace-detail .exm-detail-head .exm-detail-title-block h2 {
+  font-size: 15px;
+  line-height: 20px;
+}
+
+.exm-workspace-detail .exm-detail-head .exm-detail-quick-actions {
+  padding-top: 8px;
+  border-top: 0;
+}
+
+.exm-workspace-detail .exm-detail-tabs.ta-tabs {
+  margin: 0 22px 12px;
+}
+
+.exm-workspace-detail .exm-detail-body {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  align-content: start;
+  gap: 12px;
+  padding: 0 22px 18px;
+  margin: 0;
+}
+
+.exm-workspace-detail .exm-detail-stats,
+.exm-workspace-detail .exm-detail-section,
+.exm-workspace-detail .exm-detail-summary,
+.exm-workspace-detail .exm-acl-section {
+  flex: 0 0 auto;
+  margin: 0;
+}
+
+.exm-workspace-detail .exm-detail-stats {
+  padding: 0;
+  background: transparent;
+}
+
+.exm-workspace-detail .exm-detail-stats div {
+  padding: 0;
+  background: transparent;
+}
+
+.exm-workspace-detail .exm-detail-stats b {
+  font-size: 22px;
+  line-height: 26px;
+}
+
+.exm-workspace-detail .exm-detail-create-actions {
+  gap: 0;
+  padding: 2px 0 10px;
+  border-top: 1px solid #e4e7ec;
+  border-bottom: 1px solid #e4e7ec;
+  border-radius: 0;
+  background: transparent;
+}
+
+.exm-workspace-detail .exm-detail-create-actions h3 {
+  display: none;
+}
+
+.exm-workspace-detail .exm-detail-create-actions > div {
+  gap: 0;
+  overflow: visible;
+  border: 0;
+  border-radius: 0;
+}
+
+.exm-workspace-detail .exm-detail-create-actions .ta-btn {
+  min-height: 38px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: #344054;
+  justify-content: flex-start;
+  padding: 0 2px;
+  box-shadow: none;
+}
+
+.exm-workspace-detail .exm-detail-create-actions .ta-btn + .ta-btn {
+  border-top: 0;
+}
+
+.exm-workspace-detail .exm-detail-create-actions .ta-btn:hover {
+  background: transparent;
+  color: #155eef;
+}
+
+.exm-workspace-detail .exm-detail-summary {
+  padding: 8px 0 0;
+  border-top: 0;
+  background: transparent;
+}
+
+.exm-workspace-detail .exm-detail-summary h3 {
+  display: none;
+}
+
+.exm-workspace-detail .exm-detail-summary div {
+  min-height: 30px;
+  border-top: 1px solid #e4e7ec;
+}
+
+:root[data-exm-theme="dark"] .exm-workspace-detail .exm-detail-head,
+:root[data-exm-theme="dark"] .exm-workspace-detail .exm-detail-create-actions,
+:root[data-exm-theme="dark"] .exm-workspace-detail .exm-detail-summary div {
+  border-color: #334155 !important;
+}
+
+:root[data-exm-theme="dark"] .exm-workspace-detail .exm-detail-create-actions .ta-btn {
+  border-color: #334155 !important;
+  background: transparent !important;
+  color: #e5e7eb !important;
+}
+
+:root[data-exm-theme="dark"] .exm-workspace-detail .exm-detail-create-actions .ta-btn:hover {
+  border-color: #46566f !important;
+  background: #172033 !important;
+}
+
+:root[data-exm-theme="dark"] .exm-workspace-detail .exm-detail-head,
+:root[data-exm-theme="dark"] .exm-workspace-detail .exm-detail-stats,
+:root[data-exm-theme="dark"] .exm-workspace-detail .exm-detail-stats div,
+:root[data-exm-theme="dark"] .exm-workspace-detail .exm-detail-create-actions,
+:root[data-exm-theme="dark"] .exm-workspace-detail .exm-detail-summary {
+  background: transparent !important;
+}
+
+/* Sidebar storage should feel like a utility meter, not a highlighted card. */
+.exm-sidebar .exm-sidebar-secondary {
+  border-top: 1px solid #e4e7ec;
+  border-bottom: 0;
+  margin: 0;
+  padding: 12px 0 10px;
+}
+
+.exm-sidebar .exm-sidebar-storage {
+  align-self: end;
+  border: 0;
+  border-top: 1px solid #e4e7ec;
+  border-radius: 0;
+  background: transparent;
+  gap: 7px;
+  margin-top: 2px;
+  padding: 12px 2px 0;
+  box-shadow: none;
+}
+
+.exm-sidebar .exm-sidebar-storage > div:first-child {
+  gap: 8px;
+}
+
+.exm-sidebar .exm-sidebar-storage span {
+  color: #667085;
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: 650;
+}
+
+.exm-sidebar .exm-sidebar-storage strong {
+  min-width: 34px;
+  color: #667085;
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: 650;
+  text-align: right;
+}
+
+.exm-sidebar .exm-sidebar-storage p {
+  color: #667085;
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: 500;
+}
+
+.exm-sidebar .exm-sidebar-storage-track {
+  height: 4px;
+  background: #e4e7ec;
+}
+
+.exm-sidebar .exm-sidebar-storage-track i {
+  background: #667085;
+}
+
+.exm-sidebar .exm-sidebar-storage .ta-btn,
+.exm-sidebar .exm-sidebar-storage button {
+  width: 100%;
+  height: 36px;
+  border: 1px solid #d0d5dd;
+  border-radius: 8px;
+  background: transparent;
+  color: #344054;
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: 650;
+  box-shadow: none;
+}
+
+.exm-sidebar .exm-sidebar-storage .ta-btn:hover,
+.exm-sidebar .exm-sidebar-storage button:hover {
+  border-color: #98a2b3;
+  background: #f8fafc;
+  color: #101828;
+}
+
+:root[data-exm-theme="dark"] .exm-sidebar .exm-sidebar-storage {
+  border-top-color: #334155 !important;
+  background: transparent !important;
+}
+
+:root[data-exm-theme="dark"] .exm-workspace-detail .exm-detail-create-actions > div {
+  border-color: transparent !important;
+}
+
+:root[data-exm-theme="dark"] .exm-workspace-detail .exm-detail-create-actions .ta-btn + .ta-btn {
+  border-top-color: transparent !important;
+}
+
+:root[data-exm-theme="dark"] .exm-sidebar .exm-sidebar-secondary {
+  border-top-color: #334155 !important;
+  border-bottom: 0 !important;
+}
+
+:root[data-exm-theme="dark"] .exm-workspace-sidebar .exm-sidebar .exm-sidebar-storage {
+  background: transparent !important;
+}
+
+:root[data-exm-theme="dark"] .exm-sidebar .exm-sidebar-storage span,
+:root[data-exm-theme="dark"] .exm-sidebar .exm-sidebar-storage strong,
+:root[data-exm-theme="dark"] .exm-sidebar .exm-sidebar-storage p {
+  color: #94a3b8 !important;
+}
+
+:root[data-exm-theme="dark"] .exm-sidebar .exm-sidebar-storage-track {
+  background: #243244 !important;
+}
+
+:root[data-exm-theme="dark"] .exm-sidebar .exm-sidebar-storage-track i {
+  background: #64748b !important;
+}
+
+:root[data-exm-theme="dark"] .exm-sidebar .exm-sidebar-storage .ta-btn,
+:root[data-exm-theme="dark"] .exm-sidebar .exm-sidebar-storage button {
+  border-color: #334155 !important;
+  background: transparent !important;
+  color: #cbd5e1 !important;
+}
+
+:root[data-exm-theme="dark"] .exm-sidebar .exm-sidebar-storage .ta-btn:hover,
+:root[data-exm-theme="dark"] .exm-sidebar .exm-sidebar-storage button:hover {
+  border-color: #46566f !important;
+  background: #172033 !important;
+  color: #f8fafc !important;
+}
+
+/* Restore the dedicated mobile workspace layout after the desktop simplification overrides. */
+@media (max-width: 760px) {
+  .exm-workspace-topbar {
+    grid-template-columns: minmax(0, 1fr) auto;
+    height: auto;
+    min-height: 56px;
+    gap: 10px;
+    padding: 10px 12px;
+  }
+
+  .exm-global-search-wrap {
+    grid-column: 1 / -1;
+    order: 3;
+    width: 100%;
+  }
+
+  .exm-topbar-actions .ta-btn:not(.exm-primary-action):not(.exm-user-menu) {
+    width: 32px;
+    min-width: 32px;
+  }
+
+  .exm-topbar-actions .exm-primary-action {
+    padding: 0 10px;
+  }
+
+  .exm-workspace-layout,
+  .exm-workspace-layout.sidebar-collapsed {
+    height: auto;
+    min-height: calc(100vh - 112px);
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .exm-content {
+    min-width: 0;
+    overflow: visible;
+    padding: 12px;
+  }
+
+  .exm-content-tools.ta-card {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 10px;
+    padding: 0 0 8px;
+  }
+
+  .exm-content-tools .exm-content-tabs,
+  .exm-content-tools .exm-folder-search {
+    grid-column: 1 / -1;
+    width: 100%;
+  }
+
+  .exm-content-tools > .ta-select {
+    width: 100%;
+  }
+
+  .exm-content-tools > .ta-btn {
+    width: 42px;
+    min-width: 42px;
+  }
+
+  .exm-content-tools .exm-view-toggle {
+    grid-column: 1 / -1;
+    justify-self: stretch;
+    width: 100%;
+  }
+
+  .exm-content-tools .exm-view-toggle .ta-btn {
+    flex: 1 1 0;
+    width: auto;
+    min-width: 0;
+  }
+
+  .exm-table-view.ta-table {
+    overflow-x: auto;
+  }
+
+  .exm-table-row.ta-table-row {
+    grid-template-columns: 28px minmax(180px, 1fr) 74px 76px 44px;
+    gap: 8px;
+  }
+
+  .exm-table-row.ta-table-row > span:nth-child(3),
+  .exm-table-row.ta-table-row > span:nth-child(5),
+  .exm-table-row.ta-table-row > span:nth-child(7),
+  .exm-table-row.ta-table-row > span:nth-child(8) {
+    display: none;
+  }
+
+  .exm-grid-view,
+  .exm-template-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .exm-grid-card,
+  .exm-grid-view > button,
+  .exm-grid-view > .ta-btn,
+  .exm-template-card.ta-btn {
+    min-height: 132px;
   }
 }

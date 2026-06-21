@@ -1534,6 +1534,44 @@ func TestRewardWorkflowNodeHandlerCalculatesConfiguredReward(t *testing.T) {
 	}
 }
 
+func TestCandidateRewardWorkflowNodeHandlerUsesProviderChainRewardConfig(t *testing.T) {
+	runtime := testWorkflowHandlerRuntime(true)
+	runtime.Activity.Rewards = []marketing.Reward{{
+		ID:            "reward_checkin",
+		Code:          "DAILY_CHECKIN_BONUS",
+		Type:          marketing.RewardBonus,
+		CalculateType: marketing.CalculateFixed,
+		Config:        json.RawMessage(`{"amount":"1","currency":"USD"}`),
+		GrantMode:     marketing.GrantAuto,
+		GrantChannel:  marketing.GrantHTTP,
+		Enabled:       true,
+	}}
+	node := marketing.WorkflowNode{
+		ID:   "candidate-reward",
+		Type: "candidate-reward",
+		Config: json.RawMessage(`{
+			"providerChain":[
+				{"source":"RESOURCE","resourceRef":"default_activity_reward_config","namespace":"reward","operation":"READ","keyTemplate":"${activityId}","valuePath":"$.reward_items","outputAs":"rewardConfig","onMiss":"BLOCK"}
+			],
+			"notQualifiedAction":"SKIP",
+			"emptyAction":"BLOCK"
+		}`),
+	}
+	result := NewService(marketing.NewMemoryRepository()).candidateRewardWorkflowNodeHandler(context.Background(), node, runtime)
+	if result.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected candidate reward success, got %+v", result)
+	}
+	items := result.Output["candidate_rewards"].([]any)
+	item := items[0].(map[string]any)
+	if item["rewardCode"] != "DAILY_CHECKIN_BONUS" || item["amount"] != "1.0000" {
+		t.Fatalf("expected provider-chain candidate reward, got %+v", item)
+	}
+	resourceResult := result.Output["resource_result"].(map[string]any)
+	if resourceResult["resourceRef"] != "default_activity_reward_config" || resourceResult["adapterMode"] != "ACTIVITY_REWARD_CONFIG" {
+		t.Fatalf("expected activity reward config resource result, got %+v", resourceResult)
+	}
+}
+
 func TestServiceFactQueryWorkflowNodeHandlerHonorsUseEmptyFailureAction(t *testing.T) {
 	service := NewService(marketing.NewMemoryRepository())
 	node := marketing.WorkflowNode{
@@ -2276,6 +2314,103 @@ func TestActivityStateWorkflowNodeHandlerSupportsExternalResourceState(t *testin
 	read := service.activityStateWorkflowNodeHandler(ctx, readNode, runtime)
 	if read.Status != marketing.WorkflowNodeSuccess || read.Output["state_version"] != int64(1) {
 		t.Fatalf("expected external activity state read success, got %+v", read)
+	}
+}
+
+func TestActivityStateWorkflowNodeHandlerSupportsStateOperationChain(t *testing.T) {
+	ctx := context.Background()
+	service := NewService(marketing.NewMemoryRepository())
+	runtime := testWorkflowHandlerRuntime(true)
+	seedCtx := context.WithValue(ctx, workflowNodeExecutionContextKey{}, workflowNodeExecutionContext{
+		ResolvedInput: map[string]any{
+			"state_patch": map[string]any{"lastCheckinDate": "2026-06-18", "streakDays": 1},
+		},
+	})
+	seedNode := marketing.WorkflowNode{
+		ID:     "seed-state",
+		Type:   "activity-state",
+		Config: json.RawMessage(`{"storeType":"EXTERNAL","resourceRef":"default_workflow_state","operation":"UPSERT","namespace":"checkin","stateKeyTemplate":"${activityId}:${subject.id}:chain"}`),
+	}
+	if seed := service.activityStateWorkflowNodeHandler(seedCtx, seedNode, runtime); seed.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected seed success, got %+v", seed)
+	}
+
+	chainNode := marketing.WorkflowNode{
+		ID:   "checkin-state-chain",
+		Type: "activity-state",
+		Config: json.RawMessage(`{
+			"namespace":"checkin",
+			"providerChain":[
+				{"source":"RESOURCE","name":"current","operation":"READ","resourceRef":"default_workflow_state","keyTemplate":"${activityId}:${subject.id}:chain","outputAs":"currentState","onMiss":"BLOCK"},
+				{"source":"RESOURCE","name":"claim","operation":"UPSERT","resourceRef":"default_workflow_state","keyTemplate":"${activityId}:${subject.id}:chain","valuePath":"$.input.currentState_value","outputAs":"updatedState"}
+			]
+		}`),
+	}
+	result := service.activityStateWorkflowNodeHandler(ctx, chainNode, runtime)
+	if result.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected state chain success, got %+v", result)
+	}
+	if result.Output["operation"] != "CHAIN" {
+		t.Fatalf("expected chain operation output, got %+v", result.Output)
+	}
+	traces, ok := result.Output["stateChain"].([]any)
+	if !ok || len(traces) != 2 {
+		t.Fatalf("expected two state chain traces, got %+v", result.Output["stateChain"])
+	}
+	results := result.Output["state_results"].(map[string]any)
+	updated := results["updatedState"].(map[string]any)
+	value := updated["stored_value"].(map[string]any)
+	if value["lastCheckinDate"] != "2026-06-18" || value["streakDays"] != float64(1) {
+		t.Fatalf("expected second step to use first step value, got %+v", value)
+	}
+	state := result.Output["activity_state"].(map[string]any)
+	if state["external"] != true || state["resourceRef"] != "default_workflow_state" {
+		t.Fatalf("expected external activity state output from chain, got %+v", state)
+	}
+}
+
+func TestActivityStateWorkflowNodeHandlerSupportsInternalStateOperationChainWithoutResourceRef(t *testing.T) {
+	ctx := context.Background()
+	service := NewService(marketing.NewMemoryRepository())
+	runtime := testWorkflowHandlerRuntime(true)
+	seedCtx := context.WithValue(ctx, workflowNodeExecutionContextKey{}, workflowNodeExecutionContext{
+		ResolvedInput: map[string]any{
+			"state_patch": map[string]any{"lastCheckinDate": "2026-06-20", "streakDays": 2},
+		},
+	})
+	seedNode := marketing.WorkflowNode{
+		ID:     "seed-state",
+		Type:   "activity-state",
+		Config: json.RawMessage(`{"storeType":"INTERNAL","operation":"UPSERT","namespace":"checkin","stateKeyTemplate":"${activityId}:${subject.id}:internal-chain"}`),
+	}
+	if seed := service.activityStateWorkflowNodeHandler(seedCtx, seedNode, runtime); seed.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected seed success, got %+v", seed)
+	}
+
+	chainNode := marketing.WorkflowNode{
+		ID:   "checkin-state-chain",
+		Type: "activity-state",
+		Config: json.RawMessage(`{
+			"namespace":"checkin",
+			"providerChain":[
+				{"source":"INTERNAL","operation":"READ","keyTemplate":"${activityId}:${subject.id}:internal-chain","outputAs":"currentState","onMiss":"BLOCK"}
+			]
+		}`),
+	}
+	result := service.activityStateWorkflowNodeHandler(ctx, chainNode, runtime)
+	if result.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected internal state chain success, got %+v", result)
+	}
+	if result.Output["state_version"] != int64(1) {
+		t.Fatalf("expected internal state version, got %+v", result.Output)
+	}
+	state := result.Output["activity_state"].(map[string]any)
+	if state["external"] == true || state["resourceRef"] != nil {
+		t.Fatalf("expected internal activity state without resourceRef, got %+v", state)
+	}
+	data := state["data"].(map[string]any)
+	if data["lastCheckinDate"] != "2026-06-20" || data["streakDays"] != float64(2) {
+		t.Fatalf("expected internal state data, got %+v", data)
 	}
 }
 
@@ -3231,6 +3366,42 @@ func TestFactQueryWorkflowNodeHandlerReadsUserProfileStoreFromDefaultMarketingDa
 	}
 }
 
+func TestFactQueryWorkflowNodeHandlerReadsUserProfileViaProviderResource(t *testing.T) {
+	ctx := context.Background()
+	runtime := testWorkflowHandlerRuntime(true)
+	runtime.Inbox.Event.Subject = marketing.EventSubject{Type: "USER", ID: "u_provider_001"}
+	repo := workflowUserProfileTestRepository{
+		Repository: marketing.NewMemoryRepository(),
+		profiles: map[string]marketing.UserProfile{
+			runtime.Activity.TenantID + "|USER|u_provider_001": {
+				TenantID:    runtime.Activity.TenantID,
+				SubjectType: "USER",
+				SubjectID:   "u_provider_001",
+				UserLevel:   4,
+				VIPLevel:    5,
+				Status:      "ACTIVE",
+			},
+		},
+	}
+	service := NewService(repo)
+	node := marketing.WorkflowNode{
+		ID:     "fact-query",
+		Type:   "fact-query",
+		Config: json.RawMessage(`{"source":"PROVIDER","resourceRef":"user-profile-provider","factKeys":["USER_PROFILE"],"namespace":"facts","subjectPath":"subject.id","failureAction":"BLOCK"}`),
+	}
+	result := service.factQueryWorkflowNodeHandler(ctx, node, runtime)
+	if result.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected provider resource fact query success, got %+v", result)
+	}
+	profile := result.Output["facts"].(map[string]any)["USER_PROFILE"].(map[string]any)
+	if profile["exists"] != true || profile["level"] != 4 || profile["vipLevel"] != 5 {
+		t.Fatalf("expected user profile facts from provider resource, got %+v", profile)
+	}
+	if result.Output["resourceRef"] != "default_user_profile_store" {
+		t.Fatalf("expected provider to resolve target resource, got %+v", result.Output)
+	}
+}
+
 func TestFactQueryWorkflowNodeHandlerReadsKYCProfileStoreFromDefaultMarketingDatabase(t *testing.T) {
 	ctx := context.Background()
 	baseRepo := marketing.NewMemoryRepository()
@@ -3697,6 +3868,39 @@ func TestQuotaCheckWorkflowNodeHandlerUsesRedisCounterResource(t *testing.T) {
 	second := service.quotaCheckWorkflowNodeHandler(ctx, node, runtime)
 	if second.Status != marketing.WorkflowNodeFailed || second.Output["errorCode"] != "REDIS_COUNTER_LIMIT_EXCEEDED" {
 		t.Fatalf("expected quota counter limit failure, got %+v", second)
+	}
+}
+
+func TestQuotaCheckWorkflowNodeHandlerUsesProviderChainResource(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	runtime := testWorkflowHandlerRuntime(true)
+	node := marketing.WorkflowNode{
+		ID:   "quota-check",
+		Type: "quota-check",
+		Config: json.RawMessage(`{
+			"providerChain":[
+				{"source":"RESOURCE","resourceRef":"default_checkin_quota_counter","namespace":"checkin","operation":"READ","keyTemplate":"${subject.id}:${activityId}","valuePath":"$.counter","outputAs":"currentQuota","onMiss":"BLOCK"}
+			],
+			"scope":"USER",
+			"window":"DAY",
+			"maxCount":1,
+			"consumeMode":"CHECK_ONLY",
+			"exceedAction":"BLOCK"
+		}`),
+	}
+	result := service.quotaCheckWorkflowNodeHandler(ctx, node, runtime)
+	if result.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected provider-chain quota check success, got %+v", result)
+	}
+	quotaCheck := result.Output["quota_check"].(map[string]any)
+	if quotaCheck["resourceRef"] != "default_checkin_quota_counter" || quotaCheck["logicalKey"] != "user_001:activity_handler:20260605" {
+		t.Fatalf("expected provider-chain quota resource and key, got %+v", quotaCheck)
+	}
+	resourceResult := result.Output["resource_result"].(map[string]any)
+	if resourceResult["redisNamespace"] != "redis:default_checkin_quota_counter:checkin" {
+		t.Fatalf("expected checkin redis namespace, got %+v", resourceResult)
 	}
 }
 
@@ -4250,6 +4454,45 @@ func TestLuaResourceAPIUpsertsAndReadsResource(t *testing.T) {
 	stored := codeResult["stored"].(map[string]any)
 	if stored["streakDays"] != float64(5) {
 		t.Fatalf("expected lua stored value, got %+v", stored)
+	}
+}
+
+func TestWorkflowResourceAPICallsLuaResource(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	runtime := testWorkflowHandlerRuntime(true)
+	if _, err := service.SaveResource(ctx, marketing.Resource{
+		TenantID:    runtime.Activity.TenantID,
+		WorkspaceID: runtime.Activity.WorkspaceID,
+		Code:        "lua_transform_resource",
+		Name:        "Lua Transform Resource",
+		Type:        marketing.ResourceLua,
+		Driver:      marketing.ResourceDriverInternal,
+		Scope:       marketing.ResourceScopeWorkspace,
+		Status:      marketing.ResourceActive,
+		Config:      json.RawMessage(`{"source":"local req = input('resource'); emit({value = {resourceRef = req.ref, key = req.key, amount = req.value.amount}, facts = {LUA_RESULT = {ok = true}}})"}`),
+	}); err != nil {
+		t.Fatalf("save lua resource: %v", err)
+	}
+	node := marketing.WorkflowNode{ID: "lua-resource-call", Type: "code", Config: json.RawMessage(`{"language":"LUA","source":"emit({ok=true})"}`)}
+	output, err := service.workflowExecuteResourceAPI(ctx, node, runtime, workflowResourceAPIRequest{
+		Operation:   marketing.ResourceCall,
+		ResourceRef: "lua_transform_resource",
+		Namespace:   "lua",
+		Key:         "subject:user_001",
+		Value:       map[string]any{"amount": 12},
+		ValueType:   "OBJECT",
+	})
+	if err != nil {
+		t.Fatalf("expected lua resource call success: %v output=%+v", err, output)
+	}
+	value, ok := output["value"].(map[string]any)
+	if !ok || value["resourceRef"] != "lua_transform_resource" || value["key"] != "subject:user_001" || value["amount"] != float64(12) {
+		t.Fatalf("unexpected lua resource value: %+v", output)
+	}
+	if output["resourceAdapterMode"] != "LUA" || output["executionAuthority"] != "WorkflowExecutor/LuaResource" {
+		t.Fatalf("expected lua resource metadata, got %+v", output)
 	}
 }
 

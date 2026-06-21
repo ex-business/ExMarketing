@@ -22,6 +22,11 @@ const (
 	defaultUserProfileStore      = "default_user_profile_store"
 	defaultKYCProfileStore       = "default_kyc_profile_store"
 	defaultRiskProfileStore      = "default_risk_profile_store"
+	defaultUserProfileProvider   = "user-profile-provider"
+	defaultKYCProvider           = "kyc-provider"
+	defaultRiskProvider          = "risk-provider"
+	defaultCheckinQuotaCounter   = "default_checkin_quota_counter"
+	defaultActivityRewardConfig  = "default_activity_reward_config"
 )
 
 func (s *Service) SaveResource(ctx context.Context, resource marketing.Resource) (marketing.Resource, error) {
@@ -203,7 +208,7 @@ func (s *Service) testResourceDryRun(ctx context.Context, resource marketing.Res
 		return ""
 	}
 	switch resource.Type {
-	case marketing.ResourceHTTPProvider:
+	case marketing.ResourceHTTP, marketing.ResourceHTTPProvider:
 		endpoint := firstNonEmpty(resourceConfigString(config, "testEndpoint"), resourceConfigString(config, "endpoint"), resourceConfigString(config, "providerEndpoint"))
 		if err := workflowValidateHTTPProviderEndpoint(endpoint, config); err != nil {
 			return "RESOURCE_HTTP_ENDPOINT_DENIED"
@@ -254,7 +259,7 @@ func (s *Service) testResourceDryRun(ctx context.Context, resource marketing.Res
 func resourceAdapterConfigError(resource marketing.Resource) string {
 	config := resource.ConfigMap()
 	switch resource.Type {
-	case marketing.ResourceDatabaseTable:
+	case marketing.ResourceTable, marketing.ResourceDatabaseTable:
 		if firstNonEmpty(resourceConfigString(config, "physicalTable"), resourceConfigString(config, "table"), resourceConfigString(config, "tableNamespace")) == "" {
 			return "RESOURCE_TABLE_CONFIG_INVALID"
 		}
@@ -274,7 +279,7 @@ func resourceAdapterConfigError(resource marketing.Resource) string {
 		if !resourceTablePrimaryKeyCovered(config, primaryKey) {
 			return "RESOURCE_TABLE_PRIMARY_KEY_MAPPING_INVALID"
 		}
-	case marketing.ResourceHTTPProvider:
+	case marketing.ResourceHTTP, marketing.ResourceHTTPProvider:
 		if firstNonEmpty(resourceConfigString(config, "endpoint"), resourceConfigString(config, "providerEndpoint")) == "" {
 			return "RESOURCE_HTTP_ENDPOINT_REQUIRED"
 		}
@@ -288,11 +293,19 @@ func resourceAdapterConfigError(resource marketing.Resource) string {
 		if !resourceHTTPResponseSchemaConfigValid(config) {
 			return "RESOURCE_HTTP_RESPONSE_SCHEMA_INVALID"
 		}
-	case marketing.ResourceRedisKV, marketing.ResourceRedisHash, marketing.ResourceRedisCounter, marketing.ResourceRedisLock:
+	case marketing.ResourceLua:
+		if workflowLuaResourceSource(config) == "" {
+			return "RESOURCE_LUA_SOURCE_REQUIRED"
+		}
+	case marketing.ResourceProvider:
+		if firstNonEmpty(resourceConfigString(config, "targetResourceRef"), resourceConfigString(config, "resourceRef"), resourceConfigString(config, "storeRef")) == "" {
+			return "RESOURCE_PROVIDER_TARGET_REQUIRED"
+		}
+	case marketing.ResourceRedis, marketing.ResourceRedisKV, marketing.ResourceRedisHash, marketing.ResourceRedisCounter, marketing.ResourceRedisLock:
 		if firstNonEmpty(resourceConfigString(config, "keyPrefix"), resourceConfigString(config, "prefix")) == "" {
 			return "RESOURCE_REDIS_KEY_PREFIX_REQUIRED"
 		}
-	case marketing.ResourceMQTopic:
+	case marketing.ResourceMQ, marketing.ResourceMQTopic:
 		if firstNonEmpty(resourceConfigString(config, "topic"), resourceConfigString(config, "destination"), resourceConfigString(config, "targetRef")) == "" {
 			return "RESOURCE_MQ_TOPIC_REQUIRED"
 		}
@@ -629,7 +642,7 @@ func builtInResources(tenantID string) []marketing.Resource {
 			TenantID:      tenantID,
 			Code:          defaultWorkflowStateResource,
 			Name:          "默认工作流状态存储",
-			Type:          marketing.ResourceDatabaseKV,
+			Type:          marketing.ResourceDatabase,
 			Driver:        marketing.ResourceDriverPostgres,
 			Scope:         marketing.ResourceScopeSystem,
 			Status:        marketing.ResourceActive,
@@ -650,6 +663,43 @@ func builtInResources(tenantID string) []marketing.Resource {
 			Status:        marketing.ResourceActive,
 			Config:        json.RawMessage(`{}`),
 			Capabilities:  []marketing.ResourceOperation{marketing.ResourceRead, marketing.ResourceWrite, marketing.ResourceUpsert, marketing.ResourceAppend, marketing.ResourceDelete},
+			SchemaVersion: 1,
+			CreatedAt:     now,
+			UpdatedAt:     now,
+		},
+		{
+			ID:          "res_builtin_default_checkin_quota_counter",
+			TenantID:    tenantID,
+			Code:        defaultCheckinQuotaCounter,
+			Name:        "默认签到频控计数器",
+			Description: "每日签到频控默认计数资源，按 namespace、subject、activity 和窗口分段读写受控计数器。",
+			Type:        marketing.ResourceRedis,
+			Driver:      marketing.ResourceDriverInternal,
+			Scope:       marketing.ResourceScopeSystem,
+			Status:      marketing.ResourceActive,
+			Config: json.RawMessage(`{
+					"keyPrefix":"quota:checkin",
+					"mode":"COUNTER"
+				}`),
+			Capabilities:  []marketing.ResourceOperation{marketing.ResourceRead, marketing.ResourceWrite, marketing.ResourceUpsert, marketing.ResourceDelete, marketing.ResourceCheckAndIncrement, marketing.ResourceTestConnection},
+			SchemaVersion: 1,
+			CreatedAt:     now,
+			UpdatedAt:     now,
+		},
+		{
+			ID:          "res_builtin_default_activity_reward_config",
+			TenantID:    tenantID,
+			Code:        defaultActivityRewardConfig,
+			Name:        "默认活动奖励配置",
+			Description: "当前活动版本上的奖励配置资源，供 candidate-reward 生成待发奖励候选。",
+			Type:        marketing.ResourceWorkflowContext,
+			Driver:      marketing.ResourceDriverInternal,
+			Scope:       marketing.ResourceScopeSystem,
+			Status:      marketing.ResourceActive,
+			Config: json.RawMessage(`{
+					"contextPath":"$.activity.rewards"
+				}`),
+			Capabilities:  []marketing.ResourceOperation{marketing.ResourceRead, marketing.ResourceTestConnection},
 			SchemaVersion: 1,
 			CreatedAt:     now,
 			UpdatedAt:     now,
@@ -679,7 +729,7 @@ func builtInResources(tenantID string) []marketing.Resource {
 			Code:        defaultUserProfileStore,
 			Name:        "默认用户资料 Store",
 			Description: "基于 default_marketing_database 创建的用户资料 store，读取 marketing_user_profile 并输出 USER_PROFILE 事实。",
-			Type:        marketing.ResourceDatabaseTable,
+			Type:        marketing.ResourceTable,
 			Driver:      marketing.ResourceDriverPostgres,
 			Scope:       marketing.ResourceScopeSystem,
 			Status:      marketing.ResourceActive,
@@ -711,12 +761,34 @@ func builtInResources(tenantID string) []marketing.Resource {
 			UpdatedAt:     now,
 		},
 		{
+			ID:          "res_builtin_user_profile_provider",
+			TenantID:    tenantID,
+			Code:        defaultUserProfileProvider,
+			Name:        "用户资料 Provider",
+			Description: "公共事实 Provider，输出 USER_PROFILE；默认由 default_user_profile_store 实现。",
+			Type:        marketing.ResourceProvider,
+			Driver:      marketing.ResourceDriverInternal,
+			Scope:       marketing.ResourceScopeSystem,
+			Status:      marketing.ResourceActive,
+			Config: json.RawMessage(`{
+					"providerType":"TABLE",
+					"contract":"FACTS_V1",
+					"capabilities":["FACT_QUERY"],
+					"factKeys":["USER_PROFILE"],
+					"targetResourceRef":"default_user_profile_store"
+				}`),
+			Capabilities:  []marketing.ResourceOperation{marketing.ResourceRead, marketing.ResourceTestConnection},
+			SchemaVersion: 1,
+			CreatedAt:     now,
+			UpdatedAt:     now,
+		},
+		{
 			ID:          "res_builtin_default_kyc_profile_store",
 			TenantID:    tenantID,
 			Code:        defaultKYCProfileStore,
 			Name:        "默认 KYC 资料 Store",
 			Description: "基于 default_marketing_database 创建的 KYC 用户资源，读取 marketing_kyc_profile 并输出 KYC_PROFILE 事实。",
-			Type:        marketing.ResourceDatabaseTable,
+			Type:        marketing.ResourceTable,
 			Driver:      marketing.ResourceDriverPostgres,
 			Scope:       marketing.ResourceScopeSystem,
 			Status:      marketing.ResourceActive,
@@ -749,12 +821,34 @@ func builtInResources(tenantID string) []marketing.Resource {
 			UpdatedAt:     now,
 		},
 		{
+			ID:          "res_builtin_kyc_provider",
+			TenantID:    tenantID,
+			Code:        defaultKYCProvider,
+			Name:        "KYC Provider",
+			Description: "公共事实 Provider，输出 KYC_PROFILE；默认由 default_kyc_profile_store 实现。",
+			Type:        marketing.ResourceProvider,
+			Driver:      marketing.ResourceDriverInternal,
+			Scope:       marketing.ResourceScopeSystem,
+			Status:      marketing.ResourceActive,
+			Config: json.RawMessage(`{
+					"providerType":"TABLE",
+					"contract":"FACTS_V1",
+					"capabilities":["FACT_QUERY"],
+					"factKeys":["KYC_PROFILE"],
+					"targetResourceRef":"default_kyc_profile_store"
+				}`),
+			Capabilities:  []marketing.ResourceOperation{marketing.ResourceRead, marketing.ResourceTestConnection},
+			SchemaVersion: 1,
+			CreatedAt:     now,
+			UpdatedAt:     now,
+		},
+		{
 			ID:          "res_builtin_default_risk_profile_store",
 			TenantID:    tenantID,
 			Code:        defaultRiskProfileStore,
 			Name:        "默认风控资料 Store",
 			Description: "基于 default_marketing_database 创建的风控用户资源，读取 marketing_risk_profile 并输出 RISK_PROFILE 事实。",
-			Type:        marketing.ResourceDatabaseTable,
+			Type:        marketing.ResourceTable,
 			Driver:      marketing.ResourceDriverPostgres,
 			Scope:       marketing.ResourceScopeSystem,
 			Status:      marketing.ResourceActive,
@@ -782,6 +876,28 @@ func builtInResources(tenantID string) []marketing.Resource {
 						"subjectType":{"path":"$.subject.type"},
 						"subjectId":{"path":"$.subject.id"}
 					}
+				}`),
+			Capabilities:  []marketing.ResourceOperation{marketing.ResourceRead, marketing.ResourceTestConnection},
+			SchemaVersion: 1,
+			CreatedAt:     now,
+			UpdatedAt:     now,
+		},
+		{
+			ID:          "res_builtin_risk_provider",
+			TenantID:    tenantID,
+			Code:        defaultRiskProvider,
+			Name:        "风控 Provider",
+			Description: "公共事实 Provider，输出 RISK_PROFILE；默认由 default_risk_profile_store 实现。",
+			Type:        marketing.ResourceProvider,
+			Driver:      marketing.ResourceDriverInternal,
+			Scope:       marketing.ResourceScopeSystem,
+			Status:      marketing.ResourceActive,
+			Config: json.RawMessage(`{
+					"providerType":"TABLE",
+					"contract":"FACTS_V1",
+					"capabilities":["FACT_QUERY"],
+					"factKeys":["RISK_PROFILE"],
+					"targetResourceRef":"default_risk_profile_store"
 				}`),
 			Capabilities:  []marketing.ResourceOperation{marketing.ResourceRead, marketing.ResourceTestConnection},
 			SchemaVersion: 1,
@@ -835,17 +951,21 @@ func resourceScopeAllows(resource marketing.Resource, req marketing.ResourceAcce
 
 func defaultResourceCapabilities(resourceType marketing.ResourceType) []marketing.ResourceOperation {
 	switch resourceType {
-	case marketing.ResourceMemory, marketing.ResourceWorkflowContext, marketing.ResourceDatabase, marketing.ResourceDatabaseKV, marketing.ResourceDatabaseTable:
+	case marketing.ResourceMemory, marketing.ResourceWorkflowContext, marketing.ResourceDatabase, marketing.ResourceDatabaseKV, marketing.ResourceTable, marketing.ResourceArray, marketing.ResourceDatabaseTable:
 		return []marketing.ResourceOperation{marketing.ResourceRead, marketing.ResourceWrite, marketing.ResourceUpsert, marketing.ResourceAppend, marketing.ResourceDelete, marketing.ResourceCAS}
-	case marketing.ResourceHTTPProvider:
+	case marketing.ResourceHTTP, marketing.ResourceHTTPProvider, marketing.ResourceProvider:
 		return []marketing.ResourceOperation{marketing.ResourceRead, marketing.ResourceWrite, marketing.ResourceUpsert, marketing.ResourceDelete, marketing.ResourceCall, marketing.ResourceTestConnection}
+	case marketing.ResourceLua:
+		return []marketing.ResourceOperation{marketing.ResourceRead, marketing.ResourceCall, marketing.ResourceTestConnection}
+	case marketing.ResourceRedis:
+		return []marketing.ResourceOperation{marketing.ResourceRead, marketing.ResourceWrite, marketing.ResourceUpsert, marketing.ResourceDelete, marketing.ResourceCAS, marketing.ResourceCheckAndIncrement, marketing.ResourceTestConnection}
 	case marketing.ResourceRedisKV, marketing.ResourceRedisHash:
 		return []marketing.ResourceOperation{marketing.ResourceRead, marketing.ResourceWrite, marketing.ResourceUpsert, marketing.ResourceDelete, marketing.ResourceCAS, marketing.ResourceTestConnection}
 	case marketing.ResourceRedisCounter:
 		return []marketing.ResourceOperation{marketing.ResourceRead, marketing.ResourceWrite, marketing.ResourceUpsert, marketing.ResourceDelete, marketing.ResourceCheckAndIncrement, marketing.ResourceTestConnection}
 	case marketing.ResourceRedisLock:
 		return []marketing.ResourceOperation{marketing.ResourceRead, marketing.ResourceWrite, marketing.ResourceUpsert, marketing.ResourceDelete, marketing.ResourceTestConnection}
-	case marketing.ResourceMQTopic:
+	case marketing.ResourceMQ, marketing.ResourceMQTopic:
 		return []marketing.ResourceOperation{marketing.ResourcePublish, marketing.ResourceCall, marketing.ResourceTestConnection}
 	default:
 		return []marketing.ResourceOperation{marketing.ResourceRead}

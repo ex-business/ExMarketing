@@ -191,7 +191,7 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 		groupedSchema("state-event", "状态监听事件", "监听 Redis、配置、指标或全局状态条件并生成标准事件。", groups(
 			fieldGroup("watch", "监听源", "描述可恢复状态来源和路径。", fields(
 				enumField("source", "状态来源", true, "RESOURCE", []string{"RESOURCE", "REDIS", "DATABASE", "CONFIG", "METRICS", "CONTEXT"}),
-				withDescription(stringField("resourceRef", "资源 Ref", false, "", rules(maxLength(128))), "推荐引用资源管理中的 REDIS_KV、REDIS_HASH、DATABASE_KV 或 HTTP_PROVIDER。"),
+				withDescription(stringField("resourceRef", "资源 Ref", false, "", rules(maxLength(128))), "推荐引用资源管理中的受控状态资源。"),
 				withDescription(stringField("namespace", "Namespace", false, "state-watch", rules(maxLength(128))), "状态监听命名空间。"),
 				withDescription(stringField("keyTemplate", "Key 模板", true, "", rules(minLength(1), maxLength(256))), "用于读取可恢复状态，兼容旧字段 key。"),
 				withDescription(stringField("condition", "触发条件", true, "", rules(minLength(1), maxLength(2000))), "支持 value.enabled == true、$.count >= 10、value 等简单表达。"),
@@ -526,28 +526,13 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 			[]string{"真实执行受控 Lua；可通过 resource_read/write/upsert/call 访问已授权资源，不直接访问网络或文件。"},
 		)),
 		groupedSchema("activity-state", "活动状态", "读取或更新用户活动状态、任务进度、签到状态和插件状态。", groups(
-			fieldGroup("state-key", "状态 Key", "定义活动状态的主体、命名空间和 key。", fields(
-				enumField("storeType", "状态存储", true, "INTERNAL", []string{"INTERNAL", "EXTERNAL"}),
-				enumField("operation", "操作", true, "READ", []string{"READ", "WRITE", "UPSERT", "CAS"}),
-				withDescription(stringField("namespace", "命名空间", true, "activity", rules(minLength(1), maxLength(128))), "状态命名空间，例如 checkin、task、lottery、red-envelope。"),
-				withDescription(stringField("stateKeyTemplate", "State Key 模板", true, "${activityId}:${subject.id}", rules(minLength(1), maxLength(256))), "必须稳定定位一个用户或业务维度的活动状态。"),
-			)),
-			fieldGroup("state-data", "状态数据", "控制写入路径、版本和并发策略。", fields(
-				withDescription(stringField("valuePath", "Value Path", false, "$.state", rules(maxLength(160))), "WRITE/UPSERT/CAS 时从上下文读取要写入的状态。"),
-				booleanField("requireVersion", "要求版本", false, true),
-				enumField("missingPolicy", "缺失策略", true, "EMPTY_STATE", []string{"EMPTY_STATE", "BLOCK", "CREATE"}),
-			)),
-			fieldGroup("external-store", "外部状态存储", "storeType=EXTERNAL 时使用；必须引用资源管理中的受控资源。", fields(
-				withDescription(stringField("resourceRef", "资源 Ref", false, "", rules(maxLength(128))), "外部状态资源 Code，例如 checkin_state_kv、crm_state_provider。"),
-				withDescription(stringField("providerCode", "Provider Code", false, "", rules(maxLength(128))), "兼容字段；新流程优先使用 resourceRef。"),
-				objectField("requestMapping", "请求映射", false, nil),
-				objectField("responseMapping", "响应映射", false, nil),
-				numberField("timeoutSeconds", "超时秒数", false, 3, rules(minValue(1), maxValue(30))),
+			fieldGroup("data-providers", "数据提供者", "默认使用 INTERNAL 内部活动状态；需要外部状态时才选择 RESOURCE 并填写资源 Ref。", fields(
+				withDefault(withDescription(arrayField("providerChain", "数据提供者", false, "数组项格式：source、operation、namespace、keyTemplate、valuePath、outputAs、onMiss；source=RESOURCE 时才需要 resourceRef。", rules(maxItems(20))), "为空时使用下方兼容单步配置；非空时按顺序执行每个状态操作步骤。"), []any{}),
 			)),
 		), preview(
 			[]string{"event_context", "facts", "plugin_state"},
 			[]string{"activity_state", "state_version"},
-			[]string{"INTERNAL 使用 ExMarketing PG 权威状态；EXTERNAL 通过 resourceRef 走受控资源、权限和审计。"},
+			[]string{"默认使用 ExMarketing 内部活动状态，不需要资源 Ref；跨系统状态才通过 providerChain 的 RESOURCE、权限和审计执行。"},
 		)),
 		groupedSchema("state-store", "通用存储", "定义、读取和写入工作流通用数据，支持变量、字符串、数组、对象和表格。", groups(
 			fieldGroup("resource", "资源引用", "优先使用资源管理中的 resourceRef；存储介质、endpoint、表结构和密钥不应放在节点中。", fields(
@@ -569,7 +554,7 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 				withDescription(stringField("providerCode", "Provider Code", false, "", rules(maxLength(128))), "REDIS/CUSTOM adapter 编码。"),
 			)),
 			fieldGroup("compat", "兼容字段", "过渡期兼容旧节点配置；新流程应只使用 resourceRef。", fields(
-				enumField("storageType", "存储类型", false, "MEMORY", []string{"MEMORY", "WORKFLOW_CONTEXT", "LOCAL_CACHE", "DATABASE", "DATABASE_TABLE", "HTTP", "REST", "EXTERNAL", "REDIS", "REDIS_KV", "REDIS_HASH", "REDIS_COUNTER", "REDIS_LOCK", "GRPC", "PLUGIN", "CUSTOM"}),
+				enumField("storageType", "存储类型", false, "MEMORY", []string{"MEMORY", "WORKFLOW_CONTEXT", "LOCAL_CACHE", "DATABASE", "DATABASE_TABLE", "HTTP", "REST", "EXTERNAL", "REDIS", "GRPC", "PLUGIN", "CUSTOM"}),
 				withDescription(stringField("providerEndpoint", "Provider Endpoint", false, "", rules(maxLength(512))), "HTTP provider 地址；请求体包含 operation、tenantId、namespace、key、value 和版本信息。"),
 				enumField("httpMethod", "HTTP Method", false, "POST", []string{"POST", "PUT"}),
 				objectField("requestHeaders", "请求 Headers", false, nil),
@@ -581,9 +566,8 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 			[]string{"节点只引用 resourceRef；资源管理负责存储类型、endpoint、表、schema、密钥、权限和审计。"},
 		)),
 		groupedSchema("quota-check", "次数频控校验", "对用户、设备、IP、活动或租户维度做次数和频率校验。", groups(
-			fieldGroup("resource", "资源引用", "可选：使用 REDIS_COUNTER 资源作为频控计数器。", fields(
-				withDescription(stringField("resourceRef", "资源 Ref", false, "", rules(maxLength(128))), "引用资源管理中的 REDIS_COUNTER；为空时保持兼容的 limit 语义。"),
-				withDescription(stringField("namespace", "命名空间", false, "quota", rules(maxLength(128))), "资源审计和 key policy 使用的命名空间。"),
+			fieldGroup("resource-operation", "频控资源操作", "和活动状态一致，通过 RESOURCE 操作块读取或占用 REDIS mode=COUNTER 资源。", fields(
+				withDefault(withDescription(arrayField("providerChain", "资源操作", false, "数组项格式：source、resourceRef、keyTemplate、namespace、valuePath、operation、outputAs、onMiss。", rules(maxItems(5))), "第一项 RESOURCE 操作用于确定频控计数器资源、key 和命名空间。"), []any{}),
 			)),
 			fieldGroup("counter", "计数维度", "定义频控 bucket、窗口和上限。", fields(
 				enumField("scope", "限制范围", true, "USER", []string{"USER", "ACTIVITY", "TENANT", "BIZ", "IP", "DEVICE"}),
@@ -606,11 +590,11 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 		), preview(
 			[]string{"subject", "activity_id", "event_context"},
 			[]string{"quota_check", "limit_hold"},
-			[]string{"quota-check 专门表达次数/频控；配置 REDIS_COUNTER resourceRef 时会读写受控资源计数器。"},
+			[]string{"quota-check 专门表达次数/频控；配置 REDIS mode=COUNTER resourceRef 时会读写受控资源计数器。"},
 		)),
-		groupedSchema("lock", "资源锁", "通过 REDIS_LOCK 资源获取、读取或释放业务互斥锁。", groups(
+		groupedSchema("lock", "资源锁", "通过 REDIS mode=LOCK 资源获取、读取或释放业务互斥锁。", groups(
 			fieldGroup("resource", "锁资源", "定义锁资源和 key。", fields(
-				withDescription(stringField("resourceRef", "资源 Ref", true, "", rules(minLength(1), maxLength(128))), "引用资源管理中的 REDIS_LOCK。"),
+				withDescription(stringField("resourceRef", "资源 Ref", true, "", rules(minLength(1), maxLength(128))), "引用资源管理中的 REDIS 资源，config.mode=LOCK。"),
 				withDescription(stringField("namespace", "命名空间", false, "lock", rules(maxLength(128))), "资源审计和 key policy 使用的命名空间。"),
 				withDescription(stringField("keyTemplate", "锁 Key 模板", true, "${activityId}:${subject.id}", rules(minLength(1), maxLength(256))), "稳定定位业务锁。"),
 			)),
@@ -624,12 +608,11 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 		), preview(
 			[]string{"subject", "activity_id", "resourceRef"},
 			[]string{"lock_result"},
-			[]string{"lock 节点只访问授权的 REDIS_LOCK 资源；真实底层可从当前状态承载替换为 Redis client。"},
+			[]string{"lock 节点只访问授权的 REDIS mode=LOCK 资源；真实底层可从当前状态承载替换为 Redis client。"},
 		)),
 		groupedSchema("candidate-reward", "候选奖励", "根据活动配置和上游状态生成待发奖励候选，不直接产生资金副作用。", groups(
-			fieldGroup("source", "奖励来源", "定义候选奖励从哪里生成。", fields(
-				enumField("source", "来源", true, "ACTIVITY_REWARD_CONFIG", []string{"ACTIVITY_REWARD_CONFIG", "INPUT", "PLUGIN_RESULT"}),
-				withDescription(stringField("rewardItemsPath", "奖励 Path", false, "$.reward_items", rules(maxLength(160))), "source=INPUT/PLUGIN_RESULT 时读取上游奖励数组。"),
+			fieldGroup("reward-source", "奖励来源", "和活动状态、频控一致，通过 RESOURCE 操作块读取候选奖励来源。", fields(
+				withDefault(withDescription(arrayField("providerChain", "资源操作", false, "数组项格式：source、resourceRef、namespace、keyTemplate、valuePath、operation、outputAs、onMiss。", rules(maxItems(5))), "第一项 RESOURCE 操作用于确定奖励配置或候选奖励来源。"), []any{}),
 				booleanField("includeDisabledRewards", "包含禁用奖励", false, false),
 			)),
 			fieldGroup("decision", "候选策略", "控制未通过资格、空候选和审计字段。", fields(
@@ -780,7 +763,7 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 			numberField("expireSeconds", "过期秒数", false, 3600, rules(minValue(60), maxValue(604800))),
 		)),
 		schema("outbox", "消息发件箱", "写入 outbox", fields(
-			withDescription(stringField("resourceRef", "资源 Ref", false, "", rules(maxLength(128))), "可选：引用资源管理中的 MQ_TOPIC 或 HTTP_PROVIDER，绑定 outbox worker 的真实投递目标。"),
+			withDescription(stringField("resourceRef", "资源 Ref", false, "", rules(maxLength(128))), "可选：引用资源管理中的 MQ 或 HTTP 资源，绑定 outbox worker 的真实投递目标。"),
 			enumField("channel", "发送渠道", false, "HTTP", []string{"HTTP", "MQ", "WEBHOOK"}),
 			withDescription(stringField("namespace", "资源命名空间", false, "outbox", rules(maxLength(128))), "资源审计和 key policy 使用的命名空间。"),
 			stringField("keyTemplate", "消息 Key 模板", false, "${eventId}", rules(maxLength(256))),
@@ -795,7 +778,7 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 			executionAuthorityField("OutboxWorker"),
 		)),
 		schema("mq-publish", "MQ 发奖", "发布消息到队列", fields(
-			withDescription(stringField("resourceRef", "资源 Ref", false, "", rules(maxLength(128))), "引用资源管理中的 MQ_TOPIC，例如 reward_commands_topic。配置后 topic/provider 从资源读取。"),
+			withDescription(stringField("resourceRef", "资源 Ref", false, "", rules(maxLength(128))), "引用资源管理中的 MQ 资源，例如 reward_commands_topic。配置后 topic/provider 从资源读取。"),
 			withDescription(stringField("topic", "Topic", false, "", rules(maxLength(256))), "兼容旧节点；使用 resourceRef 时 topic/provider 从资源读取。"),
 			withDescription(stringField("namespace", "命名空间", false, "mq", rules(maxLength(128))), "资源审计和 key policy 使用的命名空间。"),
 			stringField("keyTemplate", "消息 Key 模板", false, "${eventId}", rules(maxLength(256))),
@@ -812,7 +795,7 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 		groupedSchema("callback", "结果回调", "处理发奖渠道、外部系统或活动平台的回调结果。", groups(
 			fieldGroup("provider", "回调来源", "定义允许哪个渠道回调以及如何识别回调事件。", fields(
 				withDescription(stringField("provider", "渠道编码", true, "default", rules(minLength(1), maxLength(128), pattern(`^[a-zA-Z0-9._-]+$`, "渠道编码只能包含字母、数字、点、下划线和短横线。"))), "外部渠道或内部 provider 编码。"),
-				withDescription(stringField("resourceRef", "资源 Ref", false, "", rules(maxLength(128))), "可选：引用资源管理中的 HTTP_PROVIDER，绑定回调入口或查询 provider 的真实 endpoint。"),
+				withDescription(stringField("resourceRef", "资源 Ref", false, "", rules(maxLength(128))), "可选：引用资源管理中的受控资源，绑定回调入口或查询 provider 的真实实现。"),
 				withDescription(stringField("namespace", "资源命名空间", false, "callback", rules(maxLength(128))), "资源审计和 key policy 使用的命名空间。"),
 				stringField("keyTemplate", "回调 Key 模板", false, "${eventId}", rules(maxLength(256))),
 				withDescription(stringField("callbackIdPath", "回调 ID Path", true, "$.callbackId", rules(minLength(1), maxLength(160))), "从 provider_callback 中读取回调唯一 ID 的路径。"),
@@ -1018,18 +1001,14 @@ func DefaultWorkflowNodeConfigSchemas() WorkflowNodeConfigSchemaRegistry {
 
 func defaultWorkflowNodeCategory(nodeType string) string {
 	switch strings.TrimSpace(nodeType) {
-	case "event-in", "http-event", "webhook-event", "mq-event", "schedule-event", "state-event", "manual-event":
-		return "EVENT_INPUT"
-	case "activity-state", "state-store", "lock", "inbox", "participation":
-		return "STORAGE"
-	case "condition", "switch", "code", "combine", "split", "decimal", "http-call", "mq-publish", "webhook", "callback", "approval-gate", "compensation", "random-pick", "plugin-execute", "ab-bucket", "risk-score", "settlement-window", "manual-adjust":
-		return "ADVANCED"
-	case "fact-query", "context-query", "local-cache-query", "http-query", "redis-query", "grpc-query", "plugin-query", "custom-query", "lua-query", "facts-compose", "facts-normalize":
-		return "FACT_QUERY"
-	case "retry", "dlq", "audit", "reconcile", "reward-reconcile", "alert":
-		return "OPS"
+	case "event-in", "inbox", "normalize", "match", "fact-query", "activity-state", "quota-check", "qualify", "candidate-reward", "budget-reserve", "participation", "grant-order", "outbox", "audit":
+		return "基础节点"
+	case "user-level-check", "facts-compose", "facts-normalize", "risk-score", "ab-bucket", "random-pick", "plugin-execute", "approval-gate", "settlement-window", "manual-adjust", "compensation", "reward-reconcile", "reconcile":
+		return "高级节点"
+	case "combine", "split", "code", "lua-query", "condition", "switch", "decimal":
+		return "组合节点"
 	default:
-		return "CORE"
+		return "其他节点"
 	}
 }
 
@@ -1160,7 +1139,7 @@ func defaultWorkflowNodeInputs(nodeType string) []WorkflowNodeInputVar {
 	case "lock":
 		return inputVars(
 			inputVar("subject", "Subject", "object", false, "锁定主体；未配置时使用事件 subject。"),
-			inputVar("resourceRef", "Resource Ref", "string", true, "REDIS_LOCK 资源引用。"),
+			inputVar("resourceRef", "Resource Ref", "string", true, "REDIS mode=LOCK 资源引用。"),
 		)
 	case "quota-check":
 		return inputVars(

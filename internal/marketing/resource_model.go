@@ -20,15 +20,22 @@ const (
 	ResourceMemory          ResourceType = "MEMORY"
 	ResourceWorkflowContext ResourceType = "WORKFLOW_CONTEXT"
 	ResourceDatabase        ResourceType = "DATABASE"
+	ResourceTable           ResourceType = "TABLE"
+	ResourceArray           ResourceType = "ARRAY"
 	ResourceDatabaseKV      ResourceType = "DATABASE_KV"
 	ResourceDatabaseTable   ResourceType = "DATABASE_TABLE"
+	ResourceRedis           ResourceType = "REDIS"
 	ResourceRedisKV         ResourceType = "REDIS_KV"
 	ResourceRedisHash       ResourceType = "REDIS_HASH"
 	ResourceRedisCounter    ResourceType = "REDIS_COUNTER"
 	ResourceRedisLock       ResourceType = "REDIS_LOCK"
+	ResourceHTTP            ResourceType = "HTTP"
 	ResourceHTTPProvider    ResourceType = "HTTP_PROVIDER"
 	ResourceGRPCProvider    ResourceType = "GRPC_PROVIDER"
+	ResourceProvider        ResourceType = "PROVIDER"
+	ResourceMQ              ResourceType = "MQ"
 	ResourceMQTopic         ResourceType = "MQ_TOPIC"
+	ResourceLua             ResourceType = "LUA"
 	ResourceObjectStorage   ResourceType = "OBJECT_STORAGE"
 	ResourcePluginProvider  ResourceType = "PLUGIN_PROVIDER"
 	ResourceCustomProvider  ResourceType = "CUSTOM_PROVIDER"
@@ -309,7 +316,7 @@ func (b ResourceBinding) Validate() error {
 
 func validResourceType(value ResourceType) bool {
 	switch value {
-	case ResourceMemory, ResourceWorkflowContext, ResourceDatabase, ResourceDatabaseKV, ResourceDatabaseTable, ResourceRedisKV, ResourceRedisHash, ResourceRedisCounter, ResourceRedisLock, ResourceHTTPProvider, ResourceGRPCProvider, ResourceMQTopic, ResourceObjectStorage, ResourcePluginProvider, ResourceCustomProvider:
+	case ResourceMemory, ResourceWorkflowContext, ResourceDatabase, ResourceTable, ResourceArray, ResourceDatabaseKV, ResourceDatabaseTable, ResourceRedis, ResourceRedisKV, ResourceRedisHash, ResourceRedisCounter, ResourceRedisLock, ResourceHTTP, ResourceHTTPProvider, ResourceGRPCProvider, ResourceProvider, ResourceMQ, ResourceMQTopic, ResourceLua, ResourceObjectStorage, ResourcePluginProvider, ResourceCustomProvider:
 		return true
 	default:
 		return false

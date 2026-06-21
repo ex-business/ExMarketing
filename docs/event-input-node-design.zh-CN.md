@@ -116,7 +116,7 @@ tenantId:sourceSystem:eventType:biz.bizType:biz.bizId
 
 边界说明：
 
-- `MQ_TOPIC` 资源和 `mq-publish` 属于出站发布能力，用于发奖指令、通知或业务消息发布意图。
+- `MQ` 资源和 `mq-publish` 属于出站发布能力，用于发奖指令、通知或业务消息发布意图。
 - `mq-event` 属于入站 trigger runtime；当前已有标准事件 consumer、ACK_AFTER_INBOX_COMMIT、retry/DLQ 结果语义和节点 adapter plan，真实 broker loop/offset/replay 由部署侧 worker 承接。
 
 ### 幂等与标准化

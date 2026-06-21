@@ -284,7 +284,7 @@ func TestValidateWorkflowDefinitionValidatesFactQueryProviderTargets(t *testing.
 		t.Fatalf("expected missing FACT_SERVICE target issue, got %+v", missingBlockingFactServiceTarget.Items)
 	}
 
-	missingRedisResource := ValidateWorkflowDefinition(json.RawMessage(`{
+	validRedisRef := ValidateWorkflowDefinition(json.RawMessage(`{
 		"meta": {"activityId": "activity-1", "workspaceId": "workspace-1", "folderId": "folder-1"},
 		"nodes": [
 			{"id": "event-in", "type": "event-in", "kind": "entry"},
@@ -294,11 +294,39 @@ func TestValidateWorkflowDefinitionValidatesFactQueryProviderTargets(t *testing.
 			{"id": "event-in-facts", "source": "event-in", "target": "facts"}
 		]
 	}`))
-	if missingRedisResource.Valid {
-		t.Fatalf("expected REDIS provider without resourceRef to fail")
+	if !validRedisRef.Valid {
+		t.Fatalf("expected REDIS provider with redisRef to pass, got %+v", validRedisRef.Items)
 	}
-	if len(missingRedisResource.Items) != 1 || missingRedisResource.Items[0].Code != "WORKFLOW_FACT_PROVIDER_TARGET_REQUIRED" || missingRedisResource.Items[0].Path != "nodes[1].config.resourceRef" {
-		t.Fatalf("expected resourceRef target issue, got %+v", missingRedisResource.Items)
+
+	missingProviderRef := ValidateWorkflowDefinition(json.RawMessage(`{
+		"meta": {"activityId": "activity-1", "workspaceId": "workspace-1", "folderId": "folder-1"},
+		"nodes": [
+			{"id": "event-in", "type": "event-in", "kind": "entry"},
+			{"id": "facts", "type": "fact-query", "config": {"factKeys": ["USER_PROFILE"], "source": "PROVIDER"}}
+		],
+		"edges": [
+			{"id": "event-in-facts", "source": "event-in", "target": "facts"}
+		]
+	}`))
+	if missingProviderRef.Valid {
+		t.Fatalf("expected PROVIDER without resourceRef to fail")
+	}
+	if len(missingProviderRef.Items) != 1 || missingProviderRef.Items[0].Code != "WORKFLOW_FACT_PROVIDER_TARGET_REQUIRED" || missingProviderRef.Items[0].Path != "nodes[1].config.resourceRef" {
+		t.Fatalf("expected provider resourceRef target issue, got %+v", missingProviderRef.Items)
+	}
+
+	validProviderRef := ValidateWorkflowDefinition(json.RawMessage(`{
+		"meta": {"activityId": "activity-1", "workspaceId": "workspace-1", "folderId": "folder-1"},
+		"nodes": [
+			{"id": "event-in", "type": "event-in", "kind": "entry"},
+			{"id": "facts", "type": "fact-query", "config": {"factKeys": ["USER_PROFILE"], "source": "PROVIDER", "resourceRef": "user-profile-provider"}}
+		],
+		"edges": [
+			{"id": "event-in-facts", "source": "event-in", "target": "facts"}
+		]
+	}`))
+	if !validProviderRef.Valid {
+		t.Fatalf("expected PROVIDER with resourceRef to pass, got %+v", validProviderRef.Items)
 	}
 
 	validChain := ValidateWorkflowDefinition(json.RawMessage(`{
@@ -318,7 +346,7 @@ func TestValidateWorkflowDefinitionValidatesFactQueryProviderTargets(t *testing.
 		t.Fatalf("expected resource-backed provider chain to pass validation, got %+v", validChain.Items)
 	}
 
-	missingChainResource := ValidateWorkflowDefinition(json.RawMessage(`{
+	validRedisChain := ValidateWorkflowDefinition(json.RawMessage(`{
 		"meta": {"activityId": "activity-1", "workspaceId": "workspace-1", "folderId": "folder-1"},
 		"nodes": [
 			{"id": "event-in", "type": "event-in", "kind": "entry"},
@@ -330,11 +358,84 @@ func TestValidateWorkflowDefinitionValidatesFactQueryProviderTargets(t *testing.
 			{"id": "event-in-facts", "source": "event-in", "target": "facts"}
 		]
 	}`))
-	if missingChainResource.Valid {
-		t.Fatalf("expected provider chain REDIS step without resourceRef to fail")
+	if !validRedisChain.Valid {
+		t.Fatalf("expected provider chain REDIS step with redisRef to pass, got %+v", validRedisChain.Items)
 	}
-	if len(missingChainResource.Items) != 1 || missingChainResource.Items[0].Code != "WORKFLOW_FACT_PROVIDER_TARGET_REQUIRED" || missingChainResource.Items[0].Path != "nodes[1].config.providerChain[0].resourceRef" {
-		t.Fatalf("expected provider chain resourceRef target issue, got %+v", missingChainResource.Items)
+
+	missingChainResource := ValidateWorkflowDefinition(json.RawMessage(`{
+		"meta": {"activityId": "activity-1", "workspaceId": "workspace-1", "folderId": "folder-1"},
+		"nodes": [
+			{"id": "event-in", "type": "event-in", "kind": "entry"},
+			{"id": "facts", "type": "fact-query", "config": {"factKeys": ["USER_PROFILE"], "providerChain": [
+				{"source": "REDIS", "onMiss": "BLOCK"}
+			]}}
+		],
+		"edges": [
+			{"id": "event-in-facts", "source": "event-in", "target": "facts"}
+		]
+	}`))
+	if missingChainResource.Valid {
+		t.Fatalf("expected provider chain REDIS step without redisRef/resourceRef to fail")
+	}
+	if len(missingChainResource.Items) != 1 || missingChainResource.Items[0].Code != "WORKFLOW_FACT_PROVIDER_TARGET_REQUIRED" || missingChainResource.Items[0].Path != "nodes[1].config.providerChain[0].redisRef" {
+		t.Fatalf("expected provider chain redisRef target issue, got %+v", missingChainResource.Items)
+	}
+
+	missingStateResource := ValidateWorkflowDefinition(json.RawMessage(`{
+		"meta": {"activityId": "activity-1", "workspaceId": "workspace-1", "folderId": "folder-1"},
+		"nodes": [
+			{"id": "event-in", "type": "event-in", "kind": "entry"},
+			{"id": "activity-state", "type": "activity-state", "config": {"providerChain": [
+				{"source": "RESOURCE", "operation": "READ", "namespace": "checkin", "keyTemplate": "${activityId}:${subject.id}"}
+			]}}
+		],
+		"edges": [
+			{"id": "event-in-activity-state", "source": "event-in", "target": "activity-state"}
+		]
+	}`))
+	if missingStateResource.Valid {
+		t.Fatalf("expected activity-state RESOURCE step without resourceRef to fail")
+	}
+	if len(missingStateResource.Items) != 1 || missingStateResource.Items[0].Code != "WORKFLOW_ACTIVITY_STATE_RESOURCE_REQUIRED" || missingStateResource.Items[0].Path != "nodes[1].config.providerChain[0].resourceRef" {
+		t.Fatalf("expected activity-state resourceRef issue, got %+v", missingStateResource.Items)
+	}
+
+	missingQuotaResource := ValidateWorkflowDefinition(json.RawMessage(`{
+		"meta": {"activityId": "activity-1", "workspaceId": "workspace-1", "folderId": "folder-1"},
+		"nodes": [
+			{"id": "event-in", "type": "event-in", "kind": "entry"},
+			{"id": "quota-check", "type": "quota-check", "config": {"providerChain": [
+				{"source": "RESOURCE", "operation": "READ", "namespace": "checkin", "keyTemplate": "${subject.id}:${activityId}"}
+			], "scope": "USER", "window": "DAY", "maxCount": 1}}
+		],
+		"edges": [
+			{"id": "event-in-quota-check", "source": "event-in", "target": "quota-check"}
+		]
+	}`))
+	if missingQuotaResource.Valid {
+		t.Fatalf("expected quota-check RESOURCE step without resourceRef to fail")
+	}
+	if len(missingQuotaResource.Items) != 1 || missingQuotaResource.Items[0].Code != "WORKFLOW_QUOTA_RESOURCE_REQUIRED" || missingQuotaResource.Items[0].Path != "nodes[1].config.providerChain[0].resourceRef" {
+		t.Fatalf("expected quota-check resourceRef issue, got %+v", missingQuotaResource.Items)
+	}
+
+	missingCandidateRewardResource := ValidateWorkflowDefinition(json.RawMessage(`{
+		"meta": {"activityId": "activity-1", "workspaceId": "workspace-1", "folderId": "folder-1"},
+		"nodes": [
+			{"id": "event-in", "type": "event-in", "kind": "entry"},
+			{"id": "candidate-reward", "type": "candidate-reward", "config": {"providerChain": [
+				{"source": "RESOURCE", "operation": "READ", "namespace": "reward", "keyTemplate": "${activityId}"}
+			], "emptyAction": "BLOCK"}}
+		],
+		"edges": [
+			{"id": "event-in-candidate-reward", "source": "event-in", "target": "candidate-reward"}
+		]
+	}`))
+	if missingCandidateRewardResource.Valid {
+		t.Fatalf("expected candidate-reward RESOURCE step without resourceRef to fail")
+	}
+	if len(missingCandidateRewardResource.Items) != 1 || missingCandidateRewardResource.Items[0].Code != "WORKFLOW_CANDIDATE_REWARD_RESOURCE_REQUIRED" || missingCandidateRewardResource.Items[0].Path != "nodes[1].config.providerChain[0].resourceRef" {
+		t.Fatalf("expected candidate-reward resourceRef issue, got %+v", missingCandidateRewardResource.Items)
 	}
 
 	validLuaQuery := ValidateWorkflowDefinition(json.RawMessage(`{

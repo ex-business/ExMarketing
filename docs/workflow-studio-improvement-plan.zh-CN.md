@@ -607,25 +607,25 @@ Executor 生产能力已经完成第一轮增强，重点从“能跑”推进�
 - 资源模型、资源列表、资源详情、资源绑定、资源审计和资源管理入口已接入。
 - `state-store + resourceRef` 支持内置 `default_workflow_state`、`workflow_memory`。
 - 资源 scope 支持 workspace、folder、activity、node 等边界，binding 支持 operation、namespace、key policy 和角色限制。
-- `DATABASE_TABLE` 和 `HTTP_PROVIDER` 已支持第一版执行。
-- `REDIS_KV`、`REDIS_HASH`、`REDIS_COUNTER`、`REDIS_LOCK` 已支持第一版资源语义。
-- `mq-publish + MQ_TOPIC resourceRef` 已支持出站发布意图和资源审计。
-- `fact-query + resourceRef` 已支持资源读和 HTTP Provider CALL 查询，统一输出 `facts`。
+- `TABLE` 和 `HTTP` 已支持第一版执行；`HTTP` 作为资源/Provider 底层实现，不再作为 fact-query 新建来源暴露。
+- `REDIS` 已支持第一版资源语义，通过 `mode=KV/HASH/COUNTER/LOCK` 区分用途。
+- `mq-publish + MQ resourceRef` 已支持出站发布意图和资源审计。
+- `fact-query + PROVIDER/RESOURCE Ref` 已支持资源读和 Provider 查询，统一输出 `facts`。
 - 核心 `outbox/callback + resourceRef` 已支持第一版资源绑定、权限校验、投递/回调计划和资源审计。
 - HTTP Provider 安全治理已完成第一版：URL scheme、userinfo、host allowlist、blockedHosts、private network 阻断和 redirect 防护。
 - HTTP Provider 已支持 `secretRef/headersRef`、response schema 强校验和 `TestResource dryRun` 探活。
 - 公共表已支持 `schema/tableSchema`、`keyMapping`、`valueMapping` 强约束。
-- `quota-check + REDIS_COUNTER resourceRef` 与专用 `lock + REDIS_LOCK resourceRef` 已完成第一版。
+- `quota-check + REDIS mode=COUNTER` 已通过 providerChain RESOURCE 操作块完成第一版；专用 `lock + REDIS mode=LOCK resourceRef` 已完成第一版。
 - `mq-event`、`schedule-event`、`state-event` 已从 planned/explain-only 收口到 trigger adapter 第一版。
 - Lua Resource API 已支持 `resource_read/write/upsert/call/publish`，并增加 `maxResourceCalls` / `maxResourceResponseBytes` 限额。
-- `fact-query providerChain` 已记录为结构化步骤列表，支持 UI 选择 source/resourceRef/onMiss，并兼容旧字符串数组配置。
+- `fact-query providerChain` 已记录为结构化步骤列表；UI 新建时只暴露 Provider Ref、Resource Ref、上下文和本地缓存，`onMiss` 仅用于事实查询兜底链路，资源操作节点隐藏该项。
 - 高风险资源操作已有第一版 `requireApproval` 信号校验；`requireFormalApproval` 可强制校验当前活动版本正式审批快照。
 - CAS 已要求明确版本，避免退化成普通写入。
 
 当前边界：
 
 - Redis 资源当前由 `marketing_storage_state` 承载语义，还不是真实 Redis client。
-- `MQ_TOPIC` 当前生成 publish intent；OutboxWorker/MQSender 已有 adapter 边界，生产 Kafka/RabbitMQ/Pulsar SDK transport 需部署注入。
+- `MQ` 当前生成 publish intent；OutboxWorker/MQSender 已有 adapter 边界，生产 Kafka/RabbitMQ/Pulsar SDK transport 需部署注入。
 - 资源审批已有活动正式审批快照硬校验，但还没有独立 resource approval order。
 - 生产 debug 写入审批仍需结合 Debug/Execution 权限和审批链路。
 

@@ -473,6 +473,160 @@ func (s WorkflowValidationService) validateNodeBusinessConfig(result *WorkflowVa
 	switch strings.ToLower(strings.TrimSpace(nodeType)) {
 	case "fact-query":
 		s.validateFactQueryProviderConfig(result, nodeIndex, nodeID, config)
+	case "activity-state":
+		s.validateActivityStateChainConfig(result, nodeIndex, nodeID, config)
+	case "quota-check":
+		s.validateQuotaCheckProviderConfig(result, nodeIndex, nodeID, config)
+	case "candidate-reward":
+		s.validateCandidateRewardProviderConfig(result, nodeIndex, nodeID, config)
+	}
+}
+
+func (s WorkflowValidationService) validateActivityStateChainConfig(result *WorkflowValidationResult, nodeIndex int, nodeID string, config map[string]any) {
+	chainKey := "providerChain"
+	rawChain, ok := config[chainKey]
+	if !ok || s.isEmptyConfigValue(rawChain) {
+		chainKey = "stateChain"
+		rawChain, ok = config[chainKey]
+	}
+	if !ok || s.isEmptyConfigValue(rawChain) {
+		return
+	}
+	items, ok := rawChain.([]any)
+	if !ok {
+		return
+	}
+	for index, rawStep := range items {
+		path := fmt.Sprintf("nodes[%d].config.%s[%d]", nodeIndex, chainKey, index)
+		step, ok := workflowConfigMapValue(rawStep)
+		if !ok {
+			result.addIssue(
+				WorkflowValidationBlock,
+				"WORKFLOW_ACTIVITY_STATE_STEP_INVALID",
+				fmt.Sprintf("节点 %q 的状态操作步骤 #%d 必须是对象。", nodeID, index+1),
+				path,
+				nodeID,
+				"",
+			)
+			continue
+		}
+		operation := strings.ToUpper(firstNonEmptyConfigString(step, "operation", "action"))
+		if operation == "" {
+			result.addIssue(
+				WorkflowValidationBlock,
+				"WORKFLOW_ACTIVITY_STATE_OPERATION_REQUIRED",
+				fmt.Sprintf("节点 %q 的状态操作步骤 #%d 必须配置 operation。", nodeID, index+1),
+				path+".operation",
+				nodeID,
+				"",
+			)
+		}
+		switch operation {
+		case "", "READ", "WRITE", "UPSERT", "APPEND", "DELETE", "CAS", "INCREMENT", "CHECK_AND_INCREMENT", "CALL", "PUBLISH":
+		default:
+			result.addIssue(
+				WorkflowValidationBlock,
+				"WORKFLOW_ACTIVITY_STATE_OPERATION_UNSUPPORTED",
+				fmt.Sprintf("节点 %q 的状态操作步骤 #%d 不支持 operation %q。", nodeID, index+1, operation),
+				path+".operation",
+				nodeID,
+				"",
+			)
+		}
+		source := strings.ToUpper(firstNonEmptyConfigString(step, "source", "provider"))
+		if source == "" && configString(step, "resourceRef") != "" {
+			source = "RESOURCE"
+		}
+		if configString(step, "resourceRef") == "" && (source == "RESOURCE" || strings.EqualFold(configString(step, "storeType"), "EXTERNAL")) {
+			result.addIssue(
+				WorkflowValidationBlock,
+				"WORKFLOW_ACTIVITY_STATE_RESOURCE_REQUIRED",
+				fmt.Sprintf("节点 %q 的资源状态操作步骤 #%d 必须配置 resourceRef。", nodeID, index+1),
+				path+".resourceRef",
+				nodeID,
+				"",
+			)
+		}
+	}
+}
+
+func (s WorkflowValidationService) validateQuotaCheckProviderConfig(result *WorkflowValidationResult, nodeIndex int, nodeID string, config map[string]any) {
+	rawChain, ok := config["providerChain"]
+	if !ok || s.isEmptyConfigValue(rawChain) {
+		return
+	}
+	items, ok := rawChain.([]any)
+	if !ok {
+		return
+	}
+	for index, rawStep := range items {
+		path := fmt.Sprintf("nodes[%d].config.providerChain[%d]", nodeIndex, index)
+		step, ok := workflowConfigMapValue(rawStep)
+		if !ok {
+			result.addIssue(
+				WorkflowValidationBlock,
+				"WORKFLOW_QUOTA_PROVIDER_STEP_INVALID",
+				fmt.Sprintf("节点 %q 的频控资源操作 #%d 必须是对象。", nodeID, index+1),
+				path,
+				nodeID,
+				"",
+			)
+			continue
+		}
+		source := strings.ToUpper(firstNonEmptyConfigString(step, "source", "provider"))
+		if source == "" && configString(step, "resourceRef") != "" {
+			source = "RESOURCE"
+		}
+		if source == "RESOURCE" && configString(step, "resourceRef") == "" {
+			result.addIssue(
+				WorkflowValidationBlock,
+				"WORKFLOW_QUOTA_RESOURCE_REQUIRED",
+				fmt.Sprintf("节点 %q 的频控 RESOURCE 操作 #%d 必须配置 resourceRef。", nodeID, index+1),
+				path+".resourceRef",
+				nodeID,
+				"",
+			)
+		}
+	}
+}
+
+func (s WorkflowValidationService) validateCandidateRewardProviderConfig(result *WorkflowValidationResult, nodeIndex int, nodeID string, config map[string]any) {
+	rawChain, ok := config["providerChain"]
+	if !ok || s.isEmptyConfigValue(rawChain) {
+		return
+	}
+	items, ok := rawChain.([]any)
+	if !ok {
+		return
+	}
+	for index, rawStep := range items {
+		path := fmt.Sprintf("nodes[%d].config.providerChain[%d]", nodeIndex, index)
+		step, ok := workflowConfigMapValue(rawStep)
+		if !ok {
+			result.addIssue(
+				WorkflowValidationBlock,
+				"WORKFLOW_CANDIDATE_REWARD_PROVIDER_STEP_INVALID",
+				fmt.Sprintf("节点 %q 的奖励来源操作 #%d 必须是对象。", nodeID, index+1),
+				path,
+				nodeID,
+				"",
+			)
+			continue
+		}
+		source := strings.ToUpper(firstNonEmptyConfigString(step, "source", "provider"))
+		if source == "" && configString(step, "resourceRef") != "" {
+			source = "RESOURCE"
+		}
+		if source == "RESOURCE" && configString(step, "resourceRef") == "" {
+			result.addIssue(
+				WorkflowValidationBlock,
+				"WORKFLOW_CANDIDATE_REWARD_RESOURCE_REQUIRED",
+				fmt.Sprintf("节点 %q 的奖励来源 RESOURCE 操作 #%d 必须配置 resourceRef。", nodeID, index+1),
+				path+".resourceRef",
+				nodeID,
+				"",
+			)
+		}
 	}
 }
 
@@ -547,6 +701,18 @@ func (s WorkflowValidationService) validateFactQueryProviderTarget(result *Workf
 	switch strings.ToUpper(strings.TrimSpace(source)) {
 	case "", "WORKFLOW_CONTEXT", "CONTEXT", "LOCAL_CACHE", "CACHE", "RESOURCE":
 		return
+	case "PROVIDER":
+		if configString(config, "resourceRef") != "" || configString(config, "providerRef") != "" {
+			return
+		}
+		result.addIssue(
+			WorkflowValidationBlock,
+			"WORKFLOW_FACT_PROVIDER_TARGET_REQUIRED",
+			fmt.Sprintf("节点 %q 的 PROVIDER 数据提供者必须选择公共 Provider 资源。", nodeID),
+			path+".resourceRef",
+			nodeID,
+			"",
+		)
 	case "FACT_SERVICE", "HTTP_PROVIDER", "HTTP":
 		if configString(config, "resourceRef") != "" || configString(config, "providerCode") != "" || configString(config, "endpoint") != "" || configString(config, "providerEndpoint") != "" {
 			return
@@ -559,15 +725,51 @@ func (s WorkflowValidationService) validateFactQueryProviderTarget(result *Workf
 			nodeID,
 			"",
 		)
-	case "REDIS", "GRPC", "PLUGIN", "CUSTOM", "LUA_QUERY":
-		if configString(config, "resourceRef") != "" {
+	case "REDIS":
+		if configString(config, "resourceRef") != "" || configString(config, "redisRef") != "" {
 			return
 		}
 		result.addIssue(
 			WorkflowValidationBlock,
 			"WORKFLOW_FACT_PROVIDER_TARGET_REQUIRED",
-			fmt.Sprintf("节点 %q 的 %s 数据提供者当前必须配置 resourceRef，指向资源管理中的可审计资源。", nodeID, source),
-			path+".resourceRef",
+			fmt.Sprintf("节点 %q 的 REDIS 数据提供者必须配置 redisRef 或 resourceRef。", nodeID),
+			path+".redisRef",
+			nodeID,
+			"",
+		)
+	case "GRPC":
+		if configString(config, "resourceRef") != "" || configString(config, "grpcTarget") != "" {
+			return
+		}
+		result.addIssue(
+			WorkflowValidationBlock,
+			"WORKFLOW_FACT_PROVIDER_TARGET_REQUIRED",
+			fmt.Sprintf("节点 %q 的 GRPC 数据提供者必须配置 grpcTarget 或 resourceRef。", nodeID),
+			path+".grpcTarget",
+			nodeID,
+			"",
+		)
+	case "PLUGIN":
+		if configString(config, "resourceRef") != "" || configString(config, "pluginCode") != "" {
+			return
+		}
+		result.addIssue(
+			WorkflowValidationBlock,
+			"WORKFLOW_FACT_PROVIDER_TARGET_REQUIRED",
+			fmt.Sprintf("节点 %q 的 PLUGIN 数据提供者必须配置 pluginCode 或 resourceRef。", nodeID),
+			path+".pluginCode",
+			nodeID,
+			"",
+		)
+	case "CUSTOM", "LUA_QUERY":
+		if configString(config, "resourceRef") != "" || configString(config, "providerCode") != "" || configString(config, "endpoint") != "" {
+			return
+		}
+		result.addIssue(
+			WorkflowValidationBlock,
+			"WORKFLOW_FACT_PROVIDER_TARGET_REQUIRED",
+			fmt.Sprintf("节点 %q 的 %s 数据提供者必须配置 providerCode、endpoint 或 resourceRef。", nodeID, source),
+			path+".providerCode",
 			nodeID,
 			"",
 		)
@@ -602,6 +804,11 @@ func configString(config map[string]any, key string) string {
 		return ""
 	}
 	return strings.TrimSpace(text)
+}
+
+func workflowConfigMapValue(value any) (map[string]any, bool) {
+	mapped, ok := value.(map[string]any)
+	return mapped, ok
 }
 
 func workflowRequiresInputMapping(meta map[string]any) bool {

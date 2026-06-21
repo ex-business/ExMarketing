@@ -10,6 +10,10 @@ type Props = {
 };
 
 const CATEGORY_HINTS: Record<string, string> = {
+  '基础节点': '生产活动主链路和常用业务节点',
+  '高级节点': '用户分层、事实标准化、风控、插件、审批和对账',
+  '组合节点': '数据组合、脚本处理、条件分支和表达式编排',
+  '其他节点': '事件适配、底层查询、旧节点、投递边界和运维辅助',
   'EVENT_INPUT 事件输入': 'HTTP、Webhook、MQ、定时和人工触发',
   'CORE 核心链路': '生产编排主链路',
   'FACT_QUERY 事实查询': '上下文、缓存、HTTP、Redis、gRPC 和插件查询',

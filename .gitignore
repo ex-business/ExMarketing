@@ -6,6 +6,7 @@ bin/
 dist/
 node_modules/
 coverage.out
+.gocache/
 playwright-report/
 test-results/
 

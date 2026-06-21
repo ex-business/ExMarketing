@@ -696,10 +696,20 @@ function configGroupSummary(node: ActivityNode, group: NonNullable<WorkflowNodeC
   return values.slice(0, 2).join(' / ');
 }
 
-function configGroupDisplayTitle(group: NonNullable<WorkflowNodeConfigSchema['fieldGroups']>[number]): string {
-  if (group.fields.some((field) => field.key === 'providerChain')) return '事实来源';
+function configGroupDisplayTitle(node: ActivityNode, group: NonNullable<WorkflowNodeConfigSchema['fieldGroups']>[number]): string {
+  if (group.fields.some((field) => field.key === 'providerChain')) return providerChainGroupTitle(node);
   if (group.fields.some((field) => field.key === 'qualifyRules')) return '资格规则';
   return group.title || group.key || '配置';
+}
+
+function providerChainGroupTitle(node: ActivityNode): string {
+  if (node.data.id === 'candidate-reward') return '奖励来源';
+  if (node.data.id === 'quota-check') return '频控资源操作';
+  return node.data.id === 'activity-state' ? '状态操作' : '事实来源';
+}
+
+function usesResourceOperationEditor(node: ActivityNode): boolean {
+  return node.data.id === 'activity-state' || node.data.id === 'quota-check' || node.data.id === 'candidate-reward';
 }
 
 function qualifyRulesField(): WorkflowNodeConfigField {
@@ -797,28 +807,50 @@ type ProviderChainStepValue = {
   grpcTarget?: string;
   pluginCode?: string;
   operation?: 'READ' | 'CALL' | string;
+  outputAs?: string;
   timeoutSeconds?: string;
   cacheTtlSeconds?: string;
   onMiss?: 'NEXT' | 'BLOCK' | string;
 };
 
-const PROVIDER_CHAIN_SOURCES = ['WORKFLOW_CONTEXT', 'LOCAL_CACHE', 'FACT_SERVICE', 'HTTP_PROVIDER', 'REDIS', 'GRPC', 'PLUGIN', 'CUSTOM', 'LUA_QUERY'];
+const FACT_PROVIDER_CHAIN_SOURCES = ['PROVIDER', 'RESOURCE', 'FACT_SERVICE', 'WORKFLOW_CONTEXT', 'LOCAL_CACHE'];
+const RESOURCE_OPERATION_CHAIN_SOURCES = ['INTERNAL', 'RESOURCE', 'WORKFLOW_CONTEXT', 'LOCAL_CACHE'];
 
-function providerChainNeedsResource(source: string): boolean {
-  return ['FACT_SERVICE', 'HTTP_PROVIDER', 'REDIS', 'GRPC', 'PLUGIN', 'CUSTOM', 'LUA_QUERY'].includes(source);
+function providerChainNeedsTarget(source: string): boolean {
+  return ['RESOURCE', 'PROVIDER', 'FACT_SERVICE', 'HTTP_PROVIDER', 'REDIS', 'GRPC', 'PLUGIN', 'CUSTOM', 'LUA_QUERY'].includes(source);
 }
 
 function providerChainRequiresManagedResource(source: string): boolean {
-  return ['REDIS', 'GRPC', 'PLUGIN', 'CUSTOM', 'LUA_QUERY'].includes(source);
+  return source === 'RESOURCE' || source === 'PROVIDER';
 }
 
 function providerChainHasTarget(step: ProviderChainStepValue): boolean {
-  if (!providerChainNeedsResource(step.source)) return true;
+  if (!providerChainNeedsTarget(step.source)) return true;
   if (step.resourceRef) return true;
   if (step.source === 'FACT_SERVICE' || step.source === 'HTTP_PROVIDER') {
     return Boolean(step.providerCode || step.endpoint);
   }
+  if (step.source === 'REDIS') return Boolean(step.redisRef);
+  if (step.source === 'GRPC') return Boolean(step.grpcTarget);
+  if (step.source === 'PLUGIN') return Boolean(step.pluginCode);
+  if (step.source === 'CUSTOM' || step.source === 'LUA_QUERY') return Boolean(step.providerCode || step.endpoint);
   return false;
+}
+
+function providerChainResourceOptions(step: ProviderChainStepValue, resources: ResourceSummary[]): ResourceSummary[] {
+  if (step.source === 'PROVIDER') return resources.filter((resource) => resource.type === 'PROVIDER');
+  return resources.filter((resource) => resource.type !== 'PROVIDER');
+}
+
+function providerChainProviderOptions(resources: ResourceSummary[]): ResourceSummary[] {
+  return resources.filter((resource) => resource.type === 'PROVIDER');
+}
+
+function providerChainSourceOptions(node: ActivityNode, currentSource: string): string[] {
+  const baseSources = usesResourceOperationEditor(node) ? RESOURCE_OPERATION_CHAIN_SOURCES : FACT_PROVIDER_CHAIN_SOURCES;
+  const normalizedCurrent = currentSource.trim().toUpperCase();
+  if (!normalizedCurrent || baseSources.includes(normalizedCurrent)) return baseSources;
+  return [...baseSources, normalizedCurrent];
 }
 
 function emptyProviderChainStep(source = 'FACT_SERVICE'): ProviderChainStepValue {
@@ -864,6 +896,8 @@ function normalizeProviderChain(value: unknown): ProviderChainStepValue[] {
     PLUGIN_CODE: 'pluginCode',
     PLUGINCODE: 'pluginCode',
     OPERATION: 'operation',
+    OUTPUT_AS: 'outputAs',
+    OUTPUTAS: 'outputAs',
     TIMEOUT_SECONDS: 'timeoutSeconds',
     TIMEOUTSECONDS: 'timeoutSeconds',
     CACHE_TTL_SECONDS: 'cacheTtlSeconds',
@@ -890,7 +924,7 @@ function normalizeProviderChain(value: unknown): ProviderChainStepValue[] {
   if (Array.isArray(value)) {
     const sourceFragments = value.every((item) => typeof item === 'string')
       && value.some((item) => /\b(?:SOURCE|source)\s*=/.test(String(item)))
-      && value.some((item) => /\b(?:resourceRef|RESOURCE_REF|providerCode|endpoint)\s*=/.test(String(item)));
+      && value.some((item) => /\b(?:resourceRef|RESOURCE_REF|providerCode|endpoint|redisRef|REDIS_REF|grpcTarget|GRPC_TARGET|pluginCode|PLUGIN_CODE)\s*=/.test(String(item)));
     const rawItems = sourceFragments ? [value.map((item) => String(item)).join(', ')] : value;
     return rawItems
       .map((item): ProviderChainStepValue | undefined => {
@@ -915,6 +949,7 @@ function normalizeProviderChain(value: unknown): ProviderChainStepValue[] {
           grpcTarget: stringProp(mapped, 'grpcTarget', 'GRPC_TARGET', 'grpctarget'),
           pluginCode: stringProp(mapped, 'pluginCode', 'PLUGIN_CODE', 'plugincode'),
           operation: stringProp(mapped, 'operation', 'OPERATION'),
+          outputAs: stringProp(mapped, 'outputAs', 'OUTPUT_AS', 'outputas'),
           timeoutSeconds: typeof mapped.timeoutSeconds === 'string' || typeof mapped.timeoutSeconds === 'number'
             ? String(mapped.timeoutSeconds)
             : typeof mapped.TIMEOUT_SECONDS === 'string' || typeof mapped.TIMEOUT_SECONDS === 'number'
@@ -945,9 +980,13 @@ function nodeConfigRecord(node: ActivityNode): Record<string, unknown> {
 }
 
 function legacyProviderChainStep(node: ActivityNode): ProviderChainStepValue | undefined {
-  if (node.data.id !== 'fact-query') return undefined;
+  if (node.data.id !== 'fact-query' && !usesResourceOperationEditor(node)) return undefined;
   const config = nodeConfigRecord(node);
-  const source = typeof config.source === 'string' && config.source.trim() ? config.source.trim().toUpperCase() : 'FACT_SERVICE';
+  const source = typeof config.source === 'string' && config.source.trim()
+    ? config.source.trim().toUpperCase()
+    : usesResourceOperationEditor(node)
+      ? 'RESOURCE'
+      : 'FACT_SERVICE';
   const hasLegacyProvider = [
     'source',
     'resourceRef',
@@ -960,20 +999,24 @@ function legacyProviderChainStep(node: ActivityNode): ProviderChainStepValue | u
     'cachePath',
     'keyTemplate',
     'valuePath',
+    'stateKeyTemplate',
   ].some((key) => typeof config[key] === 'string' && String(config[key]).trim());
   if (!hasLegacyProvider) return undefined;
   const step: ProviderChainStepValue = {
     source,
-    namespace: typeof config.namespace === 'string' ? config.namespace : 'facts',
+    namespace: typeof config.namespace === 'string' ? config.namespace : usesResourceOperationEditor(node) ? 'checkin' : 'facts',
     operation: typeof config.operation === 'string' ? config.operation : source === 'HTTP_PROVIDER' ? 'CALL' : 'READ',
     onMiss: config.failureAction === 'BLOCK' ? 'BLOCK' : 'NEXT',
   };
-  (['resourceRef', 'sourcePath', 'cachePath', 'keyTemplate', 'valuePath', 'endpoint', 'method', 'authRef', 'providerCode', 'redisRef', 'grpcTarget', 'pluginCode'] as const).forEach((key) => {
+  (['resourceRef', 'sourcePath', 'cachePath', 'keyTemplate', 'valuePath', 'endpoint', 'method', 'authRef', 'providerCode', 'redisRef', 'grpcTarget', 'pluginCode', 'outputAs'] as const).forEach((key) => {
     const value = config[key];
     if (typeof value === 'string' && value.trim()) {
       step[key] = value.trim();
     }
   });
+  if (!step.keyTemplate && typeof config.stateKeyTemplate === 'string' && config.stateKeyTemplate.trim()) {
+    step.keyTemplate = config.stateKeyTemplate.trim();
+  }
   if (typeof config.timeoutSeconds === 'string' || typeof config.timeoutSeconds === 'number') {
     step.timeoutSeconds = String(config.timeoutSeconds);
   }
@@ -991,15 +1034,48 @@ function providerChainValueFor(node: ActivityNode, value: unknown): ProviderChai
 }
 
 function defaultFactServiceStepFor(node: ActivityNode): ProviderChainStepValue {
+  if (node.data.id === 'activity-state') {
+    return {
+      ...emptyProviderChainStep('INTERNAL'),
+      namespace: 'checkin',
+      keyTemplate: '${activityId}:${subject.id}',
+      valuePath: '$.state',
+      outputAs: 'currentState',
+      onMiss: 'BLOCK',
+    };
+  }
+  if (node.data.id === 'quota-check') {
+    return {
+      ...emptyProviderChainStep('RESOURCE'),
+      namespace: 'checkin',
+      resourceRef: 'default_checkin_quota_counter',
+      keyTemplate: '${subject.id}:${activityId}',
+      valuePath: '$.counter',
+      operation: 'CHECK_AND_INCREMENT',
+      outputAs: 'currentQuota',
+      onMiss: 'BLOCK',
+    };
+  }
+  if (node.data.id === 'candidate-reward') {
+    return {
+      ...emptyProviderChainStep('RESOURCE'),
+      namespace: 'reward',
+      resourceRef: 'default_activity_reward_config',
+      keyTemplate: '${activityId}',
+      valuePath: '$.reward_items',
+      outputAs: 'rewardConfig',
+      onMiss: 'BLOCK',
+    };
+  }
   const config = nodeConfigRecord(node);
   const factKeys = Array.isArray(config.factKeys) ? config.factKeys.map((item) => String(item).trim().toUpperCase()) : [];
-  let resourceRef = 'default_user_profile_store';
+  let resourceRef = 'user-profile-provider';
   if (!factKeys.includes('USER_PROFILE')) {
-    if (factKeys.includes('KYC_PROFILE')) resourceRef = 'default_kyc_profile_store';
-    if (factKeys.includes('RISK_PROFILE')) resourceRef = 'default_risk_profile_store';
+    if (factKeys.includes('KYC_PROFILE')) resourceRef = 'kyc-provider';
+    if (factKeys.includes('RISK_PROFILE')) resourceRef = 'risk-provider';
   }
   return {
-    ...emptyProviderChainStep('FACT_SERVICE'),
+    ...emptyProviderChainStep('PROVIDER'),
     resourceRef,
     keyTemplate: '${tenantId}:${subject.type}:${subject.id}',
     onMiss: 'BLOCK',
@@ -1009,7 +1085,7 @@ function defaultFactServiceStepFor(node: ActivityNode): ProviderChainStepValue {
 function compactProviderChain(steps: ProviderChainStepValue[]): ProviderChainStepValue[] {
   return steps.map((step) => {
     const next: ProviderChainStepValue = { source: step.source || 'FACT_SERVICE' };
-    (['resourceRef', 'namespace', 'sourcePath', 'cachePath', 'keyTemplate', 'valuePath', 'endpoint', 'method', 'authRef', 'providerCode', 'redisRef', 'grpcTarget', 'pluginCode', 'operation', 'timeoutSeconds', 'cacheTtlSeconds', 'onMiss'] as const).forEach((key) => {
+    (['resourceRef', 'namespace', 'sourcePath', 'cachePath', 'keyTemplate', 'valuePath', 'endpoint', 'method', 'authRef', 'providerCode', 'redisRef', 'grpcTarget', 'pluginCode', 'operation', 'outputAs', 'timeoutSeconds', 'cacheTtlSeconds', 'onMiss'] as const).forEach((key) => {
       const value = step[key];
       if (typeof value === 'string' && value.trim()) {
         next[key] = value.trim();
@@ -1032,6 +1108,7 @@ function ProviderChainEditor({
   onNodeConfigChange: (nodeId: string, key: string, value: unknown) => void;
 }) {
   const steps = providerChainValueFor(node, value);
+  const resourceOperationEditor = usesResourceOperationEditor(node);
   const [collapsedSteps, setCollapsedSteps] = useState<Set<number>>(() => new Set(steps.map((_, index) => index).filter((index) => index > 0)));
   const [advancedSteps, setAdvancedSteps] = useState<Set<number>>(() => new Set());
   useEffect(() => {
@@ -1061,7 +1138,7 @@ function ProviderChainEditor({
       const next = { ...step, ...patch };
       if (patch.source) {
         next.source = patch.source.toUpperCase();
-        if (!providerChainNeedsResource(next.source)) {
+        if (!providerChainNeedsTarget(next.source) || next.source !== 'RESOURCE') {
           next.resourceRef = '';
         }
         if (next.source === 'HTTP_PROVIDER') next.operation = 'CALL';
@@ -1084,10 +1161,14 @@ function ProviderChainEditor({
       {steps.length ? steps.map((step, index) => {
         const collapsed = collapsedSteps.has(index);
         const advancedOpen = advancedSteps.has(index);
-        const needsResource = providerChainNeedsResource(step.source);
+        const sourceOptions = providerChainSourceOptions(node, step.source);
+        const needsTarget = providerChainNeedsTarget(step.source);
         const requiresManagedResource = providerChainRequiresManagedResource(step.source);
         const hasTarget = providerChainHasTarget(step);
-        const resourceExists = !step.resourceRef || resourceOptions.some((resource) => resource.code === step.resourceRef);
+        const selectableResources = providerChainResourceOptions(step, resourceOptions);
+        const selectableProviders = providerChainProviderOptions(resourceOptions);
+        const resourceExists = !step.resourceRef || selectableResources.some((resource) => resource.code === step.resourceRef);
+        const providerExists = !step.providerCode || selectableProviders.some((resource) => resource.code === step.providerCode);
         const stepSummary = step.source === 'WORKFLOW_CONTEXT'
           ? step.sourcePath
           : step.source === 'LOCAL_CACHE'
@@ -1115,11 +1196,11 @@ function ProviderChainEditor({
                     ? 'vip-profile-provider'
                     : 'user_profile_provider';
         return (
-          <div key={`${index}-${step.source}-${step.resourceRef ?? ''}`} className={cx('provider-chain-step', !hasTarget && 'missing-resource', !resourceExists && 'missing-resource')}>
+          <div key={`${index}-${step.source}-${step.resourceRef ?? ''}`} className={cx('provider-chain-step', !hasTarget && 'missing-resource', !resourceExists && 'missing-resource', !providerExists && 'missing-resource')}>
             <div className="provider-chain-step-head">
               <b>#{index + 1}</b>
               <select value={step.source} onChange={(event) => patchStep(index, { source: event.target.value })}>
-                {PROVIDER_CHAIN_SOURCES.map((source) => <option key={source} value={source}>{source}</option>)}
+                {sourceOptions.map((source) => <option key={source} value={source}>{source}</option>)}
               </select>
               {collapsed && stepSummary ? <span className="provider-chain-step-summary">{stepSummary}</span> : null}
               <select value={step.onMiss ?? 'NEXT'} onChange={(event) => patchStep(index, { onMiss: event.target.value })}>
@@ -1135,19 +1216,19 @@ function ProviderChainEditor({
             </div>
             {!collapsed ? (
               <>
-                {!hasTarget ? (
+                {!hasTarget && requiresManagedResource ? (
                   <div className="provider-chain-warning">
-                    {requiresManagedResource ? '当前数据提供者必须选择资源 Ref。' : '需要配置 resourceRef、providerCode 或 endpoint。'}
+                    当前数据提供者必须选择资源 Ref。
                   </div>
                 ) : null}
                 <div className="provider-chain-fields core">
-                  {needsResource ? (
+                  {requiresManagedResource ? (
                     <label>
                       <span>资源</span>
                       <select className={resourceExists ? '' : 'invalid'} value={step.resourceRef ?? ''} onChange={(event) => patchStep(index, { resourceRef: event.target.value })}>
                         <option value="">{requiresManagedResource ? '资源 Ref *' : '资源 Ref'}</option>
                         {step.resourceRef && !resourceExists ? <option value={step.resourceRef}>{step.resourceRef}（未加载或无权限）</option> : null}
-                        {resourceOptions.map((resource) => (
+                        {selectableResources.map((resource) => (
                           <option key={resource.id || resource.code} value={resource.code}>{resource.name || resource.code} · {resource.code} · {resource.type}</option>
                         ))}
                       </select>
@@ -1189,22 +1270,46 @@ function ProviderChainEditor({
                       <input value={step.pluginCode ?? ''} placeholder={targetPlaceholder} onChange={(event) => patchStep(index, { pluginCode: event.target.value })} />
                     </label>
                   ) : null}
-                  {step.source === 'CUSTOM' || step.source === 'FACT_SERVICE' ? (
+                  {step.source === 'FACT_SERVICE' ? (
+                    <label>
+                      <span>Provider</span>
+                      <select className={providerExists ? '' : 'invalid'} value={step.providerCode ?? ''} onChange={(event) => patchStep(index, { providerCode: event.target.value })}>
+                        <option value="">选择 Provider</option>
+                        {step.providerCode && !providerExists ? <option value={step.providerCode}>{step.providerCode}（未加载或无权限）</option> : null}
+                        {selectableProviders.map((resource) => (
+                          <option key={resource.id || resource.code} value={resource.code}>{resource.name || resource.code} · {resource.code}</option>
+                        ))}
+                      </select>
+                    </label>
+                  ) : null}
+                  {step.source === 'CUSTOM' ? (
                     <label>
                       <span>Provider</span>
                       <input value={step.providerCode ?? ''} placeholder={targetPlaceholder} onChange={(event) => patchStep(index, { providerCode: event.target.value })} />
                     </label>
                   ) : null}
-                  {needsResource ? (
+                  {needsTarget || step.source === 'INTERNAL' ? (
                     <label>
                       <span>Key</span>
                       <input value={step.keyTemplate ?? ''} placeholder="${tenantId}:${subject.type}:${subject.id}" onChange={(event) => patchStep(index, { keyTemplate: event.target.value })} />
                     </label>
                   ) : null}
-                  {needsResource ? (
+                  {resourceOperationEditor && (needsTarget || step.source === 'INTERNAL') ? (
+                    <label>
+                      <span>Namespace</span>
+                      <input value={step.namespace ?? ''} placeholder="checkin" onChange={(event) => patchStep(index, { namespace: event.target.value })} />
+                    </label>
+                  ) : null}
+                  {needsTarget || step.source === 'INTERNAL' ? (
                     <label>
                       <span>Value Path</span>
                       <input value={step.valuePath ?? ''} placeholder="facts" onChange={(event) => patchStep(index, { valuePath: event.target.value })} />
+                    </label>
+                  ) : null}
+                  {resourceOperationEditor ? (
+                    <label>
+                      <span>Output As</span>
+                      <input value={step.outputAs ?? ''} placeholder={node.data.id === 'quota-check' ? 'currentQuota' : node.data.id === 'candidate-reward' ? 'rewardConfig' : 'currentState'} onChange={(event) => patchStep(index, { outputAs: event.target.value })} />
                     </label>
                   ) : null}
                 </div>
@@ -1214,7 +1319,7 @@ function ProviderChainEditor({
                 </button>
                 {advancedOpen ? (
                   <div className="provider-chain-fields advanced">
-                    {needsResource ? (
+                    {needsTarget && !resourceOperationEditor ? (
                       <label>
                         <span>Namespace</span>
                         <input value={step.namespace ?? ''} placeholder="namespace" onChange={(event) => patchStep(index, { namespace: event.target.value })} />
@@ -1226,15 +1331,6 @@ function ProviderChainEditor({
                         <select value={step.method ?? 'POST'} onChange={(event) => patchStep(index, { method: event.target.value })}>
                           <option value="POST">POST</option>
                           <option value="GET">GET</option>
-                        </select>
-                      </label>
-                    ) : null}
-                    {needsResource ? (
-                      <label>
-                        <span>操作</span>
-                        <select value={step.operation ?? 'READ'} onChange={(event) => patchStep(index, { operation: event.target.value })}>
-                          <option value="READ">READ</option>
-                          <option value="CALL">CALL</option>
                         </select>
                       </label>
                     ) : null}
@@ -1258,9 +1354,9 @@ function ProviderChainEditor({
               ) : null}
           </div>
         );
-      }) : <p className="property-empty">未配置事实来源。请添加上下文、缓存、Store、HTTP、Redis、gRPC、Plugin 或 Lua 来源。</p>}
+      }) : <p className="property-empty">{resourceOperationEditor ? '未配置资源操作。请添加内部状态、资源 Ref、上下文或缓存步骤。' : '未配置事实来源。请添加 Provider Ref、资源 Ref、上下文或缓存来源。'}</p>}
       <div className="provider-chain-actions">
-        <button type="button" onClick={() => update([...steps, defaultFactServiceStepFor(node)])}>+ 事实来源</button>
+        <button type="button" onClick={() => update([...steps, defaultFactServiceStepFor(node)])}>{resourceOperationEditor ? '+ 资源操作' : '+ 事实来源'}</button>
       </div>
     </div>
   );
@@ -1928,7 +2024,7 @@ function NodeConfigForm({
 }) {
   const groups = displayConfigGroupsForNode(node, schema);
   const defaultOpenGroupKeys = (items: typeof groups) => {
-    if (node.data.id === 'fact-query') {
+    if (node.data.id === 'fact-query' || usesResourceOperationEditor(node)) {
       return items
         .map((group, index) => ({ group, key: group.key || `group-${index}` }))
         .filter(({ group }) => group.fields.some((field) => field.key === 'providerChain'))
@@ -1992,7 +2088,7 @@ function NodeConfigForm({
       ) : null}
       {groups.map((group, index) => {
         const groupKey = group.key || `group-${index}`;
-        const groupTitle = configGroupDisplayTitle(group);
+        const groupTitle = configGroupDisplayTitle(node, group);
         const visual = configSectionVisual(groupTitle);
         return (
           <ConfigAccordionSection

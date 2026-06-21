@@ -48,12 +48,95 @@ type Props = {
   onTestResource: (resourceCode: string) => Promise<void>;
 };
 
-const RESOURCE_TYPES = ['MEMORY', 'WORKFLOW_CONTEXT', 'DATABASE_KV', 'DATABASE_TABLE', 'REDIS_KV', 'REDIS_HASH', 'REDIS_COUNTER', 'REDIS_LOCK', 'HTTP_PROVIDER', 'GRPC_PROVIDER', 'MQ_TOPIC', 'OBJECT_STORAGE', 'PLUGIN_PROVIDER', 'CUSTOM_PROVIDER'];
+const RESOURCE_TYPES = ['REDIS', 'TABLE', 'ARRAY', 'DATABASE', 'HTTP', 'MQ', 'LUA', 'PROVIDER', 'MEMORY', 'WORKFLOW_CONTEXT'];
 const RESOURCE_DRIVERS = ['INTERNAL', 'POSTGRES', 'HTTP', 'REST', 'REDIS', 'GRPC', 'PLUGIN', 'CUSTOM'];
 const RESOURCE_SCOPES = ['TENANT', 'WORKSPACE', 'FOLDER', 'ACTIVITY', 'NODE'];
 const RESOURCE_STATUSES = ['ACTIVE', 'DRAFT', 'DISABLED'];
 const RESOURCE_OPERATIONS: ResourceOperation[] = ['READ', 'WRITE', 'UPSERT', 'APPEND', 'DELETE', 'CAS', 'CALL', 'PUBLISH', 'TEST_CONNECTION', 'CHECK_AND_INCREMENT'];
 const WORKSPACE_ROLES = ['GUEST', 'VIEWER', 'EDITOR', 'ADMIN', 'OWNER'];
+
+function resourceTypeDefaults(type: string, tenantId: string, workspaceId?: string, folderId?: string): Pick<ResourceDraft, 'driver' | 'capabilitiesText' | 'configText'> {
+  if (type === 'REDIS') {
+    return {
+      driver: 'REDIS',
+      capabilitiesText: ['READ', 'WRITE', 'UPSERT', 'DELETE', 'CAS', 'CHECK_AND_INCREMENT', 'TEST_CONNECTION'].join('\n'),
+      configText: JSON.stringify({
+        redisRef: 'default_redis',
+        mode: 'KV',
+        keyPrefix: 'checkin:state',
+        namespace: 'checkin',
+      }, null, 2),
+    };
+  }
+  if (type === 'HTTP') {
+    return {
+      driver: 'HTTP',
+      capabilitiesText: ['READ', 'CALL', 'TEST_CONNECTION'].join('\n'),
+      configText: JSON.stringify({
+        endpoint: 'https://api.example.com/facts',
+        method: 'POST',
+        timeoutSeconds: 3,
+        headersRef: 'example_service_headers',
+      }, null, 2),
+    };
+  }
+  if (type === 'MQ') {
+    return {
+      driver: 'CUSTOM',
+      capabilitiesText: ['PUBLISH', 'CALL', 'TEST_CONNECTION'].join('\n'),
+      configText: JSON.stringify({
+        provider: 'KAFKA',
+        topic: 'reward.commands',
+        destination: 'reward.commands',
+      }, null, 2),
+    };
+  }
+  if (type === 'PROVIDER') {
+    return {
+      driver: 'INTERNAL',
+      capabilitiesText: ['READ', 'CALL', 'TEST_CONNECTION'].join('\n'),
+      configText: JSON.stringify({
+        providerCode: 'user-profile-provider',
+        contract: 'FACTS_V1',
+        targetResourceRef: 'default_user_profile_store',
+        factKeys: ['USER_PROFILE'],
+      }, null, 2),
+    };
+  }
+  if (type === 'LUA') {
+    return {
+      driver: 'CUSTOM',
+      capabilitiesText: ['READ', 'CALL', 'TEST_CONNECTION'].join('\n'),
+      configText: JSON.stringify({
+        source: "local req = input('resource')\nemit({value = {key = req.key, ok = true}, result = {resource = req.ref, operation = req.operation}})",
+        timeoutMs: 100,
+      }, null, 2),
+    };
+  }
+  return {
+    driver: 'POSTGRES',
+    capabilitiesText: ['READ', 'WRITE', 'UPSERT', 'APPEND', 'DELETE', 'CAS'].join('\n'),
+    configText: JSON.stringify({
+      table: 'marketing_storage_state',
+      tenantId,
+      workspaceId,
+      folderId,
+      primaryKey: ['tenantId', 'namespace', 'resourceKey'],
+      schema: {
+        columns: {
+          tenantId: 'STRING',
+          namespace: 'STRING',
+          resourceKey: 'STRING',
+        },
+      },
+      keyMapping: {
+        tenantId: { path: '$.tenantId' },
+        namespace: { path: '$.namespace' },
+        resourceKey: { path: '$.resourceKey' },
+      },
+    }, null, 2),
+  };
+}
 
 function splitList(value: string): string[] {
   return value.split(/[\n,]/).map((item) => item.trim()).filter(Boolean);
@@ -70,17 +153,19 @@ function parseConfig(text: string): Record<string, unknown> {
 }
 
 function resourceDraft(resource: ResourceSummary | undefined, tenantId: string, workspaceId?: string, folderId?: string): ResourceDraft {
+  const type = resource?.type ?? 'TABLE';
+  const defaults = resourceTypeDefaults(type, tenantId, workspaceId, folderId);
   return {
     code: resource?.code ?? '',
     name: resource?.name ?? '',
     description: resource?.description ?? '',
-    type: resource?.type ?? 'DATABASE_KV',
-    driver: resource?.driver ?? 'POSTGRES',
+    type,
+    driver: resource?.driver ?? defaults.driver,
     scope: resource?.scope && resource.scope !== 'SYSTEM' ? resource.scope : 'WORKSPACE',
     status: resource?.status ?? 'ACTIVE',
     environment: resource?.environment ?? 'DEV',
-    capabilitiesText: (resource?.capabilities?.length ? resource.capabilities : ['READ', 'UPSERT']).join('\n'),
-    configText: JSON.stringify(resource?.config ?? { table: 'marketing_storage_state', tenantId, workspaceId, folderId }, null, 2),
+    capabilitiesText: (resource?.capabilities?.length ? resource.capabilities.join('\n') : defaults.capabilitiesText),
+    configText: JSON.stringify(resource?.config ?? JSON.parse(defaults.configText), null, 2),
   };
 }
 
@@ -246,7 +331,11 @@ export function ResourceManagement({
             <div className="resource-form">
               <label><span>Code</span><TaInput value={draft.code} placeholder="workflow_state_store" onChange={(event) => setDraft((item) => ({ ...item, code: event.target.value }))} /></label>
               <label><span>名称</span><TaInput value={draft.name} placeholder="工作流状态存储" onChange={(event) => setDraft((item) => ({ ...item, name: event.target.value }))} /></label>
-              <label><span>类型</span><TaSelect value={draft.type} onChange={(event) => setDraft((item) => ({ ...item, type: event.target.value }))}>{RESOURCE_TYPES.map((type) => <option key={type}>{type}</option>)}</TaSelect></label>
+              <label><span>类型</span><TaSelect value={draft.type} onChange={(event) => {
+                const nextType = event.target.value;
+                const defaults = resourceTypeDefaults(nextType, tenantId, workspaceId, folderId);
+                setDraft((item) => ({ ...item, type: nextType, ...defaults }));
+              }}>{RESOURCE_TYPES.map((type) => <option key={type}>{type}</option>)}</TaSelect></label>
               <label><span>Driver</span><TaSelect value={draft.driver} onChange={(event) => setDraft((item) => ({ ...item, driver: event.target.value }))}>{RESOURCE_DRIVERS.map((driver) => <option key={driver}>{driver}</option>)}</TaSelect></label>
               <label><span>Scope</span><TaSelect value={draft.scope} onChange={(event) => setDraft((item) => ({ ...item, scope: event.target.value }))}>{RESOURCE_SCOPES.map((scope) => <option key={scope}>{scope}</option>)}</TaSelect></label>
               <label><span>Status</span><TaSelect value={draft.status} onChange={(event) => setDraft((item) => ({ ...item, status: event.target.value }))}>{RESOURCE_STATUSES.map((status) => <option key={status}>{status}</option>)}</TaSelect></label>

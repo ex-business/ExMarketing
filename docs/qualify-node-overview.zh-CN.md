@@ -163,15 +163,13 @@ KYC 规则推荐由独立事实查询节点先查询 `KYC_PROFILE`：
 ```json
 {
   "factKeys": ["KYC_PROFILE"],
-  "providerChain": [
-    {
-      "source": "FACT_SERVICE",
-      "resourceRef": "default_kyc_profile_store",
-      "table": "marketing_kyc_profile",
-      "keyTemplate": "${tenantId}:${subject.type}:${subject.id}",
-      "onMiss": "BLOCK"
-    }
-  ]
+	  "providerChain": [
+	    {
+	      "source": "PROVIDER",
+	      "resourceRef": "kyc-provider",
+	      "onMiss": "BLOCK"
+	    }
+	  ]
 }
 ```
 
@@ -180,15 +178,13 @@ KYC 规则推荐由独立事实查询节点先查询 `KYC_PROFILE`：
 ```json
 {
   "factKeys": ["RISK_PROFILE"],
-  "providerChain": [
-    {
-      "source": "FACT_SERVICE",
-      "resourceRef": "default_risk_profile_store",
-      "table": "marketing_risk_profile",
-      "keyTemplate": "${tenantId}:${subject.type}:${subject.id}",
-      "onMiss": "BLOCK"
-    }
-  ]
+	  "providerChain": [
+	    {
+	      "source": "PROVIDER",
+	      "resourceRef": "risk-provider",
+	      "onMiss": "BLOCK"
+	    }
+	  ]
 }
 ```
 

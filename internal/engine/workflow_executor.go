@@ -420,7 +420,7 @@ func (s *Service) workflowNodeHandlers() map[string]workflowNodeHandler {
 		"code":              s.codeWorkflowNodeHandler,
 		"combine":           s.transformScriptWorkflowNodeHandler("combine", "combined_result"),
 		"split":             s.transformScriptWorkflowNodeHandler("split", "split_items"),
-		"candidate-reward":  candidateRewardWorkflowNodeHandler,
+		"candidate-reward":  s.candidateRewardWorkflowNodeHandler,
 		"reward":            rewardWorkflowNodeHandler,
 		"decimal":           decimalWorkflowNodeHandler,
 		"limit":             limitWorkflowNodeHandler,
@@ -3158,10 +3158,12 @@ func (s *Service) factQueryWorkflowNodeHandler(ctx context.Context, node marketi
 	if chain := workflowFactQueryProviderChain(config); len(chain) > 0 {
 		return s.factQueryProviderChainWorkflowNodeHandler(ctx, node, runtime, config, chain)
 	}
-	if strings.TrimSpace(workflowExplicitConfigString(node, "resourceRef")) != "" {
-		return s.factQueryResourceRefWorkflowNodeHandler(ctx, node, runtime, config)
-	}
 	source := strings.ToUpper(firstWorkflowString(workflowConfigString(config, "source"), "FACT_SERVICE"))
+	if strings.TrimSpace(workflowExplicitConfigString(node, "resourceRef")) != "" {
+		if source == "PROVIDER" || source == "RESOURCE" || source == "FACT_SERVICE" {
+			return s.factQueryResourceRefWorkflowNodeHandler(ctx, node, runtime, config)
+		}
+	}
 	if source != "FACT_SERVICE" && source != "HTTP_PROVIDER" {
 		return workflowFactQueryFailure(node, runtime, config, "", "FACT_QUERY_SOURCE_UNSUPPORTED", "fact-query source "+source+" is not supported by workflow executor", map[string]any{}, nil)
 	}
@@ -3226,10 +3228,17 @@ func (s *Service) factQueryWorkflowNodeHandler(ctx context.Context, node marketi
 }
 
 func (s *Service) factQueryResourceRefWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime, config map[string]any) workflowNodeResult {
-	resourceRef := strings.TrimSpace(workflowExplicitConfigString(node, "resourceRef"))
+	resourceRef := strings.TrimSpace(firstNonEmpty(workflowConfigString(config, "resourceRef"), workflowExplicitConfigString(node, "resourceRef")))
 	resource, err := s.GetResource(ctx, runtime.Activity.TenantID, resourceRef)
 	if err != nil {
 		return workflowFactQueryFailure(node, runtime, config, "", "RESOURCE_NOT_FOUND", err.Error(), map[string]any{}, nil)
+	}
+	if resource.Type == marketing.ResourceProvider {
+		resolvedConfig, ok := workflowFactQueryProviderResourceConfig(resource, config)
+		if !ok {
+			return workflowFactQueryFailure(node, runtime, config, "", "PROVIDER_TARGET_REQUIRED", "provider resource must define targetResourceRef", map[string]any{}, nil)
+		}
+		return s.factQueryResourceRefWorkflowNodeHandler(ctx, node, runtime, resolvedConfig)
 	}
 	refs := workflowFactQueryKeys(config, runtime)
 	if len(refs) == 0 {
@@ -3290,6 +3299,28 @@ func (s *Service) factQueryResourceRefWorkflowNodeHandler(ctx context.Context, n
 		"cacheTtlSeconds": workflowConfigNumber(config, "cacheTtlSeconds"),
 		"audit":           workflowHandlerAudit(node, runtime),
 	})
+}
+
+func workflowFactQueryProviderResourceConfig(resource marketing.Resource, config map[string]any) (map[string]any, bool) {
+	resourceConfig := resource.ConfigMap()
+	target := firstNonEmpty(
+		workflowConfigString(resourceConfig, "targetResourceRef"),
+		workflowConfigString(resourceConfig, "resourceRef"),
+		workflowConfigString(resourceConfig, "storeRef"),
+	)
+	if strings.TrimSpace(target) == "" {
+		return nil, false
+	}
+	next := workflowCopyMap(config)
+	next["resourceRef"] = strings.TrimSpace(target)
+	next["providerRef"] = resource.Code
+	if contract := workflowConfigString(resourceConfig, "contract"); contract != "" {
+		next["providerContract"] = contract
+	}
+	if providerType := workflowConfigString(resourceConfig, "providerType"); providerType != "" {
+		next["providerType"] = providerType
+	}
+	return next, true
 }
 
 func workflowResourceHasBuiltinProfileDataset(resource marketing.Resource, config map[string]any, refs []string) bool {
@@ -3431,7 +3462,7 @@ func workflowFactQueryResourceOperation(resource marketing.Resource, config map[
 		return workflowNormalizeResourceAPIOperation(marketing.ResourceOperation(operation))
 	}
 	switch resource.Type {
-	case marketing.ResourceHTTPProvider, marketing.ResourceGRPCProvider, marketing.ResourcePluginProvider, marketing.ResourceCustomProvider:
+	case marketing.ResourceHTTP, marketing.ResourceHTTPProvider, marketing.ResourceGRPCProvider, marketing.ResourceLua, marketing.ResourcePluginProvider, marketing.ResourceCustomProvider:
 		return marketing.ResourceCall
 	default:
 		return marketing.ResourceRead
@@ -3732,7 +3763,7 @@ func (s *Service) factQueryProviderChainWorkflowNodeHandler(ctx context.Context,
 			if status == "MISS" && workflowFactQueryProviderShouldBlockOnMiss(step) {
 				return workflowFactQueryFailure(node, runtime, config, "", "FACT_QUERY_PROVIDER_MISS", "providerChain step did not resolve requested facts", facts, responses)
 			}
-		case "RESOURCE":
+		case "RESOURCE", "PROVIDER":
 			resourceResult := s.factQueryResourceRefWorkflowNodeHandler(ctx, stepNode, runtime, stepConfig)
 			responses = append(responses, resourceResult.Output)
 			if resourceResult.Status == marketing.WorkflowNodeFailed {
@@ -4165,6 +4196,9 @@ func (s *Service) activityStateWorkflowNodeHandler(ctx context.Context, node mar
 		failed.Output["audit"] = workflowHandlerAudit(node, runtime)
 		return failed
 	}
+	if chain := workflowActivityStateChain(config); len(chain) > 0 {
+		return s.activityStateChainWorkflowNodeHandler(ctx, node, runtime, config, chain)
+	}
 	storeType := strings.ToUpper(firstWorkflowString(workflowConfigString(config, "storeType"), "INTERNAL"))
 	if storeType == "CUSTOM" {
 		storeType = "EXTERNAL"
@@ -4248,6 +4282,253 @@ func (s *Service) activityStateWorkflowNodeHandler(ctx context.Context, node mar
 			"audit":     workflowHandlerAudit(node, runtime),
 		})
 	}
+}
+
+type workflowActivityStateStep struct {
+	Name        string
+	Source      string
+	Operation   string
+	ResourceRef string
+	StoreType   string
+	Namespace   string
+	KeyTemplate string
+	ValueType   string
+	ValuePath   string
+	OutputAs    string
+	OnMiss      string
+	Raw         map[string]any
+}
+
+func workflowActivityStateChain(config map[string]any) []workflowActivityStateStep {
+	value, ok := config["providerChain"]
+	if !ok || value == nil {
+		value, ok = config["stateChain"]
+	}
+	if !ok || value == nil {
+		return nil
+	}
+	items, ok := workflowJSONValue(value).([]any)
+	if !ok {
+		return nil
+	}
+	steps := make([]workflowActivityStateStep, 0, len(items))
+	for index, item := range items {
+		raw, ok := workflowJSONValue(item).(map[string]any)
+		if !ok {
+			continue
+		}
+		step := workflowActivityStateStep{
+			Name:        firstNonEmpty(workflowConfigString(raw, "name"), workflowConfigString(raw, "id"), fmt.Sprintf("step_%d", index+1)),
+			Source:      strings.ToUpper(firstNonEmpty(workflowConfigString(raw, "source"), workflowConfigString(raw, "provider"), "RESOURCE")),
+			Operation:   strings.ToUpper(firstNonEmpty(workflowConfigString(raw, "operation"), workflowConfigString(raw, "action"), "READ")),
+			ResourceRef: workflowConfigString(raw, "resourceRef"),
+			StoreType:   strings.ToUpper(workflowConfigString(raw, "storeType")),
+			Namespace:   workflowConfigString(raw, "namespace"),
+			KeyTemplate: firstWorkflowString(workflowConfigString(raw, "keyTemplate"), workflowConfigString(raw, "stateKeyTemplate")),
+			ValueType:   strings.ToUpper(workflowConfigString(raw, "valueType")),
+			ValuePath:   workflowConfigString(raw, "valuePath"),
+			OutputAs:    firstNonEmpty(workflowConfigString(raw, "outputAs"), workflowConfigString(raw, "name"), fmt.Sprintf("step_%d", index+1)),
+			OnMiss:      strings.ToUpper(firstWorkflowString(workflowConfigString(raw, "onMiss"), "BLOCK")),
+			Raw:         raw,
+		}
+		steps = append(steps, step)
+	}
+	return steps
+}
+
+func (s *Service) activityStateChainWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime, config map[string]any, chain []workflowActivityStateStep) workflowNodeResult {
+	execCtx := workflowNodeContext(ctx)
+	if execCtx.ResolvedInput == nil {
+		execCtx.ResolvedInput = map[string]any{}
+	}
+	if execCtx.NodeOutputs == nil {
+		execCtx.NodeOutputs = map[string]map[string]any{}
+	}
+	traces := make([]any, 0, len(chain))
+	results := map[string]any{}
+	var last workflowNodeResult
+	for index, step := range chain {
+		stepConfig := workflowActivityStateStepConfig(config, step)
+		stepNode := node
+		stepNode.ID = firstNonEmpty(step.OutputAs, step.Name, fmt.Sprintf("%s_step_%d", node.ID, index+1))
+		if workflowActivityStateStepIsInternal(step) {
+			stepNode.Type = "activity-state"
+		} else {
+			stepNode.Type = "state-store"
+		}
+		stepNode.Config = workflowRawJSON(stepConfig)
+		stepCtx := context.WithValue(ctx, workflowNodeExecutionContextKey{}, execCtx)
+		var result workflowNodeResult
+		if workflowActivityStateStepIsInternal(step) {
+			result = s.activityStateWorkflowNodeHandler(stepCtx, stepNode, runtime)
+		} else {
+			result = s.stateStoreWorkflowNodeHandler(stepCtx, stepNode, runtime)
+		}
+		last = result
+		status := string(result.Status)
+		if result.Status == marketing.WorkflowNodeFailed && workflowActivityStateStepCanContinue(step, result) {
+			status = "MISS_NEXT"
+			traces = append(traces, workflowActivityStateStepTrace(step, status, result.Output))
+			continue
+		}
+		if result.Status == marketing.WorkflowNodeFailed {
+			if result.Output == nil {
+				result.Output = map[string]any{}
+			}
+			result.Output["stateChain"] = traces
+			result.Output["failedStep"] = step.OutputAs
+			return result
+		}
+		output := result.Output
+		if output == nil {
+			output = map[string]any{}
+		}
+		execCtx.NodeOutputs[step.OutputAs] = output
+		execCtx.ResolvedInput[step.OutputAs] = output
+		if value, ok := output["stored_value"]; ok {
+			execCtx.ResolvedInput[step.OutputAs+"_value"] = value
+		} else if state, ok := output["activity_state"].(map[string]any); ok {
+			if value, ok := state["data"]; ok {
+				execCtx.ResolvedInput[step.OutputAs+"_value"] = value
+			}
+		}
+		results[step.OutputAs] = output
+		traces = append(traces, workflowActivityStateStepTrace(step, status, output))
+	}
+	if last.Output == nil {
+		last.Output = map[string]any{}
+	}
+	lastStep := chain[len(chain)-1]
+	state := last.Output["activity_state"]
+	version := workflowInt64(last.Output["state_version"])
+	if !workflowActivityStateStepIsInternal(lastStep) {
+		state = workflowExternalActivityStateOutput(runtime, workflowActivityStateLastStepConfig(config, chain), last.Output)
+		version = workflowInt64(last.Output["storage_version"])
+	}
+	return nodeSuccess(map[string]any{
+		"activity_state":     state,
+		"state_version":      version,
+		"state_results":      results,
+		"stateChain":         traces,
+		"operation":          "CHAIN",
+		"storeType":          "CHAIN",
+		"executionMode":      "REAL_HANDLER",
+		"executionAuthority": "WorkflowExecutor/ActivityStateOperationChain",
+		"audit":              workflowHandlerAudit(node, runtime),
+	})
+}
+
+func workflowActivityStateStepConfig(root map[string]any, step workflowActivityStateStep) map[string]any {
+	next := workflowCopyMap(root)
+	for key, value := range step.Raw {
+		next[key] = value
+	}
+	operation := firstWorkflowString(step.Operation, "READ")
+	next["operation"] = operation
+	next["namespace"] = firstNonEmpty(step.Namespace, workflowConfigString(root, "namespace"), "activity")
+	keyTemplate := firstNonEmpty(step.KeyTemplate, workflowConfigString(root, "keyTemplate"), workflowConfigString(root, "stateKeyTemplate"), "${activityId}:${subject.id}")
+	next["keyTemplate"] = keyTemplate
+	next["stateKeyTemplate"] = keyTemplate
+	next["valueType"] = firstNonEmpty(step.ValueType, workflowConfigString(root, "valueType"), "OBJECT")
+	if workflowActivityStateStepIsInternal(step) {
+		next["storeType"] = "INTERNAL"
+		delete(next, "resourceRef")
+	} else if step.ResourceRef != "" {
+		next["resourceRef"] = step.ResourceRef
+		next["storageType"] = "EXTERNAL"
+	} else {
+		storeType := firstNonEmpty(step.StoreType, workflowActivityStateStorageTypeForSource(step.Source), strings.ToUpper(workflowConfigString(root, "storeType")), "DATABASE")
+		if storeType == "INTERNAL" {
+			storeType = "DATABASE"
+		}
+		next["storageType"] = storeType
+	}
+	if step.ValuePath != "" {
+		next["valuePath"] = step.ValuePath
+	} else if operation != "READ" && operation != "DELETE" {
+		next["valuePath"] = firstWorkflowString(workflowConfigString(root, "valuePath"), "$.input.state_patch")
+	}
+	next["missingPolicy"] = workflowActivityStateStepMissingPolicy(firstNonEmpty(workflowConfigString(step.Raw, "missingPolicy"), workflowConfigString(root, "missingPolicy"), step.OnMiss))
+	delete(next, "providerChain")
+	delete(next, "stateChain")
+	if !workflowActivityStateStepIsInternal(step) {
+		delete(next, "stateKeyTemplate")
+	}
+	return next
+}
+
+func workflowActivityStateStepIsInternal(step workflowActivityStateStep) bool {
+	source := strings.ToUpper(strings.TrimSpace(step.Source))
+	storeType := strings.ToUpper(strings.TrimSpace(step.StoreType))
+	return source == "INTERNAL" || source == "ACTIVITY_STATE" || storeType == "INTERNAL"
+}
+
+func workflowActivityStateStorageTypeForSource(source string) string {
+	switch strings.ToUpper(strings.TrimSpace(source)) {
+	case "WORKFLOW_CONTEXT", "CONTEXT":
+		return "WORKFLOW_CONTEXT"
+	case "LOCAL_CACHE", "CACHE":
+		return "LOCAL_CACHE"
+	case "HTTP_PROVIDER", "HTTP", "FACT_SERVICE":
+		return "HTTP"
+	case "REDIS", "REDIS_KV", "REDIS_HASH", "REDIS_COUNTER", "REDIS_LOCK":
+		return "REDIS"
+	case "DATABASE", "DATABASE_KV", "DATABASE_TABLE", "TABLE":
+		return "DATABASE"
+	default:
+		return ""
+	}
+}
+
+func workflowActivityStateLastStepConfig(root map[string]any, chain []workflowActivityStateStep) map[string]any {
+	if len(chain) == 0 {
+		return root
+	}
+	return workflowActivityStateStepConfig(root, chain[len(chain)-1])
+}
+
+func workflowActivityStateStepMissingPolicy(policy string) string {
+	switch strings.ToUpper(strings.TrimSpace(policy)) {
+	case "EMPTY_STATE", "EMPTY", "DEFAULT", "NEXT":
+		return "EMPTY"
+	case "BLOCK":
+		return "BLOCK"
+	default:
+		return "EMPTY"
+	}
+}
+
+func workflowActivityStateStepCanContinue(step workflowActivityStateStep, result workflowNodeResult) bool {
+	onMiss := strings.ToUpper(strings.TrimSpace(step.OnMiss))
+	if onMiss != "NEXT" && onMiss != "SKIP" && onMiss != "EMPTY" && onMiss != "DEFAULT" {
+		return false
+	}
+	code := workflowConfigString(result.Output, "errorCode")
+	return code == "STATE_STORE_NOT_FOUND" || code == "ACTIVITY_STATE_NOT_FOUND"
+}
+
+func workflowActivityStateStepTrace(step workflowActivityStateStep, status string, output map[string]any) map[string]any {
+	trace := map[string]any{
+		"name":      step.Name,
+		"source":    step.Source,
+		"operation": step.Operation,
+		"status":    status,
+		"outputAs":  step.OutputAs,
+		"onMiss":    firstWorkflowString(step.OnMiss, "BLOCK"),
+	}
+	if step.ResourceRef != "" {
+		trace["resourceRef"] = step.ResourceRef
+	}
+	if step.Namespace != "" {
+		trace["namespace"] = step.Namespace
+	}
+	if step.KeyTemplate != "" {
+		trace["keyTemplate"] = step.KeyTemplate
+	}
+	if output != nil {
+		trace["output"] = output
+	}
+	return trace
 }
 
 func (s *Service) externalActivityStateWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime, config map[string]any, storeType string) workflowNodeResult {
@@ -4640,7 +4921,7 @@ func (s *Service) workflowStateStoreResourceConfig(ctx context.Context, node mar
 }
 
 func workflowNormalizeProviderResourceConfig(node marketing.WorkflowNode, resource marketing.Resource, resourceConfig map[string]any, config map[string]any) {
-	if resource.Type != marketing.ResourceHTTPProvider {
+	if !workflowResourceIsHTTP(resource) {
 		return
 	}
 	if endpoint := firstWorkflowString(workflowConfigString(resourceConfig, "endpoint"), workflowConfigString(config, "endpoint")); endpoint != "" && !workflowExplicitConfigHasKey(node, "providerEndpoint") {
@@ -4688,18 +4969,18 @@ func workflowStorageTypeForResource(resource marketing.Resource) string {
 	switch resource.Type {
 	case marketing.ResourceMemory, marketing.ResourceWorkflowContext:
 		return "MEMORY"
-	case marketing.ResourceDatabaseKV:
+	case marketing.ResourceDatabase, marketing.ResourceDatabaseKV:
 		return "DATABASE"
-	case marketing.ResourceDatabase:
-		return "DATABASE"
-	case marketing.ResourceDatabaseTable:
+	case marketing.ResourceTable, marketing.ResourceDatabaseTable:
 		return "DATABASE_TABLE"
-	case marketing.ResourceHTTPProvider:
+	case marketing.ResourceHTTP, marketing.ResourceHTTPProvider:
 		return "HTTP"
-	case marketing.ResourceRedisKV, marketing.ResourceRedisHash, marketing.ResourceRedisCounter, marketing.ResourceRedisLock:
+	case marketing.ResourceRedis, marketing.ResourceRedisKV, marketing.ResourceRedisHash, marketing.ResourceRedisCounter, marketing.ResourceRedisLock:
 		return "REDIS"
 	case marketing.ResourceGRPCProvider:
 		return "GRPC"
+	case marketing.ResourceLua:
+		return "LUA"
 	case marketing.ResourcePluginProvider:
 		return "PLUGIN"
 	default:
@@ -4761,7 +5042,7 @@ func (s *Service) workflowExecuteResourceAPI(ctx context.Context, node marketing
 	namespace := firstWorkflowString(req.Namespace, "workflow")
 	key := workflowRenderNodeTemplate(firstWorkflowString(req.Key, "${activityId}:${eventId}:${nodeId}"), runtime, node)
 	accessOperation := operation
-	if accessOperation == marketing.ResourceCall && resource.Type == marketing.ResourceMQTopic {
+	if accessOperation == marketing.ResourceCall && workflowResourceIsMQ(resource) {
 		accessOperation = marketing.ResourcePublish
 	}
 	accessOperation = workflowStateStoreResourceOperation(accessOperation)
@@ -4793,13 +5074,28 @@ func (s *Service) workflowExecuteResourceAPI(ctx context.Context, node marketing
 	var result workflowNodeResult
 	auditRecorded := false
 	switch resource.Type {
-	case marketing.ResourceMQTopic:
+	case marketing.ResourceMQ, marketing.ResourceMQTopic:
 		if accessOperation != marketing.ResourcePublish && accessOperation != marketing.ResourceCall {
 			output := map[string]any{"errorCode": "RESOURCE_OPERATION_UNSUPPORTED", "resourceRef": resourceRef, "operation": accessOperation, "audit": workflowHandlerAudit(node, runtime)}
-			return output, errors.New("RESOURCE_OPERATION_UNSUPPORTED: MQ_TOPIC only supports PUBLISH/CALL")
+			return output, errors.New("RESOURCE_OPERATION_UNSUPPORTED: MQ only supports PUBLISH/CALL")
 		}
 		result = nodeSuccess(workflowMQTopicPublishOutput(node, runtime, resource, namespace, key, req.Value))
-	case marketing.ResourceMemory, marketing.ResourceWorkflowContext, marketing.ResourceDatabaseKV, marketing.ResourceDatabaseTable, marketing.ResourceHTTPProvider, marketing.ResourceRedisKV, marketing.ResourceRedisHash, marketing.ResourceRedisCounter, marketing.ResourceRedisLock:
+	case marketing.ResourceLua:
+		if accessOperation != marketing.ResourceRead && accessOperation != marketing.ResourceCall {
+			output := map[string]any{"errorCode": "RESOURCE_OPERATION_UNSUPPORTED", "resourceRef": resourceRef, "operation": accessOperation, "audit": workflowHandlerAudit(node, runtime)}
+			return output, errors.New("RESOURCE_OPERATION_UNSUPPORTED: LUA only supports READ/CALL")
+		}
+		output, err := s.workflowLuaResourceOutput(ctx, node, runtime, resource, req)
+		if err != nil {
+			if output == nil {
+				output = map[string]any{}
+			}
+			output["errorCode"] = firstWorkflowString(workflowConfigString(output, "errorCode"), "RESOURCE_LUA_EXECUTION_FAILED")
+			output["audit"] = workflowHandlerAudit(node, runtime)
+			return output, err
+		}
+		result = nodeSuccess(output)
+	case marketing.ResourceMemory, marketing.ResourceWorkflowContext, marketing.ResourceDatabase, marketing.ResourceDatabaseKV, marketing.ResourceTable, marketing.ResourceArray, marketing.ResourceDatabaseTable, marketing.ResourceHTTP, marketing.ResourceHTTPProvider, marketing.ResourceRedis, marketing.ResourceRedisKV, marketing.ResourceRedisHash, marketing.ResourceRedisCounter, marketing.ResourceRedisLock:
 		stateOperation := string(operation)
 		if operation == marketing.ResourceCall {
 			stateOperation = "CALL"
@@ -4841,6 +5137,75 @@ func (s *Service) workflowExecuteResourceAPI(ctx context.Context, node marketing
 		return result.Output, errors.New(result.Error)
 	}
 	return result.Output, nil
+}
+
+func (s *Service) workflowLuaResourceOutput(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime, resource marketing.Resource, req workflowResourceAPIRequest) (map[string]any, error) {
+	config := resource.ConfigMap()
+	source := workflowLuaResourceSource(config)
+	if source == "" {
+		return map[string]any{"resourceRef": resource.Code, "resourceType": resource.Type, "errorCode": "RESOURCE_LUA_SOURCE_REQUIRED"}, errors.New("RESOURCE_LUA_SOURCE_REQUIRED: lua resource source is required")
+	}
+	tempNode := node
+	tempConfig := workflowCopyMap(config)
+	tempConfig["resourceRef"] = resource.Code
+	tempConfig["resourceType"] = resource.Type
+	tempConfig["operation"] = req.Operation
+	tempConfig["namespace"] = req.Namespace
+	tempConfig["key"] = req.Key
+	if req.ValueType != "" {
+		tempConfig["valueType"] = req.ValueType
+	}
+	configBytes, _ := json.Marshal(tempConfig)
+	tempNode.Config = configBytes
+	execCtx := workflowNodeContext(ctx)
+	if execCtx.ResolvedInput == nil {
+		execCtx.ResolvedInput = map[string]any{}
+	}
+	execCtx.ResolvedInput["resource"] = map[string]any{
+		"ref":       resource.Code,
+		"type":      resource.Type,
+		"operation": req.Operation,
+		"namespace": req.Namespace,
+		"key":       req.Key,
+		"value":     workflowJSONValue(req.Value),
+		"options":   workflowJSONValue(req.Options),
+	}
+	execCtx.ResolvedInput["value"] = workflowJSONValue(req.Value)
+	for key, value := range req.Options {
+		execCtx.ResolvedInput[key] = workflowJSONValue(value)
+	}
+	luaOutput, err := s.executeWorkflowLua(context.WithValue(ctx, workflowNodeExecutionContextKey{}, execCtx), tempNode, runtime, source)
+	if err != nil {
+		return map[string]any{"resourceRef": resource.Code, "resourceType": resource.Type, "errorCode": "RESOURCE_LUA_EXECUTION_FAILED", "error": err.Error()}, fmt.Errorf("RESOURCE_LUA_EXECUTION_FAILED: %w", err)
+	}
+	output := map[string]any{
+		"resourceRef":         resource.Code,
+		"resourceType":        resource.Type,
+		"operation":           req.Operation,
+		"namespace":           req.Namespace,
+		"key":                 req.Key,
+		"value":               workflowJSONValue(luaOutput["value"]),
+		"result":              workflowJSONValue(luaOutput),
+		"executionMode":       "REAL_HANDLER",
+		"executionAuthority":  "WorkflowExecutor/LuaResource",
+		"resourceAdapterMode": "LUA",
+		"audit":               workflowHandlerAudit(node, runtime),
+	}
+	for key, value := range luaOutput {
+		if _, exists := output[key]; !exists {
+			output[key] = workflowJSONValue(value)
+		}
+	}
+	return output, nil
+}
+
+func workflowLuaResourceSource(config map[string]any) string {
+	return firstNonEmpty(
+		resourceConfigString(config, "source"),
+		resourceConfigString(config, "script"),
+		resourceConfigString(config, "scriptSource"),
+		resourceConfigString(config, "luaSource"),
+	)
 }
 
 func workflowNormalizeResourceAPIOperation(operation marketing.ResourceOperation) marketing.ResourceOperation {
@@ -5609,18 +5974,40 @@ func workflowDatabaseTableErrorCode(err error) string {
 func (s *Service) workflowRedisStateStore(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime, resource marketing.Resource, config map[string]any, operation string, namespace string, storageKey string, valueType string) workflowNodeResult {
 	redisNamespace := workflowRedisNamespace(resource, namespace)
 	redisKey := workflowRedisStorageKey(resource, config, storageKey)
-	switch resource.Type {
-	case marketing.ResourceRedisHash:
+	switch workflowRedisMode(resource) {
+	case "HASH":
 		field := workflowRenderNodeTemplate(firstWorkflowString(workflowConfigString(config, "fieldTemplate"), firstWorkflowString(workflowConfigString(config, "field"), "value")), runtime, node)
 		redisKey = redisKey + "#" + field
-	case marketing.ResourceRedisCounter:
+	case "COUNTER":
 		return s.workflowRedisCounterStateStore(ctx, node, runtime, resource, config, operation, redisNamespace, redisKey)
-	case marketing.ResourceRedisLock:
+	case "LOCK":
 		return s.workflowRedisLockStateStore(ctx, node, runtime, resource, config, operation, redisNamespace, redisKey)
 	}
 	result := s.workflowDatabaseStateStore(ctx, node, runtime, config, operation, redisNamespace, redisKey, valueType)
 	workflowAnnotateRedisOutput(result.Output, resource, redisNamespace, redisKey)
 	return result
+}
+
+func workflowRedisMode(resource marketing.Resource) string {
+	if resource.Type == marketing.ResourceRedisHash {
+		return "HASH"
+	}
+	if resource.Type == marketing.ResourceRedisCounter {
+		return "COUNTER"
+	}
+	if resource.Type == marketing.ResourceRedisLock {
+		return "LOCK"
+	}
+	mode := strings.ToUpper(firstWorkflowString(
+		firstNonEmpty(resourceConfigString(resource.ConfigMap(), "mode"), resourceConfigString(resource.ConfigMap(), "redisMode"), resourceConfigString(resource.ConfigMap(), "kind")),
+		"KV",
+	))
+	switch mode {
+	case "HASH", "COUNTER", "LOCK":
+		return mode
+	default:
+		return "KV"
+	}
 }
 
 func workflowRedisNamespace(resource marketing.Resource, namespace string) string {
@@ -5645,6 +6032,7 @@ func workflowAnnotateRedisOutput(output map[string]any, resource marketing.Resou
 	}
 	output["storageType"] = "REDIS"
 	output["redisType"] = resource.Type
+	output["redisMode"] = workflowRedisMode(resource)
 	output["redisNamespace"] = namespace
 	output["redisKey"] = key
 	output["adapterMode"] = "RESOURCE_STATE_BACKED"
@@ -5895,13 +6283,15 @@ func quotaCheckWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowN
 }
 
 func (s *Service) quotaCheckWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
-	if strings.TrimSpace(workflowExplicitConfigString(node, "resourceRef")) == "" {
-		return quotaCheckWorkflowNodeHandler(ctx, node, runtime)
-	}
 	config, failed, ok := workflowRequireNodeConfig(node)
 	if !ok {
 		failed.Output["audit"] = workflowHandlerAudit(node, runtime)
 		return failed
+	}
+	config = workflowQuotaResourceConfig(config)
+	resourceRef := strings.TrimSpace(workflowConfigString(config, "resourceRef"))
+	if resourceRef == "" {
+		return quotaCheckWorkflowNodeHandler(ctx, node, runtime)
 	}
 	scopeKey := workflowRenderNodeTemplate(firstWorkflowString(workflowConfigString(config, "scopeKeyTemplate"), "${subject.id}:${activityId}"), runtime, node)
 	windowSegment, err := s.workflowQuotaWindowSegment(ctx, node, runtime, config)
@@ -5922,7 +6312,7 @@ func (s *Service) quotaCheckWorkflowNodeHandler(ctx context.Context, node market
 	}
 	output, err := s.workflowExecuteResourceAPI(ctx, node, runtime, workflowResourceAPIRequest{
 		Operation:   operation,
-		ResourceRef: workflowExplicitConfigString(node, "resourceRef"),
+		ResourceRef: resourceRef,
 		Namespace:   namespace,
 		Key:         logicalKey,
 		ValueType:   "NUMBER",
@@ -5957,6 +6347,44 @@ func (s *Service) quotaCheckWorkflowNodeHandler(ctx context.Context, node market
 		"executionAuthority": "WorkflowExecutor/RedisCounterResource",
 		"audit":              workflowHandlerAudit(node, runtime),
 	})
+}
+
+func workflowQuotaResourceConfig(config map[string]any) map[string]any {
+	next := workflowCopyMap(config)
+	rawChain, ok := config["providerChain"]
+	if !ok || rawChain == nil {
+		return next
+	}
+	items, ok := workflowJSONValue(rawChain).([]any)
+	if !ok || len(items) == 0 {
+		return next
+	}
+	step, ok := workflowJSONValue(items[0]).(map[string]any)
+	if !ok {
+		return next
+	}
+	source := strings.ToUpper(firstWorkflowString(workflowConfigString(step, "source"), "RESOURCE"))
+	if source != "RESOURCE" {
+		return next
+	}
+	for _, key := range []string{"resourceRef", "namespace", "valuePath", "outputAs"} {
+		if value := workflowConfigString(step, key); value != "" {
+			next[key] = value
+		}
+	}
+	if keyTemplate := firstWorkflowString(workflowConfigString(step, "keyTemplate"), workflowConfigString(step, "key")); keyTemplate != "" {
+		next["scopeKeyTemplate"] = keyTemplate
+		next["keyTemplate"] = keyTemplate
+	}
+	if operation := strings.ToUpper(workflowConfigString(step, "operation")); operation != "" && workflowConfigString(next, "consumeMode") == "" {
+		switch operation {
+		case "READ":
+			next["consumeMode"] = "CHECK_ONLY"
+		case "CHECK_AND_INCREMENT", "INCREMENT", "UPSERT", "WRITE":
+			next["consumeMode"] = "ATOMIC"
+		}
+	}
+	return next
 }
 
 func workflowQuotaCheckDelta(config map[string]any) float64 {
@@ -6575,7 +7003,7 @@ func workflowUserLevelCheckBool(user map[string]any, path string) (bool, bool) {
 	return workflowTruthy(value), true
 }
 
-func candidateRewardWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
+func (s *Service) candidateRewardWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
 	if canceled := workflowHandlerContextCanceled(ctx, node, runtime); canceled.Status != "" {
 		return canceled
 	}
@@ -6591,7 +7019,16 @@ func candidateRewardWorkflowNodeHandler(ctx context.Context, node marketing.Work
 		}
 		return nodeSkipped("CANDIDATE_REWARD_NOT_QUALIFIED: activity not qualified", output)
 	}
-	items := workflowCandidateRewardItems(ctx, runtime, config)
+	items, resourceOutput, err := s.workflowCandidateRewardItems(ctx, node, runtime, config)
+	if err != nil {
+		return nodeFailed(err.Error(), map[string]any{
+			"errorCode":          "CANDIDATE_REWARD_RESOURCE_FAILED",
+			"resource_result":    resourceOutput,
+			"executionMode":      "REAL_HANDLER",
+			"executionAuthority": "WorkflowExecutor/CandidateRewardResource",
+			"audit":              workflowHandlerAudit(node, runtime),
+		})
+	}
 	if len(items) == 0 {
 		output := map[string]any{"errorCode": "CANDIDATE_REWARD_EMPTY", "candidate_rewards": []any{}, "reward_items": []any{}, "audit": workflowHandlerAudit(node, runtime)}
 		if strings.EqualFold(workflowConfigString(config, "emptyAction"), "SKIP") {
@@ -6604,6 +7041,7 @@ func candidateRewardWorkflowNodeHandler(ctx context.Context, node marketing.Work
 		"reward_items":      items,
 		"candidateCount":    len(items),
 		"source":            firstWorkflowString(workflowConfigString(config, "source"), "ACTIVITY_REWARD_CONFIG"),
+		"resource_result":   resourceOutput,
 		"audit":             workflowHandlerAudit(node, runtime),
 	})
 }
@@ -6968,7 +7406,94 @@ func rewardWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowNode,
 	})
 }
 
-func workflowCandidateRewardItems(ctx context.Context, runtime workflowRuntime, config map[string]any) []any {
+func (s *Service) workflowCandidateRewardItems(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime, config map[string]any) ([]any, map[string]any, error) {
+	if step, ok := workflowCandidateRewardResourceStep(config); ok {
+		resourceRef := strings.TrimSpace(workflowConfigString(step, "resourceRef"))
+		if resourceRef == "" {
+			return nil, nil, errors.New("CANDIDATE_REWARD_RESOURCE_REF_REQUIRED: resourceRef is required")
+		}
+		if resourceRef == defaultActivityRewardConfig {
+			items := workflowCandidateRewardItemsFromActivityConfig(ctx, runtime, config)
+			return items, map[string]any{
+				"source":      "RESOURCE",
+				"resourceRef": resourceRef,
+				"namespace":   firstWorkflowString(workflowConfigString(step, "namespace"), "reward"),
+				"key":         workflowRenderNodeTemplate(firstWorkflowString(workflowConfigString(step, "keyTemplate"), "${activityId}"), runtime, node),
+				"outputAs":    firstWorkflowString(workflowConfigString(step, "outputAs"), "rewardConfig"),
+				"adapterMode": "ACTIVITY_REWARD_CONFIG",
+			}, nil
+		}
+		namespace := firstWorkflowString(workflowConfigString(step, "namespace"), "reward")
+		key := workflowRenderNodeTemplate(firstWorkflowString(workflowConfigString(step, "keyTemplate"), "${activityId}"), runtime, node)
+		operation := marketing.ResourceRead
+		if op := strings.ToUpper(workflowConfigString(step, "operation")); op != "" && op != "READ" {
+			return nil, map[string]any{"resourceRef": resourceRef, "operation": op}, fmt.Errorf("CANDIDATE_REWARD_RESOURCE_OPERATION_UNSUPPORTED: operation %s is not supported", op)
+		}
+		output, err := s.workflowExecuteResourceAPI(ctx, node, runtime, workflowResourceAPIRequest{
+			Operation:   operation,
+			ResourceRef: resourceRef,
+			Namespace:   namespace,
+			Key:         key,
+			ValueType:   "ARRAY",
+		})
+		if err != nil {
+			return nil, output, fmt.Errorf("CANDIDATE_REWARD_RESOURCE_READ_FAILED: %w", err)
+		}
+		if items := workflowCandidateRewardItemsFromResourceOutput(output, workflowConfigString(step, "valuePath")); len(items) > 0 {
+			return items, output, nil
+		}
+		return nil, output, nil
+	}
+	return workflowCandidateRewardItemsFromLegacySource(ctx, runtime, config), nil, nil
+}
+
+func workflowCandidateRewardResourceStep(config map[string]any) (map[string]any, bool) {
+	rawChain, ok := config["providerChain"]
+	if !ok || rawChain == nil {
+		return nil, false
+	}
+	items, ok := workflowJSONValue(rawChain).([]any)
+	if !ok || len(items) == 0 {
+		return nil, false
+	}
+	for _, item := range items {
+		step, ok := workflowJSONValue(item).(map[string]any)
+		if !ok {
+			continue
+		}
+		source := strings.ToUpper(firstWorkflowString(workflowConfigString(step, "source"), "RESOURCE"))
+		if source == "RESOURCE" {
+			return step, true
+		}
+	}
+	return nil, false
+}
+
+func workflowCandidateRewardItemsFromResourceOutput(output map[string]any, valuePath string) []any {
+	if output == nil {
+		return nil
+	}
+	if valuePath != "" {
+		if value, err := extractWorkflowJSONPath(output, valuePath); err == nil {
+			if items := workflowAnyArray(value); len(items) > 0 {
+				return items
+			}
+		}
+	}
+	for _, key := range []string{"candidate_rewards", "reward_items", "selected_rewards", "stored_value", "value"} {
+		if items := workflowAnyArray(output[key]); len(items) > 0 {
+			return items
+		}
+	}
+	if storageEntry, ok := workflowJSONValue(output["storage_entry"]).(map[string]any); ok {
+		if items := workflowAnyArray(storageEntry["value"]); len(items) > 0 {
+			return items
+		}
+	}
+	return nil
+}
+
+func workflowCandidateRewardItemsFromLegacySource(ctx context.Context, runtime workflowRuntime, config map[string]any) []any {
 	source := strings.ToUpper(firstWorkflowString(workflowConfigString(config, "source"), "ACTIVITY_REWARD_CONFIG"))
 	if source == "INPUT" || source == "PLUGIN_RESULT" {
 		if value, ok := workflowResolvedInput(ctx, "plugin_result"); ok {
@@ -6984,6 +7509,10 @@ func workflowCandidateRewardItems(ctx context.Context, runtime workflowRuntime, 
 			}
 		}
 	}
+	return workflowCandidateRewardItemsFromActivityConfig(ctx, runtime, config)
+}
+
+func workflowCandidateRewardItemsFromActivityConfig(ctx context.Context, runtime workflowRuntime, config map[string]any) []any {
 	items := make([]any, 0, len(runtime.Activity.Rewards))
 	calculator := rewardcalc.ConfigCalculator{}
 	includeDisabled := workflowConfigBool(config, "includeDisabledRewards", false)
@@ -7353,7 +7882,7 @@ func (s *Service) outboxWorkflowNodeHandler(ctx context.Context, node marketing.
 }
 
 func workflowOutboxResourceOperation(resource marketing.Resource) marketing.ResourceOperation {
-	if resource.Type == marketing.ResourceMQTopic {
+	if workflowResourceIsMQ(resource) {
 		return marketing.ResourcePublish
 	}
 	return marketing.ResourceCall
@@ -7364,9 +7893,9 @@ func workflowOutboxResourceChannel(resource marketing.Resource, config map[strin
 		return marketing.GrantChannel(channel)
 	}
 	switch resource.Type {
-	case marketing.ResourceMQTopic:
+	case marketing.ResourceMQ, marketing.ResourceMQTopic:
 		return marketing.GrantMQ
-	case marketing.ResourceHTTPProvider:
+	case marketing.ResourceHTTP, marketing.ResourceHTTPProvider:
 		return marketing.GrantHTTP
 	default:
 		return marketing.GrantWebhook
@@ -7386,13 +7915,21 @@ func workflowOutboxMessagesForChannel(messages []marketing.OutboxMessage, channe
 func workflowResourceTargetRef(resource marketing.Resource) string {
 	config := resource.ConfigMap()
 	switch resource.Type {
-	case marketing.ResourceMQTopic:
+	case marketing.ResourceMQ, marketing.ResourceMQTopic:
 		return firstWorkflowString(resourceConfigString(config, "destination"), firstWorkflowString(resourceConfigString(config, "targetRef"), resourceConfigString(config, "topic")))
-	case marketing.ResourceHTTPProvider:
+	case marketing.ResourceHTTP, marketing.ResourceHTTPProvider:
 		return firstWorkflowString(resourceConfigString(config, "endpoint"), resourceConfigString(config, "providerEndpoint"))
 	default:
 		return firstWorkflowString(resourceConfigString(config, "targetRef"), resource.Code)
 	}
+}
+
+func workflowResourceIsHTTP(resource marketing.Resource) bool {
+	return resource.Type == marketing.ResourceHTTP || resource.Type == marketing.ResourceHTTPProvider
+}
+
+func workflowResourceIsMQ(resource marketing.Resource) bool {
+	return resource.Type == marketing.ResourceMQ || resource.Type == marketing.ResourceMQTopic
 }
 
 func retryWorkflowNodeHandler(_ context.Context, node marketing.WorkflowNode, runtime workflowRuntime) workflowNodeResult {
@@ -7651,7 +8188,7 @@ func randomPickWorkflowNodeHandler(ctx context.Context, node marketing.WorkflowN
 		failed.Output["audit"] = workflowHandlerAudit(node, runtime)
 		return failed
 	}
-	items := workflowCandidateRewardItems(ctx, runtime, map[string]any{"source": "INPUT"})
+	items := workflowCandidateRewardItemsFromLegacySource(ctx, runtime, map[string]any{"source": "INPUT"})
 	if len(items) == 0 {
 		output := map[string]any{"errorCode": "RANDOM_PICK_EMPTY", "selected_rewards": []any{}, "audit": workflowHandlerAudit(node, runtime)}
 		if strings.EqualFold(workflowConfigString(config, "emptyAction"), "BLOCK") {

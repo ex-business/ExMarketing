@@ -77,13 +77,13 @@ default_marketing_database
 | 对象 | 类型 | 作用 |
 | --- | --- | --- |
 | `default_marketing_database` | `DATABASE` | 默认营销数据库资源，表示底层数据库连接和能力 |
-| `default_user_profile_store` | `DATABASE_TABLE` | 基于默认数据库创建的用户资料 Store |
+| `default_user_profile_store` | `TABLE` | 基于默认数据库创建的用户资料 Store |
 | `marketing_user_profile` | 物理表 | 存储用户等级、VIP、国家、渠道、状态等 |
 | `USER_PROFILE` | Fact Code | workflow 中统一读取的事实 key |
-| `default_kyc_profile_store` | `DATABASE_TABLE` | 基于默认数据库创建的 KYC 用户资源 Store |
+| `default_kyc_profile_store` | `TABLE` | 基于默认数据库创建的 KYC 用户资源 Store |
 | `marketing_kyc_profile` | 物理表 | 存储实名状态、KYC 等级、认证来源等 |
 | `KYC_PROFILE` | Fact Code | 资格校验中读取的实名 / 合规事实 key |
-| `default_risk_profile_store` | `DATABASE_TABLE` | 基于默认数据库创建的风控用户资源 Store |
+| `default_risk_profile_store` | `TABLE` | 基于默认数据库创建的风控用户资源 Store |
 | `marketing_risk_profile` | 物理表 | 存储风险分、风险等级、黑名单状态等 |
 | `RISK_PROFILE` | Fact Code | 资格校验中读取的风控事实 key |
 
@@ -112,7 +112,7 @@ default_marketing_database
 ```json
 {
   "code": "default_user_profile_store",
-  "type": "DATABASE_TABLE",
+  "type": "TABLE",
   "driver": "POSTGRES",
   "config": {
     "databaseRef": "default_marketing_database",
@@ -141,7 +141,7 @@ WHERE tenant_id = :tenantId
 ```json
 {
   "code": "default_kyc_profile_store",
-  "type": "DATABASE_TABLE",
+  "type": "TABLE",
   "driver": "POSTGRES",
   "config": {
     "databaseRef": "default_marketing_database",
@@ -180,7 +180,7 @@ Fact Query 查询 KYC 时推荐配置：
 ```json
 {
   "code": "default_risk_profile_store",
-  "type": "DATABASE_TABLE",
+  "type": "TABLE",
   "driver": "POSTGRES",
   "config": {
     "databaseRef": "default_marketing_database",
@@ -241,8 +241,8 @@ subject_id = u_demo_001
   "subjectPath": "subject.id",
   "providerChain": [
     {
-      "source": "FACT_SERVICE",
-      "resourceRef": "default_user_profile_store",
+      "source": "PROVIDER",
+      "resourceRef": "user-profile-provider",
       "namespace": "facts",
       "keyTemplate": "${tenantId}:${subject.type}:${subject.id}",
       "valuePath": "$.facts.USER_PROFILE",
@@ -260,7 +260,7 @@ UI 上只分三块：
 | --- | --- | --- |
 | 配置参数 | `subjectPath` | 当前 fact-query 的公共主体路径，例如用户 ID、订单 ID 或业务主体 ID |
 | 事实 Key | `factKeys` | 本节点要产出的事实字段，例如 `USER_PROFILE` |
-| 数据提供者 | `providerChain` | 从哪里读、怎么读、用什么资源、key 模板、超时、缓存、miss 策略都在这里配置 |
+| 数据提供者 | `providerChain` | 选择 Provider Ref、Resource Ref、上下文或本地缓存；底层 HTTP/Redis/gRPC/Plugin/Lua 实现放在资源管理里 |
 
 字段说明：
 
@@ -270,11 +270,19 @@ UI 上只分三块：
 | `subjectPath` | 是 | 从输入上下文读取主体 ID 的路径 | `subject.id` |
 | `providerChain` | 是 | 数据提供者列表，所有取数参数都放在 step 内 | 见下方 |
 
-不再推荐在顶层配置 `sourcePath`、`cachePath`、`resourceRef`、`endpoint`、`redisRef`、`grpcTarget`、`pluginCode`、`timeoutSeconds`、`cacheTtlSeconds`、`failureAction`。这些字段属于某一个数据提供者，应放到对应 `providerChain[]` step 中。旧 draft 仍兼容，但新 UI 不再单独展示这些顶层字段。
+不再推荐在节点里配置 `endpoint`、`redisRef`、`grpcTarget`、`pluginCode`、Lua 脚本或底层操作类型。节点只表达业务查询意图；技术实现放到 `PROVIDER` 或 `RESOURCE` 资源定义里。旧 draft 仍兼容，但新 UI 不再把这些字段作为产品化配置入口。
 
 ## 数据提供者设计
 
-数据提供者是 `fact-query` 的统一查询入口。上下文、运行缓存、Store、HTTP、Redis、gRPC、Plugin、自定义协议都应该作为“数据提供者 step”配置到同一个列表里，而不是分散在“上下文和缓存”“Provider 目标”“高级兼容字段”几块里。
+数据提供者是 `fact-query` 的统一查询入口。产品层只允许选择：
+
+- `PROVIDER`：公共事实 Provider，例如 `user-profile-provider`、`kyc-provider`、`risk-provider`。
+- `RESOURCE`：受控资源 Ref，适合读取明确的 Store。
+- `WORKFLOW_CONTEXT`：从事件、上游输出或公共上下文读取。
+- `LOCAL_CACHE`：从本次 workflow 运行缓存读取。
+- `FACT_SERVICE`：旧兼容入口，新配置优先使用 `PROVIDER`。
+
+HTTP、Redis、gRPC、Plugin、Custom、Lua 不再作为 fact-query 节点来源暴露。需要这些实现时，先在资源管理里定义资源或 Provider，再由节点选择 Ref。
 
 底层字段暂时仍叫 `providerChain`，用于兼容已有 draft；产品语义统一叫“数据提供者”。
 
@@ -294,26 +302,11 @@ UI 上只分三块：
       "onMiss": "NEXT"
     },
     {
-      "source": "FACT_SERVICE",
-      "resourceRef": "default_user_profile_store",
+      "source": "PROVIDER",
+      "resourceRef": "user-profile-provider",
       "namespace": "facts",
       "keyTemplate": "${tenantId}:${subject.type}:${subject.id}",
       "onMiss": "BLOCK"
-    },
-    {
-      "source": "HTTP_PROVIDER",
-      "resourceRef": "user_profile_fact_provider",
-      "endpoint": "https://user-service/internal/facts/user-profile",
-      "method": "POST",
-      "authRef": "user-service-auth",
-      "onMiss": "BLOCK"
-    },
-    {
-      "source": "REDIS",
-      "resourceRef": "user_profile_cache",
-      "redisRef": "marketing-fact-cache",
-      "keyTemplate": "marketing:fact:${tenantId}:${subject.id}:USER_PROFILE",
-      "onMiss": "NEXT"
     }
   ]
 }
@@ -323,21 +316,14 @@ UI 上只分三块：
 
 | 字段 | 必填 | 说明 |
 | --- | --- | --- |
-| `source` | 是 | 查询来源，例如 `WORKFLOW_CONTEXT`、`LOCAL_CACHE`、`FACT_SERVICE`、`HTTP_PROVIDER`、`REDIS` |
-| `resourceRef` | 视来源而定 | 需要访问资源管理时选择资源别名，例如 `default_user_profile_store` |
+| `source` | 是 | 查询来源：`PROVIDER`、`RESOURCE`、`WORKFLOW_CONTEXT`、`LOCAL_CACHE`；`FACT_SERVICE` 仅保留兼容 |
+| `resourceRef` | 视来源而定 | 选择资源别名；`PROVIDER` 只能选择 `type=PROVIDER` 的公共 Provider |
 | `sourcePath` | 否 | `WORKFLOW_CONTEXT` 使用，从当前事件、上游输出或公共上下文读取 |
 | `cachePath` | 否 | `LOCAL_CACHE` 使用，从 workflow 运行缓存读取 |
-| `keyTemplate` | 否 | 资源、Redis、缓存查询 key 模板 |
+| `keyTemplate` | 否 | 资源或缓存查询 key 模板；普通 Provider 通常不需要用户手填 |
 | `namespace` | 否 | 资源审计和 key policy 命名空间 |
-| `operation` | 否 | 资源操作，通常是 `READ` 或 `CALL` |
 | `valuePath` | 否 | 从资源响应里提取 fact value 的 JSON Path |
-| `endpoint` | 否 | `HTTP_PROVIDER` 的 HTTP 地址；推荐放资源管理，节点里只作为同一 step 的覆盖参数 |
-| `method` | 否 | `HTTP_PROVIDER` 的请求方法 |
-| `authRef` | 否 | `HTTP_PROVIDER` 的鉴权引用 |
-| `redisRef` | 否 | `REDIS` 提供者的 Redis 连接或资源引用 |
-| `grpcTarget` | 否 | `GRPC` 提供者的服务地址或服务发现名 |
-| `pluginCode` | 否 | `PLUGIN` 提供者的插件编码 |
-| `providerCode` | 否 | 已登记的业务 Fact Provider 编码 |
+| `providerCode` | 否 | 旧 `FACT_SERVICE` 兼容字段；新配置优先选择 `PROVIDER resourceRef` |
 | `timeoutSeconds` | 否 | 当前 provider step 的查询超时 |
 | `cacheTtlSeconds` | 否 | 当前 provider step 的缓存时间；`0` 表示不缓存 |
 | `onMiss` | 否 | 当前 step 没查到时动作：`NEXT` 继续下一步，`BLOCK` 立即失败 |
@@ -348,25 +334,20 @@ UI 上只分三块：
 
 | Source | 当前目标要求 | 说明 |
 | --- | --- | --- |
+| `PROVIDER` | 必须选择 `resourceRef` | `resourceRef` 应指向 `type=PROVIDER` 的公共事实 Provider |
+| `RESOURCE` | 必须选择 `resourceRef` | `resourceRef` 应指向资源管理中的受控 Store |
 | `WORKFLOW_CONTEXT` | 不需要资源 | 从当前事件、上游输出、变量、facts 读取 |
 | `LOCAL_CACHE` | 不需要资源 | 从本次 workflow 变量缓存读取 |
-| `FACT_SERVICE` | `resourceRef` / `providerCode` / `endpoint` 任一 | 推荐 `resourceRef=default_user_profile_store` |
-| `HTTP_PROVIDER` | `resourceRef` / `providerCode` / `endpoint` 任一 | 推荐把 endpoint/auth 放到资源管理，节点只引用资源 |
-| `REDIS` | 必须 `resourceRef` | `resourceRef` 应指向资源管理中的 Redis 或 Redis 语义 Store |
-| `GRPC` | 必须 `resourceRef` | 裸 `grpcTarget` 只做展示，真实执行需要受控资源 |
-| `PLUGIN` | 必须 `resourceRef` | 插件执行也要通过资源授权和审计边界 |
-| `CUSTOM` | 必须 `resourceRef` | 自定义协议必须先登记为资源 |
-| `LUA_QUERY` | 必须 `resourceRef` | Lua 查询可调用资源 API，但节点目标仍需可审计 |
+| `FACT_SERVICE` | `resourceRef` / `providerCode` / `endpoint` 任一 | 旧兼容入口；新配置不建议使用 |
 
-因此下面配置会被发布校验拦截：
+因此下面这种新配置不再推荐：
 
 ```json
 {
   "providerChain": [
     {
-      "source": "REDIS",
-      "redisRef": "marketing-fact-cache",
-      "keyTemplate": "marketing:fact:${tenantId}:${subject.id}:USER_PROFILE"
+      "source": "HTTP",
+      "endpoint": "https://user-service/internal/facts/user-profile"
     }
   ]
 }
@@ -378,17 +359,8 @@ UI 上只分三块：
 {
   "providerChain": [
     {
-      "source": "REDIS",
-      "resourceRef": "user_profile_cache",
-      "namespace": "facts",
-      "keyTemplate": "marketing:fact:${tenantId}:${subject.id}:USER_PROFILE",
-      "onMiss": "NEXT"
-    },
-    {
-      "source": "FACT_SERVICE",
-      "resourceRef": "default_user_profile_store",
-      "namespace": "facts",
-      "keyTemplate": "${tenantId}:${subject.type}:${subject.id}",
+      "source": "PROVIDER",
+      "resourceRef": "user-profile-provider",
       "onMiss": "BLOCK"
     }
   ]
@@ -432,21 +404,19 @@ UI 上只分三块：
 UI 推荐：
 
 - `数据提供者` 显示为步骤列表，不显示原始 JSON。
-- 每一步用下拉选择 `source`。
-- 当 `source` 需要资源时显示 `resourceRef` 下拉，只能选择当前 workspace/folder/activity 有权限的资源。
-- 当 `source=HTTP_PROVIDER` 时，在同一个 step 内显示 endpoint、method、authRef。
-- 当 `source=REDIS` 时，在同一个 step 内显示 redisRef、keyTemplate。
-- 当 `source=GRPC` 时，在同一个 step 内显示 grpcTarget。
-- 当 `source=PLUGIN` 时，在同一个 step 内显示 pluginCode。
+- 每一步用下拉选择 `source`；新建配置只暴露 `PROVIDER`、`RESOURCE`、`WORKFLOW_CONTEXT`、`LOCAL_CACHE` 和兼容用 `FACT_SERVICE`。
+- 当 `source=PROVIDER` 时显示 Provider 资源下拉，只能选择 `type=PROVIDER` 且当前 workspace/folder/activity 有权限的资源。
+- 当 `source=RESOURCE` 时显示普通资源下拉，底层 HTTP/Redis/gRPC/Plugin/Lua 实现不在节点里展开。
+- `HTTP`、`REDIS`、`GRPC`、`PLUGIN`、`CUSTOM`、`LUA_QUERY` 只作为旧 draft 兼容值显示，不作为新配置入口。
 - 支持上移、下移、删除；复制可作为后续快捷操作补充。
 - 缺少 `resourceRef`、key 模板不合法、资源无权限时在当前 step 标红。
 - 调试运行时 `trace` 需要显示每个 step 是否命中、miss、失败或被跳过。
 
 兼容要求：
 
-- 旧配置 `["WORKFLOW_CONTEXT", "LOCAL_CACHE", "HTTP_PROVIDER"]` 仍然有效。
+- 旧配置 `["WORKFLOW_CONTEXT", "LOCAL_CACHE", "HTTP"]` 仍然由后端兼容解析。
 - 新配置使用对象数组，executor 会在运行前解析为 resolved provider steps。
-- 新 UI 只推荐使用 `providerChain`。旧 draft 中的顶层 Provider 字段仍由后端兼容读取，但不再作为产品化配置入口。
+- 新 UI 只推荐使用 `providerChain` 中的 Provider Ref / Resource Ref。旧 draft 中的顶层 Provider 字段仍由后端兼容读取，但不再作为产品化配置入口。
 
 ### subjectPath
 
@@ -589,8 +559,8 @@ subject.id
 {
   "providerChain": [
     {
-      "source": "FACT_SERVICE",
-      "resourceRef": "default_user_profile_store",
+      "source": "PROVIDER",
+      "resourceRef": "user-profile-provider",
       "onMiss": "BLOCK"
     }
   ]
@@ -601,16 +571,14 @@ subject.id
 
 ## 常见资源类型
 
-`fact-query` 可以引用不同类型的 Store 或 Provider。
+`fact-query` 在节点层只引用公共 Provider 或受控资源。不同技术实现由资源管理承接。
 
 | Store / Provider | 典型 resource type | 说明 |
 | --- | --- | --- |
-| 数据库 Store | `DATABASE_TABLE` | 读取营销域公共表，例如 `marketing_user_profile` |
-| Redis Store | `REDIS_KV` / `REDIS_HASH` | 读取预计算事实缓存 |
-| HTTP Provider | `HTTP_PROVIDER` | 调业务服务实时查询事实 |
-| gRPC Provider | `GRPC_PROVIDER` | 调内部服务查询事实 |
-| Plugin Provider | `PLUGIN_PROVIDER` | 通过插件扩展事实查询 |
-| Lua Query | `LUA_QUERY` | 用受控 Lua 生成事实；适合加工，不适合绕过资源权限 |
+| 公共事实 Provider | `PROVIDER` | 节点首选入口，例如 `user-profile-provider`、`kyc-provider`、`risk-provider` |
+| 数据库 Store | `TABLE` | 读取营销域公共表，例如 `marketing_user_profile` |
+| Redis Store | `REDIS mode=KV/HASH` | 读取预计算事实缓存 |
+| HTTP / gRPC / Plugin / Lua 实现 | `HTTP` / `GRPC_PROVIDER` / `PLUGIN_PROVIDER` / `CUSTOM_PROVIDER` | 不直接出现在 fact-query 节点下拉中，应封装为 `PROVIDER` 或 `RESOURCE` 后再引用 |
 
 推荐优先级：
 
@@ -619,10 +587,10 @@ subject.id
   -> 不需要 fact-query
 
 营销域已有公共 Store
-  -> 使用 DATABASE_TABLE / REDIS_* Store
+  -> 建立 PROVIDER，targetResourceRef 指向 TABLE / REDIS Store
 
 必须实时查业务系统
-  -> 使用 HTTP/gRPC Provider
+  -> 建立 PROVIDER，底层 target 指向 HTTP/gRPC/Plugin 资源
 
 复杂组合加工
   -> fact-query 后接 combine/code/lua-query
@@ -666,8 +634,8 @@ subject.id
   "subjectPath": "subject.id",
   "providerChain": [
     {
-      "source": "FACT_SERVICE",
-      "resourceRef": "default_user_profile_store",
+      "source": "PROVIDER",
+      "resourceRef": "user-profile-provider",
       "namespace": "facts",
       "keyTemplate": "${tenantId}:${subject.type}:${subject.id}",
       "timeoutSeconds": 3,
@@ -746,22 +714,22 @@ subject.id
 
 因为“用户不存在”是业务事实，不是查询失败。查询成功返回 `exists=false`，后续资格节点负责阻断。
 
-### 数据提供者里的 resourceRef 应该填数据库还是 Store？
+### 数据提供者里的 resourceRef 应该填什么？
 
-填 Store。
+新配置优先填公共 Provider，例如 `user-profile-provider`。Provider 再通过 `targetResourceRef` 指向实际 Store 或外部实现。
 
 ```json
 {
   "providerChain": [
     {
-      "source": "FACT_SERVICE",
-      "resourceRef": "default_user_profile_store"
+      "source": "PROVIDER",
+      "resourceRef": "user-profile-provider"
     }
   ]
 }
 ```
 
-数据库资源只作为底层连接：
+数据库资源只作为底层连接，不直接放到 fact-query 节点里：
 
 ```text
 default_marketing_database -> default_user_profile_store

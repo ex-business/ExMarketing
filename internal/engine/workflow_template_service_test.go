@@ -64,7 +64,7 @@ func TestProductionCheckinTemplateComposesFactsBeforeQualify(t *testing.T) {
 	for _, node := range definition.Nodes {
 		nodeByID[node.ID] = node
 	}
-	for _, nodeID := range []string{"fact-user-profile", "fact-kyc-profile", "fact-risk-profile", "fact-checkin-streak", "facts-compose", "facts-normalize", "user-level-check", "qualify"} {
+	for _, nodeID := range []string{"fact-user-profile", "fact-kyc-profile", "fact-risk-profile", "fact-checkin-streak", "facts-compose", "facts-normalize", "user-level-check", "activity-state", "quota-check", "qualify", "candidate-reward", "budget-reserve"} {
 		if nodeByID[nodeID].ID == "" {
 			t.Fatalf("expected node %s in checkin template", nodeID)
 		}
@@ -78,6 +78,12 @@ func TestProductionCheckinTemplateComposesFactsBeforeQualify(t *testing.T) {
 	assertTemplateInputMapping(t, nodeByID["facts-normalize"], "facts", "facts-compose", "facts")
 	assertTemplateInputMapping(t, nodeByID["user-level-check"], "standard_context", "facts-normalize", "standard_context")
 	assertTemplateInputMapping(t, nodeByID["qualify"], "standard_context", "facts-normalize", "standard_context")
+	assertTemplateProviderChainValue(t, nodeByID["activity-state"], 0, "source", "INTERNAL")
+	assertTemplateProviderChainValue(t, nodeByID["activity-state"], 0, "namespace", "checkin")
+	assertTemplateProviderChainValue(t, nodeByID["quota-check"], 0, "source", "RESOURCE")
+	assertTemplateProviderChainValue(t, nodeByID["quota-check"], 0, "resourceRef", defaultCheckinQuotaCounter)
+	assertTemplateProviderChainValue(t, nodeByID["candidate-reward"], 0, "source", "RESOURCE")
+	assertTemplateProviderChainValue(t, nodeByID["candidate-reward"], 0, "resourceRef", defaultActivityRewardConfig)
 	assertTemplateEdge(t, definition.Edges, "normalize", "fact-user-profile")
 	assertTemplateEdge(t, definition.Edges, "normalize", "fact-kyc-profile")
 	assertTemplateEdge(t, definition.Edges, "normalize", "fact-risk-profile")
@@ -88,6 +94,72 @@ func TestProductionCheckinTemplateComposesFactsBeforeQualify(t *testing.T) {
 	assertTemplateEdge(t, definition.Edges, "fact-checkin-streak", "facts-compose")
 	assertTemplateEdge(t, definition.Edges, "facts-compose", "facts-normalize")
 	assertTemplateEdge(t, definition.Edges, "facts-normalize", "user-level-check")
+	assertTemplateEdge(t, definition.Edges, "activity-state", "quota-check")
+	assertTemplateEdge(t, definition.Edges, "quota-check", "qualify")
+	assertTemplateEdge(t, definition.Edges, "candidate-reward", "budget-reserve")
+	assertTemplateEdge(t, definition.Edges, "budget-reserve", "participation")
+	assertTemplateInputMapping(t, nodeByID["budget-reserve"], "candidate_rewards", "candidate-reward", "candidate_rewards")
+	assertTemplateInputMapping(t, nodeByID["grant-order"], "reward_items", "candidate-reward", "reward_items")
+	for _, legacyID := range []string{"limit", "reward", "quota"} {
+		if nodeByID[legacyID].ID != "" {
+			t.Fatalf("production checkin template should not use legacy node %s", legacyID)
+		}
+	}
+}
+
+func TestBuiltInResourcesIncludeDefaultCheckinQuotaCounter(t *testing.T) {
+	resource, ok := builtInResource("site_001", defaultCheckinQuotaCounter)
+	if !ok {
+		t.Fatalf("expected built-in checkin quota counter")
+	}
+	if resource.Type != marketing.ResourceRedis {
+		t.Fatalf("expected REDIS resource, got %s", resource.Type)
+	}
+	config := resource.ConfigMap()
+	if config["mode"] != "COUNTER" {
+		t.Fatalf("expected REDIS counter mode, got %+v", config)
+	}
+	if !resource.Supports(marketing.ResourceRead) || !resource.Supports(marketing.ResourceCheckAndIncrement) {
+		t.Fatalf("expected checkin quota counter read and check-and-increment capabilities, got %+v", resource.Capabilities)
+	}
+}
+
+func TestBuiltInResourcesIncludeDefaultActivityRewardConfig(t *testing.T) {
+	resource, ok := builtInResource("site_001", defaultActivityRewardConfig)
+	if !ok {
+		t.Fatalf("expected built-in activity reward config")
+	}
+	if resource.Type != marketing.ResourceWorkflowContext {
+		t.Fatalf("expected WORKFLOW_CONTEXT resource, got %s", resource.Type)
+	}
+	if !resource.Supports(marketing.ResourceRead) {
+		t.Fatalf("expected activity reward config read capability, got %+v", resource.Capabilities)
+	}
+}
+
+func TestBuiltInResourcesIncludeDefaultFactProviders(t *testing.T) {
+	cases := map[string]string{
+		defaultUserProfileProvider: "USER_PROFILE",
+		defaultKYCProvider:         "KYC_PROFILE",
+		defaultRiskProvider:        "RISK_PROFILE",
+	}
+	for code, factCode := range cases {
+		resource, ok := builtInResource("site_001", code)
+		if !ok {
+			t.Fatalf("expected built-in provider %s", code)
+		}
+		if resource.Type != marketing.ResourceProvider {
+			t.Fatalf("expected PROVIDER resource for %s, got %s", code, resource.Type)
+		}
+		config := resource.ConfigMap()
+		if config["contract"] != "FACTS_V1" || config["targetResourceRef"] == "" {
+			t.Fatalf("expected provider contract and target for %s, got %+v", code, config)
+		}
+		factKeys, _ := config["factKeys"].([]any)
+		if len(factKeys) != 1 || factKeys[0] != factCode {
+			t.Fatalf("expected provider %s fact key %s, got %+v", code, factCode, factKeys)
+		}
+	}
 }
 
 func assertTemplateRoute(t *testing.T, edges []marketing.WorkflowEdge, source string, routeKey string) {
@@ -129,6 +201,36 @@ func assertTemplateInputMapping(t *testing.T, node marketing.WorkflowNode, input
 	}
 	if rawRef["sourceNodeId"] != sourceNodeID || rawRef["outputKey"] != outputKey {
 		t.Fatalf("expected %s.%s from %s.%s, got %+v", node.ID, inputKey, sourceNodeID, outputKey, rawRef)
+	}
+}
+
+func assertTemplateConfigValue(t *testing.T, node marketing.WorkflowNode, key string, expected any) {
+	t.Helper()
+	config := map[string]any{}
+	if err := json.Unmarshal(node.Config, &config); err != nil {
+		t.Fatalf("unmarshal node config for %s: %v", node.ID, err)
+	}
+	if config[key] != expected {
+		t.Fatalf("expected %s config %s=%v, got %+v", node.ID, key, expected, config[key])
+	}
+}
+
+func assertTemplateProviderChainValue(t *testing.T, node marketing.WorkflowNode, index int, key string, expected any) {
+	t.Helper()
+	config := map[string]any{}
+	if err := json.Unmarshal(node.Config, &config); err != nil {
+		t.Fatalf("unmarshal node config for %s: %v", node.ID, err)
+	}
+	chain, ok := config["providerChain"].([]any)
+	if !ok || len(chain) <= index {
+		t.Fatalf("expected providerChain[%d] on %s, got %+v", index, node.ID, config["providerChain"])
+	}
+	step, ok := chain[index].(map[string]any)
+	if !ok {
+		t.Fatalf("expected providerChain[%d] object on %s, got %+v", index, node.ID, chain[index])
+	}
+	if step[key] != expected {
+		t.Fatalf("expected %s providerChain[%d].%s=%v, got %+v", node.ID, index, key, expected, step[key])
 	}
 }
 

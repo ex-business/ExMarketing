@@ -93,18 +93,26 @@ Workflow Node
 | --- | --- | --- |
 | `MEMORY` | 当前 execution 内存资源 | 临时变量、调试中间结果 |
 | `WORKFLOW_CONTEXT` | 工作流上下文资源 | 流程公共参数、节点间共享数据 |
-| `DATABASE_KV` | 数据库 KV/JSON 存储 | `marketing_storage_state`、活动状态 |
-| `DATABASE_TABLE` | 数据库公共表 | 签到用户表、奖励记录表、白名单表 |
-| `REDIS_KV` | Redis KV | 用户状态缓存、活动配置缓存 |
-| `REDIS_HASH` | Redis Hash | 用户资料、活动进度 |
-| `REDIS_COUNTER` | Redis 计数器 | 频控、次数限制 |
-| `REDIS_LOCK` | Redis 锁 | 用户活动互斥、并发保护 |
-| `HTTP_PROVIDER` | HTTP 外部服务 | 用户中心、钱包、风控、通知服务 |
-| `GRPC_PROVIDER` | gRPC 外部服务 | 高性能内部服务 |
-| `MQ_TOPIC` | 消息资源 | Kafka/RabbitMQ/Pulsar topic |
-| `OBJECT_STORAGE` | 文件/对象存储 | 导出文件、执行附件、报表 |
-| `PLUGIN_PROVIDER` | 插件资源 | 活动插件、业务扩展 |
-| `CUSTOM_PROVIDER` | 自定义协议资源 | Lua/Go 扩展协议、专有系统 |
+| `DATABASE` | 数据库连接或数据库级资源 | 营销库连接、公共状态承载 |
+| `TABLE` | 表/行数据资源 | 用户资料表、KYC 表、风控表、白名单表 |
+| `ARRAY` | 列表/数组资源 | 奖励列表、候选池、名单集合 |
+| `REDIS` | Redis 资源 Ref | 统一 Redis 类型；通过 `config.mode=KV/HASH/COUNTER/LOCK` 区分用途 |
+| `HTTP` | HTTP 服务资源 | 用户中心、钱包、风控、通知服务 |
+| `MQ` | 消息队列资源 | Kafka/RabbitMQ/Pulsar topic 或 stream |
+| `LUA` | Lua 脚本资源 | 受控 Lua 查询、加工或扩展 |
+| `PROVIDER` | 公共事实 Provider 抽象 | 用户资料、KYC、风控等统一 FACTS_V1 Provider |
+
+新资源创建和节点选择只暴露这些大类型。历史类型 `DATABASE_TABLE`、`HTTP_PROVIDER`、`MQ_TOPIC`、`REDIS_KV`、`REDIS_HASH`、`REDIS_COUNTER`、`REDIS_LOCK` 只作为旧 draft / 旧资源的兼容别名继续解析，不再作为推荐建模入口。
+
+Redis 只有一个大类 `REDIS`。同一个 Redis 地址可以创建多个资源 Ref，例如：
+
+| 资源 Ref | 指向 | 差异配置 | 用途 |
+| --- | --- | --- | --- |
+| `checkin_state_redis_ref` | 同一个 Redis 集群 | `mode=KV`、`keyPrefix=checkin:state` | 签到状态读取/写入 |
+| `checkin_quota_redis_ref` | 同一个 Redis 集群 | `mode=COUNTER`、`keyPrefix=checkin:quota` | 每日签到频控 |
+| `checkin_lock_redis_ref` | 同一个 Redis 集群 | `mode=LOCK`、`keyPrefix=checkin:lock` | 并发防重锁 |
+
+也就是说，大类型决定 adapter，资源 Ref 决定具体地址、命名空间、key 规则、mode、权限和审计边界。
 
 ## 资源能力
 
@@ -160,7 +168,7 @@ RESOURCE_CAPABILITY_DENIED
 ```json
 {
   "code": "checkin_user_state",
-  "type": "DATABASE_TABLE",
+  "type": "TABLE",
   "scope": "FOLDER",
   "tenantId": "site_001",
   "workspaceId": "hello",
@@ -430,7 +438,7 @@ CREATE TABLE marketing_resource_audit (
 {
   "code": "checkin_user_state",
   "name": "签到用户状态表",
-  "type": "DATABASE_TABLE",
+  "type": "TABLE",
   "driver": "POSTGRES",
   "scope": "FOLDER",
   "workspaceId": "hello",
@@ -460,7 +468,7 @@ CREATE TABLE marketing_resource_audit (
 {
   "code": "user_profile_provider",
   "name": "用户资料查询服务",
-  "type": "HTTP_PROVIDER",
+  "type": "HTTP",
   "driver": "REST",
   "scope": "WORKSPACE",
   "workspaceId": "hello",
@@ -481,7 +489,7 @@ CREATE TABLE marketing_resource_audit (
 {
   "code": "daily_checkin_counter",
   "name": "每日签到次数计数器",
-  "type": "REDIS_COUNTER",
+  "type": "REDIS",
   "driver": "REDIS",
   "scope": "FOLDER",
   "workspaceId": "hello",
@@ -491,6 +499,7 @@ CREATE TABLE marketing_resource_audit (
   "config": {
     "redisRef": "marketing-redis",
     "keyPrefix": "marketing:checkin:counter",
+    "mode": "COUNTER",
     "ttlPolicy": "WINDOW_END"
   }
 }
@@ -541,7 +550,7 @@ CREATE TABLE marketing_resource_audit (
 
 ### fact-query
 
-事实查询节点只表达查询意图。节点应引用 Store 或 Provider，不直接引用底层数据库连接、Redis 地址或 HTTP 密钥。
+事实查询节点只表达查询意图。默认应引用公共 `PROVIDER`，由 Provider 决定底层使用数据库表、HTTP、Redis、gRPC、插件还是自定义实现；节点不直接引用底层数据库连接、Redis 地址或 HTTP 密钥。
 
 推荐结构：
 
@@ -550,32 +559,50 @@ default_marketing_database
   -> default_user_profile_store
        -> marketing_user_profile
        -> USER_PROFILE
+
+user-profile-provider
+  -> contract FACTS_V1
+  -> targetResourceRef default_user_profile_store
 ```
 
 ```json
 {
   "type": "fact-query",
-  "resourceRef": "default_user_profile_store",
-  "operation": "READ",
+  "source": "PROVIDER",
+  "resourceRef": "user-profile-provider",
   "factKeys": ["USER_PROFILE"],
   "namespace": "facts",
-  "subjectPath": "subject.id",
-  "keyTemplate": "${tenantId}:${subject.type}:${subject.id}",
   "failureAction": "BLOCK"
 }
 ```
+
+当前内置公共 Provider：
+
+| Provider 资源 | 输出事实 | 默认实现 |
+| --- | --- | --- |
+| `user-profile-provider` | `USER_PROFILE` | `default_user_profile_store` |
+| `kyc-provider` | `KYC_PROFILE` | `default_kyc_profile_store` |
+| `risk-provider` | `RISK_PROFILE` | `default_risk_profile_store` |
 
 详细使用说明见 [Fact Query 事实查询节点](fact-query-node.zh-CN.md)。
 
 ### quota-check
 
-频控节点引用计数器资源。`resourceRef` 指向资源管理里的 `REDIS_COUNTER`，节点负责生成逻辑计数 key，资源适配器负责把 `namespace + logicalKey` 落到具体存储。
+频控节点通过 `providerChain` 的 RESOURCE 操作块引用计数器资源。`resourceRef` 指向资源管理里的 `REDIS` 资源，资源配置用 `mode=COUNTER` 表达计数用途；节点负责生成逻辑计数 key，资源适配器负责把 `namespace + logicalKey` 落到具体存储。
 
 ```json
 {
   "type": "quota-check",
-  "resourceRef": "daily_checkin_counter",
-  "namespace": "checkin",
+  "providerChain": [
+    {
+      "source": "RESOURCE",
+	      "resourceRef": "daily_checkin_counter",
+	      "keyTemplate": "${tenantId}:${activityId}:${subject.id}",
+	      "namespace": "checkin",
+	      "valuePath": "$.counter",
+	      "outputAs": "dailyCheckinQuota"
+    }
+  ],
   "scope": "USER",
   "scopeKeyTemplate": "${tenantId}:${activityId}:${subject.id}",
   "window": "DAY",
@@ -601,8 +628,16 @@ default_marketing_database
 ```json
 {
   "type": "quota-check",
-  "resourceRef": "promo_counter",
-  "namespace": "promo",
+  "providerChain": [
+    {
+      "source": "RESOURCE",
+	      "resourceRef": "promo_counter",
+	      "keyTemplate": "${subject.id}:${activityId}",
+	      "namespace": "promo",
+	      "valuePath": "$.counter",
+	      "outputAs": "promoQuota"
+    }
+  ],
   "scope": "USER",
   "scopeKeyTemplate": "${subject.id}:${activityId}",
   "window": "CUSTOM_RANGE",
@@ -756,7 +791,7 @@ type ResourceAdapter interface {
   "version": 2,
   "exists": true,
   "metadata": {
-    "resourceType": "DATABASE_TABLE",
+    "resourceType": "TABLE",
     "adapter": "POSTGRES",
     "durationMs": 12
   }
@@ -800,7 +835,7 @@ type ResourceAdapter interface {
 | --- | --- |
 | 名称 | 资源中文名 |
 | Code | `resourceRef` |
-| 类型 | DATABASE_TABLE、HTTP_PROVIDER 等 |
+| 类型 | TABLE、HTTP 等 |
 | 作用域 | SYSTEM/TENANT/WORKSPACE/FOLDER/ACTIVITY |
 | 所属位置 | 工作区 / 文件夹 / 活动 |
 | 状态 | ACTIVE/DISABLED/DRAFT/DELETED |
@@ -964,10 +999,10 @@ Value 映射：valuePath 或 valueMapping
 | 类型 | 测试项 |
 | --- | --- |
 | DATABASE_KV | 表存在、读写权限、JSONB 支持 |
-| DATABASE_TABLE | 表存在、schema 匹配、主键可用 |
+| TABLE | 表存在、schema 匹配、主键可用 |
 | REDIS | 连接、认证、读写测试、TTL 测试 |
-| HTTP_PROVIDER | endpoint 可达、鉴权、响应 schema |
-| MQ_TOPIC | topic 存在、生产权限 |
+| HTTP | endpoint 可达、鉴权、响应 schema |
+| MQ | topic 存在、生产权限 |
 | OBJECT_STORAGE | bucket 存在、上传/下载权限 |
 
 测试结果要写审计，但不能写业务数据。
@@ -1045,7 +1080,7 @@ GET /admin/v1/resources/available?workspaceId=...&folderId=...&activityId=...&no
     {
       "code": "wallet_reward_provider",
       "name": "钱包发奖服务",
-      "type": "HTTP_PROVIDER",
+      "type": "HTTP",
       "available": false,
       "unavailableReason": "当前节点类型 state-store 不允许 CALL"
     }
@@ -1120,7 +1155,7 @@ audit.Write(request, response)
 | 现有能力 | 资源化后 |
 | --- | --- |
 | `state-store.storageType` | 改为 `resourceRef` 指向资源类型 |
-| `state-store.providerEndpoint` | 移入 `HTTP_PROVIDER.config.endpoint` |
+| `state-store.providerEndpoint` | 移入 `HTTP.config.endpoint` |
 | `state-store.tableSchema` | 移入 `marketing_resource_schema` |
 | `fact-query` 的 HTTP/Redis/gRPC 配置 | 改为 `resourceRef` |
 | `outbox` / `callback` endpoint/topic | 改为资源引用 |
@@ -1223,12 +1258,12 @@ VIEWER 不能保存写资源节点
 
 当前实现：
 
-1. `state-store + resourceRef` 已支持 `DATABASE_TABLE`：
+1. `state-store + resourceRef` 已支持 `TABLE`：
    - 资源配置承载 `physicalTable/table/tableNamespace` 和 `primaryKey`
    - 执行器按 `primaryKey` 生成行 key，并自动补齐 `tenantId/activityId/subjectId/eventId`
    - 支持 `READ/WRITE/UPSERT/APPEND/DELETE`，单行写入支持 CAS 版本检查
    - 底层先使用受控的 `marketing_storage_state` 作为虚拟公共表承载，不直接开放任意 SQL 表写入
-2. `state-store + resourceRef` 已支持 `HTTP_PROVIDER`：
+2. `state-store + resourceRef` 已支持 `HTTP`：
    - `endpoint/method/headers/timeoutSeconds` 从资源配置读取
    - 节点只需要引用 `resourceRef`、操作、namespace、keyTemplate、valueType
    - 资源配置优先于 schema 默认值，节点显式配置仍可覆盖
@@ -1236,25 +1271,25 @@ VIEWER 不能保存写资源节点
 3. `fact-query + resourceRef` 已支持资源查询：
    - 推荐节点引用 Store，例如 `default_user_profile_store`
    - Store 可由底层资源创建，例如 `default_marketing_database -> default_user_profile_store`
-   - 可读取 `DATABASE_KV/DATABASE_TABLE/REDIS_*` 语义资源
-   - 可通过 `HTTP_PROVIDER` 执行 `CALL` 查询，并从 `value/stored_value/data/facts` 或 `valuePath` 抽取事实
+   - 可读取 `DATABASE_KV/TABLE/REDIS mode=KV/HASH/COUNTER/LOCK` 语义资源
+   - 可通过 `HTTP` 执行 `CALL` 查询，并从 `value/stored_value/data/facts` 或 `valuePath` 抽取事实
    - 查询 key 支持 `${tenantId}`、`${activityId}`、`${eventId}`、`${subject.id}`、`${factCode}`
 4. `outbox/callback + resourceRef` 已支持资源绑定：
-   - `outbox` 可绑定 `HTTP_PROVIDER/MQ_TOPIC`，生成受控 dispatch plan、校验权限并记录资源审计
-   - `callback` 可绑定 `HTTP_PROVIDER`，明确回调入口或查询 provider 边界，最终状态仍由 `RewardCallback/Reconciliation` 权威
+   - `outbox` 可绑定 `HTTP/MQ`，生成受控 dispatch plan、校验权限并记录资源审计
+   - `callback` 可绑定 `HTTP`，明确回调入口或查询 provider 边界，最终状态仍由 `RewardCallback/Reconciliation` 权威
 5. 资源测试连接已增加 adapter 配置校验：
-   - `DATABASE_TABLE` 必须配置表名和 `primaryKey`
-   - `HTTP_PROVIDER` 必须配置 endpoint，method 只允许 `GET/POST/PUT`
+   - `TABLE` 必须配置表名和 `primaryKey`
+   - `HTTP` 必须配置 endpoint，method 只允许 `GET/POST/PUT`
 6. 默认能力已补齐：
-   - `DATABASE_TABLE` 默认支持 `READ/WRITE/UPSERT/APPEND/DELETE/CAS`
-   - `HTTP_PROVIDER` 默认支持 `READ/WRITE/UPSERT/DELETE/CALL/TEST_CONNECTION`
+   - `TABLE` 默认支持 `READ/WRITE/UPSERT/APPEND/DELETE/CAS`
+   - `HTTP` 默认支持 `READ/WRITE/UPSERT/DELETE/CALL/TEST_CONNECTION`
 
 已完成：
 
 | 项目 | 状态 | 说明 |
 | --- | --- | --- |
-| `DATABASE_TABLE` adapter | 已完成第一版 | 支持资源配置表名、主键、READ/WRITE/UPSERT/APPEND/DELETE/CAS；底层为受控虚拟公共表 |
-| `HTTP_PROVIDER` adapter | 已完成第一版 | `endpoint/method/httpMethod/headers/timeoutSeconds` 从资源读取，节点显式配置可覆盖 |
+| `TABLE` adapter | 已完成第一版 | 支持资源配置表名、主键、READ/WRITE/UPSERT/APPEND/DELETE/CAS；底层为受控虚拟公共表 |
+| `HTTP` adapter | 已完成第一版 | `endpoint/method/httpMethod/headers/timeoutSeconds` 从资源读取，节点显式配置可覆盖 |
 | Adapter 配置校验 | 已完成第一版 | `TestResource` 和运行时都会校验公共表、HTTP Provider 的必要配置 |
 | HTTP Provider 安全治理 | 已完成第一版 | URL scheme、userinfo、allowlist、blockedHosts、private network 阻断开关、redirect 防护已接入运行时 |
 | 公共表 schema / mapping | 已完成第一版 | `schema/tableSchema`、`keyMapping`、`valueMapping` 已在 TestResource 和运行时强校验 |
@@ -1289,12 +1324,12 @@ HTTP Provider endpoint 不再必须出现在节点配置里：已完成
 当前实现：
 
 1. `state-store + resourceRef` 已支持 Redis 资源：
-   - `REDIS_KV`：按 `keyPrefix + keyTemplate` 读写对象、数组、字符串、数字等状态
-   - `REDIS_HASH`：按 `keyPrefix + keyTemplate + field` 读写 hash field 语义
-   - `REDIS_COUNTER`：支持 `READ/WRITE/UPSERT/DELETE/CHECK_AND_INCREMENT`，可配置 `delta/max`
-   - `REDIS_LOCK`：支持 `READ/UPSERT/DELETE`，写入时按 `ttlSeconds` 建立受控锁，锁未过期会返回 `REDIS_LOCK_HELD`
+   - `REDIS mode=KV`：按 `keyPrefix + keyTemplate` 读写对象、数组、字符串、数字等状态
+   - `REDIS mode=HASH`：按 `keyPrefix + keyTemplate + field` 读写 hash field 语义
+   - `REDIS mode=COUNTER`：支持 `READ/WRITE/UPSERT/DELETE/CHECK_AND_INCREMENT`，可配置 `delta/max`
+   - `REDIS mode=LOCK`：支持 `READ/UPSERT/DELETE`，写入时按 `ttlSeconds` 建立受控锁，锁未过期会返回 `REDIS_LOCK_HELD`
    - 当前底层使用统一 `marketing_storage_state` 承载 Redis 语义，后续可替换为真实 Redis client adapter，节点和 Lua API 不需要改变
-2. `mq-publish + resourceRef` 已支持 `MQ_TOPIC`：
+2. `mq-publish + resourceRef` 已支持 `MQ`：
    - topic/provider/destination 从资源配置读取
    - 节点负责生成受控 `PUBLISH_ACCEPTED` 意图、资源权限校验和审计
    - OutboxWorker 已有 `MQSender`/`RuntimeMQSender` adapter 边界、provider allowlist、send timeout 和失败重试/DLQ 语义；真实 broker SDK 由部署侧 transport 注入，不在流程节点里伪造发送成功
@@ -1315,17 +1350,14 @@ HTTP Provider endpoint 不再必须出现在节点配置里：已完成
 
 | 项目 | 状态 | 说明 |
 | --- | --- | --- |
-| `REDIS_KV` | 已完成第一版 | 通过 `state-store + resourceRef` 读写 key/value 语义 |
-| `REDIS_HASH` | 已完成第一版 | 通过 `field/fieldTemplate` 表达 hash field 语义 |
-| `REDIS_COUNTER` | 已完成第一版 | 支持 `CHECK_AND_INCREMENT`、`delta`、`max` |
-| `REDIS_LOCK` | 已完成第一版 | 支持 ttl 锁占用、未过期锁阻断和释放 |
-| `MQ_TOPIC` | 已完成第一版 | `mq-publish + resourceRef` 生成受控 publish intent，并记录审计 |
+| `REDIS` | 已完成第一版 | 单一 Redis 资源类型，通过 `mode=KV/HASH/COUNTER/LOCK` 表达 key/value、hash、计数器和锁语义 |
+| `MQ` | 已完成第一版 | `mq-publish + resourceRef` 生成受控 publish intent，并记录审计 |
 | Lua Resource API | 已完成第一版 | 支持 `resource_read/write/upsert/call/publish` |
 | Lua 资源调用限流 | 已完成第一版 | 支持每个脚本最大资源调用次数和单次响应大小限制 |
 | 高风险资源操作审批 | 已完成第一版 | `requireApproval=true` 时，`DELETE/CALL/PUBLISH` 要求 `approved` 或 `approvalId` |
 | 正式活动审批快照校验 | 已完成第一版 | `requireFormalApproval=true` 时必须通过当前活动版本审批 |
-| `quota-check + REDIS_COUNTER` | 已完成第一版 | `quota-check` 可直接引用 `REDIS_COUNTER resourceRef` 做 `READ/CHECK_AND_INCREMENT` |
-| `lock + REDIS_LOCK` | 已完成第一版 | 专用 `lock` 节点支持 acquire/read/release 和 ttl |
+| `quota-check + REDIS mode=COUNTER` | 已完成第一版 | `quota-check` 通过 `providerChain` 的 RESOURCE 操作块引用 `REDIS`，支持 `READ/CHECK_AND_INCREMENT` |
+| `lock + REDIS mode=LOCK` | 已完成第一版 | 专用 `lock` 节点支持 acquire/read/release 和 ttl |
 | CAS 语义 | 已完成第一版 | `CAS` 必须带 `expectedVersion` 或上游 `storage_version`，否则阻断 |
 
 仍需完善：
@@ -1340,9 +1372,9 @@ HTTP Provider endpoint 不再必须出现在节点配置里：已完成
 验收：
 
 ```text
-quota-check 可使用 REDIS_COUNTER：已完成第一版，quota-check 可直接绑定 resourceRef
-lock 节点可使用 REDIS_LOCK：已完成第一版，专用 lock 节点已建立
-outbox 可使用 MQ_TOPIC/HTTP_PROVIDER：已完成第一版，核心 outbox 可绑定资源并生成 dispatch plan；MQ 真发送由 OutboxWorker/MQSender transport 承接
+quota-check 可使用 REDIS mode=COUNTER：已完成第一版，quota-check 通过 providerChain RESOURCE 操作块绑定计数器资源
+lock 节点可使用 REDIS mode=LOCK：已完成第一版，专用 lock 节点已建立
+outbox 可使用 MQ/HTTP：已完成第一版，核心 outbox 可绑定资源并生成 dispatch plan；MQ 真发送由 OutboxWorker/MQSender transport 承接
 Lua 只能访问被 binding 授权的资源：已完成第一版
 ```
 

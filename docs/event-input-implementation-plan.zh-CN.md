@@ -236,7 +236,7 @@ Manual Trigger 语义：
 
 目标：实现真正的 MQ 入站事件入口。
 
-当前状态：未实现。资源管理中的 `MQ_TOPIC` 和 `mq-publish resourceRef` 只解决出站发布意图，不包含入站 consumer。
+当前状态：未实现。资源管理中的 `MQ` 和 `mq-publish resourceRef` 只解决出站发布意图，不包含入站 consumer。
 
 核心要求：
 

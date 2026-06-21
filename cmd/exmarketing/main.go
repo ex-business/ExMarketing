@@ -108,12 +108,13 @@ func main() {
 }
 
 func buildRepository(ctx context.Context, logger *slog.Logger) (marketing.Repository, func()) {
-	databaseURL := os.Getenv("EX_MARKETING_DATABASE_URL")
-	if databaseURL == "" {
-		logger.Info("using in-memory repository")
+	repositoryMode := env("EX_MARKETING_REPOSITORY", "postgres")
+	if repositoryMode == "memory" {
+		logger.Warn("using in-memory repository; data will not be persisted")
 		return marketing.NewMemoryRepository(), func() {}
 	}
 
+	databaseURL := env("EX_MARKETING_DATABASE_URL", "postgres://exmarketing:exmarketing@localhost:54329/exmarketing?sslmode=disable")
 	repository, err := postgres.NewRepository(ctx, databaseURL)
 	if err != nil {
 		logger.Error("postgres repository init failed", "error", err)

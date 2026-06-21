@@ -73,10 +73,7 @@ type TemplateItem = {
 };
 
 type WorkspaceContentProps = {
-  workspaceName: string;
-  folderName: string;
   folderVisibility: string;
-  folderUpdatedLabel: string;
   homeView: 'workspace' | 'recent' | 'favorites' | 'archived';
   folders: WorkspaceContentFolder[];
   workflows: WorkspaceContentWorkflow[];
@@ -94,9 +91,6 @@ type WorkspaceContentProps = {
   onSearchChange: (value: string) => void;
   onStatusFilterChange: (value: 'ACTIVE' | 'DRAFT' | 'ARCHIVED' | 'ALL') => void;
   onSortChange: (value: WorkspaceSortMode) => void;
-  onCreateFolder: () => void;
-  onCreateWorkflow: () => void;
-  onImportWorkflow: () => void;
   onItemSelect: (item: { id: string; type: ItemType; name: string; visibility: string; status?: string; version?: string; owner?: string }) => void;
   onFolderOpen: (folderId: string) => void;
   onWorkflowOpen: (workflowId: string) => void;
@@ -194,10 +188,7 @@ function renderKeyword(value: string, keyword: string): ReactNode {
 }
 
 export function WorkspaceContent({
-  workspaceName,
-  folderName,
   folderVisibility,
-  folderUpdatedLabel,
   homeView,
   folders,
   workflows,
@@ -215,9 +206,6 @@ export function WorkspaceContent({
   onSearchChange,
   onStatusFilterChange,
   onSortChange,
-  onCreateFolder,
-  onCreateWorkflow,
-  onImportWorkflow,
   onItemSelect,
   onFolderOpen,
   onWorkflowOpen,
@@ -327,10 +315,6 @@ export function WorkspaceContent({
   }, [searchValue, sortMode, tab, templates]);
 
   const totalCount = tab === 'template' ? filteredTemplates.length : filteredItems.length;
-  const workflowTotal = workflows.length;
-  const folderTotal = folders.length;
-  const templateTotal = templates.length;
-  const activeWorkflowTotal = workflows.filter((workflow) => workflow.status !== 'ARCHIVED').length;
   const pageCount = Math.max(1, Math.ceil(totalCount / pageSize));
   const safePage = Math.min(page, pageCount);
   const pageItems = filteredItems.slice((safePage - 1) * pageSize, safePage * pageSize);
@@ -420,29 +404,6 @@ export function WorkspaceContent({
           {onRetryLoad ? <TaButton size="sm" onClick={onRetryLoad}>重试</TaButton> : null}
         </div>
       ) : null}
-      <header className="exm-workspace-hero">
-        <div className="exm-workspace-hero-main">
-          <span className="exm-folder-icon"><Folder size={22} fill="currentColor" /></span>
-          <div>
-            <p>{workspaceName}</p>
-            <h1>{folderName}</h1>
-            <span>{visibilityLabel(folderVisibility)} · {folderUpdatedLabel}</span>
-          </div>
-        </div>
-        <div className="exm-workspace-hero-stats">
-          <div><b>{workflowTotal}</b><span>流程</span></div>
-          <div><b>{folderTotal}</b><span>文件夹</span></div>
-          <div><b>{templateTotal}</b><span>模板</span></div>
-          <div><b>{activeWorkflowTotal}</b><span>可用</span></div>
-        </div>
-        <div className="exm-folder-actions">
-          {!capabilities.canEditWorkspace ? <span className="exm-action-note">{capabilities.role} 只读</span> : null}
-          <TaButton data-testid="workspace-new-folder" disabled={!capabilities.canManageFolders} title={!capabilities.canManageFolders ? disabledReason('新建文件夹') : '新建文件夹'} onClick={onCreateFolder}>新建文件夹</TaButton>
-          <TaButton disabled={!capabilities.canEditWorkspace} title={!capabilities.canEditWorkspace ? disabledReason('导入流程') : '导入流程'} onClick={onImportWorkflow}>导入流程</TaButton>
-          <TaButton className="primary" tone="primary" data-testid="workspace-new-workflow" disabled={!capabilities.canEditWorkspace} title={!capabilities.canEditWorkspace ? disabledReason('新建流程') : '新建流程'} onClick={onCreateWorkflow}>新建流程</TaButton>
-        </div>
-      </header>
-
       <div className="exm-content-tools ta-card">
         <TaTabs className="exm-content-tabs">
           {([

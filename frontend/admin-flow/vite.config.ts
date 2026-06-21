@@ -3,6 +3,21 @@ import { defineConfig } from 'vite';
 export default defineConfig({
   root: 'frontend/admin-flow',
   base: '/admin-flow/',
+  plugins: [{
+    name: 'admin-flow-slash-redirect',
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        if (req.url?.startsWith('/admin-flow?') || req.url === '/admin-flow') {
+          const target = req.url.replace('/admin-flow', '/admin-flow/');
+          res.statusCode = 302;
+          res.setHeader('Location', target);
+          res.end();
+          return;
+        }
+        next();
+      });
+    },
+  }],
   server: {
     proxy: {
       '/admin/v1': 'http://127.0.0.1:8080',

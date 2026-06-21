@@ -59,9 +59,10 @@ docker compose up -d postgres
 使用 PostgreSQL 运行服务：
 
 ```bash
-export EX_MARKETING_DATABASE_URL='postgres://exmarketing:exmarketing@localhost:54329/exmarketing?sslmode=disable'
 go run ./cmd/exmarketing
 ```
+
+默认 DSN 是 `postgres://exmarketing:exmarketing@localhost:54329/exmarketing?sslmode=disable`。需要连接其他数据库时再设置 `EX_MARKETING_DATABASE_URL`。
 
 开启 Outbox 投递：
 
@@ -75,7 +76,7 @@ Fact Query 必须显式配置 allowlist：
 export EX_MARKETING_FACT_ALLOWLIST='example.com,api.partner.com'
 ```
 
-未设置 `EX_MARKETING_DATABASE_URL` 时，服务使用内存仓储。内存仓储只用于本地快速开发；生产语义验证必须使用 PostgreSQL。
+服务默认使用 PostgreSQL 持久化。只有显式设置 `EX_MARKETING_REPOSITORY=memory` 时才会使用内存仓储；内存仓储只允许用于隔离测试，不允许承载业务数据。
 
 ## 包边界
 

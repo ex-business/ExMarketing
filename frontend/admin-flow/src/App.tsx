@@ -3523,10 +3523,7 @@ function StudioActivityStart({
 
           content={(
             <WorkspaceContent
-              workspaceName={selectedWorkspace?.name ?? 'hello'}
-              folderName={selectedFolder?.name ?? '风控活动'}
               folderVisibility={selectedFolder?.visibility ?? selectedWorkspace?.visibility ?? 'Private'}
-              folderUpdatedLabel={workflowStatus.includes('失败') || workflowStatus.includes('不可用') ? workflowStatus : '2 小时前更新'}
               homeView={workspaceHomeNav === 'shared' ? 'workspace' : workspaceHomeNav}
               folders={selectedChildFolders}
               workflows={selectedWorkflows}
@@ -3549,12 +3546,6 @@ function StudioActivityStart({
               onSearchChange={setSearch}
               onStatusFilterChange={setStatusFilter}
               onSortChange={setSortMode}
-              onCreateFolder={() => {
-                setFolderError('');
-                setShowFolderDialog(true);
-              }}
-              onCreateWorkflow={() => openCreateDialog(search || '新 workflow', { workspaceId: selectedWorkspace?.id, folderId: selectedFolder?.id })}
-              onImportWorkflow={importWorkflowFromHome}
               onItemSelect={(item) => setSelectedDetail(item)}
               onFolderOpen={setSelectedFolderId}
               onWorkflowOpen={onSelectActivity}
@@ -3592,6 +3583,8 @@ function StudioActivityStart({
               audits={selectedAuditLogs}
               activityGrants={detailActivityGrants}
               shareUrl={detailShareUrl}
+              templateCount={templates.length}
+              activeWorkflowCount={selectedWorkflows.filter((workflow) => workflow.status !== 'ARCHIVED').length}
               dataSources={detailDataSources}
               isLoading={!workspaceDataReady}
               errorMessage={workspaceStatusError}
@@ -3639,6 +3632,12 @@ function StudioActivityStart({
                 setHomeUtilityDialog('share');
               }}
               onViewAllAudit={() => setHomeUtilityDialog('audit')}
+              onCreateFolder={() => {
+                setFolderError('');
+                setShowFolderDialog(true);
+              }}
+              onCreateWorkflow={() => openCreateDialog(search || '新 workflow', { workspaceId: selectedWorkspace?.id, folderId: selectedFolder?.id })}
+              onImportWorkflow={importWorkflowFromHome}
               onRename={() => openDetailAction('rename')}
               onMove={() => openDetailAction('move')}
               onArchive={() => openDetailAction('archive')}
@@ -6688,8 +6687,6 @@ export function App() {
             setShowActivitySettings(true);
           }}
           onModeChange={setInteractionMode}
-          onDefault={resetDefault}
-          onSimple={loadSimpleTemplate}
           onTemplates={() => {
             setShowTemplatePanel(true);
             void refreshWorkflowTemplates();

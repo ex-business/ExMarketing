@@ -77,6 +77,8 @@ type WorkspaceDetailPanelProps = {
   audits: WorkspaceDetailAudit[];
   activityGrants: WorkspaceActivityGrant[];
   shareUrl: string;
+  templateCount: number;
+  activeWorkflowCount: number;
   dataSources?: WorkspaceDetailDataSource[];
   capabilities: WorkspaceDetailCapabilities;
   errorMessage?: string;
@@ -87,6 +89,9 @@ type WorkspaceDetailPanelProps = {
   onManageMembers: () => void;
   onManageShare: () => void;
   onViewAllAudit: () => void;
+  onCreateFolder: () => void;
+  onCreateWorkflow: () => void;
+  onImportWorkflow: () => void;
   onRename: () => void;
   onMove: () => void;
   onArchive: () => void;
@@ -135,6 +140,8 @@ export function WorkspaceDetailPanel({
   audits,
   activityGrants,
   shareUrl,
+  templateCount,
+  activeWorkflowCount,
   dataSources = [],
   capabilities,
   errorMessage = '',
@@ -145,6 +152,9 @@ export function WorkspaceDetailPanel({
   onManageMembers,
   onManageShare,
   onViewAllAudit,
+  onCreateFolder,
+  onCreateWorkflow,
+  onImportWorkflow,
   onRename,
   onMove,
   onArchive,
@@ -162,6 +172,7 @@ export function WorkspaceDetailPanel({
   const TargetIcon = target.type === 'Workflow' ? Workflow : Folder;
   const canEditTarget = target.type === 'Folder' ? capabilities.canManageFolders : capabilities.canEditWorkspace;
   const disabledReason = `${capabilities.reason}，不能修改${targetTypeLabel(target.type)}。`;
+  const disabledActionReason = (action: string): string => `${capabilities.reason}，不能执行${action}。`;
   const grantMembers = useMemo(() => members.filter((member) => member.status !== 'REMOVED'), [members]);
   const principalLabel = (grant: WorkspaceActivityGrant): string => {
     if (grant.principalType === 'ROLE') return grant.principalId;
@@ -324,10 +335,47 @@ export function WorkspaceDetailPanel({
         ) : null}
 
         {tab === 'overview' ? (
-          <section className="exm-detail-stats">
+          <section className="exm-detail-stats exm-workspace-stats">
             <div><span>流程</span><b>{target.workflowCount}</b></div>
             <div><span>文件夹</span><b>{target.folderCount}</b></div>
-            <div><span>成员</span><b>{target.memberCount}</b></div>
+            <div><span>模板</span><b>{templateCount}</b></div>
+            <div><span>可用</span><b>{activeWorkflowCount}</b></div>
+          </section>
+        ) : null}
+
+        {tab === 'overview' ? (
+          <section className="exm-detail-section exm-detail-create-actions">
+            <h3>创建入口</h3>
+            {!capabilities.canEditWorkspace ? <p>{capabilities.role} · 只读浏览</p> : null}
+            <div>
+              <TaButton
+                size="sm"
+                data-testid="workspace-new-folder"
+                disabled={!capabilities.canManageFolders}
+                title={!capabilities.canManageFolders ? disabledActionReason('新建文件夹') : '新建文件夹'}
+                onClick={onCreateFolder}
+              >
+                <Folder size={14} />新建文件夹
+              </TaButton>
+              <TaButton
+                size="sm"
+                disabled={!capabilities.canEditWorkspace}
+                title={!capabilities.canEditWorkspace ? disabledActionReason('导入流程') : '导入流程'}
+                onClick={onImportWorkflow}
+              >
+                <Copy size={14} />导入流程
+              </TaButton>
+              <TaButton
+                size="sm"
+                tone="primary"
+                data-testid="workspace-new-workflow"
+                disabled={!capabilities.canEditWorkspace}
+                title={!capabilities.canEditWorkspace ? disabledActionReason('新建流程') : '新建流程'}
+                onClick={onCreateWorkflow}
+              >
+                <Plus size={14} />新建流程
+              </TaButton>
+            </div>
           </section>
         ) : null}
 
@@ -341,6 +389,10 @@ export function WorkspaceDetailPanel({
             <div>
               <span>权限</span>
               <b>{capabilities.role}</b>
+            </div>
+            <div>
+              <span>成员</span>
+              <b>{target.memberCount}</b>
             </div>
           </section>
         ) : null}

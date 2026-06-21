@@ -154,8 +154,6 @@ type Props = {
   onWorkspaceNavigate: (workspaceId: string, folderId?: string) => void;
   onActivitySettings: () => void;
   onModeChange: (mode: 'pointer' | 'hand') => void;
-  onDefault: () => void;
-  onSimple: () => void;
   onTemplates: () => void;
   onAutoLayout: () => void;
   onZoomIn: () => void;
@@ -604,8 +602,6 @@ export function StudioChrome({
   onWorkspaceNavigate,
   onActivitySettings,
   onModeChange,
-  onDefault,
-  onSimple,
   onTemplates,
   onAutoLayout,
   onZoomIn,
@@ -956,8 +952,6 @@ export function StudioChrome({
         ) : null}
       </div>
       <div className="dify-float-toolbar">
-        <button disabled={!canEditWorkflow} onClick={onDefault}>完整链路</button>
-        <button disabled={!canEditWorkflow} onClick={onSimple}>简化链路</button>
         <button disabled={!canEditWorkflow} onClick={onTemplates}>模板</button>
         <button disabled={!canEditWorkflow} onClick={onAutoLayout}>自动排齐</button>
         <button disabled={!canEditWorkflow || draftSaveState === 'saving'} title="Cmd/Ctrl+S" onClick={onSaveDraft}>{draftSaveState === 'saving' ? '保存中' : '保存草稿'}</button>

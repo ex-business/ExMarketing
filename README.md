@@ -23,7 +23,6 @@ ExMarketing 是 `ex-stack` 下的营销活动与流程编排系统，用来把�
 
 ```bash
 docker compose up -d postgres
-export EX_MARKETING_DATABASE_URL='postgres://exmarketing:exmarketing@localhost:54329/exmarketing?sslmode=disable'
 go run ./cmd/db-migration-release --mode apply
 ```
 
@@ -60,7 +59,7 @@ npm run build:admin-flow
 docker compose down
 ```
 
-没有配置 `EX_MARKETING_DATABASE_URL` 时，后端会使用内存仓储，只适合快速本地验证。
+后端默认使用本地 PostgreSQL：`postgres://exmarketing:exmarketing@localhost:54329/exmarketing?sslmode=disable`。只有显式设置 `EX_MARKETING_REPOSITORY=memory` 时才会使用内存仓储；内存模式只允许用于临时单元验证，业务数据不要放在内存里。
 
 ## 核心能力
 

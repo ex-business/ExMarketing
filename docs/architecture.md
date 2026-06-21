@@ -68,8 +68,9 @@ phase does not add plugin state tables or execute real gameplay state changes.
 The service supports two repository modes:
 
 ```text
-default                         in-memory repository
-EX_MARKETING_DATABASE_URL set    PostgreSQL repository
+default                         PostgreSQL repository
+EX_MARKETING_DATABASE_URL set    PostgreSQL repository with the given DSN
+EX_MARKETING_REPOSITORY=memory   in-memory repository for isolated tests only
 ```
 
 Local PostgreSQL is provided by `docker-compose.yml`. Schema initialization and

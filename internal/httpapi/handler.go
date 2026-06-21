@@ -290,9 +290,18 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /openapi/v1/facts/query", h.queryFacts)
 	mux.HandleFunc("POST /internal/facts/user-profile", h.userProfileFactProvider)
 	mux.HandleFunc("POST /openapi/v1/reward/callback", h.rewardCallback)
+	mux.HandleFunc("GET /admin-flow", redirectToTrailingSlash)
 	mux.Handle("GET /admin-flow/", http.StripPrefix("/admin-flow/", http.FileServer(http.Dir("web/admin-flow"))))
 	mux.Handle("GET /admin/", http.StripPrefix("/admin/", http.FileServer(http.Dir("web/admin"))))
 	return withAuditSource(mux)
+}
+
+func redirectToTrailingSlash(w http.ResponseWriter, r *http.Request) {
+	target := r.URL.Path + "/"
+	if r.URL.RawQuery != "" {
+		target += "?" + r.URL.RawQuery
+	}
+	http.Redirect(w, r, target, http.StatusFound)
 }
 
 func (h *Handler) metrics(w http.ResponseWriter, r *http.Request) {

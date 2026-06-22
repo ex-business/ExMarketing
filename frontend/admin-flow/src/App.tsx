@@ -101,26 +101,13 @@ import {
   workflowRouteTrace,
 } from './utils/runHistory';
 import type { JsonDiffRow, WorkflowErrorClass, WorkflowRouteTraceItem } from './utils/runHistory';
+import { applyDocumentTheme, EXM_THEME_STORAGE_KEY, initialExmTheme, type ExmThemeMode } from './theme';
 
 type OpsToast = {
   id: number;
   message: string;
   tone: 'success' | 'error' | 'info';
 };
-
-type ExmThemeMode = 'light' | 'dark';
-const EXM_THEME_STORAGE_KEY = 'exmarketing.adminFlow.theme';
-
-function initialExmTheme(): ExmThemeMode {
-  if (typeof window === 'undefined') return 'light';
-  try {
-    const stored = window.localStorage.getItem(EXM_THEME_STORAGE_KEY);
-    if (stored === 'dark' || stored === 'light') return stored;
-  } catch {
-    return 'light';
-  }
-  return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-}
 
 function opsToastTone(message: string): OpsToast['tone'] {
   if (/(失败|错误|不可用|不能|需要|先选择|不存在|无权限)/.test(message)) return 'error';
@@ -4231,8 +4218,7 @@ export function App() {
   const [inspectedEdgeIds, setInspectedEdgeIds] = useState<string[]>([]);
 
   useEffect(() => {
-    document.documentElement.dataset.exmTheme = themeMode;
-    document.documentElement.style.colorScheme = themeMode === 'dark' ? 'dark' : 'light';
+    applyDocumentTheme(themeMode);
     try {
       window.localStorage.setItem(EXM_THEME_STORAGE_KEY, themeMode);
     } catch {

@@ -5,43 +5,112 @@
 }
 
 :root {
-  --app-bg: #f7f9fb;
+  color-scheme: light;
+  --theme-page: #f7f9fb;
+  --theme-page-elevated: #ffffff;
+  --theme-canvas: #f8fafc;
+  --theme-surface: #ffffff;
+  --theme-surface-raised: #f8fafc;
+  --theme-surface-hover: #f1f5f9;
+  --theme-control: #ffffff;
+  --theme-control-hover: #f8fafc;
+  --theme-border: #e4e9f0;
+  --theme-border-strong: #cfd8e6;
+  --theme-text: #101828;
+  --theme-text-body: #1f2937;
+  --theme-text-muted: #667085;
+  --theme-text-soft: #98a2b3;
+  --theme-accent: #2563eb;
+  --theme-accent-strong: #1d4ed8;
+  --theme-accent-soft: #eff6ff;
+  --theme-accent-border: #c7d7fe;
+  --theme-on-accent: #ffffff;
+  --theme-success: #027a48;
+  --theme-success-soft: #ecfdf3;
+  --theme-success-border: #bbf7d0;
+  --theme-warning: #b54708;
+  --theme-warning-soft: #fffaeb;
+  --theme-warning-border: #fed7aa;
+  --theme-danger: #b42318;
+  --theme-danger-soft: #fef3f2;
+  --theme-danger-border: #fecaca;
+  --theme-code-bg: #0f172a;
+  --theme-code-text: #e2e8f0;
+  --theme-shadow-panel: 0 16px 40px rgba(16, 24, 40, 0.1);
+  --theme-shadow-float: 0 10px 24px rgba(16, 24, 40, 0.09), 0 2px 6px rgba(16, 24, 40, 0.05);
+  --app-bg: var(--theme-page);
   --diagnostic-panel-width: 432px;
   --diagnostic-panel-top: 88px;
-  --panel-bg: #ffffff;
-  --panel-border: #e4e9f0;
-  --muted-border: #edf1f5;
-  --text-strong: #101828;
-  --text-main: #1f2937;
-  --text-muted: #667085;
-  --text-soft: #98a2b3;
-  --brand-blue: #155eef;
-  --brand-blue-soft: #eff6ff;
-  --btn-bg: #ffffff;
-  --btn-text: #344054;
-  --btn-border: #d8dee8;
-  --btn-hover-bg: #f8fafc;
-  --btn-hover-border: #cfd6e1;
-  --btn-primary-bg: #2563eb;
-  --btn-primary-border: #2563eb;
-  --btn-primary-hover-bg: #1d4ed8;
-  --btn-primary-hover-border: #1d4ed8;
-  --btn-active-bg: #f3f7ff;
-  --btn-active-border: #c7d7fe;
-  --btn-active-text: #1d4ed8;
-  --btn-danger-bg: #d92d20;
-  --btn-danger-border: #d92d20;
-  --btn-danger-soft-bg: #fff5f5;
-  --btn-danger-soft-border: #ffd3d0;
-  --btn-danger-text: #b42318;
+  --panel-bg: var(--theme-surface);
+  --panel-border: var(--theme-border);
+  --muted-border: var(--theme-border);
+  --text-strong: var(--theme-text);
+  --text-main: var(--theme-text-body);
+  --text-muted: var(--theme-text-muted);
+  --text-soft: var(--theme-text-soft);
+  --brand-blue: var(--theme-accent);
+  --brand-blue-soft: var(--theme-accent-soft);
+  --btn-bg: var(--theme-control);
+  --btn-text: var(--theme-text-body);
+  --btn-border: var(--theme-border);
+  --btn-hover-bg: var(--theme-control-hover);
+  --btn-hover-border: var(--theme-border-strong);
+  --btn-primary-bg: var(--theme-accent);
+  --btn-primary-border: var(--theme-accent);
+  --btn-primary-hover-bg: var(--theme-accent-strong);
+  --btn-primary-hover-border: var(--theme-accent-strong);
+  --btn-active-bg: var(--theme-accent-soft);
+  --btn-active-border: var(--theme-accent-border);
+  --btn-active-text: var(--theme-accent-strong);
+  --btn-danger-bg: var(--theme-danger);
+  --btn-danger-border: var(--theme-danger);
+  --btn-danger-soft-bg: var(--theme-danger-soft);
+  --btn-danger-soft-border: var(--theme-danger-border);
+  --btn-danger-text: var(--theme-danger);
   --btn-radius: 7px;
-  --focus-ring: rgba(21, 94, 239, 0.16);
+  --focus-ring: var(--theme-accent-soft);
   --radius-panel: 8px;
   --radius-control: 6px;
-  --shadow-panel: 0 16px 40px rgba(16, 24, 40, 0.1);
-  --shadow-float: 0 10px 24px rgba(16, 24, 40, 0.09), 0 2px 6px rgba(16, 24, 40, 0.05);
+  --shadow-panel: var(--theme-shadow-panel);
+  --shadow-float: var(--theme-shadow-float);
   --motion-fast: 120ms cubic-bezier(0.2, 0, 0, 1);
   --motion-med: 180ms cubic-bezier(0.2, 0, 0, 1);
+}
+
+:root[data-exm-theme="dark"] {
+  color-scheme: dark;
+  --theme-page: #101114;
+  --theme-page-elevated: #121318;
+  --theme-canvas: #18191d;
+  --theme-surface: #17181c;
+  --theme-surface-raised: #202126;
+  --theme-surface-hover: #292a30;
+  --theme-control: #202126;
+  --theme-control-hover: #292a30;
+  --theme-border: #34363e;
+  --theme-border-strong: #4a4d57;
+  --theme-text: #f4f4f5;
+  --theme-text-body: #e4e4e7;
+  --theme-text-muted: #a1a1aa;
+  --theme-text-soft: #71717a;
+  --theme-accent: #8b9cff;
+  --theme-accent-strong: #aab6ff;
+  --theme-accent-soft: rgba(139, 156, 255, 0.16);
+  --theme-accent-border: rgba(139, 156, 255, 0.48);
+  --theme-on-accent: #ffffff;
+  --theme-success: #bbf7d0;
+  --theme-success-soft: rgba(52, 211, 153, 0.14);
+  --theme-success-border: rgba(52, 211, 153, 0.32);
+  --theme-warning: #fde68a;
+  --theme-warning-soft: rgba(251, 191, 36, 0.14);
+  --theme-warning-border: rgba(251, 191, 36, 0.34);
+  --theme-danger: #fecaca;
+  --theme-danger-soft: rgba(248, 113, 113, 0.14);
+  --theme-danger-border: rgba(248, 113, 113, 0.34);
+  --theme-code-bg: #111216;
+  --theme-code-text: #e4e4e7;
+  --theme-shadow-panel: 0 18px 44px rgba(0, 0, 0, 0.28);
+  --theme-shadow-float: 0 22px 60px rgba(0, 0, 0, 0.42);
 }
 
 body {
@@ -2009,7 +2078,7 @@ input:focus-visible {
 }
 
 .run-summary.run-failed {
-  border-color: #fecaca;
+  border-color: var(--theme-danger);
   background: #fff5f5;
 }
 
@@ -2058,7 +2127,7 @@ input:focus-visible {
 .property-danger {
   width: 100%;
   margin-top: 12px;
-  border: 1px solid #fecaca;
+  border: 1px solid var(--theme-danger);
   border-radius: 8px;
   background: #fff;
   color: #b91c1c;
@@ -2163,7 +2232,7 @@ input:focus-visible {
 }
 
 .status-pill.green {
-  border-color: #bbf7d0;
+  border-color: var(--theme-success);
   background: #f0fdf4;
   color: #15803d;
 }
@@ -2320,12 +2389,12 @@ input:focus-visible {
 .activity-node.audit .activity-node-head { background: #ecfccb; color: #4d7c0f; }
 
 .activity-node.entry { border-color: #bfdbfe; }
-.activity-node.store { border-color: #bbf7d0; }
+.activity-node.store { border-color: var(--theme-success); }
 .activity-node.transform { border-color: #bae6fd; }
-.activity-node.logic { border-color: #fde68a; }
+.activity-node.logic { border-color: var(--theme-warning); }
 .activity-node.query { border-color: #ddd6fe; }
 .activity-node.reward { border-color: #fed7aa; }
-.activity-node.quota { border-color: #fecaca; }
+.activity-node.quota { border-color: var(--theme-danger); }
 .activity-node.grant { border-color: #99f6e4; }
 .activity-node.dispatch { border-color: #c7d2fe; }
 .activity-node.callback { border-color: #fbcfe8; }
@@ -4097,7 +4166,7 @@ input:focus-visible {
 .exm-error-banner button {
   flex: 0 0 auto;
   height: 26px;
-  border: 1px solid #fecaca;
+  border: 1px solid var(--theme-danger);
   border-radius: 6px;
   background: #fff;
   color: #b42318;
@@ -4116,7 +4185,7 @@ input:focus-visible {
 }
 
 .exm-error-banner {
-  border: 1px solid #fecaca;
+  border: 1px solid var(--theme-danger);
   background: #fff7f7;
   color: #b42318;
 }
@@ -4919,9 +4988,9 @@ input:focus-visible {
 
 .exm-content-empty.archived::before {
   background:
-    linear-gradient(#fecaca, #fecaca) 8px 11px / 22px 4px no-repeat,
+    linear-gradient(var(--theme-danger), var(--theme-danger)) 8px 11px / 22px 4px no-repeat,
     linear-gradient(#fff5f5, #fff5f5);
-  box-shadow: inset 0 0 0 1px #fecaca;
+  box-shadow: inset 0 0 0 1px var(--theme-danger);
 }
 
 .exm-content-empty.permission::before {
@@ -5016,8 +5085,8 @@ input:focus-visible {
   opacity: 1;
 }
 
-.exm-toast.success { border-color: #bbf7d0; color: #027a48; }
-.exm-toast.error { border-color: #fecaca; color: #b42318; }
+.exm-toast.success { border-color: var(--theme-success); color: #027a48; }
+.exm-toast.error { border-color: var(--theme-danger); color: #b42318; }
 .exm-toast.info { border-color: #bfdbfe; color: #155eef; }
 
 .exm-table-view.loading {
@@ -5386,7 +5455,7 @@ input:focus-visible {
 
 .exm-acl-error {
   margin: 0;
-  border: 1px solid #fecaca;
+  border: 1px solid var(--theme-danger);
   border-radius: 7px;
   background: #fff7f7;
   color: #b42318;
@@ -7378,7 +7447,7 @@ input:focus-visible {
   min-width: 0;
   max-height: 190px;
   overflow: auto;
-  border: 1px solid #fecaca;
+  border: 1px solid var(--theme-danger);
   border-radius: 8px;
   background: #fff7f7;
   display: grid;
@@ -7622,7 +7691,7 @@ input:focus-visible {
 }
 
 .studio-file-upload.failed {
-  border-color: #fecaca;
+  border-color: var(--theme-danger);
   background: #fff7f7;
 }
 
@@ -8264,7 +8333,7 @@ input:focus-visible {
 }
 
 .workflow-state-pill.saved {
-  border-color: #bbf7d0;
+  border-color: var(--theme-success);
   background: #f0fdf4;
   color: #15803d;
 }
@@ -8272,7 +8341,7 @@ input:focus-visible {
 .workflow-state-pill.saved::before { background: #16a34a; }
 
 .workflow-state-pill.failed {
-  border-color: #fecaca;
+  border-color: var(--theme-danger);
   background: #fef2f2;
   color: #b42318;
 }
@@ -8288,7 +8357,7 @@ input:focus-visible {
   display: flex;
   align-items: center;
   gap: 8px;
-  border: 1px solid #fecaca;
+  border: 1px solid var(--theme-danger);
   border-radius: 8px;
   background: #fff7f7;
   color: #b42318;
@@ -8498,7 +8567,7 @@ input:focus-visible {
 }
 
 .publish-check-card.pass {
-  border-color: #bbf7d0;
+  border-color: var(--theme-success);
   background: #f0fdf4;
 }
 
@@ -8518,7 +8587,7 @@ input:focus-visible {
 }
 
 .publish-check-card.block {
-  border-color: #fecaca;
+  border-color: var(--theme-danger);
   background: #fef2f2;
 }
 
@@ -9281,7 +9350,7 @@ input:focus-visible {
 }
 
 .head-actions .danger-action {
-  border-color: #fecaca;
+  border-color: var(--theme-danger);
   background: #fff;
   color: #b91c1c;
 }
@@ -10090,7 +10159,7 @@ input:focus-visible {
 .node-icon.entry { color: #93c5fd; }
 .node-icon.store { color: #86efac; }
 .node-icon.transform { color: #7dd3fc; }
-.node-icon.logic { color: #fde68a; }
+.node-icon.logic { color: var(--theme-warning); }
 .node-icon.query { color: #c4b5fd; }
 .node-icon.reward { color: #fdba74; }
 .node-icon.quota { color: #fca5a5; }
@@ -11213,7 +11282,7 @@ input:focus-visible {
 
 .run-payload-tabs pre mark {
   border-radius: 3px;
-  background: #fde68a;
+  background: var(--theme-warning);
   color: #0f172a;
   padding: 0 1px;
 }
@@ -12021,7 +12090,7 @@ input:focus-visible {
 }
 
 .node-delete:hover {
-  border-color: #fecaca;
+  border-color: var(--theme-danger);
   background: #fff5f5;
   color: #b91c1c;
 }
@@ -12832,7 +12901,7 @@ input:focus-visible {
 }
 
 .context-menu button.danger:hover {
-  border-color: #fecaca;
+  border-color: var(--theme-danger);
   background: #fef2f2;
 }
 
@@ -13024,7 +13093,7 @@ input:focus-visible {
 }
 
 .error-bar {
-  border-color: #fecaca;
+  border-color: var(--theme-danger);
   background: #fef2f2;
   color: #b91c1c;
 }
@@ -15948,7 +16017,7 @@ input:focus-visible {
 /* Studio editor final TailAdmin shell. */
 .studio:not(.studio-home) .workspace-topbar {
   height: 56px;
-  grid-template-columns: minmax(260px, 1fr) auto minmax(220px, 1fr);
+  grid-template-columns: minmax(260px, 1fr) auto;
   gap: 16px;
   border-bottom: 1px solid var(--ta-gray-200);
   background: #fff;
@@ -18851,12 +18920,12 @@ input:focus-visible {
 }
 
 .debug-result-card.success {
-  border-color: #bbf7d0;
+  border-color: var(--theme-success);
   background: #f0fdf4;
 }
 
 .debug-result-card.failed {
-  border-color: #fecaca;
+  border-color: var(--theme-danger);
   background: #fef2f2;
 }
 
@@ -18977,12 +19046,12 @@ input:focus-visible {
 }
 
 .node-run-status-card.run-success {
-  border-color: #bbf7d0;
+  border-color: var(--theme-success);
   background: #f0fdf4;
 }
 
 .node-run-status-card.run-failed {
-  border-color: #fecaca;
+  border-color: var(--theme-danger);
   background: #fef2f2;
 }
 
@@ -19190,7 +19259,7 @@ input:focus-visible {
 }
 
 .node-run-log-block code.log-error {
-  border-color: #fecaca;
+  border-color: var(--theme-danger);
   background: #fef2f2;
   color: #b91c1c;
 }
@@ -19276,7 +19345,7 @@ input:focus-visible {
 }
 
 .run-failed .node-run-pill {
-  border-color: #fecaca;
+  border-color: var(--theme-danger);
   background: #fef2f2;
   color: #b91c1c;
 }
@@ -19342,7 +19411,7 @@ input:focus-visible {
 }
 
 .resource-manager-error {
-  border: 1px solid #fecaca;
+  border: 1px solid var(--theme-danger);
   border-radius: 8px;
   background: #fef2f2;
   color: #b91c1c;
@@ -25005,7 +25074,7 @@ input:focus-visible {
   gap: 12px !important;
   border: 1px solid #e4e9f0 !important;
   border-radius: 8px !important;
-  background: #ffffff !important;
+  background: var(--theme-control) !important;
   padding: 12px !important;
 }
 
@@ -25278,18 +25347,18 @@ input:focus-visible {
 /* Right property panel design standard. Keep this final to normalize all tabs. */
 .property-panel {
   --pi-font: Outfit, Inter, "SF Pro Text", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Segoe UI", system-ui, sans-serif;
-  --pi-text: #182230;
-  --pi-text-soft: #344054;
-  --pi-muted: #667085;
-  --pi-subtle: #98a2b3;
-  --pi-line: #edf1f6;
-  --pi-line-soft: #f4f6fa;
-  --pi-bg: #ffffff;
-  --pi-bg-soft: #f8fafc;
-  --pi-blue: #2563eb;
-  --pi-blue-soft: #eff6ff;
-  --pi-red: #d92d20;
-  --pi-purple: #7c3aed;
+  --pi-text: var(--theme-text);
+  --pi-text-soft: var(--theme-text-body);
+  --pi-muted: var(--theme-text-muted);
+  --pi-subtle: var(--theme-text-soft);
+  --pi-line: var(--theme-border);
+  --pi-line-soft: var(--theme-border);
+  --pi-bg: var(--theme-surface);
+  --pi-bg-soft: var(--theme-surface-raised);
+  --pi-blue: var(--theme-accent);
+  --pi-blue-soft: var(--theme-accent-soft);
+  --pi-red: var(--theme-danger);
+  --pi-purple: var(--theme-accent);
   --pi-fs-10: 10px;
   --pi-fs-11: 11px;
   --pi-fs-12: 12px;
@@ -25355,7 +25424,7 @@ input:focus-visible {
   padding: 0 9px !important;
   border: 1px solid #d8e0ec !important;
   border-radius: 7px !important;
-  background: #ffffff !important;
+  background: var(--theme-control) !important;
   color: var(--pi-text-soft) !important;
   box-shadow: none !important;
   font-size: var(--pi-fs-11) !important;
@@ -25528,7 +25597,7 @@ input:focus-visible {
   min-height: var(--pi-control-h) !important;
   border-color: #d8e0ec !important;
   border-radius: var(--pi-radius) !important;
-  background: #ffffff !important;
+  background: var(--theme-control) !important;
   color: var(--pi-text) !important;
   padding: 0 9px !important;
   font-size: var(--pi-fs-12) !important;
@@ -25546,7 +25615,7 @@ input:focus-visible {
   padding: 10px !important;
   border: 1px solid var(--pi-line) !important;
   border-radius: var(--pi-radius) !important;
-  background: #ffffff !important;
+  background: var(--theme-control) !important;
 }
 
 .property-panel .provider-chain-step-head {
@@ -25634,7 +25703,7 @@ input:focus-visible {
   height: 34px !important;
   border: 1px solid var(--pi-line) !important;
   border-radius: var(--pi-radius) !important;
-  background: #ffffff !important;
+  background: var(--theme-control) !important;
   color: var(--pi-text) !important;
   padding: 0 10px !important;
   font-size: var(--pi-fs-13) !important;
@@ -25881,7 +25950,7 @@ input:focus-visible {
   height: var(--pi-control-h) !important;
   border: 1px solid #d8e0ec !important;
   border-radius: var(--pi-radius) !important;
-  background: #ffffff !important;
+  background: var(--theme-control) !important;
   color: var(--pi-text) !important;
   font-size: var(--pi-fs-12) !important;
   line-height: var(--pi-lh-18) !important;
@@ -25977,7 +26046,7 @@ input:focus-visible {
   height: 30px !important;
   border: 1px solid #cfd8e6 !important;
   border-radius: var(--pi-radius) !important;
-  background: #ffffff !important;
+  background: var(--theme-control) !important;
   color: var(--pi-blue) !important;
   padding: 0 9px !important;
   font-size: var(--pi-fs-12) !important;
@@ -25997,7 +26066,7 @@ input:focus-visible {
   min-width: 0 !important;
   border: 1px solid var(--pi-line-soft) !important;
   border-radius: var(--pi-radius) !important;
-  background: #ffffff !important;
+  background: var(--theme-control) !important;
   padding: 10px !important;
 }
 
@@ -26059,7 +26128,7 @@ input:focus-visible {
   place-items: center !important;
   border: 1px solid var(--pi-line) !important;
   border-radius: var(--pi-radius) !important;
-  background: #ffffff !important;
+  background: var(--theme-control) !important;
   color: var(--pi-text-soft) !important;
   padding: 0 !important;
 }
@@ -26206,7 +26275,7 @@ input:focus-visible {
   place-items: center !important;
   border: 1px solid #ffd0c8 !important;
   border-radius: var(--pi-radius) !important;
-  background: #ffffff !important;
+  background: var(--theme-control) !important;
   color: var(--pi-red) !important;
   padding: 0 !important;
 }
@@ -26280,7 +26349,7 @@ input:focus-visible {
   gap: 8px !important;
   border: 1px solid var(--pi-line) !important;
   border-radius: var(--pi-radius) !important;
-  background: #ffffff !important;
+  background: var(--theme-control) !important;
   padding: 10px !important;
 }
 
@@ -27611,7 +27680,7 @@ input:focus-visible {
 :root[data-exm-theme="dark"] .exm-folder-icon,
 :root[data-exm-theme="dark"] .exm-workspace-switcher > span {
   background: #3b82f6 !important;
-  color: #ffffff !important;
+  color: var(--theme-on-accent) !important;
 }
 
 :root[data-exm-theme="dark"] .exm-sidebar-folders button.active svg,
@@ -28065,4 +28134,1997 @@ input:focus-visible {
   .exm-template-card.ta-btn {
     min-height: 132px;
   }
+}
+
+/* Flow studio theme bridge: editor pages should inherit the same app theme tokens. */
+:root {
+  --flow-page-bg: var(--app-bg);
+  --flow-canvas-bg: var(--ta-gray-50, #f8fafc);
+  --flow-surface: var(--panel-bg);
+  --flow-surface-elevated: color-mix(in srgb, var(--panel-bg) 96%, white 4%);
+  --flow-border: var(--panel-border);
+  --flow-border-soft: var(--muted-border);
+  --flow-text: var(--text-main);
+  --flow-heading: var(--text-strong);
+  --flow-muted: var(--text-muted);
+  --flow-soft: var(--text-soft);
+  --flow-accent: var(--brand-blue);
+  --flow-accent-soft: var(--brand-blue-soft);
+  --flow-shadow: var(--shadow-float);
+}
+
+:root[data-exm-theme="dark"] {
+  --flow-page-bg: #0b1220;
+  --flow-canvas-bg: #07101f;
+  --flow-surface: #111827;
+  --flow-surface-elevated: #151f30;
+  --flow-border: #243244;
+  --flow-border-soft: #1f2a3a;
+  --flow-text: #e5e7eb;
+  --flow-heading: #f8fafc;
+  --flow-muted: #94a3b8;
+  --flow-soft: #64748b;
+  --flow-accent: #8ba4ff;
+  --flow-accent-soft: rgba(139, 164, 255, 0.12);
+  --flow-shadow: none;
+}
+
+.studio:not(.studio-home),
+.studio:not(.studio-home) .flow-shell,
+.studio:not(.studio-home) .canvas-card,
+.studio:not(.studio-home) .react-flow,
+.studio:not(.studio-home) .react-flow__renderer,
+.studio:not(.studio-home) .react-flow__pane {
+  background:
+    radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--flow-muted) 18%, transparent) 1px, transparent 0) 0 0 / 20px 20px,
+    var(--flow-canvas-bg) !important;
+  color: var(--flow-text) !important;
+}
+
+.studio:not(.studio-home) .workspace-topbar,
+.studio:not(.studio-home) .dify-top-status,
+.studio:not(.studio-home) .studio-head {
+  border-color: var(--flow-border) !important;
+  background: color-mix(in srgb, var(--flow-surface) 96%, transparent) !important;
+  color: var(--flow-text) !important;
+  box-shadow: var(--ta-shadow-xs, none) !important;
+}
+
+.studio:not(.studio-home) .workspace-brand .exm-brand-mark strong,
+.studio:not(.studio-home) .workflow-title-button,
+.studio:not(.studio-home) .studio-head h1,
+.studio:not(.studio-home) .canvas-empty-guide b {
+  color: var(--flow-heading) !important;
+}
+
+.studio:not(.studio-home) .workspace-brand > span,
+.studio:not(.studio-home) .activity-status,
+.studio:not(.studio-home) .workflow-breadcrumb,
+.studio:not(.studio-home) .workflow-breadcrumb button,
+.studio:not(.studio-home) .workflow-breadcrumb span,
+.studio:not(.studio-home) .workflow-breadcrumb i,
+.studio:not(.studio-home) .studio-head p,
+.studio:not(.studio-home) .canvas-empty-guide span,
+.studio:not(.studio-home) .canvas-empty-guide em {
+  color: var(--flow-muted) !important;
+}
+
+.studio:not(.studio-home) .app-tabs button {
+  border-color: transparent !important;
+  background: transparent !important;
+  color: var(--flow-muted) !important;
+  box-shadow: none !important;
+}
+
+.studio:not(.studio-home) .app-tabs button.active {
+  border-bottom-color: var(--flow-accent) !important;
+  color: var(--flow-accent) !important;
+}
+
+.studio:not(.studio-home) .workspace-actions button,
+.studio:not(.studio-home) .activity-info-button,
+.studio:not(.studio-home) .workflow-edit-button,
+.studio:not(.studio-home) .dify-float-toolbar button,
+.studio:not(.studio-home) .head-actions .ghost-action,
+.studio:not(.studio-home) .node-library-fab,
+.studio:not(.studio-home) .dify-left-rail,
+.studio:not(.studio-home) .zoom-toolbar,
+.studio:not(.studio-home) .react-flow__controls,
+.studio:not(.studio-home) .react-flow__minimap,
+.studio:not(.studio-home) .canvas-empty-guide,
+.flow-sidebar,
+.node-palette,
+.node-picker,
+.context-menu,
+.zoom-menu {
+  border-color: var(--flow-border) !important;
+  background: var(--flow-surface) !important;
+  color: var(--flow-text) !important;
+  box-shadow: var(--flow-shadow) !important;
+}
+
+.studio:not(.studio-home) .dify-float-toolbar button,
+.studio:not(.studio-home) .head-actions button,
+.studio:not(.studio-home) .canvas-empty-guide button,
+.studio:not(.studio-home) .zoom-toolbar button,
+.studio:not(.studio-home) .dify-left-rail button,
+.node-palette button,
+.node-picker button,
+.context-menu button,
+.zoom-menu button {
+  border-color: var(--flow-border) !important;
+  background: transparent !important;
+  color: var(--flow-text) !important;
+  box-shadow: none !important;
+}
+
+.studio:not(.studio-home) .dify-float-toolbar button:hover:not(:disabled),
+.studio:not(.studio-home) .head-actions button:hover:not(:disabled),
+.studio:not(.studio-home) .canvas-empty-guide button:hover:not(:disabled),
+.studio:not(.studio-home) .zoom-toolbar button:hover:not(:disabled),
+.studio:not(.studio-home) .dify-left-rail button:hover:not(:disabled),
+.node-palette button:hover,
+.node-picker button:hover:not(:disabled),
+.context-menu button:hover:not(:disabled),
+.zoom-menu button:hover:not(:disabled) {
+  border-color: var(--btn-hover-border) !important;
+  background: var(--btn-hover-bg) !important;
+  color: var(--flow-heading) !important;
+  box-shadow: none !important;
+}
+
+.studio:not(.studio-home) .dify-float-toolbar .debug-action,
+.studio:not(.studio-home) .dify-float-toolbar .publish-action,
+.studio:not(.studio-home) .canvas-empty-guide button:first-child,
+.studio:not(.studio-home) .node-library-fab span,
+.studio:not(.studio-home) .workspace-actions span {
+  border-color: var(--flow-accent) !important;
+  background: var(--flow-accent) !important;
+  color: #fff !important;
+}
+
+.studio:not(.studio-home) .dify-float-toolbar button:disabled,
+.studio:not(.studio-home) .head-actions button:disabled,
+.studio:not(.studio-home) .canvas-empty-guide button:disabled,
+.context-menu button:disabled,
+.context-menu button.disabled {
+  border-color: var(--flow-border-soft) !important;
+  background: transparent !important;
+  color: var(--flow-soft) !important;
+  opacity: 0.58;
+}
+
+.studio:not(.studio-home) .workflow-state-pill,
+.studio:not(.studio-home) .status-pill,
+.studio:not(.studio-home) .head-actions .status-pill {
+  border-color: var(--flow-border) !important;
+  background: var(--flow-accent-soft) !important;
+  color: var(--flow-text) !important;
+}
+
+.studio:not(.studio-home) .workflow-state-pill.saved,
+.studio:not(.studio-home) .status-pill.green {
+  border-color: rgba(34, 197, 94, 0.24) !important;
+  background: rgba(34, 197, 94, 0.12) !important;
+  color: #74d99f !important;
+}
+
+.studio:not(.studio-home) .workflow-state-pill.failed {
+  border-color: rgba(248, 113, 113, 0.28) !important;
+  background: rgba(248, 113, 113, 0.12) !important;
+  color: #fca5a5 !important;
+}
+
+.studio:not(.studio-home) .workflow-state-pill.neutral {
+  border-color: var(--flow-border) !important;
+  background: color-mix(in srgb, var(--flow-surface-elevated) 80%, transparent) !important;
+  color: var(--flow-muted) !important;
+}
+
+.studio:not(.studio-home) .canvas-empty-guide i {
+  background: var(--flow-accent) !important;
+  color: #fff !important;
+}
+
+.studio:not(.studio-home) .dify-left-rail button.active,
+.node-picker .picker-tabs button.active,
+.zoom-menu button.active {
+  border-color: color-mix(in srgb, var(--flow-accent) 32%, var(--flow-border)) !important;
+  background: var(--flow-accent-soft) !important;
+  color: var(--flow-accent) !important;
+  box-shadow: none !important;
+}
+
+.node-palette section + section,
+.node-picker .picker-tabs,
+.context-divider,
+.zoom-menu button + button {
+  border-color: var(--flow-border-soft) !important;
+}
+
+.node-palette h3,
+.node-palette em,
+.node-picker em,
+.context-menu em,
+.context-title,
+.zoom-percent-button {
+  color: var(--flow-muted) !important;
+}
+
+.node-palette strong,
+.node-picker strong,
+.context-menu strong {
+  color: var(--flow-heading) !important;
+}
+
+.node-picker input,
+.node-palette input,
+.picker-search {
+  border-color: var(--flow-border) !important;
+  background: var(--flow-surface-elevated) !important;
+  color: var(--flow-text) !important;
+}
+
+.studio:not(.studio-home) .react-flow__controls button {
+  border-bottom-color: var(--flow-border-soft) !important;
+  background: var(--flow-surface) !important;
+  color: var(--flow-muted) !important;
+  fill: var(--flow-muted) !important;
+}
+
+.studio:not(.studio-home) .react-flow__controls button:hover {
+  background: var(--btn-hover-bg) !important;
+  color: var(--flow-heading) !important;
+  fill: var(--flow-heading) !important;
+}
+
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .react-flow__minimap-mask {
+  fill: rgba(7, 16, 31, 0.72) !important;
+}
+
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .react-flow__minimap-node {
+  fill: #243244 !important;
+  stroke: #46566f !important;
+}
+
+/* Dark theme inactive states: keep non-selected controls readable without competing with active items. */
+:root[data-exm-theme="dark"] {
+  --exm-inactive-text: #c4cfdf;
+  --exm-inactive-icon: #b8c4d5;
+  --exm-inactive-muted: #9aa9bd;
+  --exm-inactive-hover: #f8fafc;
+  --exm-control-bg: #111b2a;
+  --exm-control-bg-hover: #182437;
+  --exm-control-border: #2a3a50;
+  --exm-control-border-hover: #3a4d66;
+  --flow-muted: #aeb9cc;
+  --flow-soft: #8190a6;
+}
+
+:root[data-exm-theme="dark"] .exm-content-tabs.ta-tabs,
+:root[data-exm-theme="dark"] .exm-detail-tabs.ta-tabs {
+  border: 1px solid var(--exm-control-border) !important;
+  background: var(--exm-control-bg) !important;
+}
+
+:root[data-exm-theme="dark"] .exm-detail-tabs.ta-tabs {
+  border-width: 0 0 1px !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  gap: 18px !important;
+  padding: 0 !important;
+}
+
+:root[data-exm-theme="dark"] .exm-detail-tabs.ta-tabs .ta-tab {
+  min-height: 34px !important;
+  border: 0 !important;
+  border-bottom: 2px solid transparent !important;
+  border-radius: 0 !important;
+  padding: 0 0 9px !important;
+}
+
+:root[data-exm-theme="dark"] .exm-content-tabs .ta-tab:not(.active),
+:root[data-exm-theme="dark"] .exm-content-tabs button:not(.active),
+:root[data-exm-theme="dark"] .exm-detail-tabs.ta-tabs .ta-tab:not(.active) {
+  border-color: transparent !important;
+  background: transparent !important;
+  color: var(--exm-inactive-text) !important;
+  box-shadow: none !important;
+}
+
+:root[data-exm-theme="dark"] .exm-content-tabs .ta-tab.active,
+:root[data-exm-theme="dark"] .exm-content-tabs button.active,
+:root[data-exm-theme="dark"] .exm-detail-tabs.ta-tabs .ta-tab.active {
+  border-color: rgba(139, 164, 255, 0.30) !important;
+  background: #243149 !important;
+  color: #dbe4ff !important;
+  box-shadow: none !important;
+}
+
+:root[data-exm-theme="dark"] .exm-detail-tabs.ta-tabs .ta-tab.active {
+  border-bottom-color: #8ba4ff !important;
+  background: transparent !important;
+  color: #dbe4ff !important;
+}
+
+:root[data-exm-theme="dark"] .exm-folder-search,
+:root[data-exm-theme="dark"] .exm-global-search,
+:root[data-exm-theme="dark"] .exm-content-tools > .ta-select,
+:root[data-exm-theme="dark"] .exm-content-tools > .ta-btn,
+:root[data-exm-theme="dark"] .exm-view-toggle .ta-btn,
+:root[data-exm-theme="dark"] .exm-detail-create-actions .ta-btn,
+:root[data-exm-theme="dark"] .exm-topbar-actions .ta-btn:not(.exm-primary-action) {
+  border-color: var(--exm-control-border) !important;
+  background: var(--exm-control-bg) !important;
+  color: var(--exm-inactive-text) !important;
+}
+
+:root[data-exm-theme="dark"] .exm-folder-search:hover,
+:root[data-exm-theme="dark"] .exm-content-tools > .ta-select:hover,
+:root[data-exm-theme="dark"] .exm-content-tools > .ta-btn:hover,
+:root[data-exm-theme="dark"] .exm-view-toggle .ta-btn:hover,
+:root[data-exm-theme="dark"] .exm-detail-create-actions .ta-btn:hover,
+:root[data-exm-theme="dark"] .exm-topbar-actions .ta-btn:not(.exm-primary-action):hover {
+  border-color: var(--exm-control-border-hover) !important;
+  background: var(--exm-control-bg-hover) !important;
+  color: var(--exm-inactive-hover) !important;
+}
+
+:root[data-exm-theme="dark"] input::placeholder,
+:root[data-exm-theme="dark"] textarea::placeholder,
+:root[data-exm-theme="dark"] .exm-folder-search input::placeholder,
+:root[data-exm-theme="dark"] .exm-global-search input::placeholder {
+  color: var(--exm-inactive-muted) !important;
+}
+
+:root[data-exm-theme="dark"] .exm-content-tabs .ta-tab:not(.active),
+:root[data-exm-theme="dark"] .exm-content-tabs button:not(.active),
+:root[data-exm-theme="dark"] .exm-detail-tabs.ta-tabs .ta-tab:not(.active),
+:root[data-exm-theme="dark"] .exm-view-toggle .ta-btn:not(.active),
+:root[data-exm-theme="dark"] .exm-content-tools > .ta-btn:not(.active),
+:root[data-exm-theme="dark"] .exm-content-tools > .ta-select,
+:root[data-exm-theme="dark"] .exm-sidebar-nav button:not(.active),
+:root[data-exm-theme="dark"] .exm-sidebar-folders button:not(.active),
+:root[data-exm-theme="dark"] .exm-detail-create-actions .ta-btn,
+:root[data-exm-theme="dark"] .exm-topbar-actions .ta-btn:not(.exm-primary-action),
+:root[data-exm-theme="dark"] .exm-workspace-switcher-trigger,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .app-tabs button:not(.active),
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .dify-float-toolbar button:not(.debug-action):not(.publish-action),
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .head-actions .ghost-action,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .workspace-actions button,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .zoom-toolbar button,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .dify-left-rail button {
+  color: var(--exm-inactive-text) !important;
+}
+
+:root[data-exm-theme="dark"] .exm-content-tabs .ta-tab:not(.active) svg,
+:root[data-exm-theme="dark"] .exm-content-tabs button:not(.active) svg,
+:root[data-exm-theme="dark"] .exm-view-toggle .ta-btn:not(.active) svg,
+:root[data-exm-theme="dark"] .exm-sidebar-nav button:not(.active) svg,
+:root[data-exm-theme="dark"] .exm-sidebar-folders button:not(.active) svg,
+:root[data-exm-theme="dark"] .exm-table-row .name-cell svg,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .dify-float-toolbar button:not(.debug-action):not(.publish-action) svg,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .head-actions .ghost-action svg {
+  color: var(--exm-inactive-icon) !important;
+}
+
+:root[data-exm-theme="dark"] .exm-workspace-switcher-trigger small,
+:root[data-exm-theme="dark"] .exm-sidebar-section-head span,
+:root[data-exm-theme="dark"] .exm-sidebar-storage span,
+:root[data-exm-theme="dark"] .exm-sidebar-storage strong,
+:root[data-exm-theme="dark"] .exm-sidebar-storage p,
+:root[data-exm-theme="dark"] .exm-table-row span,
+:root[data-exm-theme="dark"] .exm-grid-view em,
+:root[data-exm-theme="dark"] .exm-grid-view footer,
+:root[data-exm-theme="dark"] .exm-detail-summary span,
+:root[data-exm-theme="dark"] .exm-detail-section-head span,
+:root[data-exm-theme="dark"] .exm-detail-stats span,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .workflow-breadcrumb button,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .workflow-breadcrumb span,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .workflow-breadcrumb i,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .studio-head p,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .canvas-empty-guide span,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .canvas-empty-guide em {
+  color: var(--exm-inactive-muted) !important;
+}
+
+:root[data-exm-theme="dark"] .exm-content-tabs .ta-tab:not(.active):hover,
+:root[data-exm-theme="dark"] .exm-content-tabs button:not(.active):hover,
+:root[data-exm-theme="dark"] .exm-detail-tabs.ta-tabs .ta-tab:not(.active):hover,
+:root[data-exm-theme="dark"] .exm-view-toggle .ta-btn:not(.active):hover,
+:root[data-exm-theme="dark"] .exm-content-tools > .ta-btn:not(.active):hover,
+:root[data-exm-theme="dark"] .exm-sidebar-nav button:not(.active):hover,
+:root[data-exm-theme="dark"] .exm-sidebar-folders button:not(.active):hover,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .app-tabs button:not(.active):hover,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .dify-float-toolbar button:not(.debug-action):not(.publish-action):hover,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .head-actions .ghost-action:hover,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .workspace-actions button:hover,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .zoom-toolbar button:hover,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .dify-left-rail button:hover {
+  color: var(--exm-inactive-hover) !important;
+}
+
+/* Flow editor dark mode refinement: neutral workbench, not a blue wash. */
+:root[data-exm-theme="dark"] {
+  --flow-page-bg: #0a0f18;
+  --flow-canvas-bg: #070b12;
+  --flow-canvas-dot: rgba(148, 163, 184, 0.13);
+  --flow-surface: #101722;
+  --flow-surface-elevated: #151e2b;
+  --flow-border: #263241;
+  --flow-border-soft: #1d2734;
+  --flow-text: #e5eaf2;
+  --flow-heading: #f8fafc;
+  --flow-muted: #a7b3c4;
+  --flow-soft: #77869a;
+  --flow-accent: #8ea2ff;
+  --flow-accent-soft: rgba(142, 162, 255, 0.13);
+}
+
+:root[data-exm-theme="dark"] .studio:not(.studio-home),
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .flow-shell,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .canvas-card,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .react-flow,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .react-flow.light,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .react-flow__renderer,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .react-flow__pane,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .react-flow__viewport {
+  background:
+    radial-gradient(circle at 1px 1px, var(--flow-canvas-dot) 1px, transparent 0) 0 0 / 22px 22px,
+    var(--flow-canvas-bg) !important;
+}
+
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .workspace-topbar,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .dify-top-status,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .studio-head,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .canvas-bottom-bar {
+  border-color: var(--flow-border-soft) !important;
+  background: #0f1722 !important;
+  color: var(--flow-text) !important;
+}
+
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .workspace-actions button,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .activity-info-button,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .workflow-edit-button,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .dify-float-toolbar button,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .head-actions .ghost-action,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .zoom-toolbar,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .zoom-toolbar button,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .dify-left-rail,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .react-flow__controls,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .react-flow__controls button,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .react-flow__minimap,
+:root[data-exm-theme="dark"] .context-menu {
+  border-color: var(--flow-border) !important;
+  background: #111a26 !important;
+  color: var(--flow-text) !important;
+}
+
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .dify-float-toolbar .debug-action,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .dify-float-toolbar .publish-action {
+  border-color: #8ea2ff !important;
+  background: #7188f5 !important;
+  color: #fff !important;
+}
+
+:root[data-exm-theme="dark"] .context-menu {
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.32) !important;
+}
+
+:root[data-exm-theme="dark"] .context-menu button {
+  color: #d6deeb !important;
+}
+
+:root[data-exm-theme="dark"] .context-menu button:hover:not(:disabled) {
+  background: #1a2534 !important;
+  color: #f8fafc !important;
+}
+
+:root[data-exm-theme="dark"] .activity-node {
+  border-color: #2b3646 !important;
+  background: #111821 !important;
+  box-shadow:
+    0 14px 30px rgba(0, 0, 0, 0.28),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.035) !important;
+}
+
+:root[data-exm-theme="dark"] .activity-node:hover {
+  border-color: #4b5b70 !important;
+  box-shadow:
+    0 18px 34px rgba(0, 0, 0, 0.34),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.055) !important;
+}
+
+:root[data-exm-theme="dark"] .react-flow__node.selected .activity-node {
+  border-color: #e8b44b !important;
+  box-shadow:
+    0 0 0 1px rgba(232, 180, 75, 0.78),
+    0 20px 38px rgba(0, 0, 0, 0.38) !important;
+}
+
+:root[data-exm-theme="dark"] .activity-node-head,
+:root[data-exm-theme="dark"] .activity-node .activity-node-head,
+:root[data-exm-theme="dark"] .react-flow__node.validation-block .activity-node-head,
+:root[data-exm-theme="dark"] .react-flow__node.validation-warning .activity-node-head {
+  border-color: #263241 !important;
+  border-bottom-color: #263241 !important;
+  background: #182231 !important;
+  color: #f8fafc !important;
+}
+
+:root[data-exm-theme="dark"] .activity-node.entry .activity-node-head { box-shadow: inset 4px 0 0 #60a5fa; }
+:root[data-exm-theme="dark"] .activity-node.store .activity-node-head { box-shadow: inset 4px 0 0 #34d399; }
+:root[data-exm-theme="dark"] .activity-node.transform .activity-node-head { box-shadow: inset 4px 0 0 #38bdf8; }
+:root[data-exm-theme="dark"] .activity-node.logic .activity-node-head { box-shadow: inset 4px 0 0 #fbbf24; }
+:root[data-exm-theme="dark"] .activity-node.query .activity-node-head { box-shadow: inset 4px 0 0 #a78bfa; }
+:root[data-exm-theme="dark"] .activity-node.reward .activity-node-head { box-shadow: inset 4px 0 0 #fb923c; }
+:root[data-exm-theme="dark"] .activity-node.quota .activity-node-head { box-shadow: inset 4px 0 0 #f87171; }
+:root[data-exm-theme="dark"] .activity-node.grant .activity-node-head { box-shadow: inset 4px 0 0 #2dd4bf; }
+:root[data-exm-theme="dark"] .activity-node.dispatch .activity-node-head { box-shadow: inset 4px 0 0 #818cf8; }
+:root[data-exm-theme="dark"] .activity-node.callback .activity-node-head { box-shadow: inset 4px 0 0 #f472b6; }
+:root[data-exm-theme="dark"] .activity-node.reliable .activity-node-head { box-shadow: inset 4px 0 0 #94a3b8; }
+:root[data-exm-theme="dark"] .activity-node.audit .activity-node-head { box-shadow: inset 4px 0 0 #a3e635; }
+
+:root[data-exm-theme="dark"] .activity-node-head strong,
+:root[data-exm-theme="dark"] .activity-node p,
+:root[data-exm-theme="dark"] .variable-row strong,
+:root[data-exm-theme="dark"] .branch-expression strong {
+  color: #e9eef7 !important;
+}
+
+:root[data-exm-theme="dark"] .node-title-block span,
+:root[data-exm-theme="dark"] .activity-node span,
+:root[data-exm-theme="dark"] .activity-node em,
+:root[data-exm-theme="dark"] .variable-row span,
+:root[data-exm-theme="dark"] .output-handle-label {
+  color: #9caabd !important;
+}
+
+:root[data-exm-theme="dark"] .chips span,
+:root[data-exm-theme="dark"] .variable-row,
+:root[data-exm-theme="dark"] .branch-expression,
+:root[data-exm-theme="dark"] .branch-output-row {
+  border-color: #2b3646 !important;
+  background: #0d131c !important;
+  color: #cbd5e1 !important;
+}
+
+:root[data-exm-theme="dark"] .note-flow-node {
+  border-color: #35445a !important;
+  border-top-color: #7c8cff !important;
+  background: #131c29 !important;
+  color: #dbe4ef !important;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.24) !important;
+}
+
+:root[data-exm-theme="dark"] .group-node {
+  border-color: rgba(142, 162, 255, 0.46) !important;
+  background: rgba(17, 24, 36, 0.52) !important;
+}
+
+:root[data-exm-theme="dark"] .group-node-head {
+  border-bottom-color: rgba(142, 162, 255, 0.28) !important;
+  background: rgba(24, 34, 49, 0.92) !important;
+  color: #dbe4ff !important;
+}
+
+:root[data-exm-theme="dark"] .react-flow__edge path,
+:root[data-exm-theme="dark"] .react-flow__edge .react-flow__edge-path {
+  stroke: #748196;
+  filter: none;
+}
+
+:root[data-exm-theme="dark"] .react-flow__edge.edge-route-default path,
+:root[data-exm-theme="dark"] .react-flow__edge.edge-route-default .react-flow__edge-path {
+  stroke: #66758a;
+  opacity: 0.72;
+}
+
+:root[data-exm-theme="dark"] .react-flow__edge.edge-route-condition path,
+:root[data-exm-theme="dark"] .react-flow__edge.edge-route-condition .react-flow__edge-path {
+  stroke: #8ea2ff;
+}
+
+:root[data-exm-theme="dark"] .react-flow__edge.edge-route-terminal path,
+:root[data-exm-theme="dark"] .react-flow__edge.edge-route-terminal .react-flow__edge-path {
+  stroke: #fb923c;
+}
+
+:root[data-exm-theme="dark"] .react-flow__edge .react-flow__edge-textbg,
+:root[data-exm-theme="dark"] .react-flow__edge.edge-route-default .react-flow__edge-textbg,
+:root[data-exm-theme="dark"] .react-flow__edge.edge-route-condition .react-flow__edge-textbg,
+:root[data-exm-theme="dark"] .react-flow__edge.edge-route-terminal .react-flow__edge-textbg {
+  fill: #111821;
+  stroke: #2b3646;
+}
+
+:root[data-exm-theme="dark"] .react-flow__edge .react-flow__edge-text,
+:root[data-exm-theme="dark"] .react-flow__edge.edge-route-default .react-flow__edge-text,
+:root[data-exm-theme="dark"] .react-flow__edge.edge-route-condition .react-flow__edge-text,
+:root[data-exm-theme="dark"] .react-flow__edge.edge-route-terminal .react-flow__edge-text {
+  fill: #d8e0ec;
+}
+
+:root[data-exm-theme="dark"] .react-flow__minimap-mask {
+  fill: rgba(7, 11, 18, 0.76) !important;
+}
+
+:root[data-exm-theme="dark"] .react-flow__minimap-node {
+  fill: #273244 !important;
+  stroke: #435167 !important;
+}
+
+/* Flow editor dark mode v2: softer product-grade contrast. */
+:root[data-exm-theme="dark"] {
+  --flow-page-bg: #11151c;
+  --flow-canvas-bg: #151a22;
+  --flow-canvas-dot: rgba(148, 163, 184, 0.095);
+  --flow-surface: #171d26;
+  --flow-surface-elevated: #202733;
+  --flow-border: #303a49;
+  --flow-border-soft: #252d39;
+  --flow-text: #dbe3ee;
+  --flow-heading: #f4f7fb;
+  --flow-muted: #9aa8ba;
+  --flow-soft: #788699;
+  --flow-accent: #7f95ff;
+  --flow-accent-soft: rgba(127, 149, 255, 0.14);
+}
+
+:root[data-exm-theme="dark"] body,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) {
+  background: #11151c !important;
+}
+
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .canvas-card,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .react-flow,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .react-flow.light,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .react-flow__renderer,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .react-flow__pane,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .react-flow__viewport {
+  background:
+    radial-gradient(circle at 1px 1px, var(--flow-canvas-dot) 1px, transparent 0) 0 0 / 24px 24px,
+    var(--flow-canvas-bg) !important;
+  color: var(--flow-text) !important;
+}
+
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .workspace-topbar,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .dify-top-status,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .studio-head,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .canvas-bottom-bar {
+  border-color: #252d39 !important;
+  background: #121821 !important;
+}
+
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .app-tabs button {
+  min-height: 40px !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  color: #a6b2c3 !important;
+}
+
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .app-tabs button.active {
+  border-bottom-color: #7f95ff !important;
+  background: transparent !important;
+  color: #eef2ff !important;
+}
+
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .dify-float-toolbar button,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .workspace-actions button,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .head-actions .ghost-action,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .zoom-toolbar,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .zoom-toolbar button,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .dify-left-rail,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .react-flow__controls,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .react-flow__controls button {
+  border-color: #303a49 !important;
+  background: #171d26 !important;
+  color: #c8d2df !important;
+}
+
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .dify-float-toolbar button:hover:not(:disabled),
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .workspace-actions button:hover:not(:disabled),
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .head-actions .ghost-action:hover,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .zoom-toolbar button:hover,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .react-flow__controls button:hover {
+  border-color: #435066 !important;
+  background: #202733 !important;
+  color: #f4f7fb !important;
+}
+
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .dify-float-toolbar .debug-action {
+  border-color: #7f95ff !important;
+  background: #6f85f7 !important;
+  color: #fff !important;
+}
+
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .dify-float-toolbar .publish-action {
+  border-color: #8ea2ff !important;
+  background: #7f95ff !important;
+  color: #fff !important;
+}
+
+:root[data-exm-theme="dark"] .activity-node {
+  border-color: #344052 !important;
+  background: #1b222d !important;
+  box-shadow:
+    0 10px 24px rgba(0, 0, 0, 0.22),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.032) !important;
+}
+
+:root[data-exm-theme="dark"] .activity-node:hover {
+  border-color: #516176 !important;
+  box-shadow:
+    0 14px 28px rgba(0, 0, 0, 0.26),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.05) !important;
+}
+
+:root[data-exm-theme="dark"] .activity-node-head,
+:root[data-exm-theme="dark"] .activity-node .activity-node-head {
+  border-color: #344052 !important;
+  background: #222b38 !important;
+}
+
+:root[data-exm-theme="dark"] .node-title-block span,
+:root[data-exm-theme="dark"] .activity-node span,
+:root[data-exm-theme="dark"] .activity-node em,
+:root[data-exm-theme="dark"] .variable-row span,
+:root[data-exm-theme="dark"] .output-handle-label {
+  color: #a7b3c4 !important;
+}
+
+:root[data-exm-theme="dark"] .chips span,
+:root[data-exm-theme="dark"] .variable-row,
+:root[data-exm-theme="dark"] .branch-expression,
+:root[data-exm-theme="dark"] .branch-output-row {
+  border-color: #344052 !important;
+  background: #151b24 !important;
+}
+
+:root[data-exm-theme="dark"] .react-flow__edge.edge-route-default path,
+:root[data-exm-theme="dark"] .react-flow__edge.edge-route-default .react-flow__edge-path {
+  stroke: #8793a6;
+  opacity: 0.64;
+}
+
+:root[data-exm-theme="dark"] .react-flow__edge path,
+:root[data-exm-theme="dark"] .react-flow__edge .react-flow__edge-path {
+  stroke: #8b98ac;
+  opacity: 0.74;
+}
+
+:root[data-exm-theme="dark"] .react-flow__edge.selected path,
+:root[data-exm-theme="dark"] .react-flow__edge:hover path,
+:root[data-exm-theme="dark"] .react-flow__edge.edge-hover path {
+  stroke: #93a5ff;
+  opacity: 1;
+}
+
+:root[data-exm-theme="dark"] .context-menu {
+  border-color: #344052 !important;
+  background: #1b222d !important;
+}
+
+/* Flow editor dark mode v3: remove blue cast, keep a neutral design-tool palette. */
+:root[data-exm-theme="dark"] {
+  --flow-page-bg: #111113;
+  --flow-canvas-bg: #1b1b20;
+  --flow-canvas-dot: rgba(212, 212, 216, 0.09);
+  --flow-surface: #222228;
+  --flow-surface-elevated: #2b2b32;
+  --flow-border: #3c3c44;
+  --flow-border-soft: #2a2a30;
+  --flow-text: #e4e4e7;
+  --flow-heading: #fafafa;
+  --flow-muted: #a1a1aa;
+  --flow-soft: #71717a;
+  --flow-accent: var(--theme-accent);
+  --flow-accent-soft: var(--theme-accent-soft);
+}
+
+:root[data-exm-theme="dark"] body,
+:root[data-exm-theme="dark"] .studio:not(.studio-home),
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .flow-shell {
+  background: #111113 !important;
+}
+
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .canvas-card,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .react-flow,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .react-flow.light,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .react-flow__renderer,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .react-flow__pane,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .react-flow__viewport {
+  background:
+    radial-gradient(circle at 1px 1px, var(--flow-canvas-dot) 1px, transparent 0) 0 0 / 24px 24px,
+    #1b1b20 !important;
+}
+
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .workspace-topbar,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .dify-top-status,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .studio-head,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .canvas-bottom-bar {
+  border-color: #2a2a30 !important;
+  background: #111113 !important;
+  color: #e4e4e7 !important;
+}
+
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .workspace-brand > span,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .activity-status,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .workflow-breadcrumb,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .workflow-breadcrumb button,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .workflow-breadcrumb span,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .workflow-breadcrumb i,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .studio-head p {
+  color: #a1a1aa !important;
+}
+
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .dify-float-toolbar button,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .workspace-actions button,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .head-actions .ghost-action,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .zoom-toolbar,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .zoom-toolbar button,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .dify-left-rail,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .react-flow__controls,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .react-flow__controls button,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .react-flow__minimap,
+:root[data-exm-theme="dark"] .context-menu {
+  border-color: #35353b !important;
+  background: #1f1f23 !important;
+  color: #d4d4d8 !important;
+}
+
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .dify-float-toolbar button:hover:not(:disabled),
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .workspace-actions button:hover:not(:disabled),
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .head-actions .ghost-action:hover,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .zoom-toolbar button:hover,
+:root[data-exm-theme="dark"] .studio:not(.studio-home) .react-flow__controls button:hover,
+:root[data-exm-theme="dark"] .context-menu button:hover:not(:disabled) {
+  border-color: #4a4a52 !important;
+  background: #27272c !important;
+  color: #fafafa !important;
+}
+
+:root[data-exm-theme="dark"] .activity-node {
+  border-color: #41414a !important;
+  background: #24242a !important;
+  box-shadow:
+    0 10px 22px rgba(0, 0, 0, 0.24),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.028) !important;
+}
+
+:root[data-exm-theme="dark"] .activity-node:hover {
+  border-color: #5a5a64 !important;
+  box-shadow:
+    0 14px 30px rgba(0, 0, 0, 0.30),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.045) !important;
+}
+
+:root[data-exm-theme="dark"] .activity-node-head,
+:root[data-exm-theme="dark"] .activity-node .activity-node-head,
+:root[data-exm-theme="dark"] .react-flow__node.validation-block .activity-node-head,
+:root[data-exm-theme="dark"] .react-flow__node.validation-warning .activity-node-head {
+  border-color: #3a3a42 !important;
+  background: #303037 !important;
+  color: #fafafa !important;
+}
+
+:root[data-exm-theme="dark"] .chips span,
+:root[data-exm-theme="dark"] .variable-row,
+:root[data-exm-theme="dark"] .branch-expression,
+:root[data-exm-theme="dark"] .branch-output-row {
+  border-color: #36363d !important;
+  background: #18181b !important;
+}
+
+:root[data-exm-theme="dark"] .react-flow__edge path,
+:root[data-exm-theme="dark"] .react-flow__edge .react-flow__edge-path {
+  stroke: #9ca3af;
+  opacity: 0.66;
+}
+
+:root[data-exm-theme="dark"] .react-flow__edge.edge-route-default path,
+:root[data-exm-theme="dark"] .react-flow__edge.edge-route-default .react-flow__edge-path {
+  stroke: #858b96;
+  opacity: 0.55;
+}
+
+:root[data-exm-theme="dark"] .react-flow__edge .react-flow__edge-textbg,
+:root[data-exm-theme="dark"] .react-flow__edge.edge-route-default .react-flow__edge-textbg,
+:root[data-exm-theme="dark"] .react-flow__edge.edge-route-condition .react-flow__edge-textbg,
+:root[data-exm-theme="dark"] .react-flow__edge.edge-route-terminal .react-flow__edge-textbg {
+  fill: #202024;
+  stroke: #3a3a42;
+}
+
+:root[data-exm-theme="dark"] .react-flow__minimap-mask {
+  fill: rgba(24, 24, 27, 0.74) !important;
+}
+
+:root[data-exm-theme="dark"] .react-flow__minimap-node {
+  fill: #3a3a42 !important;
+  stroke: #55555f !important;
+}
+
+/* Flow connection polish: selection outlines the node and handles stay outside content. */
+:root[data-exm-theme="dark"] .react-flow__node.selected .activity-node,
+:root[data-exm-theme="dark"] .activity-node.is-selected {
+  border-color: #7f95ff !important;
+  background: #24242a !important;
+  box-shadow:
+    0 0 0 2px rgba(127, 149, 255, 0.52),
+    0 16px 30px rgba(0, 0, 0, 0.30),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.035) !important;
+}
+
+:root[data-exm-theme="dark"] .react-flow__node.selected .activity-node-head,
+:root[data-exm-theme="dark"] .activity-node.is-selected .activity-node-head {
+  background: #303037 !important;
+}
+
+:root[data-exm-theme="dark"] .react-flow__node.selected .activity-node::before,
+:root[data-exm-theme="dark"] .activity-node.is-selected::before {
+  content: "";
+  position: absolute;
+  inset: -5px;
+  border: 1px solid rgba(127, 149, 255, 0.22);
+  border-radius: 10px;
+  pointer-events: none;
+}
+
+:root[data-exm-theme="dark"] .react-flow__handle.input-anchor-handle,
+:root[data-exm-theme="dark"] .react-flow__handle.output-anchor-handle {
+  width: 18px !important;
+  height: 18px !important;
+  opacity: 1 !important;
+}
+
+:root[data-exm-theme="dark"] .react-flow__handle.input-anchor-handle {
+  left: -4px !important;
+}
+
+:root[data-exm-theme="dark"] .react-flow__handle.output-anchor-handle {
+  right: -4px !important;
+}
+
+:root[data-exm-theme="dark"] .input-handle-visual,
+:root[data-exm-theme="dark"] .output-handle-visual,
+:root[data-exm-theme="dark"] .branch-output-handle-visual {
+  width: 9px !important;
+  height: 9px !important;
+  border-width: 1.5px !important;
+  border-color: var(--theme-accent) !important;
+  background: #1b1b20 !important;
+  box-shadow: 0 0 0 2px #24242a !important;
+  opacity: 0.88;
+}
+
+:root[data-exm-theme="dark"] .input-handle-visual {
+  left: -9px !important;
+}
+
+:root[data-exm-theme="dark"] .output-handle-visual,
+:root[data-exm-theme="dark"] .branch-output-handle-visual {
+  right: -9px !important;
+}
+
+:root[data-exm-theme="dark"] .branch-output-handle-visual.route-if,
+:root[data-exm-theme="dark"] .branch-output-handle-visual.route-pass {
+  border-color: #5ee08c !important;
+}
+
+:root[data-exm-theme="dark"] .branch-output-handle-visual.route-elif,
+:root[data-exm-theme="dark"] .branch-output-handle-visual.route-block,
+:root[data-exm-theme="dark"] .branch-output-handle-visual.route-risk {
+  border-color: #ff7a8a !important;
+}
+
+:root[data-exm-theme="dark"] .branch-output-handle-visual.route-else,
+:root[data-exm-theme="dark"] .branch-output-handle-visual.route-skip {
+  border-color: #a1a1aa !important;
+}
+
+:root[data-exm-theme="dark"] .activity-node:hover .input-handle-visual,
+:root[data-exm-theme="dark"] .react-flow__node.selected .input-handle-visual,
+:root[data-exm-theme="dark"] .activity-node:hover .output-handle-visual,
+:root[data-exm-theme="dark"] .activity-node:hover .branch-output-handle-visual,
+:root[data-exm-theme="dark"] .react-flow__node.selected .output-handle-visual,
+:root[data-exm-theme="dark"] .react-flow__node.selected .branch-output-handle-visual {
+  opacity: 1;
+  border-color: var(--theme-accent-strong) !important;
+  box-shadow: 0 0 0 2px #24242a, 0 0 0 5px rgba(127, 149, 255, 0.14) !important;
+}
+
+:root[data-exm-theme="dark"] .react-flow__handle.input-anchor-handle:hover + .input-handle-visual,
+:root[data-exm-theme="dark"] .react-flow__handle.output-anchor-handle:hover + .output-handle-visual {
+  width: 12px !important;
+  height: 12px !important;
+  background: #27304a !important;
+  border-color: #c7d2fe !important;
+  box-shadow: 0 0 0 2px #24242a, 0 0 0 6px rgba(127, 149, 255, 0.18) !important;
+}
+
+:root[data-exm-theme="dark"] .output-handle-label {
+  right: 22px !important;
+  color: #a1a1aa !important;
+  opacity: 0 !important;
+  pointer-events: none;
+}
+
+:root[data-exm-theme="dark"] .activity-node:hover .output-handle-label,
+:root[data-exm-theme="dark"] .react-flow__node.selected .output-handle-label {
+  color: #d4d4d8 !important;
+  opacity: 0.56 !important;
+  transform: translateY(-50%) !important;
+}
+
+:root[data-exm-theme="dark"] .react-flow__handle.output-anchor-handle:hover ~ .output-handle-tooltip {
+  border: 1px solid #3a3a42;
+  background: #24242a;
+  color: #e4e4e7;
+  box-shadow: 0 12px 26px rgba(0, 0, 0, 0.34);
+}
+
+:root[data-exm-theme="dark"] .react-flow__handle.output-anchor-handle:hover ~ .output-handle-tooltip b,
+:root[data-exm-theme="dark"] .react-flow__handle.output-anchor-handle:hover ~ .output-handle-tooltip span {
+  color: #e4e4e7;
+}
+
+:root[data-exm-theme="dark"] .react-flow__handle.output-anchor-handle:hover ~ .output-handle-tooltip em {
+  color: #a1a1aa;
+}
+
+/* Property panel dark mode final pass: keep the inspector in the same neutral theme as the canvas. */
+:root[data-exm-theme="dark"] .property-panel {
+  --pi-bg: #17171b;
+  --pi-bg-soft: #1d1d22;
+  --pi-line: #33333a;
+  --pi-text: #f4f4f5;
+  --pi-text-soft: #d4d4d8;
+  --pi-muted: #a1a1aa;
+  --pi-blue: var(--theme-accent);
+  border-color: #2a2a30 !important;
+  background: #17171b !important;
+  color: #e4e4e7 !important;
+}
+
+:root[data-exm-theme="dark"] .property-panel .property-head {
+  border-color: #2f2f36 !important;
+  border-left-color: transparent !important;
+  border-right-color: transparent !important;
+  border-top-color: transparent !important;
+  border-bottom-color: #2f2f36 !important;
+  background: #1d1d22 !important;
+}
+
+:root[data-exm-theme="dark"] .property-panel .property-title-with-icon b {
+  color: #fafafa !important;
+}
+
+:root[data-exm-theme="dark"] .property-panel .property-title-with-icon .node-icon {
+  background: #27272c !important;
+  color: var(--theme-accent-strong) !important;
+}
+
+:root[data-exm-theme="dark"] .property-panel .property-preview-head-button {
+  border-color: #3a3a42 !important;
+  background: #24242a !important;
+  color: #d4d4d8 !important;
+}
+
+:root[data-exm-theme="dark"] .property-panel .property-preview-head-button:hover:not(:disabled) {
+  border-color: #555560 !important;
+  background: #303037 !important;
+  color: #fafafa !important;
+}
+
+:root[data-exm-theme="dark"] .property-panel .property-tabs {
+  border-color: #2f2f36 !important;
+  border-left-color: transparent !important;
+  border-right-color: transparent !important;
+  border-top-color: transparent !important;
+  border-bottom-color: #2f2f36 !important;
+  background: #202026 !important;
+}
+
+:root[data-exm-theme="dark"] .property-panel .property-tabs button {
+  background: transparent !important;
+  color: #a1a1aa !important;
+}
+
+:root[data-exm-theme="dark"] .property-panel .property-tabs button:hover:not(:disabled) {
+  color: #e4e4e7 !important;
+}
+
+:root[data-exm-theme="dark"] .property-panel .property-tabs button.active {
+  color: var(--theme-accent-strong) !important;
+}
+
+:root[data-exm-theme="dark"] .property-panel .property-tabs button.active::after {
+  background: var(--theme-accent) !important;
+}
+
+:root[data-exm-theme="dark"] .property-panel .config-body,
+:root[data-exm-theme="dark"] .property-panel .property-body,
+:root[data-exm-theme="dark"] .property-panel .basic-body {
+  background: #17171b !important;
+  color: #e4e4e7 !important;
+}
+
+:root[data-exm-theme="dark"] .property-panel .property-node-summary,
+:root[data-exm-theme="dark"] .property-panel .schema-config-group,
+:root[data-exm-theme="dark"] .property-panel .config-accordion-section,
+:root[data-exm-theme="dark"] .property-panel .property-section,
+:root[data-exm-theme="dark"] .property-panel .provider-chain-step,
+:root[data-exm-theme="dark"] .property-panel .run-summary.empty {
+  border-color: #33333a !important;
+  background: transparent !important;
+  color: #e4e4e7 !important;
+  box-shadow: none !important;
+}
+
+:root[data-exm-theme="dark"] .property-panel .config-accordion-head,
+:root[data-exm-theme="dark"] .property-panel .property-config-toolbar {
+  border-color: #33333a !important;
+}
+
+:root[data-exm-theme="dark"] .property-panel .property-node-title-editor span,
+:root[data-exm-theme="dark"] .property-panel .property-node-summary-meta em,
+:root[data-exm-theme="dark"] .property-panel .schema-config-row > span b,
+:root[data-exm-theme="dark"] .property-panel .schema-config-row > span em,
+:root[data-exm-theme="dark"] .property-panel .config-accordion-head small,
+:root[data-exm-theme="dark"] .property-panel .property-section p {
+  color: #a1a1aa !important;
+}
+
+:root[data-exm-theme="dark"] .property-panel .property-node-summary-meta b,
+:root[data-exm-theme="dark"] .property-panel .config-accordion-head b,
+:root[data-exm-theme="dark"] .property-panel .property-config-toolbar b,
+:root[data-exm-theme="dark"] .property-panel .schema-config-group-head b,
+:root[data-exm-theme="dark"] .property-panel .property-section h3 {
+  color: #e4e4e7 !important;
+}
+
+:root[data-exm-theme="dark"] .property-panel .basic-body .property-node-summary-meta {
+  border-top-color: #3a3a42 !important;
+}
+
+:root[data-exm-theme="dark"] .property-panel .basic-body .property-node-summary-meta span {
+  border-bottom-color: #3a3a42 !important;
+}
+
+:root[data-exm-theme="dark"] .property-panel input,
+:root[data-exm-theme="dark"] .property-panel select,
+:root[data-exm-theme="dark"] .property-panel textarea,
+:root[data-exm-theme="dark"] .property-panel .schema-config-row input,
+:root[data-exm-theme="dark"] .property-panel .schema-config-row select,
+:root[data-exm-theme="dark"] .property-panel .schema-config-row textarea,
+:root[data-exm-theme="dark"] .property-panel .provider-chain-fields label input,
+:root[data-exm-theme="dark"] .property-panel .provider-chain-fields label select,
+:root[data-exm-theme="dark"] .property-panel .basic-body .property-node-title-editor input {
+  border-color: #3a3a42 !important;
+  background: #24242a !important;
+  color: #f4f4f5 !important;
+}
+
+:root[data-exm-theme="dark"] .property-panel input:hover,
+:root[data-exm-theme="dark"] .property-panel select:hover,
+:root[data-exm-theme="dark"] .property-panel textarea:hover {
+  border-color: #555560 !important;
+}
+
+:root[data-exm-theme="dark"] .property-panel input:focus,
+:root[data-exm-theme="dark"] .property-panel select:focus,
+:root[data-exm-theme="dark"] .property-panel textarea:focus {
+  border-color: var(--theme-accent) !important;
+  background: #27272c !important;
+  outline: none !important;
+  box-shadow: 0 0 0 3px rgba(139, 156, 255, 0.15) !important;
+}
+
+:root[data-exm-theme="dark"] .property-panel input::placeholder,
+:root[data-exm-theme="dark"] .property-panel textarea::placeholder {
+  color: #71717a !important;
+}
+
+/* Dark inspector multi-select: avoid the light-blue expanded block. */
+:root[data-exm-theme="dark"] .property-panel .schema-multi-select {
+  border: 1px solid #3a3a42 !important;
+  border-radius: 8px !important;
+  background: #24242a !important;
+  color: #f4f4f5 !important;
+  overflow: hidden !important;
+}
+
+:root[data-exm-theme="dark"] .property-panel .schema-multi-select[open] {
+  border-color: #555560 !important;
+  background: #1f1f24 !important;
+  box-shadow: 0 0 0 3px var(--theme-accent-soft) !important;
+}
+
+:root[data-exm-theme="dark"] .property-panel .schema-multi-select summary {
+  min-height: 36px !important;
+  border: 0 !important;
+  border-bottom: 1px solid transparent !important;
+  background: #24242a !important;
+  color: #f4f4f5 !important;
+  padding: 0 34px 0 10px !important;
+}
+
+:root[data-exm-theme="dark"] .property-panel .schema-multi-select[open] summary {
+  border-bottom-color: #33333a !important;
+  background: #27272d !important;
+}
+
+:root[data-exm-theme="dark"] .property-panel .schema-multi-select summary span {
+  color: #f4f4f5 !important;
+  font-weight: 650 !important;
+}
+
+:root[data-exm-theme="dark"] .property-panel .schema-multi-select summary em {
+  border: 0 !important;
+  background: var(--theme-accent-soft) !important;
+  color: #c7d2fe !important;
+}
+
+:root[data-exm-theme="dark"] .property-panel .schema-multi-select > div {
+  max-height: 220px !important;
+  border: 0 !important;
+  background: #1f1f24 !important;
+  padding: 4px !important;
+  overflow: auto !important;
+}
+
+:root[data-exm-theme="dark"] .property-panel .schema-multi-select > div::-webkit-scrollbar {
+  width: 8px;
+}
+
+:root[data-exm-theme="dark"] .property-panel .schema-multi-select > div::-webkit-scrollbar-track {
+  background: #1f1f24;
+}
+
+:root[data-exm-theme="dark"] .property-panel .schema-multi-select > div::-webkit-scrollbar-thumb {
+  border: 2px solid #1f1f24;
+  border-radius: 999px;
+  background: #555560;
+}
+
+:root[data-exm-theme="dark"] .property-panel .schema-multi-select label {
+  min-height: 36px !important;
+  border: 0 !important;
+  border-radius: 7px !important;
+  background: transparent !important;
+  color: #d4d4d8 !important;
+  padding: 0 8px !important;
+}
+
+:root[data-exm-theme="dark"] .property-panel .schema-multi-select label + label {
+  border-top: 0 !important;
+}
+
+:root[data-exm-theme="dark"] .property-panel .schema-multi-select label:hover {
+  background: #2a2a31 !important;
+  color: #f4f4f5 !important;
+}
+
+:root[data-exm-theme="dark"] .property-panel .schema-multi-select label:has(input:checked) {
+  background: var(--theme-accent-soft) !important;
+  color: #f4f4f5 !important;
+}
+
+:root[data-exm-theme="dark"] .property-panel .schema-multi-select label input[type="checkbox"],
+:root[data-exm-theme="dark"] .property-panel input[type="checkbox"] {
+  width: 14px !important;
+  height: 14px !important;
+  min-height: 14px !important;
+  accent-color: var(--theme-accent) !important;
+  border-color: #555560 !important;
+  background: #18181b !important;
+}
+
+:root[data-exm-theme="dark"] .property-panel .schema-multi-select label span {
+  color: inherit !important;
+  font-size: 12px !important;
+  font-weight: 650 !important;
+}
+
+/* Dark canvas node hint chips. */
+:root[data-exm-theme="dark"] .activity-node .node-drag-hint {
+  height: 14px !important;
+  margin: -4px 10px 6px !important;
+  color: #9ca3af !important;
+  gap: 4px !important;
+}
+
+:root[data-exm-theme="dark"] .activity-node .node-drag-hint span {
+  border: 1px solid #3a3a42 !important;
+  border-radius: 999px !important;
+  background: #1b1b20 !important;
+  color: #a1a1aa !important;
+  padding: 1px 5px !important;
+  box-shadow: none !important;
+}
+
+:root[data-exm-theme="dark"] .activity-node:hover .node-drag-hint span,
+:root[data-exm-theme="dark"] .react-flow__node.selected .node-drag-hint span {
+  border-color: #555560 !important;
+  background: #24242a !important;
+  color: #d4d4d8 !important;
+}
+
+/* Same multi-select fix scoped to the dark editor surface for cases where root theme is not present. */
+.studio:not(.studio-home) ~ .property-panel .schema-multi-select,
+.flow-shell .property-panel .schema-multi-select {
+  border: 1px solid #3a3a42 !important;
+  border-radius: 8px !important;
+  background: #24242a !important;
+  color: #f4f4f5 !important;
+  overflow: hidden !important;
+}
+
+.studio:not(.studio-home) ~ .property-panel .schema-multi-select[open],
+.flow-shell .property-panel .schema-multi-select[open] {
+  border-color: #555560 !important;
+  background: #1f1f24 !important;
+  box-shadow: 0 0 0 3px var(--theme-accent-soft) !important;
+}
+
+.studio:not(.studio-home) ~ .property-panel .schema-multi-select summary,
+.flow-shell .property-panel .schema-multi-select summary {
+  min-height: 36px !important;
+  border: 0 !important;
+  border-bottom: 1px solid transparent !important;
+  background: #24242a !important;
+  color: #f4f4f5 !important;
+  padding: 0 34px 0 10px !important;
+}
+
+.studio:not(.studio-home) ~ .property-panel .schema-multi-select[open] summary,
+.flow-shell .property-panel .schema-multi-select[open] summary {
+  border-bottom-color: #33333a !important;
+  background: #27272d !important;
+}
+
+.studio:not(.studio-home) ~ .property-panel .schema-multi-select summary span,
+.flow-shell .property-panel .schema-multi-select summary span {
+  color: #f4f4f5 !important;
+  font-weight: 650 !important;
+}
+
+.studio:not(.studio-home) ~ .property-panel .schema-multi-select summary em,
+.flow-shell .property-panel .schema-multi-select summary em {
+  border: 0 !important;
+  background: var(--theme-accent-soft) !important;
+  color: #c7d2fe !important;
+}
+
+.studio:not(.studio-home) ~ .property-panel .schema-multi-select > div,
+.flow-shell .property-panel .schema-multi-select > div {
+  max-height: 220px !important;
+  border: 0 !important;
+  background: #1f1f24 !important;
+  padding: 4px !important;
+  overflow: auto !important;
+}
+
+.studio:not(.studio-home) ~ .property-panel .schema-multi-select label,
+.flow-shell .property-panel .schema-multi-select label {
+  min-height: 36px !important;
+  border: 0 !important;
+  border-radius: 7px !important;
+  background: transparent !important;
+  color: #d4d4d8 !important;
+  padding: 0 8px !important;
+}
+
+.studio:not(.studio-home) ~ .property-panel .schema-multi-select label:hover,
+.flow-shell .property-panel .schema-multi-select label:hover {
+  background: #2a2a31 !important;
+  color: #f4f4f5 !important;
+}
+
+.studio:not(.studio-home) ~ .property-panel .schema-multi-select label:has(input:checked),
+.flow-shell .property-panel .schema-multi-select label:has(input:checked) {
+  background: var(--theme-accent-soft) !important;
+  color: #f4f4f5 !important;
+}
+
+/* Admin-flow dark theme consolidation: editor, inspector, overlays and workspace surfaces. */
+:root[data-exm-theme="dark"],
+.flow-shell,
+.studio-start-shell {
+  --exm-dark-page: var(--theme-page);
+  --exm-dark-canvas: var(--theme-canvas);
+  --exm-dark-surface: var(--theme-surface);
+  --exm-dark-surface-2: var(--theme-surface-raised);
+  --exm-dark-surface-3: var(--theme-surface-hover);
+  --exm-dark-line: var(--theme-border);
+  --exm-dark-line-strong: var(--theme-border-strong);
+  --exm-dark-text: var(--theme-text);
+  --exm-dark-body: var(--theme-text-body);
+  --exm-dark-muted: var(--theme-text-muted);
+  --exm-dark-soft: var(--theme-text-soft);
+  --exm-dark-accent: var(--theme-accent);
+  --exm-dark-accent-strong: var(--theme-accent-strong);
+  --exm-dark-accent-soft: var(--theme-accent-soft);
+  --exm-dark-danger-soft: var(--theme-danger-soft);
+  --exm-dark-warn-soft: var(--theme-warning-soft);
+  --exm-dark-success-soft: var(--theme-success-soft);
+}
+
+:root[data-exm-theme="dark"] :is(.property-panel, .node-picker, .context-menu, .activity-picker-popover, .workflow-template-panel, .run-history-panel, .debug-run-panel, .publish-confirm-modal, .activity-settings-modal, .version-popover, .checklist-popover, .config-preview-popover, .studio-ops-panel, .studio-browser-panel),
+.flow-shell :is(.property-panel, .node-picker, .context-menu, .activity-picker-popover, .workflow-template-panel, .run-history-panel, .debug-run-panel, .publish-confirm-modal, .activity-settings-modal, .version-popover, .checklist-popover, .config-preview-popover, .studio-ops-panel, .studio-browser-panel) {
+  border-color: var(--exm-dark-line) !important;
+  background: var(--exm-dark-surface) !important;
+  color: var(--exm-dark-body) !important;
+  box-shadow: 0 22px 60px rgba(0, 0, 0, 0.42) !important;
+}
+
+:root[data-exm-theme="dark"] :is(.property-panel, .node-picker, .context-menu, .activity-picker-popover, .workflow-template-panel, .run-history-panel, .debug-run-panel, .publish-confirm-modal, .activity-settings-modal, .version-popover, .checklist-popover, .config-preview-popover) :is(header, footer, .modal-head, .modal-foot, .panel-head, .panel-footer, .config-accordion-head, .picker-tabs, .template-actions, .debug-actions),
+.flow-shell :is(.property-panel, .node-picker, .context-menu, .activity-picker-popover, .workflow-template-panel, .run-history-panel, .debug-run-panel, .publish-confirm-modal, .activity-settings-modal, .version-popover, .checklist-popover, .config-preview-popover) :is(header, footer, .modal-head, .modal-foot, .panel-head, .panel-footer, .config-accordion-head, .picker-tabs, .template-actions, .debug-actions) {
+  border-color: var(--exm-dark-line) !important;
+  background: var(--exm-dark-surface-2) !important;
+  color: var(--exm-dark-body) !important;
+}
+
+:root[data-exm-theme="dark"] :is(.property-panel, .node-picker, .context-menu, .activity-picker-popover, .workflow-template-panel, .run-history-panel, .debug-run-panel, .publish-confirm-modal, .activity-settings-modal, .version-popover, .checklist-popover, .config-preview-popover) :is(h1, h2, h3, h4, b, strong, label),
+.flow-shell :is(.property-panel, .node-picker, .context-menu, .activity-picker-popover, .workflow-template-panel, .run-history-panel, .debug-run-panel, .publish-confirm-modal, .activity-settings-modal, .version-popover, .checklist-popover, .config-preview-popover) :is(h1, h2, h3, h4, b, strong, label) {
+  color: var(--exm-dark-text) !important;
+}
+
+:root[data-exm-theme="dark"] :is(.property-panel, .node-picker, .context-menu, .activity-picker-popover, .workflow-template-panel, .run-history-panel, .debug-run-panel, .publish-confirm-modal, .activity-settings-modal, .version-popover, .checklist-popover, .config-preview-popover) :is(p, span, small, em, i, code),
+.flow-shell :is(.property-panel, .node-picker, .context-menu, .activity-picker-popover, .workflow-template-panel, .run-history-panel, .debug-run-panel, .publish-confirm-modal, .activity-settings-modal, .version-popover, .checklist-popover, .config-preview-popover) :is(p, span, small, em, i, code) {
+  color: inherit;
+}
+
+:root[data-exm-theme="dark"] :is(.property-panel, .node-picker, .context-menu, .activity-picker-popover, .workflow-template-panel, .run-history-panel, .debug-run-panel, .publish-confirm-modal, .activity-settings-modal, .version-popover, .checklist-popover, .config-preview-popover) :is(input:not([type="checkbox"]):not([type="radio"]), select, textarea, summary, .ta-input, .schema-switch-row),
+.flow-shell :is(.property-panel, .node-picker, .context-menu, .activity-picker-popover, .workflow-template-panel, .run-history-panel, .debug-run-panel, .publish-confirm-modal, .activity-settings-modal, .version-popover, .checklist-popover, .config-preview-popover) :is(input:not([type="checkbox"]):not([type="radio"]), select, textarea, summary, .ta-input, .schema-switch-row) {
+  border-color: var(--exm-dark-line) !important;
+  background: var(--exm-dark-surface-2) !important;
+  color: var(--exm-dark-text) !important;
+}
+
+:root[data-exm-theme="dark"] :is(.property-panel, .node-picker, .context-menu, .activity-picker-popover, .workflow-template-panel, .run-history-panel, .debug-run-panel, .publish-confirm-modal, .activity-settings-modal, .version-popover, .checklist-popover, .config-preview-popover) :is(input:not([type="checkbox"]):not([type="radio"]), select, textarea, summary, .ta-input):focus,
+.flow-shell :is(.property-panel, .node-picker, .context-menu, .activity-picker-popover, .workflow-template-panel, .run-history-panel, .debug-run-panel, .publish-confirm-modal, .activity-settings-modal, .version-popover, .checklist-popover, .config-preview-popover) :is(input:not([type="checkbox"]):not([type="radio"]), select, textarea, summary, .ta-input):focus {
+  border-color: var(--exm-dark-accent) !important;
+  background: var(--exm-dark-surface-3) !important;
+  box-shadow: 0 0 0 3px var(--theme-accent-soft) !important;
+  outline: none !important;
+}
+
+:root[data-exm-theme="dark"] :is(.property-panel, .node-picker, .context-menu, .activity-picker-popover, .workflow-template-panel, .run-history-panel, .debug-run-panel, .publish-confirm-modal, .activity-settings-modal, .version-popover, .checklist-popover, .config-preview-popover) :is(input::placeholder, textarea::placeholder),
+.flow-shell :is(.property-panel, .node-picker, .context-menu, .activity-picker-popover, .workflow-template-panel, .run-history-panel, .debug-run-panel, .publish-confirm-modal, .activity-settings-modal, .version-popover, .checklist-popover, .config-preview-popover) :is(input::placeholder, textarea::placeholder) {
+  color: var(--exm-dark-soft) !important;
+}
+
+:root[data-exm-theme="dark"] :is(.property-panel, .node-picker, .context-menu, .activity-picker-popover, .workflow-template-panel, .run-history-panel, .debug-run-panel, .publish-confirm-modal, .activity-settings-modal, .version-popover, .checklist-popover, .config-preview-popover) :is(button, .ta-btn),
+.flow-shell :is(.property-panel, .node-picker, .context-menu, .activity-picker-popover, .workflow-template-panel, .run-history-panel, .debug-run-panel, .publish-confirm-modal, .activity-settings-modal, .version-popover, .checklist-popover, .config-preview-popover) :is(button, .ta-btn) {
+  border-color: var(--exm-dark-line) !important;
+  background: var(--exm-dark-surface-2) !important;
+  color: var(--exm-dark-body) !important;
+}
+
+:root[data-exm-theme="dark"] :is(.property-panel, .node-picker, .context-menu, .activity-picker-popover, .workflow-template-panel, .run-history-panel, .debug-run-panel, .publish-confirm-modal, .activity-settings-modal, .version-popover, .checklist-popover, .config-preview-popover) :is(button, .ta-btn):hover:not(:disabled),
+.flow-shell :is(.property-panel, .node-picker, .context-menu, .activity-picker-popover, .workflow-template-panel, .run-history-panel, .debug-run-panel, .publish-confirm-modal, .activity-settings-modal, .version-popover, .checklist-popover, .config-preview-popover) :is(button, .ta-btn):hover:not(:disabled) {
+  border-color: var(--exm-dark-line-strong) !important;
+  background: var(--exm-dark-surface-3) !important;
+  color: var(--exm-dark-text) !important;
+}
+
+:root[data-exm-theme="dark"] :is(.property-panel, .node-picker, .context-menu, .activity-picker-popover, .workflow-template-panel, .run-history-panel, .debug-run-panel, .publish-confirm-modal, .activity-settings-modal, .version-popover, .checklist-popover, .config-preview-popover) :is(button.active, .ta-btn.active, .primary, .publish-confirm-primary),
+.flow-shell :is(.property-panel, .node-picker, .context-menu, .activity-picker-popover, .workflow-template-panel, .run-history-panel, .debug-run-panel, .publish-confirm-modal, .activity-settings-modal, .version-popover, .checklist-popover, .config-preview-popover) :is(button.active, .ta-btn.active, .primary, .publish-confirm-primary) {
+  border-color: var(--theme-accent-border) !important;
+  background: var(--exm-dark-accent-soft) !important;
+  color: var(--exm-dark-text) !important;
+}
+
+:root[data-exm-theme="dark"] :is(.property-panel, .debug-run-panel) :is(.schema-config-group, .config-accordion-section, .property-section, .property-node-summary, .provider-chain-step, .provider-chain-fields, .qualify-rule-chain-card, .qualify-rule-card, .eligibility-condition-row, .quota-rule-card, .reward-candidate-card, .run-summary, .node-run-key-data, .property-disclosure),
+.flow-shell :is(.property-panel, .debug-run-panel) :is(.schema-config-group, .config-accordion-section, .property-section, .property-node-summary, .provider-chain-step, .provider-chain-fields, .qualify-rule-chain-card, .qualify-rule-card, .eligibility-condition-row, .quota-rule-card, .reward-candidate-card, .run-summary, .node-run-key-data, .property-disclosure) {
+  border-color: var(--exm-dark-line) !important;
+  background: transparent !important;
+  color: var(--exm-dark-body) !important;
+  box-shadow: none !important;
+}
+
+:root[data-exm-theme="dark"] :is(.property-panel, .debug-run-panel) :is(.qualify-rule-inputs code, .qualify-rule-card code, .provider-chain-step-summary, .schema-config-description, .config-empty, .run-summary.empty),
+.flow-shell :is(.property-panel, .debug-run-panel) :is(.qualify-rule-inputs code, .qualify-rule-card code, .provider-chain-step-summary, .schema-config-description, .config-empty, .run-summary.empty) {
+  border-color: var(--exm-dark-line) !important;
+  background: var(--exm-dark-surface-2) !important;
+  color: var(--exm-dark-muted) !important;
+}
+
+:root[data-exm-theme="dark"] .property-panel :is(.property-info-popover, .config-preview-popover) p,
+.flow-shell .property-panel :is(.property-info-popover, .config-preview-popover) p {
+  border-color: var(--exm-dark-line) !important;
+  background: var(--exm-dark-surface-2) !important;
+  color: var(--exm-dark-body) !important;
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.38) !important;
+}
+
+:root[data-exm-theme="dark"] :is(.property-panel, .debug-run-panel) :is(.schema-multi-select, .schema-multi-select summary, .schema-multi-select > div),
+.flow-shell :is(.property-panel, .debug-run-panel) :is(.schema-multi-select, .schema-multi-select summary, .schema-multi-select > div) {
+  border-color: var(--exm-dark-line) !important;
+  background: var(--exm-dark-surface-2) !important;
+  color: var(--exm-dark-text) !important;
+}
+
+:root[data-exm-theme="dark"] :is(.property-panel, .debug-run-panel) .schema-multi-select[open],
+.flow-shell :is(.property-panel, .debug-run-panel) .schema-multi-select[open] {
+  border-color: var(--exm-dark-line-strong) !important;
+  background: var(--exm-dark-surface) !important;
+  box-shadow: 0 0 0 3px var(--theme-accent-soft) !important;
+}
+
+:root[data-exm-theme="dark"] :is(.property-panel, .debug-run-panel) .schema-multi-select > div,
+.flow-shell :is(.property-panel, .debug-run-panel) .schema-multi-select > div {
+  background: var(--exm-dark-surface) !important;
+}
+
+:root[data-exm-theme="dark"] :is(.property-panel, .debug-run-panel) .schema-multi-select label,
+.flow-shell :is(.property-panel, .debug-run-panel) .schema-multi-select label {
+  border-color: transparent !important;
+  background: transparent !important;
+  color: var(--exm-dark-body) !important;
+}
+
+:root[data-exm-theme="dark"] :is(.property-panel, .debug-run-panel) .schema-multi-select label:hover,
+.flow-shell :is(.property-panel, .debug-run-panel) .schema-multi-select label:hover {
+  background: var(--exm-dark-surface-2) !important;
+}
+
+:root[data-exm-theme="dark"] :is(.property-panel, .debug-run-panel) .schema-multi-select label:has(input:checked),
+.flow-shell :is(.property-panel, .debug-run-panel) .schema-multi-select label:has(input:checked) {
+  background: var(--exm-dark-accent-soft) !important;
+  color: var(--exm-dark-text) !important;
+}
+
+:root[data-exm-theme="dark"] :is(.property-panel, .debug-run-panel) input[type="checkbox"],
+.flow-shell :is(.property-panel, .debug-run-panel) input[type="checkbox"] {
+  accent-color: var(--exm-dark-accent) !important;
+}
+
+:root[data-exm-theme="dark"] :is(.node-picker, .context-menu) :is(button, label),
+.flow-shell :is(.node-picker, .context-menu) :is(button, label) {
+  border-color: transparent !important;
+  background: transparent !important;
+  color: var(--exm-dark-body) !important;
+}
+
+:root[data-exm-theme="dark"] :is(.node-picker, .context-menu) :is(button, label):hover:not(:disabled),
+.flow-shell :is(.node-picker, .context-menu) :is(button, label):hover:not(:disabled) {
+  background: var(--exm-dark-surface-2) !important;
+  color: var(--exm-dark-text) !important;
+}
+
+:root[data-exm-theme="dark"] :is(.node-picker, .context-menu) :is(.disabled, button:disabled),
+.flow-shell :is(.node-picker, .context-menu) :is(.disabled, button:disabled) {
+  color: var(--exm-dark-soft) !important;
+  opacity: 0.64 !important;
+}
+
+:root[data-exm-theme="dark"] :is(.workflow-template-panel, .run-history-panel, .version-popover, .checklist-popover) :is(.template-card, .run-history-item, .version-item, .checklist-row, li),
+.flow-shell :is(.workflow-template-panel, .run-history-panel, .version-popover, .checklist-popover) :is(.template-card, .run-history-item, .version-item, .checklist-row, li) {
+  border-color: var(--exm-dark-line) !important;
+  background: var(--exm-dark-surface-2) !important;
+  color: var(--exm-dark-body) !important;
+}
+
+:root[data-exm-theme="dark"] :is(.workflow-template-panel, .run-history-panel, .version-popover, .checklist-popover) :is(.template-card, .run-history-item, .version-item, .checklist-row, li):hover,
+.flow-shell :is(.workflow-template-panel, .run-history-panel, .version-popover, .checklist-popover) :is(.template-card, .run-history-item, .version-item, .checklist-row, li):hover {
+  border-color: var(--exm-dark-line-strong) !important;
+  background: var(--exm-dark-surface-3) !important;
+}
+
+:root[data-exm-theme="dark"] :is(.publish-confirm-modal, .activity-settings-modal) :is(.publish-warning, .warning, .danger-zone),
+.flow-shell :is(.publish-confirm-modal, .activity-settings-modal) :is(.publish-warning, .warning, .danger-zone) {
+  border-color: var(--theme-warning-border) !important;
+  background: var(--exm-dark-warn-soft) !important;
+  color: var(--theme-warning) !important;
+}
+
+:root[data-exm-theme="dark"] :is(.publish-confirm-modal, .activity-settings-modal) :is(.danger, .rollback, .archive) {
+  border-color: var(--theme-danger-border) !important;
+  background: var(--exm-dark-danger-soft) !important;
+  color: var(--theme-danger) !important;
+}
+
+:root[data-exm-theme="dark"] :is(.studio:not(.studio-home), .flow-shell) :is(.canvas-card, .react-flow, .react-flow__pane, .react-flow__renderer) {
+  background-color: var(--exm-dark-canvas) !important;
+}
+
+:root[data-exm-theme="dark"] .studio:not(.studio-home) :is(.workspace-topbar, .flow-toolbar, .studio-bottom-bar, .canvas-status-bar) {
+  border-color: var(--exm-dark-line) !important;
+  background: #121318 !important;
+  color: var(--exm-dark-body) !important;
+}
+
+:root[data-exm-theme="dark"] .studio:not(.studio-home) :is(.flow-toolbar button, .workspace-topbar button, .studio-bottom-bar button, .canvas-status-bar button) {
+  border-color: var(--exm-dark-line) !important;
+  background: var(--exm-dark-surface-2) !important;
+  color: var(--exm-dark-body) !important;
+}
+
+:root[data-exm-theme="dark"] .studio:not(.studio-home) :is(.flow-toolbar button, .workspace-topbar button, .studio-bottom-bar button, .canvas-status-bar button):hover:not(:disabled) {
+  border-color: var(--exm-dark-line-strong) !important;
+  background: var(--exm-dark-surface-3) !important;
+  color: var(--exm-dark-text) !important;
+}
+
+:root[data-exm-theme="dark"] .studio:not(.studio-home) :is(.flow-toolbar button.active, .workspace-topbar button.active, .studio-bottom-bar button.active, .canvas-status-bar button.active) {
+  border-color: var(--theme-accent-border) !important;
+  background: var(--exm-dark-accent-soft) !important;
+  color: var(--exm-dark-text) !important;
+}
+
+:root[data-exm-theme="dark"] .studio-start-shell :is(.exm-workspace-main, .exm-content, .exm-content-tools, .exm-list-table, .exm-table-wrap, .exm-grid-view, .exm-detail-panel, .exm-sidebar) {
+  border-color: var(--exm-dark-line) !important;
+  background: var(--exm-dark-surface) !important;
+  color: var(--exm-dark-body) !important;
+}
+
+:root[data-exm-theme="dark"] .studio-start-shell :is(.exm-content-tabs button, .exm-content-tools button, .exm-sidebar button, .exm-detail-panel button) {
+  border-color: var(--exm-dark-line) !important;
+  background: transparent !important;
+  color: var(--exm-dark-muted) !important;
+}
+
+:root[data-exm-theme="dark"] .studio-start-shell :is(.exm-content-tabs button.active, .exm-content-tools button.active, .exm-sidebar button.active, .exm-detail-panel button.active, .exm-sidebar-item.active) {
+  border-color: var(--theme-accent-border) !important;
+  background: var(--exm-dark-accent-soft) !important;
+  color: var(--exm-dark-text) !important;
+}
+
+:root[data-exm-theme="dark"] .studio-start-shell :is(.exm-content-tabs button:hover, .exm-content-tools button:hover, .exm-sidebar button:hover, .exm-detail-panel button:hover, .exm-sidebar-item:hover) {
+  border-color: var(--exm-dark-line-strong) !important;
+  background: var(--exm-dark-surface-2) !important;
+  color: var(--exm-dark-text) !important;
+}
+
+:root[data-exm-theme="dark"] .studio-start-shell :is(.exm-table-row, .exm-grid-card, .exm-template-card, .exm-detail-create-actions, .exm-sidebar-storage) {
+  border-color: var(--exm-dark-line) !important;
+  background: var(--exm-dark-surface-2) !important;
+  color: var(--exm-dark-body) !important;
+}
+
+:root[data-exm-theme="dark"] .studio-start-shell :is(.exm-table-row:hover, .exm-grid-card:hover, .exm-template-card:hover) {
+  border-color: var(--exm-dark-line-strong) !important;
+  background: var(--exm-dark-surface-3) !important;
+}
+
+:root[data-exm-theme="dark"] .studio-start-shell :is(input, select, textarea, .exm-search) {
+  border-color: var(--exm-dark-line) !important;
+  background: var(--exm-dark-surface-2) !important;
+  color: var(--exm-dark-text) !important;
+}
+
+:root[data-exm-theme="dark"] :is(.property-panel, .node-picker, .context-menu, .activity-picker-popover, .workflow-template-panel, .run-history-panel, .debug-run-panel, .publish-confirm-modal, .activity-settings-modal, .version-popover, .checklist-popover, .studio-start-shell) ::-webkit-scrollbar-track {
+  background: var(--exm-dark-surface);
+}
+
+:root[data-exm-theme="dark"] :is(.property-panel, .node-picker, .context-menu, .activity-picker-popover, .workflow-template-panel, .run-history-panel, .debug-run-panel, .publish-confirm-modal, .activity-settings-modal, .version-popover, .checklist-popover, .studio-start-shell) ::-webkit-scrollbar-thumb {
+  border-color: var(--exm-dark-surface);
+  background: var(--exm-dark-line-strong);
+}
+
+/* Admin-flow dark theme visible remnant cleanup. */
+:root[data-exm-theme="dark"] .studio-start-shell .exm-workspace-layout {
+  background: var(--theme-code-bg) !important;
+  color: var(--exm-dark-body) !important;
+}
+
+:root[data-exm-theme="dark"] :is(.node-palette, .node-palette .palette-head, .node-palette .palette-body, .node-palette .palette-section, .node-palette .palette-item),
+:root[data-exm-theme="dark"] .flow-shell :is(.node-palette, .node-palette .palette-head, .node-palette .palette-body, .node-palette .palette-section, .node-palette .palette-item) {
+  border-color: var(--exm-dark-line) !important;
+  background: var(--exm-dark-surface) !important;
+  color: var(--exm-dark-body) !important;
+  box-shadow: none !important;
+}
+
+:root[data-exm-theme="dark"] .node-palette :is(h3, h4, b, strong) {
+  color: var(--exm-dark-text) !important;
+}
+
+:root[data-exm-theme="dark"] .node-palette :is(p, span, small, em) {
+  color: var(--exm-dark-muted) !important;
+}
+
+:root[data-exm-theme="dark"] .node-palette :is(button, input) {
+  border-color: var(--exm-dark-line) !important;
+  background: var(--exm-dark-surface-2) !important;
+  color: var(--exm-dark-body) !important;
+}
+
+:root[data-exm-theme="dark"] .node-palette :is(button, input):hover:not(:disabled) {
+  border-color: var(--exm-dark-line-strong) !important;
+  background: var(--exm-dark-surface-3) !important;
+  color: var(--exm-dark-text) !important;
+}
+
+:root[data-exm-theme="dark"] :is(.activity-node .node-hover-toolbar, .activity-node-head .node-hover-toolbar) {
+  border: 1px solid var(--exm-dark-line) !important;
+  background: var(--exm-dark-surface-2) !important;
+  color: var(--exm-dark-body) !important;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.34) !important;
+}
+
+:root[data-exm-theme="dark"] .activity-node :is(.node-hover-toolbar button, .activity-node-head button, .node-delete) {
+  border-color: var(--exm-dark-line) !important;
+  background: var(--exm-dark-surface-2) !important;
+  color: var(--exm-dark-muted) !important;
+  box-shadow: none !important;
+}
+
+:root[data-exm-theme="dark"] .activity-node :is(.node-hover-toolbar button, .activity-node-head button, .node-delete):hover {
+  border-color: var(--exm-dark-line-strong) !important;
+  background: var(--exm-dark-surface-3) !important;
+  color: var(--exm-dark-text) !important;
+}
+
+:root[data-exm-theme="dark"] .activity-node .node-delete {
+  color: #fca5a5 !important;
+}
+
+:root[data-exm-theme="dark"] .activity-node :is(.node-kind-icon, .node-icon) {
+  border-color: var(--exm-dark-line) !important;
+  background: var(--exm-dark-surface-2) !important;
+  color: var(--exm-dark-accent-strong) !important;
+}
+
+:root[data-exm-theme="dark"] .activity-node :is(.output-handle-tooltip, .node-run-pill, .node-summary-tag, .field-badge, .node-meta-pill) {
+  border-color: var(--exm-dark-line) !important;
+  background: var(--exm-dark-surface-2) !important;
+  color: var(--exm-dark-body) !important;
+  box-shadow: none !important;
+}
+
+:root[data-exm-theme="dark"] .activity-node :is(.output-handle-tooltip b, .output-handle-tooltip span, .node-run-pill em) {
+  color: var(--exm-dark-body) !important;
+}
+
+:root[data-exm-theme="dark"] .property-panel :is(.debug-callout, .debug-schedule-box, .debug-result-card, .node-run-status-card, .node-run-key-data, .node-run-full-toggle, .lua-context-help, .resource-list, .resource-detail) {
+  border-color: var(--exm-dark-line) !important;
+  background: var(--exm-dark-surface-2) !important;
+  color: var(--exm-dark-body) !important;
+}
+
+:root[data-exm-theme="dark"] .property-panel :is(.debug-callout.real, .debug-result-card.skipped) {
+  border-color: var(--theme-warning-border) !important;
+  background: var(--exm-dark-warn-soft) !important;
+}
+
+:root[data-exm-theme="dark"] .property-panel :is(.debug-result-card.success, .node-run-status-card.run-success) {
+  border-color: var(--theme-success-border) !important;
+  background: var(--exm-dark-success-soft) !important;
+}
+
+:root[data-exm-theme="dark"] .property-panel :is(.debug-result-card.failed, .node-run-status-card.run-failed, .resource-manager-error) {
+  border-color: var(--theme-danger-border) !important;
+  background: var(--exm-dark-danger-soft) !important;
+}
+
+:root[data-exm-theme="dark"] .property-panel :is(.debug-result-metrics b, .debug-result-list code, .debug-log-list code, .node-run-log-block code, .lua-context-help code) {
+  border-color: var(--exm-dark-line) !important;
+  background: var(--theme-code-bg) !important;
+  color: var(--exm-dark-body) !important;
+}
+
+:root[data-exm-theme="dark"] .property-panel .resource-list button {
+  border-color: var(--exm-dark-line) !important;
+  background: var(--exm-dark-surface) !important;
+  color: var(--exm-dark-body) !important;
+}
+
+:root[data-exm-theme="dark"] .property-panel .resource-list button.active {
+  border-color: var(--theme-accent-border) !important;
+  background: var(--exm-dark-accent-soft) !important;
+}
+
+:root[data-exm-theme="dark"] .property-panel .resource-list i {
+  background: var(--exm-dark-surface-3) !important;
+  color: var(--exm-dark-accent-strong) !important;
+}
+
+:root[data-exm-theme="dark"] :is(.flow-sidebar, .flow-sidebar .palette-head, .flow-sidebar .palette-section, .flow-sidebar .palette-list) {
+  border-color: var(--exm-dark-line) !important;
+  background: var(--exm-dark-surface) !important;
+  color: var(--exm-dark-body) !important;
+  box-shadow: none !important;
+}
+
+:root[data-exm-theme="dark"] .flow-sidebar :is(h3, h4, b, strong) {
+  color: var(--exm-dark-text) !important;
+}
+
+:root[data-exm-theme="dark"] .flow-sidebar :is(p, span, small, em) {
+  color: var(--exm-dark-muted) !important;
+}
+
+:root[data-exm-theme="dark"] .flow-sidebar :is(button, input) {
+  border-color: var(--exm-dark-line) !important;
+  background: var(--exm-dark-surface-2) !important;
+  color: var(--exm-dark-body) !important;
+}
+
+:root[data-exm-theme="dark"] .flow-sidebar :is(button, input):hover:not(:disabled) {
+  border-color: var(--exm-dark-line-strong) !important;
+  background: var(--exm-dark-surface-3) !important;
+  color: var(--exm-dark-text) !important;
+}
+
+:root[data-exm-theme="dark"] .activity-node .variable-row em,
+:root[data-exm-theme="dark"] .activity-node .branch-expression span {
+  border-color: var(--exm-dark-line) !important;
+  background: var(--exm-dark-surface-2) !important;
+  color: var(--exm-dark-muted) !important;
+}
+
+/* Admin-flow dark theme: remaining pages and low-frequency panels. */
+.checkin-page {
+  --exm-dark-page: var(--theme-page);
+  --exm-dark-canvas: var(--theme-canvas);
+  --exm-dark-surface: var(--theme-surface);
+  --exm-dark-surface-2: var(--theme-surface-raised);
+  --exm-dark-surface-3: var(--theme-surface-hover);
+  --exm-dark-line: var(--theme-border);
+  --exm-dark-line-strong: var(--theme-border-strong);
+  --exm-dark-text: var(--theme-text);
+  --exm-dark-body: var(--theme-text-body);
+  --exm-dark-muted: var(--theme-text-muted);
+  --exm-dark-soft: var(--theme-text-soft);
+  --exm-dark-accent: var(--theme-accent);
+  --exm-dark-accent-strong: var(--theme-accent-strong);
+  --exm-dark-accent-soft: var(--theme-accent-soft);
+  --exm-dark-danger-soft: var(--theme-danger-soft);
+  --exm-dark-warn-soft: var(--theme-warning-soft);
+  --exm-dark-success-soft: var(--theme-success-soft);
+  background:
+    radial-gradient(circle at 16% 4%, var(--theme-accent-soft), transparent 28%),
+    linear-gradient(180deg, var(--theme-page-elevated) 0%, var(--theme-page) 100%) !important;
+  color: var(--exm-dark-body) !important;
+}
+
+.checkin-page :is(.checkin-header, .checkin-overview, .checkin-card, .checkin-api-result, .checkin-flow, .checkin-contract, .checkin-user-panel, .checkin-reward-panel, .checkin-days > div, .checkin-flow article, .checkin-contract div, .checkin-api-result > div) {
+  border-color: var(--exm-dark-line) !important;
+  background: var(--exm-dark-surface) !important;
+  color: var(--exm-dark-body) !important;
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.28) !important;
+}
+
+.checkin-page :is(h1, h2, h3, b, strong, .checkin-user-main b, .checkin-reward-panel b, .checkin-metrics b, .checkin-days b, .checkin-flow b, .checkin-api-result b) {
+  color: var(--exm-dark-text) !important;
+}
+
+.checkin-page .checkin-metrics span {
+  border-color: var(--exm-dark-line) !important;
+  background: var(--exm-dark-surface-2) !important;
+  color: var(--exm-dark-muted) !important;
+}
+
+.checkin-page :is(p, span, em, small, .checkin-header p, .checkin-reward-panel p, .checkin-action-row span, .checkin-flow em) {
+  color: var(--exm-dark-muted) !important;
+}
+
+.checkin-page :is(a, button) {
+  border-color: var(--exm-dark-line) !important;
+  background: var(--exm-dark-surface-2) !important;
+  color: var(--exm-dark-body) !important;
+  box-shadow: none !important;
+}
+
+.checkin-page :is(a, button):hover:not(:disabled) {
+  border-color: var(--exm-dark-line-strong) !important;
+  background: var(--exm-dark-surface-3) !important;
+  color: var(--exm-dark-text) !important;
+}
+
+.checkin-page .checkin-action-row button:not(:disabled) {
+  border-color: var(--theme-accent-border) !important;
+  background: linear-gradient(135deg, var(--theme-accent-strong), var(--theme-accent)) !important;
+  color: var(--theme-on-accent) !important;
+}
+
+.checkin-page :is(.checkin-avatar, .checkin-flow i, .checkin-contract svg) {
+  background: var(--exm-dark-accent-soft) !important;
+  color: var(--exm-dark-accent-strong) !important;
+}
+
+.checkin-page .checkin-days > div.done,
+.checkin-page .checkin-api-result.accepted,
+.checkin-page .checkin-flow article.success {
+  border-color: var(--theme-success-border) !important;
+  background: var(--exm-dark-success-soft) !important;
+}
+
+.checkin-page .checkin-days > div.active {
+  border-color: var(--theme-accent-border) !important;
+  background: var(--exm-dark-accent-soft) !important;
+}
+
+.checkin-page :is(.checkin-api-result.duplicate, .checkin-api-result.rejected, .checkin-flow article.skipped) {
+  border-color: var(--theme-warning-border) !important;
+  background: var(--exm-dark-warn-soft) !important;
+}
+
+.checkin-page :is(.checkin-api-result.failed, .checkin-flow article.failed) {
+  border-color: var(--theme-danger-border) !important;
+  background: var(--exm-dark-danger-soft) !important;
+}
+
+.checkin-page .checkin-api-result pre {
+  border-color: var(--exm-dark-line) !important;
+  background: var(--theme-code-bg) !important;
+  color: var(--exm-dark-body) !important;
+}
+
+:root[data-exm-theme="dark"] :is(.run-history-panel, .workflow-template-panel, .version-popover, .checklist-popover, .activity-picker-popover, .publish-confirm-modal, .activity-settings-modal, .debug-run-panel, .studio-create-dialog:has(.resource-manager)) :is(.run-history-grid, .run-history-grid section, .run-execution-item, .run-node-item, .run-route-trace button, .run-detail-summary, .run-execution-detail div, .run-node-explain div, .run-compare-panel, .run-compare-head, .run-compare-grid div, .run-compare-payload-diff section, .run-json-diff-rows div, .run-timeline, .run-timeline-head, .run-timeline-controls, .workflow-template-catalog, .workflow-template-preview, .workflow-template-preview-card, .workflow-template-manage-grid, .workflow-template-copy, .workflow-template-compare, .workflow-template-diff, .workflow-template-save, .workflow-template-params, .workflow-template-node-preview span, .checklist-summary, .checklist-pass, .checklist-empty, .checklist-row, .checklist-summary-row, .activity-picker-tree, .activity-picker-workflow-pane, .activity-picker-tree button, .activity-picker-workflow-list button, .activity-picker-empty, .publish-confirm-grid, .activity-settings-grid label, .resource-manager, .resource-list, .resource-detail, .resource-form, .resource-binding-form),
+.flow-shell :is(.run-history-panel, .workflow-template-panel, .version-popover, .checklist-popover, .activity-picker-popover, .publish-confirm-modal, .activity-settings-modal, .debug-run-panel, .studio-create-dialog:has(.resource-manager)) :is(.run-history-grid, .run-history-grid section, .run-execution-item, .run-node-item, .run-route-trace button, .run-detail-summary, .run-execution-detail div, .run-node-explain div, .run-compare-panel, .run-compare-head, .run-compare-grid div, .run-compare-payload-diff section, .run-json-diff-rows div, .run-timeline, .run-timeline-head, .run-timeline-controls, .workflow-template-catalog, .workflow-template-preview, .workflow-template-preview-card, .workflow-template-manage-grid, .workflow-template-copy, .workflow-template-compare, .workflow-template-diff, .workflow-template-save, .workflow-template-params, .workflow-template-node-preview span, .checklist-summary, .checklist-pass, .checklist-empty, .checklist-row, .checklist-summary-row, .activity-picker-tree, .activity-picker-workflow-pane, .activity-picker-tree button, .activity-picker-workflow-list button, .activity-picker-empty, .publish-confirm-grid, .activity-settings-grid label, .resource-manager, .resource-list, .resource-detail, .resource-form, .resource-binding-form) {
+  border-color: var(--exm-dark-line) !important;
+  background: var(--exm-dark-surface) !important;
+  color: var(--exm-dark-body) !important;
+  box-shadow: none !important;
+}
+
+:root[data-exm-theme="dark"] :is(.run-history-panel, .workflow-template-panel, .version-popover, .checklist-popover, .activity-picker-popover, .publish-confirm-modal, .activity-settings-modal, .debug-run-panel, .studio-create-dialog:has(.resource-manager)) :is(.run-execution-item:hover, .run-node-item:hover, .run-route-trace button:hover, .workflow-template-panel section > button:hover, .activity-picker-tree button:hover, .activity-picker-workflow-list button:hover, .checklist-row:hover, .resource-list button:hover),
+.flow-shell :is(.run-history-panel, .workflow-template-panel, .version-popover, .checklist-popover, .activity-picker-popover, .publish-confirm-modal, .activity-settings-modal, .debug-run-panel, .studio-create-dialog:has(.resource-manager)) :is(.run-execution-item:hover, .run-node-item:hover, .run-route-trace button:hover, .workflow-template-panel section > button:hover, .activity-picker-tree button:hover, .activity-picker-workflow-list button:hover, .checklist-row:hover, .resource-list button:hover) {
+  border-color: var(--exm-dark-line-strong) !important;
+  background: var(--exm-dark-surface-2) !important;
+  color: var(--exm-dark-text) !important;
+}
+
+:root[data-exm-theme="dark"] :is(.run-history-panel, .workflow-template-panel, .version-popover, .checklist-popover, .activity-picker-popover, .publish-confirm-modal, .activity-settings-modal, .debug-run-panel, .studio-create-dialog:has(.resource-manager)) :is(.active, button.active, .run-execution-item.active, .run-node-item.active, .activity-picker-tree button.active, .activity-picker-workflow-list button.active, .resource-list button.active),
+.flow-shell :is(.run-history-panel, .workflow-template-panel, .version-popover, .checklist-popover, .activity-picker-popover, .publish-confirm-modal, .activity-settings-modal, .debug-run-panel, .studio-create-dialog:has(.resource-manager)) :is(.active, button.active, .run-execution-item.active, .run-node-item.active, .activity-picker-tree button.active, .activity-picker-workflow-list button.active, .resource-list button.active) {
+  border-color: var(--theme-accent-border) !important;
+  background: var(--exm-dark-accent-soft) !important;
+  color: var(--exm-dark-text) !important;
+}
+
+:root[data-exm-theme="dark"] :is(.run-history-panel, .workflow-template-panel, .version-popover, .checklist-popover, .activity-picker-popover, .publish-confirm-modal, .activity-settings-modal, .debug-run-panel, .studio-create-dialog:has(.resource-manager)) :is(input, select, textarea),
+.flow-shell :is(.run-history-panel, .workflow-template-panel, .version-popover, .checklist-popover, .activity-picker-popover, .publish-confirm-modal, .activity-settings-modal, .debug-run-panel, .studio-create-dialog:has(.resource-manager)) :is(input, select, textarea) {
+  border-color: var(--exm-dark-line) !important;
+  background: var(--exm-dark-surface-2) !important;
+  color: var(--exm-dark-text) !important;
+}
+
+:root[data-exm-theme="dark"] :is(.run-history-panel, .workflow-template-panel, .version-popover, .checklist-popover, .activity-picker-popover, .publish-confirm-modal, .activity-settings-modal, .debug-run-panel, .studio-create-dialog:has(.resource-manager)) :is(h1, h2, h3, h4, b, strong, label, dt, dd),
+.flow-shell :is(.run-history-panel, .workflow-template-panel, .version-popover, .checklist-popover, .activity-picker-popover, .publish-confirm-modal, .activity-settings-modal, .debug-run-panel, .studio-create-dialog:has(.resource-manager)) :is(h1, h2, h3, h4, b, strong, label, dt, dd) {
+  color: var(--exm-dark-text) !important;
+}
+
+:root[data-exm-theme="dark"] :is(.run-history-panel, .workflow-template-panel, .version-popover, .checklist-popover, .activity-picker-popover, .publish-confirm-modal, .activity-settings-modal, .debug-run-panel, .studio-create-dialog:has(.resource-manager)) :is(p, span, small, em, code, li),
+.flow-shell :is(.run-history-panel, .workflow-template-panel, .version-popover, .checklist-popover, .activity-picker-popover, .publish-confirm-modal, .activity-settings-modal, .debug-run-panel, .studio-create-dialog:has(.resource-manager)) :is(p, span, small, em, code, li) {
+  color: var(--exm-dark-muted) !important;
+}
+
+:root[data-exm-theme="dark"] :is(.run-history-panel, .workflow-template-panel, .version-popover, .checklist-popover, .activity-picker-popover, .publish-confirm-modal, .activity-settings-modal, .debug-run-panel, .studio-create-dialog:has(.resource-manager)) :is(pre, .run-json-diff-rows code, .node-run-json-block pre, .debug-result-list code, .debug-log-list code),
+.flow-shell :is(.run-history-panel, .workflow-template-panel, .version-popover, .checklist-popover, .activity-picker-popover, .publish-confirm-modal, .activity-settings-modal, .debug-run-panel, .studio-create-dialog:has(.resource-manager)) :is(pre, .run-json-diff-rows code, .node-run-json-block pre, .debug-result-list code, .debug-log-list code) {
+  border-color: var(--exm-dark-line) !important;
+  background: var(--theme-code-bg) !important;
+  color: var(--exm-dark-body) !important;
+}
+
+:root[data-exm-theme="dark"] :is(.run-execution-item.run-success, .run-node-item.run-success, .checklist-summary-row.status-pass, .checklist-row.validation-pass, .workflow-template-preview-card strong.valid),
+.flow-shell :is(.run-execution-item.run-success, .run-node-item.run-success, .checklist-summary-row.status-pass, .checklist-row.validation-pass, .workflow-template-preview-card strong.valid) {
+  border-color: var(--theme-success-border) !important;
+  background: var(--exm-dark-success-soft) !important;
+  color: var(--theme-success) !important;
+}
+
+:root[data-exm-theme="dark"] :is(.run-execution-item.run-failed, .run-node-item.run-failed, .checklist-summary-row.status-block, .checklist-row.validation-block, .workflow-template-preview-card strong.invalid),
+.flow-shell :is(.run-execution-item.run-failed, .run-node-item.run-failed, .checklist-summary-row.status-block, .checklist-row.validation-block, .workflow-template-preview-card strong.invalid) {
+  border-color: var(--theme-danger-border) !important;
+  background: var(--exm-dark-danger-soft) !important;
+  color: var(--theme-danger) !important;
+}
+
+:root[data-exm-theme="dark"] :is(.run-execution-item.run-business_rejected, .checklist-summary-row.status-warning, .checklist-row.validation-warning, .run-execution-detail .run-error-class.warning, .run-json-diff-rows div.removed),
+.flow-shell :is(.run-execution-item.run-business_rejected, .checklist-summary-row.status-warning, .checklist-row.validation-warning, .run-execution-detail .run-error-class.warning, .run-json-diff-rows div.removed) {
+  border-color: var(--theme-warning-border) !important;
+  background: var(--exm-dark-warn-soft) !important;
+  color: var(--theme-warning) !important;
+}
+
+:root[data-exm-theme="dark"] .studio-create-dialog:has(.resource-manager),
+.flow-shell .studio-create-dialog:has(.resource-manager) {
+  border-color: var(--exm-dark-line) !important;
+  background: var(--exm-dark-surface) !important;
+  color: var(--exm-dark-body) !important;
 }

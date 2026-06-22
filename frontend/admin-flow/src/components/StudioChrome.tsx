@@ -911,12 +911,6 @@ export function StudioChrome({
             </div>
           ) : null}
         </div>
-        <nav className="app-tabs">
-          <button className="active">编排</button>
-          <button>访问 API</button>
-          <button>日志与标注</button>
-          <button>监测</button>
-        </nav>
         <div className="workspace-actions">
           <button>插件</button>
           <span>D</span>

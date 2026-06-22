@@ -22410,22 +22410,52 @@ input:focus-visible {
 
 .node-lua-code-shell {
   overflow: visible;
-  border: 1px solid #dbe3ee;
+  border: 1px solid var(--theme-border);
   border-radius: 10px;
-  background: #fff;
+  background: var(--theme-code-bg);
 }
 
 .node-lua-code-shell .cm-editor {
+  background: var(--theme-code-bg) !important;
+  color: var(--theme-code-text) !important;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   font-size: 12px;
 }
 
+.node-lua-code-shell .cm-scroller,
+.node-lua-code-shell .cm-content,
+.node-lua-code-shell .cm-line,
+.node-lua-code-shell .cm-layer,
+.node-lua-code-shell .cm-lineLayer,
+.node-lua-code-shell .cm-activeLine {
+  background-color: var(--theme-code-bg) !important;
+  color: var(--theme-code-text) !important;
+}
+
+.node-lua-code-shell .cm-gutters {
+  border-color: var(--theme-border) !important;
+  background: var(--theme-surface-raised) !important;
+  color: var(--theme-text-muted) !important;
+}
+
+.node-lua-code-shell .cm-activeLineGutter {
+  background: var(--theme-surface-hover) !important;
+}
+
+.node-lua-code-shell .cm-selectionBackground,
+.node-lua-code-shell .cm-focused .cm-selectionBackground {
+  background: var(--theme-accent-soft) !important;
+}
+
 .node-lua-code-shell .cm-focused {
-  outline: 2px solid rgba(75, 99, 255, 0.24);
+  outline: 2px solid var(--theme-accent-soft);
   outline-offset: -2px;
 }
 
 .node-lua-code-shell .cm-tooltip-autocomplete {
+  border-color: var(--theme-border);
+  background: var(--theme-surface);
+  color: var(--theme-text-body);
   z-index: 50;
 }
 
@@ -22435,9 +22465,9 @@ input:focus-visible {
   justify-content: space-between;
   gap: 10px;
   padding: 8px 10px;
-  border-top: 1px solid #e7edf5;
-  background: #f8fafc;
-  color: #475569;
+  border-top: 1px solid var(--theme-border);
+  background: var(--theme-surface-raised);
+  color: var(--theme-text-muted);
   font-size: 12px;
   font-weight: 800;
 }
@@ -22449,32 +22479,32 @@ input:focus-visible {
 .node-lua-syntax-status em {
   min-width: 0;
   overflow-wrap: anywhere;
-  color: #64748b;
+  color: var(--theme-text-muted);
   font-style: normal;
   font-weight: 700;
   text-align: right;
 }
 
 .node-lua-syntax-status.ok span {
-  color: #047857;
+  color: var(--theme-success);
 }
 
 .node-lua-syntax-status.error {
-  background: #fff7f7;
+  background: var(--theme-danger-soft);
 }
 
 .node-lua-syntax-status.error span,
 .node-lua-syntax-status.error em {
-  color: #b42318;
+  color: var(--theme-danger);
 }
 
 .node-lua-code-fallback {
   width: 100%;
   min-height: 180px;
-  border: 1px solid #dbe3ee;
+  border: 1px solid var(--theme-border);
   border-radius: 10px;
-  background: #fff;
-  color: #172033;
+  background: var(--theme-code-bg);
+  color: var(--theme-code-text);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   font-size: 12px;
 }
@@ -22483,8 +22513,10 @@ input:focus-visible {
   display: grid;
   gap: 10px;
   padding: 10px;
+  border: 1px solid var(--theme-border);
   border-radius: 10px;
-  background: #f8faff;
+  background: var(--theme-surface);
+  color: var(--theme-text-body);
 }
 
 .node-lua-variable-help > div:first-child {
@@ -22493,14 +22525,14 @@ input:focus-visible {
 }
 
 .node-lua-variable-help b {
-  color: #172033;
+  color: var(--theme-text);
   font-size: 13px;
   font-weight: 800;
 }
 
 .node-lua-variable-help span,
 .node-lua-variable-help em {
-  color: #64748b;
+  color: var(--theme-text-muted);
   font-size: 12px;
   font-style: normal;
   line-height: 1.45;
@@ -22520,21 +22552,25 @@ input:focus-visible {
   gap: 8px;
   border: 0;
   border-radius: 8px;
-  background: transparent;
+  background: var(--theme-surface-raised);
   padding: 7px;
   text-align: left;
 }
 
 .node-lua-variable-list button:hover {
-  background: #eef3ff;
+  background: var(--theme-surface-hover);
 }
 
 .node-lua-variable-list code,
 .node-lua-api-hints code {
-  color: #3154ff;
+  border: 1px solid var(--theme-border);
+  border-radius: 8px;
+  background: var(--theme-surface-raised);
+  color: var(--theme-accent-strong);
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
   font-size: 12px;
   font-weight: 800;
+  padding: 3px 7px;
 }
 
 .node-lua-api-hints {
@@ -22545,8 +22581,126 @@ input:focus-visible {
 
 .node-lua-api-hints code {
   border-radius: 999px;
-  background: #fff;
   padding: 4px 8px;
+}
+
+/* Checklist drawer: force the validation surface onto theme tokens. */
+.checklist-modal-layer {
+  background: rgba(0, 0, 0, 0.28) !important;
+}
+
+.checklist-popover {
+  border-color: var(--theme-border) !important;
+  background: var(--theme-surface) !important;
+  color: var(--theme-text-body) !important;
+  box-shadow: var(--theme-shadow-float) !important;
+}
+
+.checklist-head,
+.checklist-body {
+  border-color: var(--theme-border) !important;
+  background: var(--theme-surface) !important;
+  color: var(--theme-text-body) !important;
+}
+
+.checklist-head b,
+.checklist-summary-row b,
+.checklist-row b,
+.checklist-pass b {
+  color: var(--theme-text) !important;
+}
+
+.checklist-head em,
+.checklist-row em,
+.checklist-row small,
+.checklist-summary-row em,
+.checklist-empty {
+  color: var(--theme-text-muted) !important;
+}
+
+.checklist-head span,
+.checklist-summary-row strong {
+  border-color: var(--theme-border) !important;
+  background: var(--theme-surface-raised) !important;
+  color: var(--theme-text-body) !important;
+}
+
+.checklist-head button {
+  border-color: var(--theme-border) !important;
+  background: var(--theme-control) !important;
+  color: var(--theme-text-body) !important;
+}
+
+.checklist-head button:hover {
+  border-color: var(--theme-border-strong) !important;
+  background: var(--theme-control-hover) !important;
+  color: var(--theme-text) !important;
+}
+
+.checklist-summary,
+.checklist-pass,
+.checklist-empty,
+.checklist-summary-row,
+.checklist-row {
+  border-color: var(--theme-border) !important;
+  background: var(--theme-surface-raised) !important;
+  color: var(--theme-text-body) !important;
+  box-shadow: none !important;
+}
+
+.checklist-row:hover {
+  border-color: var(--theme-border-strong) !important;
+  background: var(--theme-surface-hover) !important;
+}
+
+.checklist-summary-row i,
+.checklist-row i {
+  border-color: var(--theme-border) !important;
+  background: var(--theme-surface-hover) !important;
+  color: var(--theme-text-muted) !important;
+}
+
+.checklist-summary-row.status-pass,
+.checklist-row.validation-pass,
+.checklist-pass {
+  border-color: var(--theme-success-border) !important;
+  background: var(--theme-success-soft) !important;
+}
+
+.checklist-summary-row.status-pass i,
+.checklist-summary-row.status-pass strong,
+.checklist-row.validation-pass i {
+  border-color: var(--theme-success-border) !important;
+  background: var(--theme-success-soft) !important;
+  color: var(--theme-success) !important;
+}
+
+.checklist-summary-row.status-warning,
+.checklist-row.validation-warning {
+  border-color: var(--theme-warning-border) !important;
+  background: var(--theme-warning-soft) !important;
+}
+
+.checklist-summary-row.status-warning i,
+.checklist-summary-row.status-warning strong,
+.checklist-row.validation-warning i {
+  border-color: var(--theme-warning-border) !important;
+  background: var(--theme-warning-soft) !important;
+  color: var(--theme-warning) !important;
+}
+
+.checklist-summary-row.status-block,
+.checklist-row.validation-block {
+  border-color: var(--theme-danger-border) !important;
+  background: var(--theme-danger-soft) !important;
+}
+
+.checklist-summary-row.status-block i,
+.checklist-summary-row.status-block strong,
+.checklist-row.validation-block i {
+  border-color: var(--theme-danger-border) !important;
+  background: var(--theme-danger-soft) !important;
+  color: var(--theme-danger) !important;
 }
 
 /* Readable workflow node skin: light body, strong text contrast, clear pins. */
@@ -30127,4 +30281,335 @@ input:focus-visible {
   border-color: var(--exm-dark-line) !important;
   background: var(--exm-dark-surface) !important;
   color: var(--exm-dark-body) !important;
+}
+
+/* Activity picker must follow the shared theme, not legacy modal colors. */
+.activity-picker-popover {
+  border: 1px solid var(--theme-border) !important;
+  background: var(--theme-surface) !important;
+  color: var(--theme-text-body) !important;
+  box-shadow: var(--theme-shadow-float) !important;
+}
+
+.activity-picker-head,
+.activity-picker-search,
+.activity-picker-footer,
+.activity-picker-workflow-pager,
+.activity-picker-workflow-pane header,
+.activity-picker-workflow-columns {
+  border-color: var(--theme-border) !important;
+  background: var(--theme-surface) !important;
+  color: var(--theme-text-body) !important;
+}
+
+.activity-picker-head b,
+.activity-picker-workflow-pane header b,
+.activity-picker-tree b,
+.activity-picker-workflow-list b {
+  color: var(--theme-text) !important;
+}
+
+.activity-picker-head span,
+.activity-picker-workflow-pane header em,
+.activity-picker-tree em,
+.activity-picker-workflow-list em,
+.activity-picker-workflow-list code,
+.activity-picker-workflow-columns span,
+.activity-picker-workflow-pager span,
+.activity-picker-footer span,
+.activity-picker-empty {
+  color: var(--theme-text-muted) !important;
+}
+
+.activity-picker-head a {
+  color: var(--theme-accent-strong) !important;
+}
+
+.activity-picker-head-actions button,
+.activity-picker-workflow-pager button {
+  border-color: var(--theme-border) !important;
+  background: var(--theme-control) !important;
+  color: var(--theme-text-body) !important;
+}
+
+.activity-picker-head-actions button:hover,
+.activity-picker-workflow-pager button:hover:not(:disabled) {
+  border-color: var(--theme-border-strong) !important;
+  background: var(--theme-control-hover) !important;
+  color: var(--theme-text) !important;
+}
+
+.activity-picker-search input {
+  border-color: var(--theme-border) !important;
+  background: var(--theme-control) !important;
+  color: var(--theme-text) !important;
+}
+
+.activity-picker-search input::placeholder {
+  color: var(--theme-text-soft) !important;
+}
+
+.activity-picker-workspace-view,
+.activity-picker-tree,
+.activity-picker-workflow-pane {
+  border-color: var(--theme-border) !important;
+  background: var(--theme-surface) !important;
+  color: var(--theme-text-body) !important;
+}
+
+.activity-picker-tree button,
+.activity-picker-workflow-list button {
+  border-color: var(--theme-border) !important;
+  background: var(--theme-surface) !important;
+  color: var(--theme-text-body) !important;
+}
+
+.activity-picker-tree button:hover,
+.activity-picker-workflow-list button:hover {
+  border-color: var(--theme-border-strong) !important;
+  background: var(--theme-surface-hover) !important;
+  color: var(--theme-text) !important;
+}
+
+.activity-picker-tree button.active,
+.activity-picker-workflow-list button.active {
+  border-color: var(--theme-accent-border) !important;
+  background: var(--theme-accent-soft) !important;
+  color: var(--theme-text) !important;
+}
+
+.activity-picker-tree i,
+.activity-picker-workflow-list i {
+  background: var(--theme-surface-raised) !important;
+  color: var(--theme-text-muted) !important;
+}
+
+.activity-picker-tree button.active i,
+.activity-picker-workflow-list button.active i {
+  background: var(--theme-accent-soft) !important;
+  color: var(--theme-accent-strong) !important;
+}
+
+.activity-picker-tree strong,
+.activity-picker-workflow-pane header strong,
+.activity-picker-workflow-list strong {
+  border-color: var(--theme-border) !important;
+  background: var(--theme-surface-raised) !important;
+  color: var(--theme-text-body) !important;
+}
+
+.activity-picker-tree button.active strong,
+.activity-picker-workflow-list button.active strong {
+  border-color: var(--theme-accent-border) !important;
+  background: var(--theme-accent-soft) !important;
+  color: var(--theme-accent-strong) !important;
+}
+
+.activity-picker-folder-list {
+  border-color: var(--theme-border) !important;
+}
+
+.activity-picker-toggle input {
+  accent-color: var(--theme-accent) !important;
+}
+
+/* Property panel icons: avoid legacy light tiles inside themed inspector. */
+.property-panel .property-title-with-icon .node-icon,
+.property-panel .config-accordion-head > i,
+.property-panel .property-node-summary-icon {
+  border: 1px solid var(--theme-border) !important;
+  background: var(--theme-surface-raised) !important;
+  color: var(--theme-accent-strong) !important;
+  box-shadow: none !important;
+}
+
+.property-panel .config-accordion-head > i svg,
+.property-panel .property-title-with-icon .node-icon svg,
+.property-panel .property-node-summary-icon svg {
+  stroke: currentColor !important;
+}
+
+.property-panel .config-accordion-section.tone-purple .config-accordion-head > i,
+.property-panel .node-icon.query {
+  border-color: var(--theme-accent-border) !important;
+  background: var(--theme-accent-soft) !important;
+  color: var(--theme-accent-strong) !important;
+}
+
+.property-panel .config-accordion-section.tone-green .config-accordion-head > i,
+.property-panel .node-icon.store,
+.property-panel .node-icon.grant {
+  border-color: var(--theme-success-border) !important;
+  background: var(--theme-success-soft) !important;
+  color: var(--theme-success) !important;
+}
+
+.property-panel .config-accordion-section.tone-amber .config-accordion-head > i,
+.property-panel .node-icon.reward,
+.property-panel .node-icon.logic {
+  border-color: var(--theme-warning-border) !important;
+  background: var(--theme-warning-soft) !important;
+  color: var(--theme-warning) !important;
+}
+
+.property-panel .node-icon.quota {
+  border-color: var(--theme-danger-border) !important;
+  background: var(--theme-danger-soft) !important;
+  color: var(--theme-danger) !important;
+}
+
+/* Right-side workflow tools: checklist/history/version/template must share the theme. */
+:root[data-exm-theme="dark"] :is(.checklist-popover, .run-history-panel, .version-popover, .workflow-template-panel),
+.flow-shell :is(.checklist-popover, .run-history-panel, .version-popover, .workflow-template-panel) {
+  border-color: var(--theme-border) !important;
+  background: var(--theme-surface) !important;
+  color: var(--theme-text-body) !important;
+  box-shadow: var(--theme-shadow-float) !important;
+}
+
+:root[data-exm-theme="dark"] :is(.checklist-popover, .run-history-panel, .version-popover, .workflow-template-panel) :is(header, footer, .checklist-head, .checklist-body, .run-history-filters, .run-compare-selector, .run-history-pagination, .workflow-template-toolbar, .workflow-template-tabs),
+.flow-shell :is(.checklist-popover, .run-history-panel, .version-popover, .workflow-template-panel) :is(header, footer, .checklist-head, .checklist-body, .run-history-filters, .run-compare-selector, .run-history-pagination, .workflow-template-toolbar, .workflow-template-tabs) {
+  border-color: var(--theme-border) !important;
+  background: var(--theme-surface) !important;
+  color: var(--theme-text-body) !important;
+  box-shadow: none !important;
+}
+
+:root[data-exm-theme="dark"] :is(.checklist-popover, .run-history-panel, .version-popover, .workflow-template-panel) :is(input:not([type="checkbox"]):not([type="radio"]), select, textarea, button, .ta-btn),
+.flow-shell :is(.checklist-popover, .run-history-panel, .version-popover, .workflow-template-panel) :is(input:not([type="checkbox"]):not([type="radio"]), select, textarea, button, .ta-btn) {
+  border-color: var(--theme-border) !important;
+  background: var(--theme-control) !important;
+  color: var(--theme-text-body) !important;
+  box-shadow: none !important;
+}
+
+:root[data-exm-theme="dark"] :is(.checklist-popover, .run-history-panel, .version-popover, .workflow-template-panel) :is(input:not([type="checkbox"]):not([type="radio"]), select, textarea, button, .ta-btn):hover:not(:disabled),
+.flow-shell :is(.checklist-popover, .run-history-panel, .version-popover, .workflow-template-panel) :is(input:not([type="checkbox"]):not([type="radio"]), select, textarea, button, .ta-btn):hover:not(:disabled) {
+  border-color: var(--theme-border-strong) !important;
+  background: var(--theme-control-hover) !important;
+  color: var(--theme-text) !important;
+}
+
+:root[data-exm-theme="dark"] :is(.checklist-popover, .run-history-panel, .version-popover, .workflow-template-panel) :is(button.active, .ta-btn.active, .run-execution-item.active, .run-node-item.active, .version-item.active, .template-card.active),
+.flow-shell :is(.checklist-popover, .run-history-panel, .version-popover, .workflow-template-panel) :is(button.active, .ta-btn.active, .run-execution-item.active, .run-node-item.active, .version-item.active, .template-card.active) {
+  border-color: var(--theme-accent-border) !important;
+  background: var(--theme-accent-soft) !important;
+  color: var(--theme-text) !important;
+}
+
+:root[data-exm-theme="dark"] :is(.checklist-popover, .run-history-panel, .version-popover, .workflow-template-panel) :is(h1, h2, h3, h4, b, strong, label),
+.flow-shell :is(.checklist-popover, .run-history-panel, .version-popover, .workflow-template-panel) :is(h1, h2, h3, h4, b, strong, label) {
+  color: var(--theme-text) !important;
+}
+
+:root[data-exm-theme="dark"] :is(.checklist-popover, .run-history-panel, .version-popover, .workflow-template-panel) :is(p, span, small, em, code, li),
+.flow-shell :is(.checklist-popover, .run-history-panel, .version-popover, .workflow-template-panel) :is(p, span, small, em, code, li) {
+  color: var(--theme-text-muted) !important;
+}
+
+:root[data-exm-theme="dark"] .run-history-panel :is(.run-node-item em, .run-execution-item em, .run-route-trace em, .run-timeline-route em, .run-compare-grid em, .run-compare-payload-diff em),
+.flow-shell .run-history-panel :is(.run-node-item em, .run-execution-item em, .run-route-trace em, .run-timeline-route em, .run-compare-grid em, .run-compare-payload-diff em) {
+  border: 1px solid var(--theme-border) !important;
+  background: var(--theme-surface-hover) !important;
+  color: var(--theme-text-body) !important;
+  box-shadow: none !important;
+}
+
+:root[data-exm-theme="dark"] :is(.checklist-popover, .run-history-panel, .version-popover, .workflow-template-panel) :is(.checklist-summary, .checklist-summary-row, .checklist-row, .checklist-pass, .checklist-empty, .run-history-grid, .run-history-grid section, .run-history-list, .run-node-list, .run-execution-item, .run-node-item, .run-empty, .version-item, .template-card),
+.flow-shell :is(.checklist-popover, .run-history-panel, .version-popover, .workflow-template-panel) :is(.checklist-summary, .checklist-summary-row, .checklist-row, .checklist-pass, .checklist-empty, .run-history-grid, .run-history-grid section, .run-history-list, .run-node-list, .run-execution-item, .run-node-item, .run-empty, .version-item, .template-card) {
+  border-color: var(--theme-border) !important;
+  background: var(--theme-surface-raised) !important;
+  color: var(--theme-text-body) !important;
+  box-shadow: none !important;
+}
+
+:root[data-exm-theme="dark"] :is(.checklist-popover, .run-history-panel, .version-popover, .workflow-template-panel) :is(.checklist-summary-row.status-pass, .checklist-row.validation-pass, .checklist-pass, .run-execution-item.run-success, .run-node-item.run-success),
+.flow-shell :is(.checklist-popover, .run-history-panel, .version-popover, .workflow-template-panel) :is(.checklist-summary-row.status-pass, .checklist-row.validation-pass, .checklist-pass, .run-execution-item.run-success, .run-node-item.run-success) {
+  border-color: var(--theme-success-border) !important;
+  background: var(--theme-success-soft) !important;
+  color: var(--theme-success) !important;
+}
+
+:root[data-exm-theme="dark"] :is(.checklist-popover, .run-history-panel, .version-popover, .workflow-template-panel) :is(.checklist-summary-row.status-warning, .checklist-row.validation-warning, .run-execution-item.run-business_rejected),
+.flow-shell :is(.checklist-popover, .run-history-panel, .version-popover, .workflow-template-panel) :is(.checklist-summary-row.status-warning, .checklist-row.validation-warning, .run-execution-item.run-business_rejected) {
+  border-color: var(--theme-warning-border) !important;
+  background: var(--theme-warning-soft) !important;
+  color: var(--theme-warning) !important;
+}
+
+:root[data-exm-theme="dark"] :is(.checklist-popover, .run-history-panel, .version-popover, .workflow-template-panel) :is(.checklist-summary-row.status-block, .checklist-row.validation-block, .run-execution-item.run-failed, .run-node-item.run-failed),
+.flow-shell :is(.checklist-popover, .run-history-panel, .version-popover, .workflow-template-panel) :is(.checklist-summary-row.status-block, .checklist-row.validation-block, .run-execution-item.run-failed, .run-node-item.run-failed) {
+  border-color: var(--theme-danger-border) !important;
+  background: var(--theme-danger-soft) !important;
+  color: var(--theme-danger) !important;
+}
+
+:root[data-exm-theme="dark"] .version-popover :is(.version-head, .version-section, .version-list, .workflow-diff-list, .workflow-diff-list section),
+.flow-shell .version-popover :is(.version-head, .version-section, .version-list, .workflow-diff-list, .workflow-diff-list section) {
+  border-color: var(--theme-border) !important;
+  background: transparent !important;
+  color: var(--theme-text-body) !important;
+  box-shadow: none !important;
+}
+
+:root[data-exm-theme="dark"] .version-popover :is(.version-draft-card, .version-diff-card, .version-audit-card, .version-empty, .version-card, .workflow-diff-row, .version-detail-card, .version-governance-card),
+.flow-shell .version-popover :is(.version-draft-card, .version-diff-card, .version-audit-card, .version-empty, .version-card, .workflow-diff-row, .version-detail-card, .version-governance-card) {
+  border-color: var(--theme-border) !important;
+  background: var(--theme-surface-raised) !important;
+  color: var(--theme-text-body) !important;
+  box-shadow: none !important;
+}
+
+:root[data-exm-theme="dark"] .version-popover :is(.version-draft-card.changed, .version-diff-card.changed, .version-card.active),
+.flow-shell .version-popover :is(.version-draft-card.changed, .version-diff-card.changed, .version-card.active) {
+  border-color: var(--theme-accent-border) !important;
+  background: var(--theme-accent-soft) !important;
+}
+
+:root[data-exm-theme="dark"] .version-popover :is(.version-draft-card.clean, .version-diff-card.clean),
+.flow-shell .version-popover :is(.version-draft-card.clean, .version-diff-card.clean) {
+  border-color: var(--theme-success-border) !important;
+  background: var(--theme-success-soft) !important;
+}
+
+:root[data-exm-theme="dark"] .version-popover .version-audit-card,
+.flow-shell .version-popover .version-audit-card {
+  border-color: var(--theme-warning-border) !important;
+  background: var(--theme-warning-soft) !important;
+  color: var(--theme-warning) !important;
+}
+
+:root[data-exm-theme="dark"] .version-popover :is(.version-head span, .version-card i, .workflow-diff-list h4 span, .workflow-diff-row i),
+.flow-shell .version-popover :is(.version-head span, .version-card i, .workflow-diff-list h4 span, .workflow-diff-row i) {
+  border: 1px solid var(--theme-border) !important;
+  background: var(--theme-surface-hover) !important;
+  color: var(--theme-text-body) !important;
+}
+
+:root[data-exm-theme="dark"] .version-popover :is(.workflow-diff-row.added i, .version-head span),
+.flow-shell .version-popover :is(.workflow-diff-row.added i, .version-head span) {
+  border-color: var(--theme-success-border) !important;
+  background: var(--theme-success-soft) !important;
+  color: var(--theme-success) !important;
+}
+
+:root[data-exm-theme="dark"] .version-popover :is(.workflow-diff-row.removed i, .version-card.status-superseded i),
+.flow-shell .version-popover :is(.workflow-diff-row.removed i, .version-card.status-superseded i) {
+  border-color: var(--theme-border) !important;
+  background: var(--theme-surface-hover) !important;
+  color: var(--theme-text-muted) !important;
+}
+
+:root[data-exm-theme="dark"] .version-popover :is(.workflow-diff-row.changed i),
+.flow-shell .version-popover :is(.workflow-diff-row.changed i) {
+  border-color: var(--theme-accent-border) !important;
+  background: var(--theme-accent-soft) !important;
+  color: var(--theme-accent-strong) !important;
+}
+
+:root[data-exm-theme="dark"] .version-popover .version-card.status-archived i,
+.flow-shell .version-popover .version-card.status-archived i {
+  border-color: var(--theme-warning-border) !important;
+  background: var(--theme-warning-soft) !important;
+  color: var(--theme-warning) !important;
 }

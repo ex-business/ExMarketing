@@ -468,6 +468,7 @@ export function LuaConfigCodeEditor({ value, variables, onChange, onHint }: Prop
       <CodeMirror
         value={draftValue}
         height="180px"
+        theme={document.documentElement.dataset.exmTheme === 'dark' ? 'dark' : 'light'}
         onCreateEditor={(view) => {
           editorViewRef.current = view;
         }}

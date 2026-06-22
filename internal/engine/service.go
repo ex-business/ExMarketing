@@ -871,6 +871,7 @@ func (s *Service) ProcessEventFrom(ctx context.Context, event marketing.Activity
 	for i := range activities {
 		activities[i] = s.hydrateApproval(ctx, activities[i])
 	}
+	activities = filterActivitiesByEventTarget(activities, event)
 	sortActivitiesForMatch(activities)
 	exclusiveSingleSelect := exclusiveSingleSelectGroups(activities)
 
@@ -991,6 +992,7 @@ func (s *Service) SimulateEvent(ctx context.Context, event marketing.ActivityEve
 	for i := range activities {
 		activities[i] = s.hydrateApproval(ctx, activities[i])
 	}
+	activities = filterActivitiesByEventTarget(activities, event)
 	sortActivitiesForMatch(activities)
 
 	now := s.now()
@@ -1073,6 +1075,42 @@ func (s *Service) SimulateEvent(ctx context.Context, event marketing.ActivityEve
 		"idempotencyKey": event.IdempotencyKey(),
 	}))
 	return result, nil
+}
+
+func filterActivitiesByEventTarget(activities []marketing.Activity, event marketing.ActivityEvent) []marketing.Activity {
+	targetCode := strings.TrimSpace(stringFromAny(event.Attributes["activityCode"]))
+	if targetCode == "" {
+		targetCode = strings.TrimSpace(stringFromAny(event.Attributes["targetActivityCode"]))
+	}
+	targetID := strings.TrimSpace(stringFromAny(event.Attributes["activityId"]))
+	if targetID == "" {
+		targetID = strings.TrimSpace(stringFromAny(event.Attributes["targetActivityId"]))
+	}
+	if targetCode == "" && targetID == "" {
+		return activities
+	}
+	out := make([]marketing.Activity, 0, len(activities))
+	for _, activity := range activities {
+		if targetCode != "" && strings.EqualFold(strings.TrimSpace(activity.Code), targetCode) {
+			out = append(out, activity)
+			continue
+		}
+		if targetID != "" && strings.TrimSpace(activity.ID) == targetID {
+			out = append(out, activity)
+		}
+	}
+	return out
+}
+
+func stringFromAny(value any) string {
+	switch typed := value.(type) {
+	case string:
+		return typed
+	case fmt.Stringer:
+		return typed.String()
+	default:
+		return ""
+	}
 }
 
 func (s *Service) ApplyRewardCallback(ctx context.Context, callback marketing.RewardCallback) (marketing.RewardCallbackResult, error) {

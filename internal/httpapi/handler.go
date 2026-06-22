@@ -1819,13 +1819,26 @@ type checkinStatusResponse struct {
 	Date                string                 `json:"date"`
 	Signed              bool                   `json:"signed"`
 	Rewarded            bool                   `json:"rewarded"`
+	StreakDays          int                    `json:"streakDays"`
+	CycleDays           int                    `json:"cycleDays"`
+	CycleCompletedDays  int                    `json:"cycleCompletedDays"`
+	TodayIndex          int                    `json:"todayIndex"`
 	ParticipationStatus string                 `json:"participationStatus,omitempty"`
 	GrantStatus         string                 `json:"grantStatus,omitempty"`
 	RewardType          string                 `json:"rewardType,omitempty"`
 	RewardCode          string                 `json:"rewardCode,omitempty"`
 	RewardAmount        string                 `json:"rewardAmount,omitempty"`
 	LastUpdatedAt       *time.Time             `json:"lastUpdatedAt,omitempty"`
+	History             []checkinHistoryRecord `json:"history,omitempty"`
 	Records             []checkinStatusRecord  `json:"records,omitempty"`
+}
+
+type checkinHistoryRecord struct {
+	Date       string     `json:"date"`
+	Signed     bool       `json:"signed"`
+	Rewarded   bool       `json:"rewarded"`
+	OccurredAt *time.Time `json:"occurredAt,omitempty"`
+	UpdatedAt  *time.Time `json:"updatedAt,omitempty"`
 }
 
 type checkinStatusRecord struct {
@@ -1859,6 +1872,8 @@ func (h *Handler) getCheckinStatus(w http.ResponseWriter, r *http.Request) {
 		writeErrorCode(w, http.StatusBadRequest, "INVALID_CHECKIN_STATUS_QUERY", "date must be YYYY-MM-DD")
 		return
 	}
+	targetDate, _ := time.Parse(time.DateOnly, date)
+	cycleDays := boundedPositiveQueryInt(r, "cycleDays", 7, 31)
 	if activityID == "" {
 		activity, err := h.findActivityByCode(r, tenantID, activityCode)
 		if err != nil {
@@ -1883,12 +1898,26 @@ func (h *Handler) getCheckinStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	records := make([]checkinStatusRecord, 0, len(items))
+	historyByDate := make(map[string]checkinHistoryRecord)
 	for _, item := range items {
 		record := checkinStatusRecordFromReconciliation(item)
-		if record.OccurredAt != nil && record.OccurredAt.UTC().Format(time.DateOnly) != date {
-			continue
+		recordDate := checkinRecordDate(record)
+		if recordDate != "" && checkinRecordSigned(record) {
+			day := historyByDate[recordDate]
+			day.Date = recordDate
+			day.Signed = true
+			day.Rewarded = day.Rewarded || checkinRecordRewarded(record)
+			if record.OccurredAt != nil && (day.OccurredAt == nil || record.OccurredAt.After(*day.OccurredAt)) {
+				occurredAt := *record.OccurredAt
+				day.OccurredAt = &occurredAt
+			}
+			if day.UpdatedAt == nil || record.UpdatedAt.After(*day.UpdatedAt) {
+				updatedAt := record.UpdatedAt
+				day.UpdatedAt = &updatedAt
+			}
+			historyByDate[recordDate] = day
 		}
-		if record.OccurredAt == nil && record.UpdatedAt.UTC().Format(time.DateOnly) != date {
+		if recordDate != date {
 			continue
 		}
 		records = append(records, record)
@@ -1901,12 +1930,19 @@ func (h *Handler) getCheckinStatus(w http.ResponseWriter, r *http.Request) {
 		ActivityCode: activityCode,
 		Subject:      marketing.EventSubject{Type: subjectType, ID: subjectID},
 		Date:         date,
+		CycleDays:    cycleDays,
 		Records:      records,
 	}
+	response.History = buildCheckinHistory(targetDate, cycleDays, historyByDate)
+	response.StreakDays = checkinStreakDays(targetDate, historyByDate)
+	if response.StreakDays > cycleDays {
+		response.CycleCompletedDays = cycleDays
+	} else {
+		response.CycleCompletedDays = response.StreakDays
+	}
+	response.TodayIndex = checkinTodayIndex(targetDate, cycleDays, historyByDate)
 	for _, record := range records {
-		if record.ParticipationStatus == string(marketing.ParticipationRewardable) ||
-			record.ParticipationStatus == string(marketing.ParticipationGranted) ||
-			record.GrantStatus != "" {
+		if checkinRecordSigned(record) {
 			response.Signed = true
 			response.ParticipationStatus = record.ParticipationStatus
 			response.GrantStatus = record.GrantStatus
@@ -1914,7 +1950,7 @@ func (h *Handler) getCheckinStatus(w http.ResponseWriter, r *http.Request) {
 			response.RewardCode = record.RewardCode
 			response.RewardAmount = record.RewardAmount
 			response.LastUpdatedAt = &record.UpdatedAt
-			response.Rewarded = record.GrantStatus != "" && record.GrantStatus != string(marketing.GrantFailed)
+			response.Rewarded = checkinRecordRewarded(record)
 			break
 		}
 	}
@@ -1928,6 +1964,83 @@ func (h *Handler) getCheckinStatus(w http.ResponseWriter, r *http.Request) {
 		response.LastUpdatedAt = &record.UpdatedAt
 	}
 	writeJSON(w, http.StatusOK, response)
+}
+
+func boundedPositiveQueryInt(r *http.Request, name string, defaultValue int, maxValue int) int {
+	raw := strings.TrimSpace(r.URL.Query().Get(name))
+	if raw == "" {
+		return defaultValue
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value <= 0 {
+		return defaultValue
+	}
+	if value > maxValue {
+		return maxValue
+	}
+	return value
+}
+
+func checkinRecordDate(record checkinStatusRecord) string {
+	if record.OccurredAt != nil {
+		return record.OccurredAt.UTC().Format(time.DateOnly)
+	}
+	if !record.UpdatedAt.IsZero() {
+		return record.UpdatedAt.UTC().Format(time.DateOnly)
+	}
+	return ""
+}
+
+func checkinRecordSigned(record checkinStatusRecord) bool {
+	return record.ParticipationStatus == string(marketing.ParticipationRewardable) ||
+		record.ParticipationStatus == string(marketing.ParticipationGranted) ||
+		record.GrantStatus != ""
+}
+
+func checkinRecordRewarded(record checkinStatusRecord) bool {
+	return record.GrantStatus != "" && record.GrantStatus != string(marketing.GrantFailed)
+}
+
+func buildCheckinHistory(targetDate time.Time, cycleDays int, historyByDate map[string]checkinHistoryRecord) []checkinHistoryRecord {
+	history := make([]checkinHistoryRecord, 0, cycleDays)
+	for dayOffset := 0; dayOffset < cycleDays; dayOffset++ {
+		date := targetDate.AddDate(0, 0, -dayOffset).Format(time.DateOnly)
+		record, ok := historyByDate[date]
+		if !ok {
+			record = checkinHistoryRecord{Date: date}
+		}
+		history = append(history, record)
+	}
+	return history
+}
+
+func checkinStreakDays(targetDate time.Time, historyByDate map[string]checkinHistoryRecord) int {
+	streak := 0
+	for dayOffset := 0; ; dayOffset++ {
+		date := targetDate.AddDate(0, 0, -dayOffset).Format(time.DateOnly)
+		if !historyByDate[date].Signed {
+			return streak
+		}
+		streak++
+	}
+}
+
+func checkinTodayIndex(targetDate time.Time, cycleDays int, historyByDate map[string]checkinHistoryRecord) int {
+	if cycleDays <= 0 {
+		return 0
+	}
+	if historyByDate[targetDate.Format(time.DateOnly)].Signed {
+		streak := checkinStreakDays(targetDate, historyByDate)
+		if streak > cycleDays {
+			return cycleDays
+		}
+		return streak
+	}
+	previousStreak := checkinStreakDays(targetDate.AddDate(0, 0, -1), historyByDate)
+	if previousStreak >= cycleDays {
+		return cycleDays
+	}
+	return previousStreak + 1
 }
 
 func (h *Handler) authorizeOpenAPIStatusRequest(w http.ResponseWriter, r *http.Request, tenantID string) bool {
@@ -2012,6 +2125,14 @@ func firstCheckinStatusNonEmpty(values ...string) string {
 }
 
 func processEventResultRejected(result marketing.ProcessEventResult) bool {
+	if len(result.GrantOrders) > 0 || len(result.OutboxMessages) > 0 {
+		return false
+	}
+	for _, participation := range result.Participations {
+		if participation.Status != marketing.ParticipationRejected {
+			return false
+		}
+	}
 	for _, participation := range result.Participations {
 		if participation.Status == marketing.ParticipationRejected {
 			return true

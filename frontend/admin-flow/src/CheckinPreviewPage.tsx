@@ -25,6 +25,10 @@ type CheckinStatus = {
   date: string;
   signed: boolean;
   rewarded: boolean;
+  streakDays?: number;
+  cycleDays?: number;
+  cycleCompletedDays?: number;
+  todayIndex?: number;
   participationId?: string;
   participationStatus?: string;
   grantOrderId?: string;
@@ -35,12 +39,21 @@ type CheckinStatus = {
   eventId?: string;
   idempotencyKey?: string;
   lastUpdatedAt?: string;
+  history?: Array<Record<string, unknown>>;
   records?: Array<Record<string, unknown>>;
 };
 
 const tenantId = 'site_001';
-const activityCode = 'DAILY_CHECKIN_REWARD_DEV_FINAL';
+const defaultActivityCode = 'DAILY_CHECKIN_REWARD_DEV_FINAL';
 const subject = { type: 'USER', id: 'user_checkin_demo_001' };
+
+function checkinActivityCodeFromLocation() {
+  if (typeof window === 'undefined') return defaultActivityCode;
+  const params = new URLSearchParams(window.location.search);
+  const requestedCode = params.get('activityCode')?.trim();
+  if (requestedCode) return requestedCode;
+  return defaultActivityCode;
+}
 
 const rewardItems = [
   { day: 1, label: '1 USDT', code: 'DAILY_CHECKIN_1_USDT', active: true },
@@ -82,7 +95,7 @@ function compactAPIValue(value: unknown): string {
   return `grantOrders=${grants} · outbox=${outbox} · ruleResults=${rules}`;
 }
 
-async function postCheckinEvent() {
+async function postCheckinEvent(activityCode: string) {
   const now = new Date();
   const suffix = `${now.getTime()}`;
   const event = {
@@ -100,6 +113,7 @@ async function postCheckinEvent() {
       vipLevel: 2,
       channel: 'APP',
       activityScene: 'daily_checkin',
+      activityCode,
     },
   };
   const idempotencyKey = `${event.tenantId}:${event.sourceSystem}:${event.eventType}:${event.biz.bizType}:${event.biz.bizId}`;
@@ -115,7 +129,7 @@ async function postCheckinEvent() {
   return { response, body, event, idempotencyKey };
 }
 
-async function fetchCheckinStatus() {
+async function fetchCheckinStatus(activityCode: string) {
   const date = new Date().toISOString().slice(0, 10);
   const query = new URLSearchParams({
     tenantId,
@@ -133,6 +147,8 @@ async function fetchCheckinStatus() {
 }
 
 export function CheckinPreviewPage() {
+  const activityCode = useMemo(() => checkinActivityCodeFromLocation(), []);
+  const isStreakActivity = activityCode === defaultActivityCode;
   const [signed, setSigned] = useState(false);
   const [running, setRunning] = useState(false);
   const [completedDays, setCompletedDays] = useState(0);
@@ -145,14 +161,14 @@ export function CheckinPreviewPage() {
   useEffect(() => {
     let cancelled = false;
     setAPIResult({ status: 'IDLE', message: '正在读取今日签到状态 ...' });
-    fetchCheckinStatus()
+    fetchCheckinStatus(activityCode)
       .then((status) => {
         if (cancelled) return;
         if (status.signed) {
           setSigned(true);
-          const restoredDays = Math.max(1, Math.min(7, status.records?.length ?? 1));
+          const restoredDays = Math.max(1, Math.min(7, status.cycleCompletedDays ?? status.streakDays ?? 1));
           setCompletedDays(restoredDays);
-          setStreak(restoredDays);
+          setStreak(Math.max(1, status.streakDays ?? restoredDays));
           if (status.rewarded) {
             setBalance('129.00');
           }
@@ -167,6 +183,9 @@ export function CheckinPreviewPage() {
           });
           return;
         }
+        const pendingCompletedDays = Math.max(0, Math.min(7, (status.todayIndex ?? 1) - 1));
+        setCompletedDays(pendingCompletedDays);
+        setStreak(pendingCompletedDays);
         setAPIResult({ status: 'IDLE', message: '今日未签到。' });
       })
       .catch((error) => {
@@ -176,10 +195,10 @@ export function CheckinPreviewPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [activityCode]);
 
   const signedDays = useMemo(() => new Set(Array.from({ length: completedDays }, (_, index) => index + 1)), [completedDays]);
-  const todayReward = rewardItems[0];
+  const todayReward = rewardItems[Math.max(0, Math.min(6, completedDays || 0))] ?? rewardItems[0];
 
   const runCheckin = async () => {
     if (running || signed) return;
@@ -187,7 +206,7 @@ export function CheckinPreviewPage() {
     setLastResult('');
     setAPIResult({ status: 'IDLE', message: '正在发送 POST /openapi/v1/events ...' });
     setSteps(initialSteps);
-    const requestPromise = postCheckinEvent();
+    const requestPromise = postCheckinEvent(activityCode);
     for (const step of initialSteps) {
       setSteps((items) => items.map((item) => item.id === step.id ? { ...item, status: 'RUNNING' } : item));
       await wait(180);
@@ -204,9 +223,20 @@ export function CheckinPreviewPage() {
         setSteps((items) => items.map((item) => ({ ...item, status: completedGrant ? 'SUCCESS' : 'SKIPPED' })));
         setSigned(completedGrant);
         if (completedGrant) {
-          setCompletedDays((value) => Math.max(1, Math.min(7, value + 1)));
-          setStreak((value) => Math.max(1, Math.min(7, value + 1)));
-          setBalance('129.00');
+          try {
+            const latestStatus = await fetchCheckinStatus(activityCode);
+            const restoredDays = Math.max(1, Math.min(7, latestStatus.cycleCompletedDays ?? latestStatus.streakDays ?? 1));
+            setSigned(latestStatus.signed);
+            setCompletedDays(restoredDays);
+            setStreak(Math.max(1, latestStatus.streakDays ?? restoredDays));
+            if (latestStatus.rewarded) {
+              setBalance('129.00');
+            }
+          } catch {
+            setCompletedDays((value) => Math.max(1, Math.min(7, value + 1)));
+            setStreak((value) => Math.max(1, Math.min(7, value + 1)));
+            setBalance('129.00');
+          }
         }
         setLastResult(duplicate ? '接口返回重复事件，签到结果已存在。' : completedGrant ? '接口已接收，签到事件已进入工作流并生成发奖结果。' : '接口已接收，但未生成发奖单；需要发布匹配的签到活动。');
         setAPIResult({
@@ -258,11 +288,11 @@ export function CheckinPreviewPage() {
       <section className="checkin-shell">
         <header className="checkin-header">
           <div>
-            <span>Daily Check-in</span>
-            <h1>每日签到奖励</h1>
-            <p>签到链路使用 Activity State、Quota Check、Candidate Reward、Budget Reserve 和 Grant Order。</p>
+            <span>{isStreakActivity ? '7-Day Check-in' : 'Daily Check-in'}</span>
+            <h1>{isStreakActivity ? '7 日连续签到奖励' : '每日签到奖励'}</h1>
+            <p>当前测试活动：{activityCode}。签到链路使用 Activity State、Quota Check、Candidate Reward、Budget Reserve 和 Grant Order。</p>
           </div>
-          <a href="/admin-flow/" aria-label="返回工作流画布">工作流画布</a>
+          <a href={isStreakActivity ? '/admin-flow/?activityId=act_9330403ed9cfe4b86b2523e0' : '/admin-flow/'} aria-label="返回工作流画布">工作流画布</a>
         </header>
 
         <section className="checkin-overview">
@@ -289,7 +319,7 @@ export function CheckinPreviewPage() {
                 <em>{todayReward.code}</em>
               </span>
             </div>
-            <p>奖励配置来自 Redis Ref：checkin_reward_config_ref，预算锁定来自 checkin_reward_budget_ref。</p>
+            <p>奖励配置来自 Redis Ref：{isStreakActivity ? 'checkin_streak_7d_reward_config_ref' : 'checkin_reward_config_ref'}，预算锁定来自 {isStreakActivity ? 'checkin_streak_budget_inventory_ref' : 'checkin_reward_budget_ref'}。</p>
           </article>
         </section>
 

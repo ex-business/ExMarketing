@@ -2373,6 +2373,54 @@ func TestCheckinStatusReturnsSafeSummary(t *testing.T) {
 	}
 }
 
+func TestCheckinStatusStreakHelpers(t *testing.T) {
+	today := mustParseDate(t, "2026-06-22")
+	yesterday := today.AddDate(0, 0, -1).Format(time.DateOnly)
+	todayKey := today.Format(time.DateOnly)
+	updatedAt := today.Add(2 * time.Hour)
+	historyByDate := map[string]checkinHistoryRecord{
+		todayKey: {
+			Date:      todayKey,
+			Signed:    true,
+			Rewarded:  true,
+			UpdatedAt: &updatedAt,
+		},
+		yesterday: {
+			Date:     yesterday,
+			Signed:   true,
+			Rewarded: true,
+		},
+	}
+
+	if got := checkinStreakDays(today, historyByDate); got != 2 {
+		t.Fatalf("streakDays=%d, want 2", got)
+	}
+	if got := checkinTodayIndex(today, 7, historyByDate); got != 2 {
+		t.Fatalf("todayIndex=%d, want 2", got)
+	}
+	history := buildCheckinHistory(today, 7, historyByDate)
+	if len(history) != 7 || !history[0].Signed || !history[1].Signed || history[2].Signed {
+		t.Fatalf("unexpected 7-day history: %+v", history)
+	}
+
+	delete(historyByDate, todayKey)
+	if got := checkinStreakDays(today, historyByDate); got != 0 {
+		t.Fatalf("unsigned today streakDays=%d, want 0", got)
+	}
+	if got := checkinTodayIndex(today, 7, historyByDate); got != 2 {
+		t.Fatalf("unsigned todayIndex=%d, want 2", got)
+	}
+}
+
+func mustParseDate(t *testing.T, value string) time.Time {
+	t.Helper()
+	parsed, err := time.Parse(time.DateOnly, value)
+	if err != nil {
+		t.Fatalf("parse date %q: %v", value, err)
+	}
+	return parsed
+}
+
 func TestCheckinStatusValidationErrors(t *testing.T) {
 	handler := newTestHandler()
 	tests := []struct {
@@ -4732,5 +4780,30 @@ func markGrantOrderSending(t *testing.T, repo *marketing.MemoryRepository, comma
 	t.Helper()
 	if err := repo.UpdateGrantOrderByCommandID(context.Background(), "site_001", commandID, marketing.GrantSending, ""); err != nil {
 		t.Fatalf("mark grant order sending: %v", err)
+	}
+}
+
+func TestProcessEventResultRejectedAllowsPartialSuccess(t *testing.T) {
+	rejected := marketing.ProcessEventResult{
+		Participations: []marketing.Participation{
+			{Status: marketing.ParticipationRejected},
+			{Status: marketing.ParticipationRewardable},
+		},
+		RuleResults: []marketing.ActivityRuleResult{
+			{Decision: marketing.RuleDecisionRejected},
+			{Decision: marketing.RuleDecisionPassed},
+		},
+		GrantOrders: []marketing.GrantOrder{{ID: "grant_ok"}},
+	}
+	if processEventResultRejected(rejected) {
+		t.Fatal("partial success with a grant must not be reported as overall business rejected")
+	}
+
+	allRejected := marketing.ProcessEventResult{
+		Participations: []marketing.Participation{{Status: marketing.ParticipationRejected}},
+		RuleResults:    []marketing.ActivityRuleResult{{Decision: marketing.RuleDecisionRejected}},
+	}
+	if !processEventResultRejected(allRejected) {
+		t.Fatal("all rejected result should be reported as business rejected")
 	}
 }

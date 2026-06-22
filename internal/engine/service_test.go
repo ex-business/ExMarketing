@@ -64,6 +64,67 @@ func TestSimulateEventMatchFiltersAndReasons(t *testing.T) {
 	}
 }
 
+func TestProcessEventTargetsActivityCodeWhenProvided(t *testing.T) {
+	ctx := context.Background()
+	base := time.Date(2026, 6, 22, 12, 0, 0, 0, time.UTC)
+	repo := marketing.NewMemoryRepository()
+
+	legacy := matchTestActivity("legacy_daily", "DAILY_CHECKIN_REWARD_DEV_FINAL", marketing.ActivityActive, base, 100)
+	legacy.TriggerEvents = []string{"CHECKIN_SUCCESS"}
+	legacy.Type = "CHECKIN"
+	legacy.Rules = []marketing.Rule{{
+		ID:      "rule_legacy_event_type",
+		Code:    "LEGACY_EVENT_TYPE",
+		Phase:   marketing.RulePhaseQualify,
+		Type:    marketing.RuleTypeCondition,
+		Config:  []byte(`{"logic":"AND","conditions":[{"field":"attributes.eventType","op":"=","value":"DAILY_CHECKIN"}]}`),
+		Enabled: true,
+		Version: 1,
+	}}
+	target := matchTestActivity("streak_daily", "DAILY_CHECKIN_STREAK_REWARD", marketing.ActivityActive, base, 90)
+	target.TriggerEvents = []string{"CHECKIN_SUCCESS"}
+	target.Type = "CHECKIN"
+	target.Rewards = []marketing.Reward{fixedBonusReward("DAY1_USDT", `{"amount":"1.00","currency":"USDT","targetRef":"https://wallet.example.com/reward"}`)}
+
+	for _, activity := range []marketing.Activity{legacy, target} {
+		if _, err := repo.CreateActivity(ctx, activity); err != nil {
+			t.Fatalf("seed activity %s: %v", activity.Code, err)
+		}
+	}
+
+	event := marketing.ActivityEvent{
+		EventID:      "evt_streak_target",
+		EventType:    "CHECKIN_SUCCESS",
+		SourceSystem: "app",
+		TenantID:     "site_001",
+		Subject:      marketing.EventSubject{Type: "USER", ID: "u1"},
+		Biz:          marketing.EventBiz{BizType: "CHECKIN", BizID: "b1"},
+		OccurredAt:   base,
+		Attributes: map[string]any{
+			"activityCode":  "DAILY_CHECKIN_STREAK_REWARD",
+			"activityScene": "seven_day_checkin",
+			"checkin":       true,
+		},
+	}
+
+	result, err := NewService(repo).ProcessEvent(ctx, event)
+	if err != nil {
+		t.Fatalf("process: %v", err)
+	}
+	if len(result.Participations) != 1 {
+		t.Fatalf("expected only targeted participation, got %+v", result.Participations)
+	}
+	if got := result.Participations[0].ActivityID; got != target.ID {
+		t.Fatalf("participation activity=%s, want %s", got, target.ID)
+	}
+	if len(result.RuleResults) != 1 || result.RuleResults[0].ActivityCode != target.Code {
+		t.Fatalf("expected only target rule result, got %+v", result.RuleResults)
+	}
+	if len(result.GrantOrders) != 1 {
+		t.Fatalf("expected target grant order, got %+v", result.GrantOrders)
+	}
+}
+
 func TestSimulateEventMatchEntryAudienceAndConfigReasons(t *testing.T) {
 	ctx := context.Background()
 	base := time.Date(2026, 5, 24, 12, 0, 0, 0, time.UTC)

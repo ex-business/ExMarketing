@@ -4276,6 +4276,7 @@ export function App() {
   const draftRevisionRef = useRef(0);
   const savedDraftRevisionRef = useRef(0);
   const loadedDraftUpdatedAtRef = useRef('');
+  const pendingWorkflowFitRef = useRef(false);
   const initialRunQueryRef = useRef((() => {
     const params = new URLSearchParams(window.location.search);
     const replayStep = Number(params.get('replayStep') ?? '0');
@@ -4396,6 +4397,23 @@ export function App() {
   ), [activityId, activePlacement?.folderId, activePlacement?.workspaceId, edges, nodeConfigSchemas, nodes, reactFlowInstance]);
   const activeWorkflowVersion = useMemo(() => workflowVersions.find((item) => item.status === 'ACTIVE'), [workflowVersions]);
   const draftActiveDiff = useMemo(() => workflowDiffDetail(currentWorkflowDefinition, activeWorkflowVersion?.definition, '暂无线上 active version'), [activeWorkflowVersion?.definition, currentWorkflowDefinition]);
+  const fitLoadedWorkflowIntoView = useCallback((duration = 260) => {
+    if (!reactFlowInstance) {
+      pendingWorkflowFitRef.current = true;
+      return;
+    }
+    pendingWorkflowFitRef.current = false;
+    window.requestAnimationFrame(() => {
+      reactFlowInstance.fitView({ padding: 0.16, duration });
+      window.setTimeout(() => {
+        setZoomPercent(Math.round((reactFlowInstance.getZoom() || 1) * 100));
+      }, duration + 80);
+    });
+  }, [reactFlowInstance]);
+  useEffect(() => {
+    if (!activityId || nodes.length === 0 || !reactFlowInstance || !pendingWorkflowFitRef.current) return;
+    fitLoadedWorkflowIntoView(280);
+  }, [activityId, fitLoadedWorkflowIntoView, nodes.length, reactFlowInstance]);
   const diffHighlights = useMemo(() => {
     const addedNodeIds = new Set<string>();
     const removedNodeIds = new Set<string>();
@@ -4615,7 +4633,7 @@ export function App() {
         setNodes(loadedNodes);
         setEdges(next.edges);
         if (loadedNodes.length > 0) {
-          window.requestAnimationFrame(() => reactFlowInstance?.fitView({ padding: 0.16, duration: 240 }));
+          fitLoadedWorkflowIntoView(280);
         }
         setWorkflowStatus(next.nodes.length === 0 && next.edges.length === 0 ? '空 draft 已保存，等待添加节点' : '已加载草稿');
         setDraftDirty(false);
@@ -4649,7 +4667,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [activities, activityId, reactFlowInstance, setEdges, setNodes]);
+  }, [activities, activityId, fitLoadedWorkflowIntoView, setEdges, setNodes]);
 
   const refreshWorkflowVersions = useCallback(async (nextActivityId = activityId) => {
     if (!nextActivityId) {
@@ -5258,10 +5276,16 @@ export function App() {
   const handleFlowInit = useCallback((instance: ReactFlowInstance<FlowNode, ActivityEdge>) => {
     setReactFlowInstance(instance);
     window.setTimeout(() => {
+      if (nodes.length > 0 || pendingWorkflowFitRef.current) {
+        pendingWorkflowFitRef.current = false;
+        instance.fitView({ padding: 0.16, duration: 180 });
+        window.setTimeout(() => setZoomPercent(Math.round((instance.getZoom() || 1) * 100)), 240);
+        return;
+      }
       instance.setViewport({ x: 24, y: 36, zoom: 1 }, { duration: 0 });
       setZoomPercent(100);
     }, 120);
-  }, []);
+  }, [nodes.length]);
 
   const zoomTo = useCallback((zoom: number) => {
     reactFlowInstance?.setViewport({ x: 24, y: 36, zoom }, { duration: 180 });

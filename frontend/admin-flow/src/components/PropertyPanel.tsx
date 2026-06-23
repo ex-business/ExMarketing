@@ -3,7 +3,7 @@ import type { PointerEvent as ReactPointerEvent } from 'react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
 import type { ReactNode } from 'react';
 import { ArrowDown, ArrowUp, ChevronDown, ChevronRight, ChevronUp, Database, Eye, FileInput, FileOutput, Search, SlidersHorizontal, X } from 'lucide-react';
-import type { ActivityEdge, ActivityNode, FlowNode, GroupNode, NoteNode, ResourceSummary, WorkflowEdgeRoute, WorkflowEdgeRouteType, WorkflowNodeConfigField, WorkflowNodeConfigSchema, WorkflowNodeConfigValidationRule, WorkflowValidationIssue } from '../types';
+import type { ActivityEdge, ActivityNode, FlowNode, GroupNode, NoteNode, ResourceSummary, ServiceDefinitionSummary, ServiceInterfaceSummary, WorkflowEdgeRoute, WorkflowEdgeRouteType, WorkflowNodeConfigField, WorkflowNodeConfigSchema, WorkflowNodeConfigValidationRule, WorkflowValidationIssue } from '../types';
 import { cx } from '../utils/flow';
 import { NodeKindIcon } from './NodeKindIcon';
 import type { LuaConfigVariable } from './LuaConfigCodeEditor';
@@ -806,7 +806,12 @@ function parseArrayInput(value: string): string[] {
 }
 
 type ProviderChainStepValue = {
+  targetType?: string;
   source: string;
+  serviceRef?: string;
+  interfaceRef?: string;
+  providerRef?: string;
+  providerPolicy?: string;
   resourceRef?: string;
   namespace?: string;
   sourcePath?: string;
@@ -827,11 +832,11 @@ type ProviderChainStepValue = {
   onMiss?: 'NEXT' | 'BLOCK' | string;
 };
 
-const FACT_PROVIDER_CHAIN_SOURCES = ['PROVIDER', 'RESOURCE', 'FACT_SERVICE', 'WORKFLOW_CONTEXT', 'LOCAL_CACHE'];
+const FACT_PROVIDER_CHAIN_SOURCES = ['SERVICE_INTERFACE', 'PROVIDER', 'RESOURCE', 'WORKFLOW_CONTEXT', 'LOCAL_CACHE', 'FACT_SERVICE'];
 const RESOURCE_OPERATION_CHAIN_SOURCES = ['INTERNAL', 'RESOURCE', 'WORKFLOW_CONTEXT', 'LOCAL_CACHE'];
 
 function providerChainNeedsTarget(source: string): boolean {
-  return ['RESOURCE', 'PROVIDER', 'FACT_SERVICE', 'HTTP_PROVIDER', 'REDIS', 'GRPC', 'PLUGIN', 'CUSTOM', 'LUA_QUERY'].includes(source);
+  return ['SERVICE_INTERFACE', 'RESOURCE', 'PROVIDER', 'FACT_SERVICE', 'HTTP_PROVIDER', 'REDIS', 'GRPC', 'PLUGIN', 'CUSTOM', 'LUA_QUERY'].includes(source);
 }
 
 function providerChainRequiresManagedResource(source: string): boolean {
@@ -840,6 +845,7 @@ function providerChainRequiresManagedResource(source: string): boolean {
 
 function providerChainHasTarget(step: ProviderChainStepValue): boolean {
   if (!providerChainNeedsTarget(step.source)) return true;
+  if (step.source === 'SERVICE_INTERFACE') return Boolean(step.serviceRef && step.interfaceRef);
   if (step.resourceRef) return true;
   if (step.source === 'FACT_SERVICE' || step.source === 'HTTP_PROVIDER') {
     return Boolean(step.providerCode || step.endpoint);
@@ -893,9 +899,13 @@ function providerChainSourceOptions(node: ActivityNode, currentSource: string): 
   return [...baseSources, normalizedCurrent];
 }
 
-function emptyProviderChainStep(source = 'FACT_SERVICE'): ProviderChainStepValue {
+function emptyProviderChainStep(source = 'SERVICE_INTERFACE'): ProviderChainStepValue {
   return {
+    targetType: source === 'SERVICE_INTERFACE' ? 'SERVICE_INTERFACE' : undefined,
     source,
+    serviceRef: source === 'SERVICE_INTERFACE' ? 'user-profile-service' : undefined,
+    interfaceRef: source === 'SERVICE_INTERFACE' ? 'query-user-profile' : undefined,
+    providerPolicy: source === 'SERVICE_INTERFACE' ? 'PRIMARY' : undefined,
     namespace: 'facts',
     operation: source === 'HTTP_PROVIDER' ? 'CALL' : 'READ',
     onMiss: 'NEXT',
@@ -912,6 +922,16 @@ function normalizeProviderChain(value: unknown): ProviderChainStepValue[] {
   };
   const luaProviderKeyMap: Record<string, keyof ProviderChainStepValue> = {
     SOURCE: 'source',
+    TARGET_TYPE: 'targetType',
+    TARGETTYPE: 'targetType',
+    SERVICE_REF: 'serviceRef',
+    SERVICEREF: 'serviceRef',
+    INTERFACE_REF: 'interfaceRef',
+    INTERFACEREF: 'interfaceRef',
+    PROVIDER_REF: 'providerRef',
+    PROVIDERREF: 'providerRef',
+    PROVIDER_POLICY: 'providerPolicy',
+    PROVIDERPOLICY: 'providerPolicy',
     RESOURCE_REF: 'resourceRef',
     RESOURCEREF: 'resourceRef',
     NAMESPACE: 'namespace',
@@ -971,10 +991,16 @@ function normalizeProviderChain(value: unknown): ProviderChainStepValue[] {
         if (typeof item === 'string') return stepFromString(item);
         if (!item || typeof item !== 'object' || Array.isArray(item)) return undefined;
         const mapped = item as Record<string, unknown>;
-        const source = stringProp(mapped, 'source', 'SOURCE', 'provider', 'PROVIDER') ?? '';
+        const targetType = stringProp(mapped, 'targetType', 'TARGET_TYPE', 'targettype')?.toUpperCase();
+        const source = stringProp(mapped, 'source', 'SOURCE', 'provider', 'PROVIDER') ?? targetType ?? (stringProp(mapped, 'serviceRef', 'SERVICE_REF', 'serviceref') ? 'SERVICE_INTERFACE' : '');
         if (!source.trim()) return undefined;
         return {
           source: source.trim().toUpperCase(),
+          targetType,
+          serviceRef: stringProp(mapped, 'serviceRef', 'SERVICE_REF', 'serviceref'),
+          interfaceRef: stringProp(mapped, 'interfaceRef', 'INTERFACE_REF', 'interfaceref'),
+          providerRef: stringProp(mapped, 'providerRef', 'PROVIDER_REF', 'providerref'),
+          providerPolicy: stringProp(mapped, 'providerPolicy', 'PROVIDER_POLICY', 'providerpolicy'),
           resourceRef: stringProp(mapped, 'resourceRef', 'RESOURCE_REF', 'resourceref'),
           namespace: stringProp(mapped, 'namespace', 'NAMESPACE'),
           sourcePath: stringProp(mapped, 'sourcePath', 'SOURCE_PATH', 'sourcepath'),
@@ -1109,14 +1135,12 @@ function defaultFactServiceStepFor(node: ActivityNode): ProviderChainStepValue {
   }
   const config = nodeConfigRecord(node);
   const factKeys = Array.isArray(config.factKeys) ? config.factKeys.map((item) => String(item).trim().toUpperCase()) : [];
-  let resourceRef = 'user-profile-provider';
-  if (!factKeys.includes('USER_PROFILE')) {
-    if (factKeys.includes('KYC_PROFILE')) resourceRef = 'kyc-provider';
-    if (factKeys.includes('RISK_PROFILE')) resourceRef = 'risk-provider';
-  }
   return {
-    ...emptyProviderChainStep('PROVIDER'),
-    resourceRef,
+    ...emptyProviderChainStep('SERVICE_INTERFACE'),
+    serviceRef: factKeys.includes('KYC_PROFILE') ? 'kyc-service' : factKeys.includes('RISK_PROFILE') ? 'risk-service' : 'user-profile-service',
+    interfaceRef: factKeys.includes('KYC_PROFILE') ? 'query-kyc-profile' : factKeys.includes('RISK_PROFILE') ? 'query-risk-profile' : 'query-user-profile',
+    providerRef: '',
+    resourceRef: '',
     keyTemplate: '${tenantId}:${subject.type}:${subject.id}',
     onMiss: 'BLOCK',
   };
@@ -1124,8 +1148,9 @@ function defaultFactServiceStepFor(node: ActivityNode): ProviderChainStepValue {
 
 function compactProviderChain(steps: ProviderChainStepValue[]): ProviderChainStepValue[] {
   return steps.map((step) => {
-    const next: ProviderChainStepValue = { source: step.source || 'FACT_SERVICE' };
-    (['resourceRef', 'namespace', 'sourcePath', 'cachePath', 'keyTemplate', 'valuePath', 'endpoint', 'method', 'authRef', 'providerCode', 'redisRef', 'grpcTarget', 'pluginCode', 'operation', 'outputAs', 'timeoutSeconds', 'cacheTtlSeconds', 'onMiss'] as const).forEach((key) => {
+    const next: ProviderChainStepValue = { source: step.source || 'SERVICE_INTERFACE' };
+    if (step.source === 'SERVICE_INTERFACE') next.targetType = 'SERVICE_INTERFACE';
+    (['targetType', 'serviceRef', 'interfaceRef', 'providerRef', 'providerPolicy', 'resourceRef', 'namespace', 'sourcePath', 'cachePath', 'keyTemplate', 'valuePath', 'endpoint', 'method', 'authRef', 'providerCode', 'redisRef', 'grpcTarget', 'pluginCode', 'operation', 'outputAs', 'timeoutSeconds', 'cacheTtlSeconds', 'onMiss'] as const).forEach((key) => {
       const value = step[key];
       if (typeof value === 'string' && value.trim()) {
         next[key] = value.trim();
@@ -1140,11 +1165,15 @@ function ProviderChainEditor({
   node,
   value,
   resourceOptions,
+  serviceOptions,
+  serviceInterfaceOptions,
   onNodeConfigChange,
 }: {
   node: ActivityNode;
   value: unknown;
   resourceOptions: ResourceSummary[];
+  serviceOptions: ServiceDefinitionSummary[];
+  serviceInterfaceOptions: ServiceInterfaceSummary[];
   onNodeConfigChange: (nodeId: string, key: string, value: unknown) => void;
 }) {
   const steps = providerChainValueFor(node, value);
@@ -1181,6 +1210,18 @@ function ProviderChainEditor({
         if (!providerChainNeedsTarget(next.source) || next.source !== 'RESOURCE') {
           next.resourceRef = '';
         }
+        if (next.source === 'SERVICE_INTERFACE') {
+          next.targetType = 'SERVICE_INTERFACE';
+          next.serviceRef = next.serviceRef || serviceOptions[0]?.code || 'user-profile-service';
+          next.interfaceRef = next.interfaceRef || serviceInterfaceOptions.find((item) => item.serviceRef === next.serviceRef)?.code || 'query-user-profile';
+          next.providerPolicy = next.providerPolicy || 'PRIMARY';
+        } else {
+          next.targetType = '';
+          next.serviceRef = '';
+          next.interfaceRef = '';
+          next.providerRef = '';
+          next.providerPolicy = '';
+        }
         if (next.source === 'HTTP_PROVIDER') next.operation = 'CALL';
         if (next.source === 'LOCAL_CACHE' && !next.cachePath) next.cachePath = '$.vars.execution.facts.USER_PROFILE';
         if (next.source === 'WORKFLOW_CONTEXT' && !next.sourcePath) next.sourcePath = '$.attributes.USER_PROFILE';
@@ -1207,9 +1248,12 @@ function ProviderChainEditor({
         const hasTarget = providerChainHasTarget(step);
         const selectableResources = providerChainResourceOptions(step, resourceOptions);
         const selectableProviders = providerChainProviderOptions(resourceOptions);
+        const selectableInterfaces = serviceInterfaceOptions.filter((item) => !step.serviceRef || item.serviceRef === step.serviceRef);
         const resourceExists = !step.resourceRef || selectableResources.some((resource) => resource.code === step.resourceRef);
         const providerExists = !step.providerCode || selectableProviders.some((resource) => resource.code === step.providerCode);
-        const stepSummary = step.source === 'WORKFLOW_CONTEXT'
+        const stepSummary = step.source === 'SERVICE_INTERFACE'
+          ? `${step.serviceRef ?? ''}/${step.interfaceRef ?? ''}`
+          : step.source === 'WORKFLOW_CONTEXT'
           ? step.sourcePath
           : step.source === 'LOCAL_CACHE'
             ? step.cachePath
@@ -1261,7 +1305,42 @@ function ProviderChainEditor({
                     当前数据提供者必须选择资源 Ref。
                   </div>
                 ) : null}
+                {!hasTarget && step.source === 'SERVICE_INTERFACE' ? (
+                  <div className="provider-chain-warning">
+                    当前数据提供者必须选择 Service 和 Interface。
+                  </div>
+                ) : null}
                 <div className="provider-chain-fields core">
+                  {step.source === 'SERVICE_INTERFACE' ? (
+                    <>
+                      <label>
+                        <span>Service</span>
+                        <select value={step.serviceRef ?? ''} onChange={(event) => {
+                          const serviceRef = event.target.value;
+                          const interfaceRef = serviceInterfaceOptions.find((item) => item.serviceRef === serviceRef)?.code ?? '';
+                          patchStep(index, { serviceRef, interfaceRef, targetType: 'SERVICE_INTERFACE' });
+                        }}>
+                          <option value="">选择 Service</option>
+                          {step.serviceRef && !serviceOptions.some((service) => service.code === step.serviceRef) ? <option value={step.serviceRef}>{step.serviceRef}（手动）</option> : null}
+                          {serviceOptions.map((service) => <option key={service.id || service.code} value={service.code}>{service.name || service.code} · {service.code}</option>)}
+                        </select>
+                      </label>
+                      <label>
+                        <span>Interface</span>
+                        <select value={step.interfaceRef ?? ''} onChange={(event) => patchStep(index, { interfaceRef: event.target.value, targetType: 'SERVICE_INTERFACE' })}>
+                          <option value="">选择 Interface</option>
+                          {step.interfaceRef && !selectableInterfaces.some((item) => item.code === step.interfaceRef) ? <option value={step.interfaceRef}>{step.interfaceRef}（手动）</option> : null}
+                          {selectableInterfaces.map((item) => <option key={item.id || `${item.serviceRef}:${item.code}`} value={item.code}>{item.name || item.code} · {item.code}</option>)}
+                        </select>
+                      </label>
+                      <label>
+                        <span>Policy</span>
+                        <select value={step.providerPolicy ?? 'PRIMARY'} onChange={(event) => patchStep(index, { providerPolicy: event.target.value })}>
+                          <option value="PRIMARY">PRIMARY</option>
+                        </select>
+                      </label>
+                    </>
+                  ) : null}
                   {requiresManagedResource ? (
                     <label>
                       <span>资源</span>
@@ -1436,16 +1515,20 @@ function ConfigFieldInput({
   node,
   field,
   resourceOptions = [],
+  serviceOptions = [],
+  serviceInterfaceOptions = [],
   onNodeConfigChange,
 }: {
   node: ActivityNode;
   field: WorkflowNodeConfigField;
   resourceOptions?: ResourceSummary[];
+  serviceOptions?: ServiceDefinitionSummary[];
+  serviceInterfaceOptions?: ServiceInterfaceSummary[];
   onNodeConfigChange: (nodeId: string, key: string, value: unknown) => void;
 }) {
   const value = configValue(node, field);
   if (field.key === 'providerChain') {
-    return <ProviderChainEditor node={node} value={value} resourceOptions={resourceOptions} onNodeConfigChange={onNodeConfigChange} />;
+    return <ProviderChainEditor node={node} value={value} resourceOptions={resourceOptions} serviceOptions={serviceOptions} serviceInterfaceOptions={serviceInterfaceOptions} onNodeConfigChange={onNodeConfigChange} />;
   }
   if (field.key === 'qualifyRules') {
     return <QualifyRulesEditor node={node} value={value} onNodeConfigChange={onNodeConfigChange} />;
@@ -1602,12 +1685,16 @@ function ConfigFieldRow({
   field,
   issues,
   resourceOptions,
+  serviceOptions,
+  serviceInterfaceOptions,
   onNodeConfigChange,
 }: {
   node: ActivityNode;
   field: WorkflowNodeConfigField;
   issues?: WorkflowValidationIssue[];
   resourceOptions: ResourceSummary[];
+  serviceOptions: ServiceDefinitionSummary[];
+  serviceInterfaceOptions: ServiceInterfaceSummary[];
   onNodeConfigChange: (nodeId: string, key: string, value: unknown) => void;
 }) {
   const hasBlockIssue = issues?.some((issue) => issue.severity === 'BLOCK');
@@ -1618,7 +1705,7 @@ function ConfigFieldRow({
       <span>
         <b>{field.label}{field.required ? <em className="required-star" aria-label="必填">*</em> : null}</b>
       </span>
-      <ConfigFieldInput node={node} field={field} resourceOptions={resourceOptions} onNodeConfigChange={onNodeConfigChange} />
+      <ConfigFieldInput node={node} field={field} resourceOptions={resourceOptions} serviceOptions={serviceOptions} serviceInterfaceOptions={serviceInterfaceOptions} onNodeConfigChange={onNodeConfigChange} />
       {issues?.length ? (
         <div className="schema-field-issues">
           {issues.map((issue) => (
@@ -2155,12 +2242,16 @@ function NodeConfigForm({
   schema,
   validationIssues,
   resourceOptions,
+  serviceOptions,
+  serviceInterfaceOptions,
   onNodeConfigChange,
 }: {
   node: ActivityNode;
   schema?: WorkflowNodeConfigSchema;
   validationIssues?: WorkflowValidationIssue[];
   resourceOptions: ResourceSummary[];
+  serviceOptions: ServiceDefinitionSummary[];
+  serviceInterfaceOptions: ServiceInterfaceSummary[];
   onNodeConfigChange: (nodeId: string, key: string, value: unknown) => void;
 }) {
   const groups = displayConfigGroupsForNode(node, schema);
@@ -2245,7 +2336,7 @@ function NodeConfigForm({
             <div className="schema-config-group">
               {group.description ? <p>{group.description}</p> : null}
               {group.fields.map((field) => (
-                <ConfigFieldRow key={field.key} node={node} field={field} issues={issuesByField.get(field.key)} resourceOptions={resourceOptions} onNodeConfigChange={updateConfigAndLua} />
+                <ConfigFieldRow key={field.key} node={node} field={field} issues={issuesByField.get(field.key)} resourceOptions={resourceOptions} serviceOptions={serviceOptions} serviceInterfaceOptions={serviceInterfaceOptions} onNodeConfigChange={updateConfigAndLua} />
               ))}
             </div>
           </ConfigAccordionSection>
@@ -3100,13 +3191,15 @@ type Props = {
   panelWidth: number;
   onResizeStart: (event: ReactPointerEvent<HTMLButtonElement>) => void;
   resourceOptions: ResourceSummary[];
+  serviceOptions?: ServiceDefinitionSummary[];
+  serviceInterfaceOptions?: ServiceInterfaceSummary[];
   validationIssues?: WorkflowValidationIssue[];
   edgeValidationIssues?: WorkflowValidationIssue[];
   debugContent?: ReactNode;
   debugOpen?: boolean;
 };
 
-export function PropertyPanel({ nodes, edges, selectedNodeIds, selectedEdgeIds, nodeConfigSchemas, onNodeConfigChange, onNodeMetaChange, onEdgeRouteChange, onLocateNode, onDeleteNodes, onDeleteEdges, panelWidth, onResizeStart, resourceOptions, validationIssues = [], edgeValidationIssues = [], debugContent, debugOpen = false }: Props) {
+export function PropertyPanel({ nodes, edges, selectedNodeIds, selectedEdgeIds, nodeConfigSchemas, onNodeConfigChange, onNodeMetaChange, onEdgeRouteChange, onLocateNode, onDeleteNodes, onDeleteEdges, panelWidth, onResizeStart, resourceOptions, serviceOptions = [], serviceInterfaceOptions = [], validationIssues = [], edgeValidationIssues = [], debugContent, debugOpen = false }: Props) {
   const [activeTab, setActiveTab] = useState<PropertyPanelTab>(loadPropertyPanelTab);
   const [configPreviewOpen, setConfigPreviewOpen] = useState(false);
   const [configInputOpen, setConfigInputOpen] = useState(false);
@@ -3197,7 +3290,7 @@ export function PropertyPanel({ nodes, edges, selectedNodeIds, selectedEdgeIds, 
               <NodeConfigPreviewBody node={selectedNode} schema={selectedNodeSchema} resourceOptions={resourceOptions} />
             </div>
           ) : null}
-          <NodeConfigForm node={selectedNode} schema={selectedNodeSchema} validationIssues={validationIssues} resourceOptions={resourceOptions} onNodeConfigChange={onNodeConfigChange} />
+          <NodeConfigForm node={selectedNode} schema={selectedNodeSchema} validationIssues={validationIssues} resourceOptions={resourceOptions} serviceOptions={serviceOptions} serviceInterfaceOptions={serviceInterfaceOptions} onNodeConfigChange={onNodeConfigChange} />
           <ConfigAccordionSection
             title="输入"
             summary={nodeInputSummary(selectedNode, selectedNodeSchema)}

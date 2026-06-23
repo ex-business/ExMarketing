@@ -654,7 +654,7 @@ func (s WorkflowValidationService) validateFactQueryProviderChain(result *Workfl
 		path := fmt.Sprintf("nodes[%d].config.providerChain[%d]", nodeIndex, index)
 		switch step := rawStep.(type) {
 		case map[string]any:
-			source := strings.ToUpper(firstNonEmptyConfigString(step, "source", "provider"))
+			source := strings.ToUpper(firstNonEmptyConfigString(step, "source", "provider", "targetType"))
 			if source == "" && configString(step, "resourceRef") != "" {
 				source = "RESOURCE"
 			}
@@ -701,6 +701,29 @@ func (s WorkflowValidationService) validateFactQueryProviderTarget(result *Workf
 	switch strings.ToUpper(strings.TrimSpace(source)) {
 	case "", "WORKFLOW_CONTEXT", "CONTEXT", "LOCAL_CACHE", "CACHE", "RESOURCE":
 		return
+	case "SERVICE_INTERFACE":
+		if policy := strings.ToUpper(configString(config, "providerPolicy")); policy != "" && policy != "PRIMARY" {
+			result.addIssue(
+				WorkflowValidationBlock,
+				"WORKFLOW_FACT_PROVIDER_POLICY_UNSUPPORTED",
+				fmt.Sprintf("节点 %q 的 SERVICE_INTERFACE 数据提供者暂只支持 PRIMARY providerPolicy。", nodeID),
+				path+".providerPolicy",
+				nodeID,
+				"",
+			)
+			return
+		}
+		if configString(config, "serviceRef") != "" && configString(config, "interfaceRef") != "" {
+			return
+		}
+		result.addIssue(
+			WorkflowValidationBlock,
+			"WORKFLOW_FACT_PROVIDER_TARGET_REQUIRED",
+			fmt.Sprintf("节点 %q 的 SERVICE_INTERFACE 数据提供者必须配置 serviceRef 和 interfaceRef。", nodeID),
+			path+".serviceRef",
+			nodeID,
+			"",
+		)
 	case "PROVIDER":
 		if configString(config, "resourceRef") != "" || configString(config, "providerRef") != "" {
 			return

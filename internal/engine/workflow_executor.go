@@ -2411,6 +2411,13 @@ func firstWorkflowString(value string, fallback string) string {
 	return value
 }
 
+func firstWorkflowNumber(value float64, fallback float64) float64 {
+	if value == 0 {
+		return fallback
+	}
+	return value
+}
+
 func firstWorkflowAny(values ...any) any {
 	for _, value := range values {
 		if value != nil {
@@ -3608,13 +3615,19 @@ func workflowFactValueFromResourceOutput(output map[string]any, factCode string,
 }
 
 type workflowFactQueryProviderStep struct {
+	TargetType     string
 	Source         string
+	ServiceRef     string
+	InterfaceRef   string
+	ProviderRef    string
+	ProviderPolicy string
 	ResourceRef    string
 	Namespace      string
 	Operation      string
 	SourcePath     string
 	CachePath      string
 	KeyTemplate    string
+	InputMapping   map[string]any
 	ValuePath      string
 	Endpoint       string
 	Method         string
@@ -3648,12 +3661,18 @@ func workflowFactQueryProviderChain(config map[string]any) []workflowFactQueryPr
 			case map[string]any:
 				step := workflowFactQueryProviderStep{
 					Source:         firstWorkflowString(strings.ToUpper(workflowConfigString(normalized, "source")), strings.ToUpper(workflowConfigString(normalized, "provider"))),
+					TargetType:     strings.ToUpper(workflowConfigString(normalized, "targetType")),
+					ServiceRef:     workflowConfigString(normalized, "serviceRef"),
+					InterfaceRef:   workflowConfigString(normalized, "interfaceRef"),
+					ProviderRef:    workflowConfigString(normalized, "providerRef"),
+					ProviderPolicy: workflowConfigString(normalized, "providerPolicy"),
 					ResourceRef:    workflowConfigString(normalized, "resourceRef"),
 					Namespace:      workflowConfigString(normalized, "namespace"),
 					Operation:      strings.ToUpper(workflowConfigString(normalized, "operation")),
 					SourcePath:     workflowConfigString(normalized, "sourcePath"),
 					CachePath:      workflowConfigString(normalized, "cachePath"),
 					KeyTemplate:    workflowConfigString(normalized, "keyTemplate"),
+					InputMapping:   workflowConfigMap(normalized, "inputMapping"),
 					ValuePath:      workflowConfigString(normalized, "valuePath"),
 					Endpoint:       workflowConfigString(normalized, "endpoint"),
 					Method:         workflowConfigString(normalized, "method"),
@@ -3661,12 +3680,15 @@ func workflowFactQueryProviderChain(config map[string]any) []workflowFactQueryPr
 					RedisRef:       workflowConfigString(normalized, "redisRef"),
 					GRPCTarget:     workflowConfigString(normalized, "grpcTarget"),
 					PluginCode:     workflowConfigString(normalized, "pluginCode"),
-					TimeoutSeconds: workflowConfigNumber(normalized, "timeoutSeconds"),
+					TimeoutSeconds: firstWorkflowNumber(workflowConfigNumber(normalized, "timeoutSeconds"), workflowConfigNumber(normalized, "timeoutMs")/1000),
 					OnMiss:         strings.ToUpper(firstWorkflowString(workflowConfigString(normalized, "onMiss"), "NEXT")),
 					Raw:            normalized,
 				}
 				if step.Source == "" && step.ResourceRef != "" {
 					step.Source = "RESOURCE"
+				}
+				if step.Source == "" && step.TargetType != "" {
+					step.Source = step.TargetType
 				}
 				if step.Source != "" {
 					steps = append(steps, step)
@@ -3697,13 +3719,28 @@ func workflowFactQueryProviderStepConfig(config map[string]any, step workflowFac
 	}
 	if step.Raw != nil {
 		for key, value := range step.Raw {
-			if key == "source" || key == "provider" || key == "onMiss" {
+			if key == "source" || key == "provider" || key == "targetType" || key == "onMiss" {
 				continue
 			}
 			next[key] = value
 		}
 	}
 	next["factKeys"] = remaining
+	if step.TargetType != "" {
+		next["targetType"] = step.TargetType
+	}
+	if step.ServiceRef != "" {
+		next["serviceRef"] = step.ServiceRef
+	}
+	if step.InterfaceRef != "" {
+		next["interfaceRef"] = step.InterfaceRef
+	}
+	if step.ProviderRef != "" {
+		next["providerRef"] = step.ProviderRef
+	}
+	if step.ProviderPolicy != "" {
+		next["providerPolicy"] = step.ProviderPolicy
+	}
 	if step.ResourceRef != "" {
 		next["resourceRef"] = step.ResourceRef
 	}
@@ -3721,6 +3758,9 @@ func workflowFactQueryProviderStepConfig(config map[string]any, step workflowFac
 	}
 	if step.KeyTemplate != "" {
 		next["keyTemplate"] = step.KeyTemplate
+	}
+	if step.InputMapping != nil {
+		next["inputMapping"] = step.InputMapping
 	}
 	if step.ValuePath != "" {
 		next["valuePath"] = step.ValuePath
@@ -3756,12 +3796,92 @@ func workflowFactQueryProviderStepNode(node marketing.WorkflowNode, config map[s
 	return node
 }
 
+func (s *Service) workflowResolveServiceInterfaceProviderStep(ctx context.Context, runtime workflowRuntime, step workflowFactQueryProviderStep, config map[string]any) (map[string]any, workflowFactQueryProviderStep, error) {
+	serviceRef := firstWorkflowString(step.ServiceRef, workflowConfigString(config, "serviceRef"))
+	interfaceRef := firstWorkflowString(step.InterfaceRef, workflowConfigString(config, "interfaceRef"))
+	providerRef := firstWorkflowString(step.ProviderRef, workflowConfigString(config, "providerRef"))
+	providerPolicy := firstWorkflowString(firstWorkflowString(step.ProviderPolicy, workflowConfigString(config, "providerPolicy")), "PRIMARY")
+	_, provider, err := s.ResolveServiceProvider(ctx, runtime.Activity.TenantID, serviceRef, interfaceRef, providerRef, providerPolicy)
+	if err != nil {
+		return nil, step, err
+	}
+	next := workflowCopyMap(config)
+	next["targetType"] = "SERVICE_INTERFACE"
+	next["serviceRef"] = serviceRef
+	next["interfaceRef"] = interfaceRef
+	next["providerRef"] = provider.Code
+	next["providerPolicy"] = providerPolicy
+	next["providerProtocol"] = provider.Protocol
+	providerConfig := serviceProviderConfigMap(provider)
+	resourceRef := ""
+	if len(provider.ResourceRefs) > 0 {
+		resourceRef = provider.ResourceRefs[0]
+	}
+	if resourceRef == "" {
+		resourceRef = firstNonEmpty(
+			workflowConfigString(providerConfig, "targetResourceRef"),
+			workflowConfigString(providerConfig, "resourceRef"),
+			workflowConfigString(providerConfig, "storeRef"),
+		)
+	}
+	if resourceRef == "" {
+		return nil, step, errors.New("SERVICE_PROVIDER_RESOURCE_REF_REQUIRED")
+	}
+	next["resourceRef"] = resourceRef
+	if step.Operation == "" {
+		next["operation"] = string(marketing.ResourceRead)
+	}
+	if provider.Endpoint != "" {
+		next["endpoint"] = provider.Endpoint
+	}
+	if provider.Method != "" {
+		next["method"] = provider.Method
+	}
+	if provider.AuthRef != "" {
+		next["authRef"] = provider.AuthRef
+	}
+	step.TargetType = "SERVICE_INTERFACE"
+	step.Source = "SERVICE_INTERFACE"
+	step.ServiceRef = serviceRef
+	step.InterfaceRef = interfaceRef
+	step.ProviderRef = provider.Code
+	step.ProviderPolicy = providerPolicy
+	step.ResourceRef = resourceRef
+	return next, step, nil
+}
+
+func serviceProviderConfigMap(provider marketing.ServiceProvider) map[string]any {
+	if len(provider.Config) == 0 {
+		return map[string]any{}
+	}
+	var out map[string]any
+	if err := json.Unmarshal(provider.Config, &out); err != nil || out == nil {
+		return map[string]any{}
+	}
+	return out
+}
+
 func workflowFactQueryProviderStepTrace(step workflowFactQueryProviderStep, status string, remaining []string, output any) map[string]any {
 	trace := map[string]any{
 		"source":    step.Source,
 		"status":    status,
 		"remaining": remaining,
 		"onMiss":    firstWorkflowString(step.OnMiss, "NEXT"),
+	}
+	if step.TargetType != "" {
+		trace["targetType"] = step.TargetType
+	}
+	if step.ServiceRef != "" {
+		trace["serviceRef"] = step.ServiceRef
+	}
+	if step.InterfaceRef != "" {
+		trace["interfaceRef"] = step.InterfaceRef
+	}
+	if step.ProviderRef != "" {
+		trace["providerRef"] = step.ProviderRef
+	}
+	if step.ProviderPolicy != "" {
+		trace["providerPolicy"] = step.ProviderPolicy
 	}
 	if step.ResourceRef != "" {
 		trace["resourceRef"] = step.ResourceRef
@@ -3843,6 +3963,31 @@ func (s *Service) factQueryProviderChainWorkflowNodeHandler(ctx context.Context,
 				status = "MISS"
 			}
 			resolvedChain = append(resolvedChain, workflowFactQueryProviderStepTrace(step, status, remaining, result.response))
+			if status == "MISS" && workflowFactQueryProviderShouldBlockOnMiss(step) {
+				return workflowFactQueryFailure(node, runtime, config, "", "FACT_QUERY_PROVIDER_MISS", "providerChain step did not resolve requested facts", facts, responses)
+			}
+		case "SERVICE_INTERFACE":
+			resolvedConfig, resolvedStep, err := s.workflowResolveServiceInterfaceProviderStep(ctx, runtime, step, stepConfig)
+			if err != nil {
+				return workflowFactQueryFailure(node, runtime, config, "", "SERVICE_INTERFACE_PROVIDER_NOT_RESOLVED", err.Error(), facts, responses)
+			}
+			stepConfig = resolvedConfig
+			stepNode = workflowFactQueryProviderStepNode(node, stepConfig)
+			resourceResult := s.factQueryResourceRefWorkflowNodeHandler(ctx, stepNode, runtime, stepConfig)
+			responses = append(responses, resourceResult.Output)
+			if resourceResult.Status == marketing.WorkflowNodeFailed {
+				return resourceResult
+			}
+			if mapped, ok := resourceResult.Output["facts"].(map[string]any); ok {
+				for key, value := range mapped {
+					facts[key] = value
+				}
+			}
+			status := "DONE"
+			if !workflowFactQueryProviderStepHasFacts(resourceResult.Output) {
+				status = "MISS"
+			}
+			resolvedChain = append(resolvedChain, workflowFactQueryProviderStepTrace(resolvedStep, status, remaining, resourceResult.Output))
 			if status == "MISS" && workflowFactQueryProviderShouldBlockOnMiss(step) {
 				return workflowFactQueryFailure(node, runtime, config, "", "FACT_QUERY_PROVIDER_MISS", "providerChain step did not resolve requested facts", facts, responses)
 			}

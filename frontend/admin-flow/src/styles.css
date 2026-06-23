@@ -30993,3 +30993,27 @@ input:focus-visible {
     grid-template-columns: 1fr;
   }
 }
+.resource-inline-list {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 6px;
+}
+
+.ta-check {
+  min-width: 0;
+  display: flex !important;
+  align-items: center;
+  gap: 8px;
+  color: var(--ta-gray-600);
+  font-size: 12px;
+  line-height: 18px;
+  font-weight: 700;
+}
+
+.ta-check input {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+}
+

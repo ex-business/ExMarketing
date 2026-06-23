@@ -524,6 +524,75 @@ export type ResourceAuditLogSummary = {
   createdAt?: string;
 };
 
+export type ServiceDefinitionSummary = {
+  id: string;
+  tenantId: string;
+  workspaceId?: string;
+  folderId?: string;
+  code: string;
+  name: string;
+  description?: string;
+  serviceType: string;
+  scope: string;
+  status: string;
+  owner?: string;
+  tags?: string[];
+  metadata?: Record<string, unknown>;
+  createdBy?: string;
+  updatedBy?: string;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type ServiceInterfaceSummary = {
+  id: string;
+  tenantId: string;
+  serviceRef: string;
+  code: string;
+  name: string;
+  description?: string;
+  operation: string;
+  inputSchemaRef?: string;
+  outputSchemaRef?: string;
+  errorSchemaRef?: string;
+  idempotencyKeyTemplate?: string;
+  timeoutMs?: number;
+  retryPolicy?: string;
+  luaCallable?: boolean;
+  status: string;
+  metadata?: Record<string, unknown>;
+  createdBy?: string;
+  updatedBy?: string;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type ServiceProviderSummary = {
+  id: string;
+  tenantId: string;
+  serviceRef: string;
+  interfaceRef: string;
+  code: string;
+  name: string;
+  description?: string;
+  protocol: string;
+  endpoint?: string;
+  topic?: string;
+  method?: string;
+  path?: string;
+  authRef?: string;
+  resourceRefs?: string[];
+  config?: Record<string, unknown>;
+  weight?: number;
+  priority?: number;
+  environment?: string;
+  status: string;
+  createdBy?: string;
+  updatedBy?: string;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
 export type WorkflowNodeInputVar = {
   key: string;
   label: string;

@@ -20,7 +20,7 @@ import { NodePalette } from './components/NodePalette';
 import { NodePicker } from './components/NodePicker';
 import { PropertyPanel } from './components/PropertyPanel';
 import { StudioChrome } from './components/StudioChrome';
-import { ResourceManagement, WorkspaceContent, WorkspaceDetailPanel, WorkspaceHomeLayout, WorkspaceSidebar, WorkspaceTopBar } from './components/workspace-home';
+import { ResourceManagement, ServiceCapabilityManagement, WorkspaceContent, WorkspaceDetailPanel, WorkspaceHomeLayout, WorkspaceSidebar, WorkspaceTopBar } from './components/workspace-home';
 import type { GlobalSearchResult, WorkspaceDetailTarget, WorkspaceItemAction, WorkspaceSortMode } from './components/workspace-home';
 import { baseEdges, baseNodes, simpleTemplate } from './data/initialFlow';
 import { catalogFromSchemas, getDef } from './data/nodeCatalog';
@@ -53,6 +53,9 @@ import type {
   ResourceAuditLogSummary,
   ResourceBindingSummary,
   ResourceSummary,
+  ServiceDefinitionSummary,
+  ServiceInterfaceSummary,
+  ServiceProviderSummary,
   StudioFolderPatch,
   WorkspaceActivityGrantSummary,
   WorkspaceAuditLogSummary,
@@ -2390,13 +2393,20 @@ function StudioActivityStart({
   const [batchActionBusy, setBatchActionBusy] = useState(false);
   const [batchActionError, setBatchActionError] = useState('');
   const [batchActionFailures, setBatchActionFailures] = useState<WorkspaceBatchResult['items']>([]);
-  const [homeUtilityDialog, setHomeUtilityDialog] = useState<'settings' | 'storage' | 'members' | 'share' | 'audit' | 'resources' | ''>('');
+  const [homeUtilityDialog, setHomeUtilityDialog] = useState<'settings' | 'storage' | 'members' | 'share' | 'audit' | 'resources' | 'services' | ''>('');
   const [resources, setResources] = useState<ResourceSummary[]>([]);
   const [resourcesLoading, setResourcesLoading] = useState(false);
   const [selectedResourceCode, setSelectedResourceCode] = useState('');
   const [resourceBindings, setResourceBindings] = useState<ResourceBindingSummary[]>([]);
   const [resourceAudits, setResourceAudits] = useState<ResourceAuditLogSummary[]>([]);
   const [resourceMessage, setResourceMessage] = useState('');
+  const [services, setServices] = useState<ServiceDefinitionSummary[]>([]);
+  const [serviceInterfaces, setServiceInterfaces] = useState<ServiceInterfaceSummary[]>([]);
+  const [serviceProviders, setServiceProviders] = useState<ServiceProviderSummary[]>([]);
+  const [servicesLoading, setServicesLoading] = useState(false);
+  const [selectedServiceCode, setSelectedServiceCode] = useState('');
+  const [selectedInterfaceCode, setSelectedInterfaceCode] = useState('');
+  const [serviceMessage, setServiceMessage] = useState('');
   const [workspaceSettingsDraft, setWorkspaceSettingsDraft] = useState({
     name: '',
     slug: '',
@@ -2603,6 +2613,8 @@ function StudioActivityStart({
     ? workflowStatus
     : '';
   const selectedResource = resources.find((resource) => resource.code === selectedResourceCode) ?? resources[0];
+  const selectedService = selectedServiceCode ? services.find((service) => service.code === selectedServiceCode) : undefined;
+  const selectedInterface = selectedInterfaceCode ? serviceInterfaces.find((item) => item.code === selectedInterfaceCode) : undefined;
   const dismissOpsToast = useCallback((id: number) => {
     setOpsToasts((items) => items.filter((item) => item.id !== id));
   }, []);
@@ -3107,6 +3119,99 @@ function StudioActivityStart({
     setResourceMessage(result.ok ? `资源测试通过：${resourceCode}` : `资源测试失败：${result.errorCode || resourceCode}`);
     selectResource(resourceCode);
   };
+  const refreshServiceProviders = useCallback(async (serviceCode: string, interfaceCode: string) => {
+    if (!serviceCode || !interfaceCode) {
+      setServiceProviders([]);
+      return;
+    }
+    const tenantId = selectedWorkspace?.tenantId || 'site_001';
+    const body = await fetchJSON<{ items: ServiceProviderSummary[] }>(`/admin/v1/services/${encodeURIComponent(serviceCode)}/interfaces/${encodeURIComponent(interfaceCode)}/providers?tenantId=${encodeURIComponent(tenantId)}&limit=100`);
+    setServiceProviders(body.items ?? []);
+  }, [selectedWorkspace?.tenantId]);
+  const refreshServiceInterfaces = useCallback(async (serviceCode: string, selectInterfaceCode = selectedInterfaceCode) => {
+    if (!serviceCode) {
+      setServiceInterfaces([]);
+      setServiceProviders([]);
+      setSelectedInterfaceCode('');
+      return;
+    }
+    const tenantId = selectedWorkspace?.tenantId || 'site_001';
+    const body = await fetchJSON<{ items: ServiceInterfaceSummary[] }>(`/admin/v1/services/${encodeURIComponent(serviceCode)}/interfaces?tenantId=${encodeURIComponent(tenantId)}&limit=100`);
+    const items = body.items ?? [];
+    setServiceInterfaces(items);
+    const nextInterface = selectInterfaceCode || items[0]?.code || '';
+    setSelectedInterfaceCode(nextInterface);
+    await refreshServiceProviders(serviceCode, nextInterface);
+  }, [refreshServiceProviders, selectedInterfaceCode, selectedWorkspace?.tenantId]);
+  const refreshServices = useCallback(async (selectCode = selectedServiceCode) => {
+    setServicesLoading(true);
+    try {
+      const params = new URLSearchParams();
+      params.set('tenantId', selectedWorkspace?.tenantId || 'site_001');
+      params.set('limit', '500');
+      const body = await fetchJSON<{ items: ServiceDefinitionSummary[] }>(`/admin/v1/services?${params.toString()}`);
+      const items = body.items ?? [];
+      setServices(items);
+      const nextCode = selectCode || items[0]?.code || '';
+      setSelectedServiceCode(nextCode);
+      await refreshServiceInterfaces(nextCode, '');
+      setServiceMessage('服务能力已刷新');
+    } catch (error) {
+      setServiceMessage((error as Error).message);
+    } finally {
+      setServicesLoading(false);
+    }
+  }, [refreshServiceInterfaces, selectedServiceCode, selectedWorkspace?.tenantId]);
+  const openServiceManager = () => {
+    setHomeUtilityDialog('services');
+    void Promise.all([refreshResources(), refreshServices()]);
+  };
+  const selectServiceCapability = useCallback((code: string) => {
+    setSelectedServiceCode(code);
+    void refreshServiceInterfaces(code, '').catch((error) => setServiceMessage((error as Error).message));
+  }, [refreshServiceInterfaces]);
+  const selectServiceInterface = useCallback((code: string) => {
+    setSelectedInterfaceCode(code);
+    if (selectedServiceCode) {
+      void refreshServiceProviders(selectedServiceCode, code).catch((error) => setServiceMessage((error as Error).message));
+    }
+  }, [refreshServiceProviders, selectedServiceCode]);
+  const saveServiceDefinition = async (service: Partial<ServiceDefinitionSummary> & { code: string }) => {
+    if (!service.code.trim()) throw new Error('Service Code 必填');
+    const tenantId = service.tenantId || selectedWorkspace?.tenantId || 'site_001';
+    await fetchJSON<ServiceDefinitionSummary>(`/admin/v1/services/${encodeURIComponent(service.code)}?tenantId=${encodeURIComponent(tenantId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ ...service, tenantId }),
+    });
+    setServiceMessage(`服务已保存：${service.code}`);
+    await refreshServices(service.code);
+  };
+  const saveServiceInterface = async (serviceCode: string, item: Partial<ServiceInterfaceSummary> & { code: string }) => {
+    if (!item.code.trim()) throw new Error('Interface Code 必填');
+    const tenantId = item.tenantId || selectedWorkspace?.tenantId || 'site_001';
+    await fetchJSON<ServiceInterfaceSummary>(`/admin/v1/services/${encodeURIComponent(serviceCode)}/interfaces/${encodeURIComponent(item.code)}?tenantId=${encodeURIComponent(tenantId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ ...item, tenantId, serviceRef: serviceCode }),
+    });
+    setServiceMessage(`接口已保存：${item.code}`);
+    await refreshServiceInterfaces(serviceCode, item.code);
+  };
+  const saveServiceProvider = async (serviceCode: string, interfaceCode: string, provider: Partial<ServiceProviderSummary> & { code: string }) => {
+    if (!provider.code.trim()) throw new Error('Provider Code 必填');
+    const tenantId = provider.tenantId || selectedWorkspace?.tenantId || 'site_001';
+    await fetchJSON<ServiceProviderSummary>(`/admin/v1/services/${encodeURIComponent(serviceCode)}/interfaces/${encodeURIComponent(interfaceCode)}/providers/${encodeURIComponent(provider.code)}?tenantId=${encodeURIComponent(tenantId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ ...provider, tenantId, serviceRef: serviceCode, interfaceRef: interfaceCode }),
+    });
+    setServiceMessage(`提供者已保存：${provider.code}`);
+    await refreshServiceProviders(serviceCode, interfaceCode);
+  };
+  const testServiceInterface = async (serviceCode: string, interfaceCode: string) => {
+    const tenantId = selectedWorkspace?.tenantId || 'site_001';
+    const result = await fetchJSON<{ ok?: boolean; errorCode?: string }>(`/admin/v1/services/${encodeURIComponent(serviceCode)}/interfaces/${encodeURIComponent(interfaceCode)}/test?tenantId=${encodeURIComponent(tenantId)}`, { method: 'POST' });
+    setServiceMessage(result.ok ? `接口测试通过：${interfaceCode}` : `接口测试失败：${result.errorCode || interfaceCode}`);
+    await refreshServiceProviders(serviceCode, interfaceCode);
+  };
   const normalizeDetailVisibility = (value?: string): WorkspaceDetailTarget['visibility'] => {
     const normalized = (value || '').toLowerCase();
     if (normalized.includes('public')) return 'Public';
@@ -3548,6 +3653,7 @@ function StudioActivityStart({
               }}
               onNavMembers={() => setHomeUtilityDialog('members')}
               onNavResources={openResourceManager}
+              onNavServices={openServiceManager}
               onNavAudit={() => setHomeUtilityDialog('audit')}
               onManageStorage={openStorageManager}
             />
@@ -3770,7 +3876,7 @@ function StudioActivityStart({
           <section className="studio-create-dialog" role="dialog" aria-modal="true" aria-labelledby="home-utility-dialog-title" data-testid="home-utility-dialog" onClick={(event) => event.stopPropagation()}>
             <div className="studio-create-dialog-head">
               <div>
-                <b id="home-utility-dialog-title">{homeUtilityDialog === 'settings' ? 'Workspace 设置' : homeUtilityDialog === 'storage' ? '存储空间' : homeUtilityDialog === 'members' ? '成员管理' : homeUtilityDialog === 'share' ? '分享管理' : homeUtilityDialog === 'resources' ? '资源管理' : '审计记录'}</b>
+                <b id="home-utility-dialog-title">{homeUtilityDialog === 'settings' ? 'Workspace 设置' : homeUtilityDialog === 'storage' ? '存储空间' : homeUtilityDialog === 'members' ? '成员管理' : homeUtilityDialog === 'share' ? '分享管理' : homeUtilityDialog === 'resources' ? '资源管理' : homeUtilityDialog === 'services' ? '服务能力' : '审计记录'}</b>
                 <span>{selectedWorkspace?.name ?? 'hello'}</span>
               </div>
               <button onClick={() => setHomeUtilityDialog('')}>×</button>
@@ -3931,6 +4037,29 @@ function StudioActivityStart({
                 onSaveResource={saveResource}
                 onSaveBinding={saveResourceBinding}
                 onTestResource={testResource}
+              />
+            ) : homeUtilityDialog === 'services' ? (
+              <ServiceCapabilityManagement
+                tenantId={selectedWorkspace?.tenantId || 'site_001'}
+                workspaceId={selectedWorkspace?.id}
+                folderId={selectedFolder?.id}
+                resources={resources}
+                services={services}
+                interfaces={serviceInterfaces}
+                providers={serviceProviders}
+                selectedServiceCode={selectedService?.code || selectedServiceCode}
+                selectedInterfaceCode={selectedInterface?.code || selectedInterfaceCode}
+                selectedService={selectedService}
+                selectedInterface={selectedInterface}
+                loading={servicesLoading}
+                message={serviceMessage}
+                onRefresh={() => void refreshServices()}
+                onSelectService={selectServiceCapability}
+                onSelectInterface={selectServiceInterface}
+                onSaveService={saveServiceDefinition}
+                onSaveInterface={saveServiceInterface}
+                onSaveProvider={saveServiceProvider}
+                onTestInterface={testServiceInterface}
               />
             ) : homeUtilityDialog === 'members' ? (
               <div className="studio-member-manager">
@@ -4244,6 +4373,8 @@ export function App() {
   const [workflowTemplates, setWorkflowTemplates] = useState<WorkflowDraftTemplateSummary[]>([]);
   const [workflowNodePresets, setWorkflowNodePresets] = useState<WorkflowNodePresetSummary[]>([]);
   const [canvasResources, setCanvasResources] = useState<ResourceSummary[]>([]);
+  const [canvasServices, setCanvasServices] = useState<ServiceDefinitionSummary[]>([]);
+  const [canvasServiceInterfaces, setCanvasServiceInterfaces] = useState<ServiceInterfaceSummary[]>([]);
   const [workflowTemplateVersions, setWorkflowTemplateVersions] = useState<WorkflowDraftTemplateSummary[]>([]);
   const [loadingTemplateVersions, setLoadingTemplateVersions] = useState(false);
   const [showTemplatePanel, setShowTemplatePanel] = useState(false);
@@ -4385,6 +4516,21 @@ export function App() {
     fetchJSON<{ items: ResourceSummary[] }>(`/admin/v1/resources?tenantId=${encodeURIComponent(tenantId)}&limit=500`)
       .then((body) => setCanvasResources(body.items ?? []))
       .catch(() => setCanvasResources([]));
+    fetchJSON<{ items: ServiceDefinitionSummary[] }>(`/admin/v1/services?tenantId=${encodeURIComponent(tenantId)}&limit=500`)
+      .then(async (body) => {
+        const items = body.items ?? [];
+        setCanvasServices(items);
+        const interfaceLists = await Promise.all(items.map((service) => (
+          fetchJSON<{ items: ServiceInterfaceSummary[] }>(`/admin/v1/services/${encodeURIComponent(service.code)}/interfaces?tenantId=${encodeURIComponent(tenantId)}&limit=100`)
+            .then((interfacesBody) => interfacesBody.items ?? [])
+            .catch(() => [])
+        )));
+        setCanvasServiceInterfaces(interfaceLists.flat());
+      })
+      .catch(() => {
+        setCanvasServices([]);
+        setCanvasServiceInterfaces([]);
+      });
   }, [activityId, activeWorkspace?.tenantId, activities]);
   const currentWorkflowDefinition = useMemo(() => (
     activityId && nodeConfigSchemas.length > 0
@@ -7162,6 +7308,8 @@ export function App() {
           validationIssues={validationHighlights.nodeIssues.get(inspectedNodeIds[0] ?? '') ?? []}
           edgeValidationIssues={validationHighlights.edgeIssues.get(inspectedEdgeIds[0] ?? '') ?? []}
           resourceOptions={canvasResources}
+          serviceOptions={canvasServices}
+          serviceInterfaceOptions={canvasServiceInterfaces}
           onNodeConfigChange={updateNodeConfig}
           onNodeMetaChange={updateNodeMeta}
           onEdgeRouteChange={updateEdgeRoute}

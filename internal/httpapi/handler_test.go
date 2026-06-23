@@ -2035,6 +2035,75 @@ func TestCreateActivityValidatesDisplayEntryAudienceConfig(t *testing.T) {
 	}
 }
 
+func TestServiceAssetAdminAPIs(t *testing.T) {
+	handler := newTestHandler()
+	serviceBody := `{
+		"tenantId":"site_001",
+		"code":"reward-grant-service",
+		"name":"Reward Grant Service",
+		"serviceType":"EXTERNAL",
+		"scope":"WORKSPACE",
+		"status":"ACTIVE",
+		"owner":"reward-platform",
+		"tags":["reward"]
+	}`
+	req := httptest.NewRequest(http.MethodPatch, "/admin/v1/services/reward-grant-service?tenantId=site_001", strings.NewReader(serviceBody))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"code":"reward-grant-service"`) {
+		t.Fatalf("save service failed: %d %s", rec.Code, rec.Body.String())
+	}
+
+	interfaceBody := `{
+		"tenantId":"site_001",
+		"code":"publish-reward-command",
+		"name":"Publish Reward Command",
+		"operation":"PUBLISH",
+		"timeoutMs":3000,
+		"status":"ACTIVE"
+	}`
+	req = httptest.NewRequest(http.MethodPatch, "/admin/v1/services/reward-grant-service/interfaces/publish-reward-command?tenantId=site_001", strings.NewReader(interfaceBody))
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	handler.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"serviceRef":"reward-grant-service"`) {
+		t.Fatalf("save interface failed: %d %s", rec.Code, rec.Body.String())
+	}
+
+	providerBody := `{
+		"tenantId":"site_001",
+		"code":"reward-command-mq-primary",
+		"name":"Reward Command MQ Primary",
+		"protocol":"MQ",
+		"topic":"reward.commands",
+		"resourceRefs":["reward_command_topic"],
+		"config":{"targetResourceRef":"reward_command_topic"},
+		"status":"ACTIVE"
+	}`
+	req = httptest.NewRequest(http.MethodPatch, "/admin/v1/services/reward-grant-service/interfaces/publish-reward-command/providers/reward-command-mq-primary?tenantId=site_001", strings.NewReader(providerBody))
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	handler.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"interfaceRef":"publish-reward-command"`) {
+		t.Fatalf("save provider failed: %d %s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/admin/v1/services?tenantId=site_001&limit=20", nil)
+	rec = httptest.NewRecorder()
+	handler.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"user-profile-service"`) || !strings.Contains(rec.Body.String(), `"reward-grant-service"`) {
+		t.Fatalf("list services missing built-in or saved service: %d %s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/admin/v1/services/reward-grant-service/interfaces/publish-reward-command/providers?tenantId=site_001", nil)
+	rec = httptest.NewRecorder()
+	handler.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"reward-command-mq-primary"`) {
+		t.Fatalf("list providers failed: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
 func TestCreateActivityValidatesFactProviderReferences(t *testing.T) {
 	missing := strings.Replace(validActivityBody(), `"attributes.vipLevel"`, `"facts.USER_PROFILE.vipLevel"`, 1)
 	rec := postActivity(t, newTestHandler(), missing)

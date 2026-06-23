@@ -851,6 +851,33 @@ func (r *workerTestRepo) SaveFactProvider(context.Context, marketing.FactProvide
 func (r *workerTestRepo) FindEnabledFactProvider(context.Context, string, string) (marketing.FactProvider, error) {
 	panic("not implemented")
 }
+func (r *workerTestRepo) SaveServiceDefinition(context.Context, marketing.ServiceDefinition) (marketing.ServiceDefinition, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) GetServiceDefinition(context.Context, string, string) (marketing.ServiceDefinition, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) ListServiceDefinitions(context.Context, marketing.ServiceDefinitionQuery) ([]marketing.ServiceDefinition, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) SaveServiceInterface(context.Context, marketing.ServiceInterface) (marketing.ServiceInterface, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) GetServiceInterface(context.Context, string, string, string) (marketing.ServiceInterface, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) ListServiceInterfaces(context.Context, marketing.ServiceInterfaceQuery) ([]marketing.ServiceInterface, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) SaveServiceProvider(context.Context, marketing.ServiceProvider) (marketing.ServiceProvider, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) GetServiceProvider(context.Context, string, string, string, string) (marketing.ServiceProvider, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) ListServiceProviders(context.Context, marketing.ServiceProviderQuery) ([]marketing.ServiceProvider, error) {
+	panic("not implemented")
+}
 func (r *workerTestRepo) GetActivityState(context.Context, marketing.ActivityStateKey) (marketing.ActivityState, error) {
 	panic("not implemented")
 }

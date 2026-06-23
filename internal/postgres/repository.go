@@ -896,6 +896,349 @@ func (r *Repository) FindEnabledFactProvider(ctx context.Context, tenantID strin
 	return provider, nil
 }
 
+func (r *Repository) SaveServiceDefinition(ctx context.Context, service marketing.ServiceDefinition) (marketing.ServiceDefinition, error) {
+	if service.ID == "" {
+		service.ID = marketing.NewID("svc")
+	}
+	if service.ServiceType == "" {
+		service.ServiceType = marketing.ServiceTypeExternal
+	}
+	if service.Scope == "" {
+		service.Scope = marketing.ServiceAssetScopeWorkspace
+	}
+	if service.Status == "" {
+		service.Status = marketing.ServiceAssetActive
+	}
+	if len(service.Metadata) == 0 {
+		service.Metadata = json.RawMessage(`{}`)
+	}
+	if service.CreatedAt.IsZero() {
+		service.CreatedAt = time.Now().UTC()
+	}
+	if service.UpdatedAt.IsZero() {
+		service.UpdatedAt = service.CreatedAt
+	}
+	if err := service.Validate(); err != nil {
+		return marketing.ServiceDefinition{}, err
+	}
+	tags, err := json.Marshal(service.Tags)
+	if err != nil {
+		return marketing.ServiceDefinition{}, err
+	}
+	row := r.db.QueryRowContext(ctx, `
+		INSERT INTO marketing_service (
+			id, tenant_id, workspace_id, folder_id, code, name, description,
+			service_type, scope, status, owner, tags_json, metadata_json,
+			created_by, updated_by, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+		ON CONFLICT (tenant_id, code) DO UPDATE SET
+			workspace_id = EXCLUDED.workspace_id,
+			folder_id = EXCLUDED.folder_id,
+			name = EXCLUDED.name,
+			description = EXCLUDED.description,
+			service_type = EXCLUDED.service_type,
+			scope = EXCLUDED.scope,
+			status = EXCLUDED.status,
+			owner = EXCLUDED.owner,
+			tags_json = EXCLUDED.tags_json,
+			metadata_json = EXCLUDED.metadata_json,
+			updated_by = EXCLUDED.updated_by,
+			updated_at = EXCLUDED.updated_at
+		RETURNING id, tenant_id, workspace_id, folder_id, code, name, description,
+		          service_type, scope, status, owner, tags_json, metadata_json,
+		          created_by, updated_by, created_at, updated_at
+	`, service.ID, service.TenantID, service.WorkspaceID, service.FolderID, service.Code, service.Name, service.Description,
+		service.ServiceType, service.Scope, service.Status, service.Owner, json.RawMessage(tags), service.Metadata,
+		service.CreatedBy, service.UpdatedBy, service.CreatedAt, service.UpdatedAt)
+	saved, err := scanServiceDefinition(row)
+	if err != nil {
+		return marketing.ServiceDefinition{}, mapPostgresResourceError(err)
+	}
+	return saved, nil
+}
+
+func (r *Repository) GetServiceDefinition(ctx context.Context, tenantID string, code string) (marketing.ServiceDefinition, error) {
+	row := r.db.QueryRowContext(ctx, `
+		SELECT id, tenant_id, workspace_id, folder_id, code, name, description,
+		       service_type, scope, status, owner, tags_json, metadata_json,
+		       created_by, updated_by, created_at, updated_at
+		FROM marketing_service
+		WHERE tenant_id = $1 AND code = $2
+	`, tenantID, code)
+	service, err := scanServiceDefinition(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return marketing.ServiceDefinition{}, marketing.ErrNotFound
+		}
+		return marketing.ServiceDefinition{}, err
+	}
+	return service, nil
+}
+
+func (r *Repository) ListServiceDefinitions(ctx context.Context, query marketing.ServiceDefinitionQuery) ([]marketing.ServiceDefinition, error) {
+	limit := query.Limit
+	if limit <= 0 || limit > 500 {
+		limit = 500
+	}
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, tenant_id, workspace_id, folder_id, code, name, description,
+		       service_type, scope, status, owner, tags_json, metadata_json,
+		       created_by, updated_by, created_at, updated_at
+		FROM marketing_service
+		WHERE ($1 = '' OR tenant_id = $1)
+		  AND ($2 = '' OR workspace_id = $2)
+		  AND ($3 = '' OR folder_id = $3)
+		  AND ($4 = '' OR status = $4)
+		  AND ($5 = '' OR code = $5)
+		ORDER BY updated_at DESC, code ASC
+		LIMIT $6
+	`, query.TenantID, query.WorkspaceID, query.FolderID, query.Status, query.Code, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []marketing.ServiceDefinition{}
+	for rows.Next() {
+		service, err := scanServiceDefinition(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, service)
+	}
+	return out, rows.Err()
+}
+
+func (r *Repository) SaveServiceInterface(ctx context.Context, serviceInterface marketing.ServiceInterface) (marketing.ServiceInterface, error) {
+	if serviceInterface.ID == "" {
+		serviceInterface.ID = marketing.NewID("svcif")
+	}
+	if serviceInterface.Operation == "" {
+		serviceInterface.Operation = marketing.ServiceOperationCall
+	}
+	if serviceInterface.Status == "" {
+		serviceInterface.Status = marketing.ServiceAssetActive
+	}
+	if len(serviceInterface.Metadata) == 0 {
+		serviceInterface.Metadata = json.RawMessage(`{}`)
+	}
+	if serviceInterface.CreatedAt.IsZero() {
+		serviceInterface.CreatedAt = time.Now().UTC()
+	}
+	if serviceInterface.UpdatedAt.IsZero() {
+		serviceInterface.UpdatedAt = serviceInterface.CreatedAt
+	}
+	if err := serviceInterface.Validate(); err != nil {
+		return marketing.ServiceInterface{}, err
+	}
+	row := r.db.QueryRowContext(ctx, `
+		INSERT INTO marketing_service_interface (
+			id, tenant_id, service_ref, code, name, description, operation,
+			input_schema_ref, output_schema_ref, error_schema_ref, idempotency_key_template,
+			timeout_ms, retry_policy, lua_callable, status, metadata_json,
+			created_by, updated_by, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+		ON CONFLICT (tenant_id, service_ref, code) DO UPDATE SET
+			name = EXCLUDED.name,
+			description = EXCLUDED.description,
+			operation = EXCLUDED.operation,
+			input_schema_ref = EXCLUDED.input_schema_ref,
+			output_schema_ref = EXCLUDED.output_schema_ref,
+			error_schema_ref = EXCLUDED.error_schema_ref,
+			idempotency_key_template = EXCLUDED.idempotency_key_template,
+			timeout_ms = EXCLUDED.timeout_ms,
+			retry_policy = EXCLUDED.retry_policy,
+			lua_callable = EXCLUDED.lua_callable,
+			status = EXCLUDED.status,
+			metadata_json = EXCLUDED.metadata_json,
+			updated_by = EXCLUDED.updated_by,
+			updated_at = EXCLUDED.updated_at
+		RETURNING id, tenant_id, service_ref, code, name, description, operation,
+		          input_schema_ref, output_schema_ref, error_schema_ref, idempotency_key_template,
+		          timeout_ms, retry_policy, lua_callable, status, metadata_json,
+		          created_by, updated_by, created_at, updated_at
+	`, serviceInterface.ID, serviceInterface.TenantID, serviceInterface.ServiceRef, serviceInterface.Code, serviceInterface.Name, serviceInterface.Description,
+		serviceInterface.Operation, serviceInterface.InputSchemaRef, serviceInterface.OutputSchemaRef, serviceInterface.ErrorSchemaRef,
+		serviceInterface.IdempotencyKeyTemplate, serviceInterface.TimeoutMS, serviceInterface.RetryPolicy, serviceInterface.LuaCallable,
+		serviceInterface.Status, serviceInterface.Metadata, serviceInterface.CreatedBy, serviceInterface.UpdatedBy,
+		serviceInterface.CreatedAt, serviceInterface.UpdatedAt)
+	saved, err := scanServiceInterface(row)
+	if err != nil {
+		return marketing.ServiceInterface{}, mapPostgresResourceError(err)
+	}
+	return saved, nil
+}
+
+func (r *Repository) GetServiceInterface(ctx context.Context, tenantID string, serviceRef string, code string) (marketing.ServiceInterface, error) {
+	row := r.db.QueryRowContext(ctx, `
+		SELECT id, tenant_id, service_ref, code, name, description, operation,
+		       input_schema_ref, output_schema_ref, error_schema_ref, idempotency_key_template,
+		       timeout_ms, retry_policy, lua_callable, status, metadata_json,
+		       created_by, updated_by, created_at, updated_at
+		FROM marketing_service_interface
+		WHERE tenant_id = $1 AND service_ref = $2 AND code = $3
+	`, tenantID, serviceRef, code)
+	serviceInterface, err := scanServiceInterface(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return marketing.ServiceInterface{}, marketing.ErrNotFound
+		}
+		return marketing.ServiceInterface{}, err
+	}
+	return serviceInterface, nil
+}
+
+func (r *Repository) ListServiceInterfaces(ctx context.Context, query marketing.ServiceInterfaceQuery) ([]marketing.ServiceInterface, error) {
+	limit := query.Limit
+	if limit <= 0 || limit > 500 {
+		limit = 500
+	}
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, tenant_id, service_ref, code, name, description, operation,
+		       input_schema_ref, output_schema_ref, error_schema_ref, idempotency_key_template,
+		       timeout_ms, retry_policy, lua_callable, status, metadata_json,
+		       created_by, updated_by, created_at, updated_at
+		FROM marketing_service_interface
+		WHERE ($1 = '' OR tenant_id = $1)
+		  AND ($2 = '' OR service_ref = $2)
+		  AND ($3 = '' OR status = $3)
+		  AND ($4 = '' OR code = $4)
+		ORDER BY updated_at DESC, code ASC
+		LIMIT $5
+	`, query.TenantID, query.ServiceRef, query.Status, query.Code, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []marketing.ServiceInterface{}
+	for rows.Next() {
+		serviceInterface, err := scanServiceInterface(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, serviceInterface)
+	}
+	return out, rows.Err()
+}
+
+func (r *Repository) SaveServiceProvider(ctx context.Context, provider marketing.ServiceProvider) (marketing.ServiceProvider, error) {
+	if provider.ID == "" {
+		provider.ID = marketing.NewID("svcprov")
+	}
+	if provider.Protocol == "" {
+		provider.Protocol = marketing.ServiceProviderResource
+	}
+	if provider.Status == "" {
+		provider.Status = marketing.ServiceAssetActive
+	}
+	if len(provider.Config) == 0 {
+		provider.Config = json.RawMessage(`{}`)
+	}
+	if provider.CreatedAt.IsZero() {
+		provider.CreatedAt = time.Now().UTC()
+	}
+	if provider.UpdatedAt.IsZero() {
+		provider.UpdatedAt = provider.CreatedAt
+	}
+	if err := provider.Validate(); err != nil {
+		return marketing.ServiceProvider{}, err
+	}
+	resourceRefs, err := json.Marshal(provider.ResourceRefs)
+	if err != nil {
+		return marketing.ServiceProvider{}, err
+	}
+	row := r.db.QueryRowContext(ctx, `
+		INSERT INTO marketing_service_provider (
+			id, tenant_id, service_ref, interface_ref, code, name, description,
+			protocol, endpoint, topic, method, path, auth_ref, resource_refs_json,
+			config_json, weight, priority, environment, status,
+			created_by, updated_by, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
+		ON CONFLICT (tenant_id, service_ref, interface_ref, code) DO UPDATE SET
+			name = EXCLUDED.name,
+			description = EXCLUDED.description,
+			protocol = EXCLUDED.protocol,
+			endpoint = EXCLUDED.endpoint,
+			topic = EXCLUDED.topic,
+			method = EXCLUDED.method,
+			path = EXCLUDED.path,
+			auth_ref = EXCLUDED.auth_ref,
+			resource_refs_json = EXCLUDED.resource_refs_json,
+			config_json = EXCLUDED.config_json,
+			weight = EXCLUDED.weight,
+			priority = EXCLUDED.priority,
+			environment = EXCLUDED.environment,
+			status = EXCLUDED.status,
+			updated_by = EXCLUDED.updated_by,
+			updated_at = EXCLUDED.updated_at
+		RETURNING id, tenant_id, service_ref, interface_ref, code, name, description,
+		          protocol, endpoint, topic, method, path, auth_ref, resource_refs_json,
+		          config_json, weight, priority, environment, status,
+		          created_by, updated_by, created_at, updated_at
+	`, provider.ID, provider.TenantID, provider.ServiceRef, provider.InterfaceRef, provider.Code, provider.Name, provider.Description,
+		provider.Protocol, provider.Endpoint, provider.Topic, provider.Method, provider.Path, provider.AuthRef, json.RawMessage(resourceRefs),
+		provider.Config, provider.Weight, provider.Priority, provider.Environment, provider.Status,
+		provider.CreatedBy, provider.UpdatedBy, provider.CreatedAt, provider.UpdatedAt)
+	saved, err := scanServiceProvider(row)
+	if err != nil {
+		return marketing.ServiceProvider{}, mapPostgresResourceError(err)
+	}
+	return saved, nil
+}
+
+func (r *Repository) GetServiceProvider(ctx context.Context, tenantID string, serviceRef string, interfaceRef string, code string) (marketing.ServiceProvider, error) {
+	row := r.db.QueryRowContext(ctx, `
+		SELECT id, tenant_id, service_ref, interface_ref, code, name, description,
+		       protocol, endpoint, topic, method, path, auth_ref, resource_refs_json,
+		       config_json, weight, priority, environment, status,
+		       created_by, updated_by, created_at, updated_at
+		FROM marketing_service_provider
+		WHERE tenant_id = $1 AND service_ref = $2 AND interface_ref = $3 AND code = $4
+	`, tenantID, serviceRef, interfaceRef, code)
+	provider, err := scanServiceProvider(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return marketing.ServiceProvider{}, marketing.ErrNotFound
+		}
+		return marketing.ServiceProvider{}, err
+	}
+	return provider, nil
+}
+
+func (r *Repository) ListServiceProviders(ctx context.Context, query marketing.ServiceProviderQuery) ([]marketing.ServiceProvider, error) {
+	limit := query.Limit
+	if limit <= 0 || limit > 500 {
+		limit = 500
+	}
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, tenant_id, service_ref, interface_ref, code, name, description,
+		       protocol, endpoint, topic, method, path, auth_ref, resource_refs_json,
+		       config_json, weight, priority, environment, status,
+		       created_by, updated_by, created_at, updated_at
+		FROM marketing_service_provider
+		WHERE ($1 = '' OR tenant_id = $1)
+		  AND ($2 = '' OR service_ref = $2)
+		  AND ($3 = '' OR interface_ref = $3)
+		  AND ($4 = '' OR protocol = $4)
+		  AND ($5 = '' OR status = $5)
+		  AND ($6 = '' OR code = $6)
+		ORDER BY priority ASC, updated_at DESC, code ASC
+		LIMIT $7
+	`, query.TenantID, query.ServiceRef, query.InterfaceRef, query.Protocol, query.Status, query.Code, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []marketing.ServiceProvider{}
+	for rows.Next() {
+		provider, err := scanServiceProvider(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, provider)
+	}
+	return out, rows.Err()
+}
+
 func (r *Repository) GetActivityState(ctx context.Context, key marketing.ActivityStateKey) (marketing.ActivityState, error) {
 	row := r.db.QueryRowContext(ctx, `
 		SELECT id, tenant_id, activity_id, namespace, state_key, COALESCE(subject_type, ''), COALESCE(subject_id, ''),
@@ -3063,6 +3406,66 @@ func scanStorageState(scanner outboxScanner) (marketing.StorageState, error) {
 		state.ExpiresAt = &value
 	}
 	return state, nil
+}
+
+func scanServiceDefinition(scanner outboxScanner) (marketing.ServiceDefinition, error) {
+	var service marketing.ServiceDefinition
+	var tags json.RawMessage
+	if err := scanner.Scan(&service.ID, &service.TenantID, &service.WorkspaceID, &service.FolderID,
+		&service.Code, &service.Name, &service.Description, &service.ServiceType, &service.Scope,
+		&service.Status, &service.Owner, &tags, &service.Metadata, &service.CreatedBy, &service.UpdatedBy,
+		&service.CreatedAt, &service.UpdatedAt); err != nil {
+		return marketing.ServiceDefinition{}, err
+	}
+	if len(tags) > 0 {
+		_ = json.Unmarshal(tags, &service.Tags)
+	}
+	if service.Tags == nil {
+		service.Tags = []string{}
+	}
+	if len(service.Metadata) == 0 {
+		service.Metadata = json.RawMessage(`{}`)
+	}
+	return service, nil
+}
+
+func scanServiceInterface(scanner outboxScanner) (marketing.ServiceInterface, error) {
+	var serviceInterface marketing.ServiceInterface
+	if err := scanner.Scan(&serviceInterface.ID, &serviceInterface.TenantID, &serviceInterface.ServiceRef,
+		&serviceInterface.Code, &serviceInterface.Name, &serviceInterface.Description, &serviceInterface.Operation,
+		&serviceInterface.InputSchemaRef, &serviceInterface.OutputSchemaRef, &serviceInterface.ErrorSchemaRef,
+		&serviceInterface.IdempotencyKeyTemplate, &serviceInterface.TimeoutMS, &serviceInterface.RetryPolicy,
+		&serviceInterface.LuaCallable, &serviceInterface.Status, &serviceInterface.Metadata,
+		&serviceInterface.CreatedBy, &serviceInterface.UpdatedBy, &serviceInterface.CreatedAt,
+		&serviceInterface.UpdatedAt); err != nil {
+		return marketing.ServiceInterface{}, err
+	}
+	if len(serviceInterface.Metadata) == 0 {
+		serviceInterface.Metadata = json.RawMessage(`{}`)
+	}
+	return serviceInterface, nil
+}
+
+func scanServiceProvider(scanner outboxScanner) (marketing.ServiceProvider, error) {
+	var provider marketing.ServiceProvider
+	var resourceRefs json.RawMessage
+	if err := scanner.Scan(&provider.ID, &provider.TenantID, &provider.ServiceRef, &provider.InterfaceRef,
+		&provider.Code, &provider.Name, &provider.Description, &provider.Protocol, &provider.Endpoint,
+		&provider.Topic, &provider.Method, &provider.Path, &provider.AuthRef, &resourceRefs,
+		&provider.Config, &provider.Weight, &provider.Priority, &provider.Environment, &provider.Status,
+		&provider.CreatedBy, &provider.UpdatedBy, &provider.CreatedAt, &provider.UpdatedAt); err != nil {
+		return marketing.ServiceProvider{}, err
+	}
+	if len(resourceRefs) > 0 {
+		_ = json.Unmarshal(resourceRefs, &provider.ResourceRefs)
+	}
+	if provider.ResourceRefs == nil {
+		provider.ResourceRefs = []string{}
+	}
+	if len(provider.Config) == 0 {
+		provider.Config = json.RawMessage(`{}`)
+	}
+	return provider, nil
 }
 
 func scanResource(scanner outboxScanner) (marketing.Resource, error) {

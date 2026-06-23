@@ -32,6 +32,9 @@ type MemoryRepository struct {
 	workflowExecutions      []WorkflowExecution
 	nodeExecutions          []WorkflowNodeExecution
 	factProviders           map[string]FactProvider
+	services                []ServiceDefinition
+	serviceInterfaces       []ServiceInterface
+	serviceProviders        []ServiceProvider
 	activityStates          []ActivityState
 	storageStates           []StorageState
 	resources               []Resource
@@ -586,6 +589,308 @@ func (r *MemoryRepository) FindEnabledFactProvider(ctx context.Context, tenantID
 
 func factProviderKey(tenantID string, factCode string) string {
 	return strings.TrimSpace(tenantID) + "\x00" + strings.TrimSpace(factCode)
+}
+
+func cloneServiceDefinition(service ServiceDefinition) ServiceDefinition {
+	service.Tags = slices.Clone(service.Tags)
+	if len(service.Metadata) > 0 {
+		service.Metadata = append(json.RawMessage(nil), service.Metadata...)
+	}
+	return service
+}
+
+func cloneServiceInterface(serviceInterface ServiceInterface) ServiceInterface {
+	if len(serviceInterface.Metadata) > 0 {
+		serviceInterface.Metadata = append(json.RawMessage(nil), serviceInterface.Metadata...)
+	}
+	return serviceInterface
+}
+
+func cloneServiceProvider(provider ServiceProvider) ServiceProvider {
+	provider.ResourceRefs = slices.Clone(provider.ResourceRefs)
+	if len(provider.Config) > 0 {
+		provider.Config = append(json.RawMessage(nil), provider.Config...)
+	}
+	return provider
+}
+
+func (r *MemoryRepository) SaveServiceDefinition(ctx context.Context, service ServiceDefinition) (ServiceDefinition, error) {
+	if err := ctx.Err(); err != nil {
+		return ServiceDefinition{}, err
+	}
+	if service.ID == "" {
+		service.ID = NewID("svc")
+	}
+	if service.ServiceType == "" {
+		service.ServiceType = ServiceTypeExternal
+	}
+	if service.Scope == "" {
+		service.Scope = ServiceAssetScopeWorkspace
+	}
+	if service.Status == "" {
+		service.Status = ServiceAssetActive
+	}
+	if len(service.Metadata) == 0 {
+		service.Metadata = json.RawMessage(`{}`)
+	}
+	if service.CreatedAt.IsZero() {
+		service.CreatedAt = time.Now().UTC()
+	}
+	if service.UpdatedAt.IsZero() {
+		service.UpdatedAt = service.CreatedAt
+	}
+	if err := service.Validate(); err != nil {
+		return ServiceDefinition{}, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.services {
+		sameCode := r.services[i].TenantID == service.TenantID && r.services[i].Code == service.Code
+		if sameCode && r.services[i].ID != service.ID {
+			return ServiceDefinition{}, ErrResourceConflict
+		}
+		if r.services[i].ID == service.ID || sameCode {
+			r.services[i] = cloneServiceDefinition(service)
+			return cloneServiceDefinition(service), nil
+		}
+	}
+	r.services = append(r.services, cloneServiceDefinition(service))
+	return cloneServiceDefinition(service), nil
+}
+
+func (r *MemoryRepository) GetServiceDefinition(ctx context.Context, tenantID string, code string) (ServiceDefinition, error) {
+	if err := ctx.Err(); err != nil {
+		return ServiceDefinition{}, err
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, service := range r.services {
+		if service.TenantID == tenantID && service.Code == code {
+			return cloneServiceDefinition(service), nil
+		}
+	}
+	return ServiceDefinition{}, ErrNotFound
+}
+
+func (r *MemoryRepository) ListServiceDefinitions(ctx context.Context, query ServiceDefinitionQuery) ([]ServiceDefinition, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	limit := query.Limit
+	if limit <= 0 || limit > 500 {
+		limit = 500
+	}
+	out := []ServiceDefinition{}
+	for _, service := range r.services {
+		if query.TenantID != "" && service.TenantID != query.TenantID {
+			continue
+		}
+		if query.WorkspaceID != "" && service.WorkspaceID != query.WorkspaceID {
+			continue
+		}
+		if query.FolderID != "" && service.FolderID != query.FolderID {
+			continue
+		}
+		if query.Status != "" && service.Status != query.Status {
+			continue
+		}
+		if query.Code != "" && service.Code != query.Code {
+			continue
+		}
+		out = append(out, cloneServiceDefinition(service))
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
+}
+
+func (r *MemoryRepository) SaveServiceInterface(ctx context.Context, serviceInterface ServiceInterface) (ServiceInterface, error) {
+	if err := ctx.Err(); err != nil {
+		return ServiceInterface{}, err
+	}
+	if _, err := r.GetServiceDefinition(ctx, serviceInterface.TenantID, serviceInterface.ServiceRef); err != nil {
+		return ServiceInterface{}, err
+	}
+	if serviceInterface.ID == "" {
+		serviceInterface.ID = NewID("svcif")
+	}
+	if serviceInterface.Operation == "" {
+		serviceInterface.Operation = ServiceOperationCall
+	}
+	if serviceInterface.Status == "" {
+		serviceInterface.Status = ServiceAssetActive
+	}
+	if len(serviceInterface.Metadata) == 0 {
+		serviceInterface.Metadata = json.RawMessage(`{}`)
+	}
+	if serviceInterface.CreatedAt.IsZero() {
+		serviceInterface.CreatedAt = time.Now().UTC()
+	}
+	if serviceInterface.UpdatedAt.IsZero() {
+		serviceInterface.UpdatedAt = serviceInterface.CreatedAt
+	}
+	if err := serviceInterface.Validate(); err != nil {
+		return ServiceInterface{}, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.serviceInterfaces {
+		sameCode := r.serviceInterfaces[i].TenantID == serviceInterface.TenantID && r.serviceInterfaces[i].ServiceRef == serviceInterface.ServiceRef && r.serviceInterfaces[i].Code == serviceInterface.Code
+		if sameCode && r.serviceInterfaces[i].ID != serviceInterface.ID {
+			return ServiceInterface{}, ErrResourceConflict
+		}
+		if r.serviceInterfaces[i].ID == serviceInterface.ID || sameCode {
+			r.serviceInterfaces[i] = cloneServiceInterface(serviceInterface)
+			return cloneServiceInterface(serviceInterface), nil
+		}
+	}
+	r.serviceInterfaces = append(r.serviceInterfaces, cloneServiceInterface(serviceInterface))
+	return cloneServiceInterface(serviceInterface), nil
+}
+
+func (r *MemoryRepository) GetServiceInterface(ctx context.Context, tenantID string, serviceRef string, code string) (ServiceInterface, error) {
+	if err := ctx.Err(); err != nil {
+		return ServiceInterface{}, err
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, serviceInterface := range r.serviceInterfaces {
+		if serviceInterface.TenantID == tenantID && serviceInterface.ServiceRef == serviceRef && serviceInterface.Code == code {
+			return cloneServiceInterface(serviceInterface), nil
+		}
+	}
+	return ServiceInterface{}, ErrNotFound
+}
+
+func (r *MemoryRepository) ListServiceInterfaces(ctx context.Context, query ServiceInterfaceQuery) ([]ServiceInterface, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	limit := query.Limit
+	if limit <= 0 || limit > 500 {
+		limit = 500
+	}
+	out := []ServiceInterface{}
+	for _, serviceInterface := range r.serviceInterfaces {
+		if query.TenantID != "" && serviceInterface.TenantID != query.TenantID {
+			continue
+		}
+		if query.ServiceRef != "" && serviceInterface.ServiceRef != query.ServiceRef {
+			continue
+		}
+		if query.Status != "" && serviceInterface.Status != query.Status {
+			continue
+		}
+		if query.Code != "" && serviceInterface.Code != query.Code {
+			continue
+		}
+		out = append(out, cloneServiceInterface(serviceInterface))
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
+}
+
+func (r *MemoryRepository) SaveServiceProvider(ctx context.Context, provider ServiceProvider) (ServiceProvider, error) {
+	if err := ctx.Err(); err != nil {
+		return ServiceProvider{}, err
+	}
+	if _, err := r.GetServiceInterface(ctx, provider.TenantID, provider.ServiceRef, provider.InterfaceRef); err != nil {
+		return ServiceProvider{}, err
+	}
+	if provider.ID == "" {
+		provider.ID = NewID("svcprov")
+	}
+	if provider.Protocol == "" {
+		provider.Protocol = ServiceProviderResource
+	}
+	if provider.Status == "" {
+		provider.Status = ServiceAssetActive
+	}
+	if len(provider.Config) == 0 {
+		provider.Config = json.RawMessage(`{}`)
+	}
+	if provider.CreatedAt.IsZero() {
+		provider.CreatedAt = time.Now().UTC()
+	}
+	if provider.UpdatedAt.IsZero() {
+		provider.UpdatedAt = provider.CreatedAt
+	}
+	if err := provider.Validate(); err != nil {
+		return ServiceProvider{}, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.serviceProviders {
+		sameCode := r.serviceProviders[i].TenantID == provider.TenantID && r.serviceProviders[i].ServiceRef == provider.ServiceRef && r.serviceProviders[i].InterfaceRef == provider.InterfaceRef && r.serviceProviders[i].Code == provider.Code
+		if sameCode && r.serviceProviders[i].ID != provider.ID {
+			return ServiceProvider{}, ErrResourceConflict
+		}
+		if r.serviceProviders[i].ID == provider.ID || sameCode {
+			r.serviceProviders[i] = cloneServiceProvider(provider)
+			return cloneServiceProvider(provider), nil
+		}
+	}
+	r.serviceProviders = append(r.serviceProviders, cloneServiceProvider(provider))
+	return cloneServiceProvider(provider), nil
+}
+
+func (r *MemoryRepository) GetServiceProvider(ctx context.Context, tenantID string, serviceRef string, interfaceRef string, code string) (ServiceProvider, error) {
+	if err := ctx.Err(); err != nil {
+		return ServiceProvider{}, err
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, provider := range r.serviceProviders {
+		if provider.TenantID == tenantID && provider.ServiceRef == serviceRef && provider.InterfaceRef == interfaceRef && provider.Code == code {
+			return cloneServiceProvider(provider), nil
+		}
+	}
+	return ServiceProvider{}, ErrNotFound
+}
+
+func (r *MemoryRepository) ListServiceProviders(ctx context.Context, query ServiceProviderQuery) ([]ServiceProvider, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	limit := query.Limit
+	if limit <= 0 || limit > 500 {
+		limit = 500
+	}
+	out := []ServiceProvider{}
+	for _, provider := range r.serviceProviders {
+		if query.TenantID != "" && provider.TenantID != query.TenantID {
+			continue
+		}
+		if query.ServiceRef != "" && provider.ServiceRef != query.ServiceRef {
+			continue
+		}
+		if query.InterfaceRef != "" && provider.InterfaceRef != query.InterfaceRef {
+			continue
+		}
+		if query.Protocol != "" && provider.Protocol != query.Protocol {
+			continue
+		}
+		if query.Status != "" && provider.Status != query.Status {
+			continue
+		}
+		if query.Code != "" && provider.Code != query.Code {
+			continue
+		}
+		out = append(out, cloneServiceProvider(provider))
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
 }
 
 func sameActivityStateKey(state ActivityState, key ActivityStateKey) bool {

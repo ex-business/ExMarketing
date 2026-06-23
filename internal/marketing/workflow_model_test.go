@@ -362,6 +362,22 @@ func TestValidateWorkflowDefinitionValidatesFactQueryProviderTargets(t *testing.
 		t.Fatalf("expected provider chain REDIS step with redisRef to pass, got %+v", validRedisChain.Items)
 	}
 
+	validServiceInterfaceChain := ValidateWorkflowDefinition(json.RawMessage(`{
+		"meta": {"activityId": "activity-1", "workspaceId": "workspace-1", "folderId": "folder-1"},
+		"nodes": [
+			{"id": "event-in", "type": "event-in", "kind": "entry"},
+			{"id": "facts", "type": "fact-query", "config": {"factKeys": ["USER_PROFILE"], "providerChain": [
+				{"targetType": "SERVICE_INTERFACE", "serviceRef": "user-profile-service", "interfaceRef": "query-user-profile", "providerPolicy": "PRIMARY", "onMiss": "BLOCK"}
+			]}}
+		],
+		"edges": [
+			{"id": "event-in-facts", "source": "event-in", "target": "facts"}
+		]
+	}`))
+	if !validServiceInterfaceChain.Valid {
+		t.Fatalf("expected provider chain SERVICE_INTERFACE step with serviceRef/interfaceRef to pass, got %+v", validServiceInterfaceChain.Items)
+	}
+
 	missingChainResource := ValidateWorkflowDefinition(json.RawMessage(`{
 		"meta": {"activityId": "activity-1", "workspaceId": "workspace-1", "folderId": "folder-1"},
 		"nodes": [
@@ -379,6 +395,44 @@ func TestValidateWorkflowDefinitionValidatesFactQueryProviderTargets(t *testing.
 	}
 	if len(missingChainResource.Items) != 1 || missingChainResource.Items[0].Code != "WORKFLOW_FACT_PROVIDER_TARGET_REQUIRED" || missingChainResource.Items[0].Path != "nodes[1].config.providerChain[0].redisRef" {
 		t.Fatalf("expected provider chain redisRef target issue, got %+v", missingChainResource.Items)
+	}
+
+	missingServiceInterfaceTarget := ValidateWorkflowDefinition(json.RawMessage(`{
+		"meta": {"activityId": "activity-1", "workspaceId": "workspace-1", "folderId": "folder-1"},
+		"nodes": [
+			{"id": "event-in", "type": "event-in", "kind": "entry"},
+			{"id": "facts", "type": "fact-query", "config": {"factKeys": ["USER_PROFILE"], "providerChain": [
+				{"source": "SERVICE_INTERFACE", "serviceRef": "user-profile-service", "onMiss": "BLOCK"}
+			]}}
+		],
+		"edges": [
+			{"id": "event-in-facts", "source": "event-in", "target": "facts"}
+		]
+	}`))
+	if missingServiceInterfaceTarget.Valid {
+		t.Fatalf("expected provider chain SERVICE_INTERFACE step without interfaceRef to fail")
+	}
+	if len(missingServiceInterfaceTarget.Items) != 1 || missingServiceInterfaceTarget.Items[0].Code != "WORKFLOW_FACT_PROVIDER_TARGET_REQUIRED" || missingServiceInterfaceTarget.Items[0].Path != "nodes[1].config.providerChain[0].serviceRef" {
+		t.Fatalf("expected provider chain serviceRef target issue, got %+v", missingServiceInterfaceTarget.Items)
+	}
+
+	unsupportedServiceInterfacePolicy := ValidateWorkflowDefinition(json.RawMessage(`{
+		"meta": {"activityId": "activity-1", "workspaceId": "workspace-1", "folderId": "folder-1"},
+		"nodes": [
+			{"id": "event-in", "type": "event-in", "kind": "entry"},
+			{"id": "facts", "type": "fact-query", "config": {"factKeys": ["USER_PROFILE"], "providerChain": [
+				{"source": "SERVICE_INTERFACE", "serviceRef": "user-profile-service", "interfaceRef": "query-user-profile", "providerPolicy": "PRIMARY_WITH_FALLBACK", "onMiss": "BLOCK"}
+			]}}
+		],
+		"edges": [
+			{"id": "event-in-facts", "source": "event-in", "target": "facts"}
+		]
+	}`))
+	if unsupportedServiceInterfacePolicy.Valid {
+		t.Fatalf("expected provider chain SERVICE_INTERFACE step with unsupported providerPolicy to fail")
+	}
+	if len(unsupportedServiceInterfacePolicy.Items) != 1 || unsupportedServiceInterfacePolicy.Items[0].Code != "WORKFLOW_FACT_PROVIDER_POLICY_UNSUPPORTED" || unsupportedServiceInterfacePolicy.Items[0].Path != "nodes[1].config.providerChain[0].providerPolicy" {
+		t.Fatalf("expected provider chain providerPolicy issue, got %+v", unsupportedServiceInterfacePolicy.Items)
 	}
 
 	missingStateResource := ValidateWorkflowDefinition(json.RawMessage(`{

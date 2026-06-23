@@ -147,7 +147,7 @@ EVENT_INPUT -> CORE -> ADVANCED(可选) -> OPS(审计/恢复)
 | `manual-adjust` | 人工调整 | 已实现计划输出，真实调整由 AdminManualAdjustAPI 权威 |
 | `state-store` | 通用资源状态读写 | 已支持 `TABLE`、`HTTP`、`REDIS mode=KV/HASH/COUNTER/LOCK` 的 `resourceRef` 第一版 |
 | `mq-publish` | MQ 出站发布意图 | 已支持 `MQ resourceRef` 第一版；真实 broker ack 仍由 OutboxWorker/MQ sender 权威 |
-| `fact-query` | 事实查询 | 已支持 `resourceRef` 第一版，可读状态/Redis 语义资源或调用 HTTP Provider |
+| `fact-query` | 事实查询 | 新模型优先走 Service Interface；兼容 `resourceRef` 第一版，可读状态/Redis 语义资源或受控 HTTP Resource |
 | `outbox` / `callback` | 发件箱和回调边界 | 已支持 `resourceRef` 第一版，校验资源、生成计划并审计；真实投递/回调仍由 worker/API 权威 |
 | `code` / `combine` / `split` / `lua-query` | Lua 上下文加工 | 已支持受控 Lua Resource API，所有资源调用走权限、审计和调用限额 |
 

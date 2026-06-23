@@ -241,10 +241,17 @@ subject_id = u_demo_001
   "subjectPath": "subject.id",
   "providerChain": [
     {
-      "source": "PROVIDER",
-      "resourceRef": "user-profile-provider",
+      "targetType": "SERVICE_INTERFACE",
+      "source": "SERVICE_INTERFACE",
+      "serviceRef": "user-profile-service",
+      "interfaceRef": "query-user-profile",
+      "providerPolicy": "PRIMARY",
+      "operation": "CALL",
+      "inputMapping": {
+        "tenantId": "${tenantId}",
+        "userId": "${subject.id}"
+      },
       "namespace": "facts",
-      "keyTemplate": "${tenantId}:${subject.type}:${subject.id}",
       "valuePath": "$.facts.USER_PROFILE",
       "timeoutSeconds": 3,
       "cacheTtlSeconds": 0,
@@ -260,7 +267,7 @@ UI 上只分三块：
 | --- | --- | --- |
 | 配置参数 | `subjectPath` | 当前 fact-query 的公共主体路径，例如用户 ID、订单 ID 或业务主体 ID |
 | 事实 Key | `factKeys` | 本节点要产出的事实字段，例如 `USER_PROFILE` |
-| 数据提供者 | `providerChain` | 选择 Provider Ref、Resource Ref、上下文或本地缓存；底层 HTTP/Redis/gRPC/Plugin/Lua 实现放在资源管理里 |
+| 数据提供者 | `providerChain` | 新配置优先选择 Service Interface；Resource Ref 只用于明确 Store/Cache/Counter；底层 HTTP/Redis/gRPC/Plugin/Lua 实现放在 Provider 或 Resource 里 |
 
 字段说明：
 
@@ -270,19 +277,20 @@ UI 上只分三块：
 | `subjectPath` | 是 | 从输入上下文读取主体 ID 的路径 | `subject.id` |
 | `providerChain` | 是 | 数据提供者列表，所有取数参数都放在 step 内 | 见下方 |
 
-不再推荐在节点里配置 `endpoint`、`redisRef`、`grpcTarget`、`pluginCode`、Lua 脚本或底层操作类型。节点只表达业务查询意图；技术实现放到 `PROVIDER` 或 `RESOURCE` 资源定义里。旧 draft 仍兼容，但新 UI 不再把这些字段作为产品化配置入口。
+不再推荐在节点里配置 `endpoint`、`redisRef`、`grpcTarget`、`pluginCode`、Lua 脚本或底层操作类型。节点只表达业务查询意图；业务能力优先放到 Service Interface，底层连接和 Store 放到 Resource。旧 draft 仍兼容，但新 UI 不再把这些字段作为产品化配置入口。
 
 ## 数据提供者设计
 
 数据提供者是 `fact-query` 的统一查询入口。产品层只允许选择：
 
-- `PROVIDER`：公共事实 Provider，例如 `user-profile-provider`、`kyc-provider`、`risk-provider`。
+- `SERVICE_INTERFACE`：业务事实接口，例如 `user-profile-service.query-user-profile`、`kyc-service.query-kyc-profile`、`risk-service.query-risk-profile`。
 - `RESOURCE`：受控资源 Ref，适合读取明确的 Store。
 - `WORKFLOW_CONTEXT`：从事件、上游输出或公共上下文读取。
 - `LOCAL_CACHE`：从本次 workflow 运行缓存读取。
-- `FACT_SERVICE`：旧兼容入口，新配置优先使用 `PROVIDER`。
+- `PROVIDER`：旧公共事实 Provider Resource 兼容入口，新配置优先使用 `SERVICE_INTERFACE`。
+- `FACT_SERVICE`：旧兼容入口，新配置不再使用。
 
-HTTP、Redis、gRPC、Plugin、Custom、Lua 不再作为 fact-query 节点来源暴露。需要这些实现时，先在资源管理里定义资源或 Provider，再由节点选择 Ref。
+HTTP、Redis、gRPC、Plugin、Custom、Lua 不再作为 fact-query 节点来源暴露。业务接口实现应先定义为 Service Provider；底层连接、Store、Topic、Client 定义为 Resource，再由 Service Provider 或节点受控引用。
 
 底层字段暂时仍叫 `providerChain`，用于兼容已有 draft；产品语义统一叫“数据提供者”。
 
@@ -302,10 +310,12 @@ HTTP、Redis、gRPC、Plugin、Custom、Lua 不再作为 fact-query 节点来源
       "onMiss": "NEXT"
     },
     {
-      "source": "PROVIDER",
-      "resourceRef": "user-profile-provider",
+      "targetType": "SERVICE_INTERFACE",
+      "source": "SERVICE_INTERFACE",
+      "serviceRef": "user-profile-service",
+      "interfaceRef": "query-user-profile",
+      "providerPolicy": "PRIMARY",
       "namespace": "facts",
-      "keyTemplate": "${tenantId}:${subject.type}:${subject.id}",
       "onMiss": "BLOCK"
     }
   ]
@@ -316,14 +326,16 @@ HTTP、Redis、gRPC、Plugin、Custom、Lua 不再作为 fact-query 节点来源
 
 | 字段 | 必填 | 说明 |
 | --- | --- | --- |
-| `source` | 是 | 查询来源：`PROVIDER`、`RESOURCE`、`WORKFLOW_CONTEXT`、`LOCAL_CACHE`；`FACT_SERVICE` 仅保留兼容 |
-| `resourceRef` | 视来源而定 | 选择资源别名；`PROVIDER` 只能选择 `type=PROVIDER` 的公共 Provider |
+| `targetType` / `source` | 是 | 查询来源：新配置使用 `SERVICE_INTERFACE`、`RESOURCE`、`WORKFLOW_CONTEXT`、`LOCAL_CACHE`；`PROVIDER/FACT_SERVICE` 仅保留兼容 |
+| `serviceRef` / `interfaceRef` | 视来源而定 | `SERVICE_INTERFACE` 使用，选择业务事实接口 |
+| `providerPolicy` | 否 | `SERVICE_INTERFACE` 使用，默认 `PRIMARY` |
+| `resourceRef` | 视来源而定 | `RESOURCE` 使用；兼容 `PROVIDER` 时指向公共事实 Provider Resource |
 | `sourcePath` | 否 | `WORKFLOW_CONTEXT` 使用，从当前事件、上游输出或公共上下文读取 |
 | `cachePath` | 否 | `LOCAL_CACHE` 使用，从 workflow 运行缓存读取 |
 | `keyTemplate` | 否 | 资源或缓存查询 key 模板；普通 Provider 通常不需要用户手填 |
 | `namespace` | 否 | 资源审计和 key policy 命名空间 |
 | `valuePath` | 否 | 从资源响应里提取 fact value 的 JSON Path |
-| `providerCode` | 否 | 旧 `FACT_SERVICE` 兼容字段；新配置优先选择 `PROVIDER resourceRef` |
+| `providerCode` | 否 | 旧 `FACT_SERVICE` 兼容字段；新配置优先选择 `SERVICE_INTERFACE` |
 | `timeoutSeconds` | 否 | 当前 provider step 的查询超时 |
 | `cacheTtlSeconds` | 否 | 当前 provider step 的缓存时间；`0` 表示不缓存 |
 | `onMiss` | 否 | 当前 step 没查到时动作：`NEXT` 继续下一步，`BLOCK` 立即失败 |
@@ -334,10 +346,11 @@ HTTP、Redis、gRPC、Plugin、Custom、Lua 不再作为 fact-query 节点来源
 
 | Source | 当前目标要求 | 说明 |
 | --- | --- | --- |
-| `PROVIDER` | 必须选择 `resourceRef` | `resourceRef` 应指向 `type=PROVIDER` 的公共事实 Provider |
+| `SERVICE_INTERFACE` | 必须选择 `serviceRef/interfaceRef` | 推荐默认入口，业务事实查询走服务接口权限、Schema 和 Provider 治理 |
 | `RESOURCE` | 必须选择 `resourceRef` | `resourceRef` 应指向资源管理中的受控 Store |
 | `WORKFLOW_CONTEXT` | 不需要资源 | 从当前事件、上游输出、变量、facts 读取 |
 | `LOCAL_CACHE` | 不需要资源 | 从本次 workflow 变量缓存读取 |
+| `PROVIDER` | 必须选择 `resourceRef` | 旧兼容入口，`resourceRef` 指向 `type=PROVIDER` 的公共事实 Provider Resource |
 | `FACT_SERVICE` | `resourceRef` / `providerCode` / `endpoint` 任一 | 旧兼容入口；新配置不建议使用 |
 
 因此下面这种新配置不再推荐：
@@ -359,8 +372,11 @@ HTTP、Redis、gRPC、Plugin、Custom、Lua 不再作为 fact-query 节点来源
 {
   "providerChain": [
     {
-      "source": "PROVIDER",
-      "resourceRef": "user-profile-provider",
+      "targetType": "SERVICE_INTERFACE",
+      "source": "SERVICE_INTERFACE",
+      "serviceRef": "user-profile-service",
+      "interfaceRef": "query-user-profile",
+      "providerPolicy": "PRIMARY",
       "onMiss": "BLOCK"
     }
   ]
@@ -378,7 +394,7 @@ HTTP、Redis、gRPC、Plugin、Custom、Lua 不再作为 fact-query 节点来源
 | `providerChain` | 每个数据提供者 step 的执行摘要 |
 | `providerChain[].status` | `DONE` 命中或完成、`MISS` 未命中、`FAILED_NEXT` 失败后继续、`ADAPTER_REQUIRED` 未配置真实执行目标 |
 | `providerChain[].remaining` | 进入该 step 前仍未解析的 fact key |
-| `providerChain[].resourceRef` | 当前 step 使用的资源引用 |
+| `providerChain[].serviceRef/interfaceRef/resourceRef` | 当前 step 使用的服务接口或资源引用 |
 | `responses` | provider 原始响应摘要，用于调试和审计 |
 
 每日签到成功时，`USER_PROFILE` 的关键结构类似：
@@ -404,9 +420,10 @@ HTTP、Redis、gRPC、Plugin、Custom、Lua 不再作为 fact-query 节点来源
 UI 推荐：
 
 - `数据提供者` 显示为步骤列表，不显示原始 JSON。
-- 每一步用下拉选择 `source`；新建配置只暴露 `PROVIDER`、`RESOURCE`、`WORKFLOW_CONTEXT`、`LOCAL_CACHE` 和兼容用 `FACT_SERVICE`。
-- 当 `source=PROVIDER` 时显示 Provider 资源下拉，只能选择 `type=PROVIDER` 且当前 workspace/folder/activity 有权限的资源。
+- 每一步用下拉选择 `source`；新建配置只暴露 `SERVICE_INTERFACE`、`RESOURCE`、`WORKFLOW_CONTEXT`、`LOCAL_CACHE`，旧 draft 只读显示 `PROVIDER/FACT_SERVICE` 兼容项。
+- 当 `source=SERVICE_INTERFACE` 时显示 Service 和 Interface 下拉，按当前 workspace/folder/activity/nodeType 权限过滤。
 - 当 `source=RESOURCE` 时显示普通资源下拉，底层 HTTP/Redis/gRPC/Plugin/Lua 实现不在节点里展开。
+- 当兼容 `source=PROVIDER` 时显示 Provider Resource 下拉，只能选择 `type=PROVIDER` 且当前 workspace/folder/activity 有权限的资源。
 - `HTTP`、`REDIS`、`GRPC`、`PLUGIN`、`CUSTOM`、`LUA_QUERY` 只作为旧 draft 兼容值显示，不作为新配置入口。
 - 支持上移、下移、删除；复制可作为后续快捷操作补充。
 - 缺少 `resourceRef`、key 模板不合法、资源无权限时在当前 step 标红。
@@ -416,7 +433,7 @@ UI 推荐：
 
 - 旧配置 `["WORKFLOW_CONTEXT", "LOCAL_CACHE", "HTTP"]` 仍然由后端兼容解析。
 - 新配置使用对象数组，executor 会在运行前解析为 resolved provider steps。
-- 新 UI 只推荐使用 `providerChain` 中的 Provider Ref / Resource Ref。旧 draft 中的顶层 Provider 字段仍由后端兼容读取，但不再作为产品化配置入口。
+- 新 UI 只推荐使用 `providerChain` 中的 Service Interface / Resource Ref。旧 draft 中的顶层 Provider 字段仍由后端兼容读取，但不再作为产品化配置入口。
 
 ### subjectPath
 
@@ -553,14 +570,17 @@ subject.id
 | `BLOCK` | 当前 provider 未命中时立即阻断 fact-query | 生产资格、发奖前强依赖事实 |
 | `NEXT` | 当前 provider 未命中时继续下一个 provider | 缓存优先、Store 兜底、HTTP 兜底 |
 
-生产奖励链路推荐：
+生产奖励链路推荐走 Service Interface，让服务接口权限、Schema、Provider 治理和审计一起生效：
 
 ```json
 {
   "providerChain": [
     {
-      "source": "PROVIDER",
-      "resourceRef": "user-profile-provider",
+      "targetType": "SERVICE_INTERFACE",
+      "source": "SERVICE_INTERFACE",
+      "serviceRef": "user-profile-service",
+      "interfaceRef": "query-user-profile",
+      "providerPolicy": "PRIMARY",
       "onMiss": "BLOCK"
     }
   ]
@@ -571,14 +591,15 @@ subject.id
 
 ## 常见资源类型
 
-`fact-query` 在节点层只引用公共 Provider 或受控资源。不同技术实现由资源管理承接。
+`fact-query` 在节点层只引用业务 Service Interface 或受控资源。不同技术实现由 Service Provider 和资源管理承接。
 
-| Store / Provider | 典型 resource type | 说明 |
+| 入口 | 典型类型 | 说明 |
 | --- | --- | --- |
-| 公共事实 Provider | `PROVIDER` | 节点首选入口，例如 `user-profile-provider`、`kyc-provider`、`risk-provider` |
-| 数据库 Store | `TABLE` | 读取营销域公共表，例如 `marketing_user_profile` |
-| Redis Store | `REDIS mode=KV/HASH` | 读取预计算事实缓存 |
-| HTTP / gRPC / Plugin / Lua 实现 | `HTTP` / `GRPC_PROVIDER` / `PLUGIN_PROVIDER` / `CUSTOM_PROVIDER` | 不直接出现在 fact-query 节点下拉中，应封装为 `PROVIDER` 或 `RESOURCE` 后再引用 |
+| 业务事实接口 | `SERVICE_INTERFACE` | 新配置首选入口，例如 `user-profile-service.query-user-profile`、`kyc-service.query-kyc-profile`、`risk-service.query-risk-profile` |
+| 数据库 Store | `RESOURCE(TABLE)` | 读取营销域公共表，例如 `marketing_user_profile`；只在确认为受控 Store 时直接引用 |
+| Redis Store | `RESOURCE(REDIS mode=KV/HASH)` | 读取预计算事实缓存；只暴露受控 key namespace |
+| 旧公共事实 Provider | `PROVIDER` | 兼容期入口，只读显示或迁移 diff 中使用；新建配置不再作为默认入口 |
+| HTTP / gRPC / Plugin / Lua 实现 | `HTTP` / `GRPC_PROVIDER` / `PLUGIN_PROVIDER` / `CUSTOM_PROVIDER` | 不直接出现在 fact-query 节点下拉中，应作为 Service Provider 实现，必要时依赖受控 Resource |
 
 推荐优先级：
 
@@ -587,10 +608,10 @@ subject.id
   -> 不需要 fact-query
 
 营销域已有公共 Store
-  -> 建立 PROVIDER，targetResourceRef 指向 TABLE / REDIS Store
+  -> 建立 Service Interface，并用 Service Provider 依赖 TABLE / REDIS Resource
 
 必须实时查业务系统
-  -> 建立 PROVIDER，底层 target 指向 HTTP/gRPC/Plugin 资源
+  -> 建立 Service Interface，并用 HTTP/gRPC/Plugin Provider 实现；URL、Topic、连接信息放到受控 Resource
 
 复杂组合加工
   -> fact-query 后接 combine/code/lua-query
@@ -634,10 +655,16 @@ subject.id
   "subjectPath": "subject.id",
   "providerChain": [
     {
-      "source": "PROVIDER",
-      "resourceRef": "user-profile-provider",
+      "targetType": "SERVICE_INTERFACE",
+      "source": "SERVICE_INTERFACE",
+      "serviceRef": "user-profile-service",
+      "interfaceRef": "query-user-profile",
+      "providerPolicy": "PRIMARY",
       "namespace": "facts",
-      "keyTemplate": "${tenantId}:${subject.type}:${subject.id}",
+      "inputMapping": {
+        "tenantId": "${tenantId}",
+        "userId": "${subject.id}"
+      },
       "timeoutSeconds": 3,
       "cacheTtlSeconds": 0,
       "onMiss": "BLOCK"
@@ -716,20 +743,23 @@ subject.id
 
 ### 数据提供者里的 resourceRef 应该填什么？
 
-新配置优先填公共 Provider，例如 `user-profile-provider`。Provider 再通过 `targetResourceRef` 指向实际 Store 或外部实现。
+新配置优先选择 Service Interface，不直接填写旧公共 Provider Resource。只有 `source=RESOURCE` 读取明确 Store/Cache 时才填写 `resourceRef`；兼容期旧 draft 里的 `source=PROVIDER` 仍可由后端读取，但新 UI 应提示迁移。
 
 ```json
 {
   "providerChain": [
     {
-      "source": "PROVIDER",
-      "resourceRef": "user-profile-provider"
+      "targetType": "SERVICE_INTERFACE",
+      "source": "SERVICE_INTERFACE",
+      "serviceRef": "user-profile-service",
+      "interfaceRef": "query-user-profile",
+      "providerPolicy": "PRIMARY"
     }
   ]
 }
 ```
 
-数据库资源只作为底层连接，不直接放到 fact-query 节点里：
+数据库资源通常作为 Service Provider 的依赖资源；只有治理确认的公共 Store/Cache 才允许作为 `source=RESOURCE` 直接放到 fact-query 节点里：
 
 ```text
 default_marketing_database -> default_user_profile_store

@@ -1,6 +1,6 @@
 # ExMarketing 公共资源管理设计
 
-本文档设计 ExMarketing 的公共资源管理能力，用于统一管理工作流节点需要访问的内存、数据库、公共表、Redis、HTTP/gRPC Provider、MQ、对象存储和插件资源。
+本文档设计 ExMarketing 的公共资源管理能力，用于统一管理工作流节点和 Provider 需要访问的内存、数据库、公共表、Redis、受控 HTTP Client、MQ Topic/Broker、对象存储和插件运行资源。HTTP/RPC/MQ 作为业务接口实现时属于 Provider 协议；作为连接、Client、Topic 或 Store 时才属于 Resource。
 
 更上层的服务、接口、提供者和资源关系见 [ExMarketing 服务、接口、提供者和资源设计](service-interface-provider-resource-design.zh-CN.md)。本文档重点描述其中 `Resource` 的治理和执行细节。
 
@@ -99,8 +99,8 @@ Workflow Node
 | `TABLE` | 表/行数据资源 | 用户资料表、KYC 表、风控表、白名单表 |
 | `ARRAY` | 列表/数组资源 | 奖励列表、候选池、名单集合 |
 | `REDIS` | Redis 资源 Ref | 统一 Redis 类型；通过 `config.mode=KV/HASH/COUNTER/LOCK` 区分用途 |
-| `HTTP` | HTTP 服务资源 | 用户中心、钱包、风控、通知服务 |
-| `MQ` | 消息队列资源 | Kafka/RabbitMQ/Pulsar topic 或 stream |
+| `HTTP` | 受控 HTTP Client / endpoint 资源 | Provider 依赖的用户中心、钱包、风控、通知 HTTP client；普通节点不直接配置 URL |
+| `MQ` | 消息队列 Topic / Broker 资源 | Kafka/RabbitMQ/Pulsar topic、stream 或 producer 连接；业务发布语义由 Provider/节点表达 |
 | `LUA` | Lua 脚本资源 | 受控 Lua 查询、加工或扩展 |
 | `PROVIDER` | 公共事实 Provider 抽象 | 用户资料、KYC、风控等统一 FACTS_V1 Provider |
 
@@ -464,12 +464,12 @@ CREATE TABLE marketing_resource_audit (
 }
 ```
 
-### 用户资料 HTTP Provider
+### 用户资料受控 HTTP Client Resource
 
 ```json
 {
-  "code": "user_profile_provider",
-  "name": "用户资料查询服务",
+  "code": "user_profile_http_client",
+  "name": "用户资料受控 HTTP Client",
   "type": "HTTP",
   "driver": "REST",
   "scope": "WORKSPACE",
@@ -477,10 +477,11 @@ CREATE TABLE marketing_resource_audit (
   "status": "ACTIVE",
   "capabilities": ["READ", "CALL", "TEST_CONNECTION"],
   "config": {
-    "endpoint": "https://internal.example.com/user/profile/query",
+    "endpointRef": "secret://user-profile/base-url",
+    "path": "/user/profile/query",
     "method": "POST",
     "timeoutSeconds": 3,
-    "headersRef": "secret:user-profile-provider"
+    "headersRef": "secret://user-profile/headers"
   }
 }
 ```
@@ -552,20 +553,22 @@ CREATE TABLE marketing_resource_audit (
 
 ### fact-query
 
-事实查询节点只表达查询意图。默认应引用公共 `PROVIDER`，由 Provider 决定底层使用数据库表、HTTP、Redis、gRPC、插件还是自定义实现；节点不直接引用底层数据库连接、Redis 地址或 HTTP 密钥。
+事实查询节点只表达查询意图。新模型默认应引用 Service Interface；兼容期可引用公共事实 `PROVIDER` Resource 或底层 Store Resource。真正的业务接口实现由 Service Provider 表达，底层数据库表、受控 HTTP Client、Redis、gRPC client、插件等由 Resource 承载；节点不直接引用底层数据库连接、Redis 地址或 HTTP 密钥。
 
-推荐结构：
+推荐关系：
 
 ```text
+user-profile-service.query-user-profile
+  -> ServiceProvider(protocol=RESOURCE)
+  -> targetResourceRef default_user_profile_store
+
 default_marketing_database
   -> default_user_profile_store
        -> marketing_user_profile
        -> USER_PROFILE
-
-user-profile-provider
-  -> contract FACTS_V1
-  -> targetResourceRef default_user_profile_store
 ```
+
+兼容期旧公共事实 Provider Resource 仍可读取，但新建 workflow 不再把它作为默认推荐入口。
 
 ```json
 {
@@ -578,9 +581,9 @@ user-profile-provider
 }
 ```
 
-当前内置公共 Provider：
+当前内置公共事实 Resource 兼容项：
 
-| Provider 资源 | 输出事实 | 默认实现 |
+| Resource | 输出事实 | 默认实现 |
 | --- | --- | --- |
 | `user-profile-provider` | `USER_PROFILE` | `default_user_profile_store` |
 | `kyc-provider` | `KYC_PROFILE` | `default_kyc_profile_store` |
@@ -692,7 +695,7 @@ logicalKey = render(scopeKeyTemplate) + ":" + windowSegment
 
 ### grant-order
 
-发奖节点可以引用内部订单资源，也可以引用外部钱包 provider。
+发奖节点可以引用内部订单资源，也可以通过 Service Interface 调用外部钱包能力；底层 HTTP/MQ 连接应作为 Provider 依赖的 Resource 管理。
 
 ```json
 {
@@ -709,7 +712,7 @@ logicalKey = render(scopeKeyTemplate) + ":" + windowSegment
 
 ### outbox / callback
 
-通知、回调、MQ 节点引用消息或 HTTP provider 资源。
+通知、回调、MQ 节点引用受控 HTTP Client Resource 或 MQ Topic/Broker Resource。业务化投递能力应通过 Service Provider 表达，普通节点不直接配置 URL、broker、topic 或 secret。
 
 ```json
 {
@@ -872,8 +875,8 @@ type ResourceAdapter interface {
 Redis KV
 Redis 计数器
 Redis 锁
-HTTP Provider
-gRPC Provider
+受控 HTTP Client
+受控 gRPC Client
 MQ Topic
 对象存储
 插件资源
@@ -1003,7 +1006,7 @@ Value 映射：valuePath 或 valueMapping
 | DATABASE_KV | 表存在、读写权限、JSONB 支持 |
 | TABLE | 表存在、schema 匹配、主键可用 |
 | REDIS | 连接、认证、读写测试、TTL 测试 |
-| HTTP | endpoint 可达、鉴权、响应 schema |
+| HTTP | endpointRef/受控 endpoint 可达、鉴权、响应 schema |
 | MQ | topic 存在、生产权限 |
 | OBJECT_STORAGE | bucket 存在、上传/下载权限 |
 
@@ -1149,7 +1152,7 @@ audit.Write(request, response)
 5. 资源调用日志必须脱敏，默认只保存 hash 和摘要。
 6. 资源 schema 变更需要版本化。
 7. 资源停用后，已发布 workflow 运行时应失败并给明确错误，不应静默 fallback。
-8. HTTP Provider 必须有 allowlist 或资源注册审批，不能任意 SSRF。
+8. 受控 HTTP Client Resource 必须有 allowlist 或资源注册审批，不能任意 SSRF。
 9. Lua/Code 节点只能通过受控 resource API 访问资源，不能直接访问网络和数据库。
 
 ## 和现有能力的关系
@@ -1157,7 +1160,7 @@ audit.Write(request, response)
 | 现有能力 | 资源化后 |
 | --- | --- |
 | `state-store.storageType` | 改为 `resourceRef` 指向资源类型 |
-| `state-store.providerEndpoint` | 移入 `HTTP.config.endpoint` |
+| `state-store.providerEndpoint` | 兼容读取；新配置移入 `HTTP.config.endpointRef/path` 或 Service Provider |
 | `state-store.tableSchema` | 移入 `marketing_resource_schema` |
 | `fact-query` 的 HTTP/Redis/gRPC 配置 | 改为 `resourceRef` |
 | `outbox` / `callback` endpoint/topic | 改为资源引用 |
@@ -1254,9 +1257,9 @@ VIEWER 不能保存写资源节点
 发布前能发现无权限资源引用
 ```
 
-### P2：公共表和 Provider Adapter
+### P2：公共表和受控 Client Resource Adapter
 
-目标：支持公共表和外部 provider 的生产使用。
+目标：支持公共表和 Provider 依赖的受控 HTTP Client Resource 生产使用。业务接口实现仍由 Service Provider 表达，Resource 只承载底层连接、Client、Store 和权限边界。
 
 当前实现：
 
@@ -1266,9 +1269,9 @@ VIEWER 不能保存写资源节点
    - 支持 `READ/WRITE/UPSERT/APPEND/DELETE`，单行写入支持 CAS 版本检查
    - 底层先使用受控的 `marketing_storage_state` 作为虚拟公共表承载，不直接开放任意 SQL 表写入
 2. `state-store + resourceRef` 已支持 `HTTP`：
-   - `endpoint/method/headers/timeoutSeconds` 从资源配置读取
+   - `endpointRef/path/method/headersRef/timeoutSeconds` 从资源配置读取
    - 节点只需要引用 `resourceRef`、操作、namespace、keyTemplate、valueType
-   - 资源配置优先于 schema 默认值，节点显式配置仍可覆盖
+   - 资源配置优先于 schema 默认值；节点不得覆盖 endpoint、headers、secret、broker 等底层连接字段
    - 运行时已增加 URL scheme、userinfo、host allowlist、blockedHosts、private network 阻断开关和 redirect 防护第一版
 3. `fact-query + resourceRef` 已支持资源查询：
    - 推荐节点引用 Store，例如 `default_user_profile_store`
@@ -1281,7 +1284,7 @@ VIEWER 不能保存写资源节点
    - `callback` 可绑定 `HTTP`，明确回调入口或查询 provider 边界，最终状态仍由 `RewardCallback/Reconciliation` 权威
 5. 资源测试连接已增加 adapter 配置校验：
    - `TABLE` 必须配置表名和 `primaryKey`
-   - `HTTP` 必须配置 endpoint，method 只允许 `GET/POST/PUT`
+   - `HTTP` 必须配置 endpointRef 或受控 endpoint 配置，method 只允许 `GET/POST/PUT`
 6. 默认能力已补齐：
    - `TABLE` 默认支持 `READ/WRITE/UPSERT/APPEND/DELETE/CAS`
    - `HTTP` 默认支持 `READ/WRITE/UPSERT/DELETE/CALL/TEST_CONNECTION`
@@ -1291,14 +1294,14 @@ VIEWER 不能保存写资源节点
 | 项目 | 状态 | 说明 |
 | --- | --- | --- |
 | `TABLE` adapter | 已完成第一版 | 支持资源配置表名、主键、READ/WRITE/UPSERT/APPEND/DELETE/CAS；底层为受控虚拟公共表 |
-| `HTTP` adapter | 已完成第一版 | `endpoint/method/httpMethod/headers/timeoutSeconds` 从资源读取，节点显式配置可覆盖 |
-| Adapter 配置校验 | 已完成第一版 | `TestResource` 和运行时都会校验公共表、HTTP Provider 的必要配置 |
-| HTTP Provider 安全治理 | 已完成第一版 | URL scheme、userinfo、allowlist、blockedHosts、private network 阻断开关、redirect 防护已接入运行时 |
+| `HTTP` adapter | 已完成第一版 | `endpointRef/path/method/httpMethod/headersRef/timeoutSeconds` 从受控 HTTP Resource 读取，节点不直接配置 URL |
+| Adapter 配置校验 | 已完成第一版 | `TestResource` 和运行时都会校验公共表、受控 HTTP Resource 的必要配置 |
+| HTTP Resource 安全治理 | 已完成第一版 | URL scheme、userinfo、allowlist、blockedHosts、private network 阻断开关、redirect 防护已接入运行时 |
 | 公共表 schema / mapping | 已完成第一版 | `schema/tableSchema`、`keyMapping`、`valueMapping` 已在 TestResource 和运行时强校验 |
-| HTTP Provider 密钥治理 | 已完成第一版 | 支持 `secretRef`、`headersRef`，避免敏感 header 明文配置 |
-| HTTP Provider response schema | 已完成第一版 | 支持 `responseSchema.required/requiredPaths/fields` 校验 |
-| 测试连接 dry-run | 已完成第一版 | `dryRun=true` 时 TestResource 会对 HTTP Provider 执行受控 dry-run 调用 |
-| `fact-query + resourceRef` | 已完成第一版 | 支持资源读和 HTTP Provider CALL 查询，统一输出 `facts` |
+| HTTP Resource 密钥治理 | 已完成第一版 | 支持 `secretRef`、`headersRef`，避免敏感 header 明文配置 |
+| HTTP Resource response schema | 已完成第一版 | 支持 `responseSchema.required/requiredPaths/fields` 校验 |
+| 测试连接 dry-run | 已完成第一版 | `dryRun=true` 时 TestResource 会对受控 HTTP Resource 执行 dry-run 调用 |
+| `fact-query + resourceRef` | 已完成第一版 | 支持资源读和受控 HTTP Resource CALL 兼容查询，统一输出 `facts` |
 | `outbox/callback + resourceRef` | 已完成第一版 | 核心节点可绑定资源、校验权限、生成计划并记录审计；真实投递/回调仍由 worker/API 权威 |
 | 资源审计 | 已完成第一版 | `state-store/fact-query/outbox/callback/mq-publish/Lua Resource API + resourceRef` 会记录资源调用审计 |
 
@@ -1307,14 +1310,14 @@ VIEWER 不能保存写资源节点
 | 项目 | 状态 | 说明 |
 | --- | --- | --- |
 | 独立密钥服务 | 未完成 | `secretRef` 当前支持环境变量解析，尚未接企业 KMS/Vault |
-| 外部 Provider 灰度/熔断 | 未完成 | 当前有 timeout/schema/dry-run，还没有 provider 级熔断和健康权重 |
+| 外部业务 Provider 灰度/熔断 | 未完成 | 该能力应在 Service Provider 治理层实现；Resource 层只保留 timeout/schema/dry-run 和连接安全 |
 
 验收：
 
 ```text
 state-store 可使用公共表资源：已完成
-fact-query 可使用公共表/Provider 资源：已完成第一版
-HTTP Provider endpoint 不再必须出现在节点配置里：已完成
+fact-query 可使用公共表/公共事实 Resource 兼容项：已完成第一版
+受控 HTTP Resource endpoint 不再出现在节点配置里：已完成
 节点 debug 能看到资源调用 trace：部分完成，资源审计已写入，前端 trace 仍可增强
 资源调用失败有统一错误码：已完成第一版
 ```
@@ -1481,5 +1484,5 @@ Lua 只能访问被 binding 授权的资源：已完成第一版
 
 ```text
 节点只写 resourceRef + operation + mapping。
-资源管理负责 storageType、driver、endpoint、table、schema、secret、权限和审计。
+资源管理负责 storageType、driver、受控 endpointRef/path、table、schema、secretRef、权限和审计。
 ```

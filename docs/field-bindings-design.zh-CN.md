@@ -140,7 +140,7 @@ Resource.userProfile.incr("checkin:u_001", 1)
 Resource.userProfile.delete("u_001")
 ```
 
-底层根据资源类型分发到 Redis、数据库、HTTP Provider、gRPC 或插件，但都必须经过资源权限、调用次数和响应大小限制。
+底层根据资源类型分发到 Redis、数据库、受控 HTTP/gRPC Client Resource 或插件，但都必须经过资源权限、调用次数和响应大小限制。业务接口调用应优先通过 Service Interface 暴露给节点。
 
 也支持显式资源引用：
 

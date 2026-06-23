@@ -139,7 +139,7 @@ event-in -> inbox -> normalize -> match -> fact-query -> facts-compose -> facts-
 | `match` | 活动匹配 | 按租户、事件类型、活动状态、时间窗和优先级匹配活动 | `matched_activity` |
 | `fact-query` | 事实查询 | 查询用户、订单、交易、历史参与或外部事实数据；详见 [Fact Query 事实查询节点](fact-query-node.zh-CN.md) | `facts` |
 | `activity-state` | 活动状态 | 默认读写 ExMarketing 内部活动状态；需要跨系统状态时才选择 RESOURCE 并填写资源 Ref | `activity_state`, `state_version` |
-| `state-store` | 通用存储 | 通过资源管理读写工作流状态、公共表、Redis 语义资源或 HTTP Provider | `stored_value`, `storage_entry`, `storage_version` |
+| `state-store` | 通用存储 | 通过资源管理读写工作流状态、公共表、Redis 语义资源或受控 HTTP Resource | `stored_value`, `storage_entry`, `storage_version` |
 | `quota-check` | 次数频控校验 | 通过 RESOURCE 操作块读取或占用计数器，对用户、设备、IP、活动或租户维度做次数和频率校验 | `quota_check`, `limit_hold` |
 | `qualify` | 资格校验 | 执行资格、风控、名单、规则判断；详见 [Qualify 资格校验节点](qualify-node.zh-CN.md) | `stage_result`, `PASS`, `BLOCK`, `RISK`, `decision` |
 | `candidate-reward` | 候选奖励 | 通过 RESOURCE 操作块读取奖励来源并生成待发奖励候选，不直接产生资金副作用 | `candidate_rewards`, `reward_items` |
@@ -1051,29 +1051,25 @@ Ref 内部配置：
 
 这里的 `STOCK` 就是奖品库存。系统会按 `quotaType + scope + scopeKey` 找到对应库存池，检查 `total - used - frozen` 是否足够，足够就增加 frozen，不足就按 `failAction` 处理。`quotaCode` 用于业务识别和审计。
 
-#### 外部预算/库存 Provider
+#### 外部预算/库存 Service Interface
 
-`reserveProviderRef` 不限于内部 quota。只要遵守 `QUOTA_RESERVE_V1`，Ref 可以指向外部 HTTP 或 gRPC 服务。旧字段 `resourceRef` 仍作为兼容别名支持，但新流程统一使用 `reserveProviderRef`：
+预算/库存的外部实现应建模为 Service Interface，例如 `quota-service.reserve-quota`，再由 Service Provider 选择 HTTP/RPC/Plugin 实现。旧字段 `reserveProviderRef` / `resourceRef` 仍作为兼容别名支持，但新流程统一使用 `serviceRef/interfaceRef` 或受控 Service Provider：
 
 ```json
 {
-  "code": "external_stock_http_ref",
-  "type": "HTTP_PROVIDER",
-  "config": {
-    "contract": "QUOTA_RESERVE_V1",
-    "reserveMode": "EXTERNAL_PROVIDER",
-    "endpoint": "https://inventory.example.com/reserve",
-    "httpMethod": "POST",
-    "quotaCode": "CHECKIN_COUPON_STOCK",
-    "quotaType": "STOCK",
-    "scope": "ACTIVITY",
-    "scopeKeyTemplate": "${activityId}:${candidate_rewards[0].rewardCode}",
-    "amountField": "candidate_rewards[0].quantity"
-  }
+  "serviceRef": "quota-service",
+  "interfaceRef": "reserve-quota",
+  "providerPolicy": "PRIMARY",
+  "contract": "QUOTA_RESERVE_V1",
+  "quotaCode": "CHECKIN_COUPON_STOCK",
+  "quotaType": "STOCK",
+  "scope": "ACTIVITY",
+  "scopeKeyTemplate": "${activityId}:${candidate_rewards[0].rewardCode}",
+  "amountField": "candidate_rewards[0].quantity"
 }
 ```
 
-HTTP Provider 会收到统一请求体，核心字段如下：
+Service Provider 会收到统一请求体。底层 HTTP/RPC/MQ 连接和凭据由 Provider 依赖的 Resource 管理，节点不直接配置 endpoint、grpcTarget、broker 或 secret。核心字段如下：
 
 ```json
 {
@@ -1114,27 +1110,27 @@ HTTP Provider 会收到统一请求体，核心字段如下：
 
 如果 `allowed=false`，`budget-reserve` 会按锁定失败处理。外部服务必须自己保证幂等和并发安全。
 
-gRPC Ref 也使用同一个 `QUOTA_RESERVE_V1` 契约，内部配置类似：
+RPC Provider 也使用同一个 `QUOTA_RESERVE_V1` 契约。底层 gRPC client/channel 作为 Resource 管理，Provider 只引用受控 Resource：
 
 ```json
 {
-  "code": "external_budget_grpc_ref",
-  "type": "GRPC_PROVIDER",
-  "config": {
-    "contract": "QUOTA_RESERVE_V1",
-    "reserveMode": "EXTERNAL_PROVIDER",
-    "grpcTarget": "dns:///budget-reserve:9090",
-    "grpcMethod": "Reserve",
-    "quotaCode": "CHECKIN_USDT_BUDGET",
-    "quotaType": "BUDGET",
-    "scope": "ACTIVITY",
-    "scopeKeyTemplate": "${activityId}",
-    "amountField": "candidate_rewards[0].amount"
-  }
+  "serviceRef": "quota-service",
+  "interfaceRef": "reserve-quota",
+  "provider": {
+    "protocol": "RPC",
+    "resourceRefs": ["budget-reserve-grpc-client"],
+    "method": "Reserve"
+  },
+  "contract": "QUOTA_RESERVE_V1",
+  "quotaCode": "CHECKIN_USDT_BUDGET",
+  "quotaType": "BUDGET",
+  "scope": "ACTIVITY",
+  "scopeKeyTemplate": "${activityId}",
+  "amountField": "candidate_rewards[0].amount"
 }
 ```
 
-当前执行器已经识别 gRPC reserve Ref，并会要求接入具体 gRPC adapter/client；没有 adapter 时不会伪造成功锁定。
+兼容执行器可以继续识别旧 gRPC reserve Ref，并要求接入具体 gRPC adapter/client；没有 adapter 时不会伪造成功锁定。新模型应通过 Service Interface + Provider + Resource 组合表达。
 
 #### 并发安全要求
 
@@ -1143,7 +1139,7 @@ gRPC Ref 也使用同一个 `QUOTA_RESERVE_V1` 契约，内部配置类似：
 1. 不允许先读库存再写库存。
 2. Postgres quota 使用单条条件更新：只有 `used + frozen + amount <= total` 时才增加 `frozen`。
 3. Redis 类型 Ref 后续必须使用 Lua/CAS 脚本完成同样的 check-and-freeze。
-4. 外部 HTTP/gRPC Provider 必须提供带幂等键的 reserve 接口，失败重试不能重复锁定。
+4. 外部 HTTP/gRPC Service Provider 必须提供带幂等键的 reserve 接口，失败重试不能重复锁定。
 5. 发奖成功后确认占用，发奖失败或超时后释放 frozen。
 
 因此自定义扩展时，只要新的 Ref 遵守 `QUOTA_RESERVE_V1` 契约，就可以替换底层存储，但不能绕过原子锁定语义。
@@ -1193,7 +1189,7 @@ gRPC Ref 也使用同一个 `QUOTA_RESERVE_V1` 契约，内部配置类似：
 3. `组合节点` 只负责数据整形、脚本处理和条件路由，不应伪装成业务状态、资格、频控或发奖节点。
 4. `其他节点` 主要承载事件适配、底层查询、投递边界和运维辅助；只有需要明确底层能力时才直接暴露给活动配置用户。
 5. `activity-state` 应保留并暴露为所有活动状态获取的基础节点；底层 `state-store` 作为通用存储能力放在其他节点。
-6. `http-query`、`redis-query`、`grpc-query`、`plugin-query` 作为底层接入能力；新链路不直接填写 endpoint、redisRef、grpcTarget、pluginCode，而是通过 `PROVIDER` 或 `RESOURCE` Ref 间接接入。
+6. `http-query`、`redis-query`、`grpc-query`、`plugin-query` 作为底层接入能力；新链路不直接填写 endpoint、redisRef、grpcTarget、pluginCode。业务能力通过 `SERVICE_INTERFACE` 接入，底层状态/连接通过 `RESOURCE` Ref 接入。
 7. 生产奖励链路统一使用 `activity-state`、`quota-check`、`candidate-reward`、`budget-reserve`。
 8. 解释型节点必须明确 `executionMode` 和 `executionAuthority`，不能让用户误以为 workflow 节点本身完成了外部投递、MQ 消费、回调处理或告警发送。
 
@@ -1202,7 +1198,7 @@ gRPC Ref 也使用同一个 `QUOTA_RESERVE_V1` 契约，内部配置类似：
 | 能力 | 当前状态 | 边界 |
 | --- | --- | --- |
 | `TABLE` | `state-store + resourceRef` 已支持 | 底层为受控虚拟公共表，不直接开放任意 SQL 表写入 |
-| `HTTP` | 作为资源/Provider 底层实现已支持第一版 | 不直接作为 fact-query 节点来源暴露；由 Provider 或 Resource Ref 间接引用 |
+| `HTTP` | 作为受控 HTTP Resource 和 Service Provider 协议已支持第一版 | 不直接作为 fact-query 节点来源暴露；业务能力由 Service Interface 引用，底层连接由 Resource Ref 承载 |
 | `REDIS` | `state-store + resourceRef` 已支持第一版 | 单一 Redis 类型，通过 `mode=KV/HASH/COUNTER/LOCK` 表达不同语义；当前由 `marketing_storage_state` 承载，还不是真 Redis client |
 | `MQ` | `mq-publish/outbox + resourceRef` 已支持第一版 | 节点生成 publish intent 或 dispatch plan，真实 broker ack 仍由 OutboxWorker/MQ sender |
 | Lua Resource API | `code/combine/split/lua-query` 的 service 执行路径已支持 | 只能访问通过资源权限和 binding 授权的资源，并受调用次数/响应大小限制 |

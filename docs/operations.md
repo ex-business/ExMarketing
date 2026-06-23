@@ -594,12 +594,12 @@ token:tenantId[,tenantId...]:sourceSystem[,sourceSystem...];token2:tenantId2:sou
 - `EX_MARKETING_EVENT_MAX_BODY_BYTES` 可覆盖默认 1 MiB 请求体限制。
 - 日志和错误响应不得记录完整 token 或完整 Authorization header。
 
-### fact endpoint host is not allowlisted
+### legacy fact endpoint host is not allowlisted
 
 含义：
 
 ```text
-Fact Query endpoint host 不在 EX_MARKETING_FACT_ALLOWLIST 中。
+Legacy Fact Query endpoint host 不在 EX_MARKETING_FACT_ALLOWLIST 中。新模型中的 HTTP 调用应通过 Service Provider 引用受控 HTTP Resource，并使用 Resource allowlist。
 ```
 
 处理：
@@ -608,12 +608,12 @@ Fact Query endpoint host 不在 EX_MARKETING_FACT_ALLOWLIST 中。
 export EX_MARKETING_FACT_ALLOWLIST='member.example.com'
 ```
 
-### fact endpoint resolves to private or local address
+### legacy fact endpoint resolves to private or local address
 
 含义：
 
 ```text
-Fact endpoint 解析到了 private/local IP，被 SSRF 防护拦截。
+Legacy Fact endpoint 解析到了 private/local IP，被 SSRF 防护拦截。新模型同样要求受控 HTTP Resource 在 DNS 解析后阻断 private/local/metadata 地址。
 ```
 
 处理：

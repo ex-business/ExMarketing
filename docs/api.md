@@ -875,7 +875,7 @@ POST /openapi/v1/facts/query
 
 Fact Query 是可选能力。能通过事件 `attributes` 携带的数据，不要实时查询外部系统；活动规则没有引用 `facts.*` 时事件处理链不会触发 Fact Query。
 
-`/openapi/v1/facts/query` 只接受 registry key 和标准事件上下文。服务端按 `tenantId + factCode` 查找 enabled Fact Provider，禁止在请求中传 inline endpoint、auth、mapping、timeout、TTL 或 provider 配置。允许的顶层字段只有 `eventId`、`eventType`、`sourceSystem`、`tenantId`、`factCode`、`subject`、`biz`、`occurredAt`、`attributes`、`traceId`；未知字段会返回 `INVALID_FACT_QUERY`。
+`/openapi/v1/facts/query` 是旧兼容事实查询入口。新 workflow 内部事实查询应优先通过 Service Interface，例如 `user-profile-service.query-user-profile`，再由 Service Provider 选择底层实现。该 OpenAPI 入口仍只接受 registry key 和标准事件上下文。服务端按 `tenantId + factCode` 查找 enabled legacy Fact Provider，禁止在请求中传 inline endpoint、auth、mapping、timeout、TTL 或 provider 配置。允许的顶层字段只有 `eventId`、`eventType`、`sourceSystem`、`tenantId`、`factCode`、`subject`、`biz`、`occurredAt`、`attributes`、`traceId`；未知字段会返回 `INVALID_FACT_QUERY`。
 
 Provider `mapping_json` 必须是非空对象，结构为：
 
@@ -895,8 +895,8 @@ mapping 失败统一返回 `FACT_MAPPING_FAILED`，并通过 `reason` 稳定区�
 ```text
 cache_ttl_seconds = 0 不缓存
 cache_ttl_seconds = 1..3600 只缓存成功 mapping 后的 facts
-cache key = provider 配置版本 + 规范化 provider 输入上下文
-provider 配置版本优先使用 updated_at；updated_at 不可用时使用 provider_type、endpoint、method、auth_ref、mapping_json、cache_ttl_seconds、enabled、timeout_ms 的配置指纹
+cache key = legacy provider 配置版本 + 规范化 provider 输入上下文
+legacy provider 配置版本优先使用 updated_at；updated_at 不可用时使用 provider_type、endpoint、method、auth_ref、mapping_json、cache_ttl_seconds、enabled、timeout_ms 的配置指纹
 provider 输入上下文包含 tenantId、factCode、subject、biz、attributes，以及实际存在的 eventId、eventType、sourceSystem、occurredAt
 traceId、请求时间、调用方 header、Authorization、随机数不参与缓存 key，且 traceId 不传给 provider
 ```

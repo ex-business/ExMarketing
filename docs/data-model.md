@@ -522,14 +522,14 @@ OUTBOX_DLQ_CLOSE
 
 ## marketing_fact_provider
 
-Fact Provider registry。运行时 Fact Query 和活动规则校验只按 `tenant_id + fact_code` 读取 enabled provider，不接受 inline provider 配置。
+Legacy Fact Provider registry。该表服务旧 `/openapi/v1/facts/query` 和兼容事实查询路径；新 workflow 内部事实查询应优先建模为 Service Interface + Service Provider + Resource。运行时 Fact Query 和活动规则校验只按 `tenant_id + fact_code` 读取 enabled legacy provider，不接受 inline provider 配置。
 
 | 字段 | 说明 |
 |---|---|
 | `tenant_id` | 租户 ID，和 `fact_code` 组成主键 |
 | `fact_code` | Fact 编码 |
 | `provider_type` | Provider 类型，当前只支持 `HTTP` |
-| `endpoint` | HTTP endpoint |
+| `endpoint` | 旧 HTTP endpoint 字段；新模型应使用受控 HTTP Resource 的 `endpointRef/path`，由 Service Provider 引用 |
 | `method` | HTTP method，当前支持 `GET` / `POST` |
 | `auth_ref` | 鉴权配置引用，不存放明文密钥 |
 | `mapping_json` | 外部 JSON 响应到 `facts.<factCode>.*` 的显式字段映射 |
@@ -541,4 +541,4 @@ Fact Provider registry。运行时 Fact Query 和活动规则校验只按 `tenan
 
 `mapping_json` 最小结构为 `{ "<outputPath>": { "source": "$.<providerResponsePath>", "type": "string|number|boolean|array|object", "required": true|false } }`。`outputPath` 是相对路径，例如 `vipLevel` 或 `risk.score`，不得包含 `facts.` 前缀；`required` 可省略，默认 `true`。
 
-Fact Query 缓存只缓存成功 mapping 后的 facts。缓存 key 必须包含 `tenant_id`、`fact_code`、规范化 provider 输入上下文和 provider 配置版本。provider 配置版本优先使用 `updated_at`；如果运行时没有可靠 `updated_at`，使用 `provider_type + endpoint + method + auth_ref + mapping_json + cache_ttl_seconds + enabled + timeout_ms` 的规范化配置指纹。配置变更后不要求主动清理旧缓存，后续请求会因版本 key 变化自然绕过旧缓存。
+Fact Query 缓存只缓存成功 mapping 后的 facts。缓存 key 必须包含 `tenant_id`、`fact_code`、规范化 legacy provider 输入上下文和 provider 配置版本。provider 配置版本优先使用 `updated_at`；如果运行时没有可靠 `updated_at`，使用 `provider_type + endpoint + method + auth_ref + mapping_json + cache_ttl_seconds + enabled + timeout_ms` 的规范化配置指纹。配置变更后不要求主动清理旧缓存，后续请求会因版本 key 变化自然绕过旧缓存。

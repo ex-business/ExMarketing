@@ -426,10 +426,11 @@ function InputMappingEditor({
   const mapping = displayInputMappingFor(node);
   const hasMappedInputs = Object.keys(mapping).length > 0;
   const inputs = displayInputsForNode(node, schema);
-  const autoMappingCandidates = inputs.filter((input) => !mapping[input.key] && Boolean(optionForInput(input.key, options)));
+  const autoMappingCandidates = inputs.filter((input) => input.required && !mapping[input.key] && Boolean(optionForInput(input.key, options)));
   const applyAutoMapping = () => {
     const next = { ...mapping };
     inputs.forEach((input) => {
+      if (!input.required) return;
       if (next[input.key]) return;
       const selected = optionForInput(input.key, options);
       if (selected) {
@@ -510,7 +511,7 @@ function InputMappingEditor({
         <div className="input-map-grid">
           {(autoMappingCandidates.length > 0 || invalidMappingCount > 0) ? (
             <div className="input-map-actions compact">
-              {autoMappingCandidates.length > 0 ? <button type="button" onClick={applyAutoMapping}>自动映射</button> : null}
+              {autoMappingCandidates.length > 0 ? <button type="button" onClick={applyAutoMapping}>生成 required 映射</button> : null}
               {invalidMappingCount > 0 ? <button type="button" onClick={repairInvalidMappings}>修复</button> : null}
               {invalidMappingCount > 0 ? <button type="button" onClick={clearInvalidMappings}>清空失效</button> : null}
             </div>
@@ -812,6 +813,8 @@ type ProviderChainStepValue = {
   interfaceRef?: string;
   providerRef?: string;
   providerPolicy?: string;
+  environment?: string;
+  mock?: boolean;
   resourceRef?: string;
   namespace?: string;
   sourcePath?: string;
@@ -834,6 +837,7 @@ type ProviderChainStepValue = {
 
 const FACT_PROVIDER_CHAIN_SOURCES = ['SERVICE_INTERFACE', 'PROVIDER', 'RESOURCE', 'WORKFLOW_CONTEXT', 'LOCAL_CACHE', 'FACT_SERVICE'];
 const RESOURCE_OPERATION_CHAIN_SOURCES = ['INTERNAL', 'RESOURCE', 'WORKFLOW_CONTEXT', 'LOCAL_CACHE'];
+const SERVICE_PROVIDER_POLICY_OPTIONS = ['PRIMARY', 'PRIMARY_WITH_FALLBACK', 'WEIGHTED', 'ENVIRONMENT_MATCH', 'MOCK_ONLY'];
 
 function providerChainNeedsTarget(source: string): boolean {
   return ['SERVICE_INTERFACE', 'RESOURCE', 'PROVIDER', 'FACT_SERVICE', 'HTTP_PROVIDER', 'REDIS', 'GRPC', 'PLUGIN', 'CUSTOM', 'LUA_QUERY'].includes(source);
@@ -932,6 +936,7 @@ function normalizeProviderChain(value: unknown): ProviderChainStepValue[] {
     PROVIDERREF: 'providerRef',
     PROVIDER_POLICY: 'providerPolicy',
     PROVIDERPOLICY: 'providerPolicy',
+    ENVIRONMENT: 'environment',
     RESOURCE_REF: 'resourceRef',
     RESOURCEREF: 'resourceRef',
     NAMESPACE: 'namespace',
@@ -976,7 +981,7 @@ function normalizeProviderChain(value: unknown): ProviderChainStepValue[] {
     while ((pair = pairPattern.exec(trimmed))) {
       const mappedKey = luaProviderKeyMap[pair[1].replace(/([a-z])([A-Z])/g, '$1_$2').toUpperCase()];
       if (mappedKey && mappedKey !== 'source') {
-        (step as Record<string, string>)[mappedKey] = pair[2] ?? pair[3] ?? pair[4] ?? '';
+        (step as Record<string, unknown>)[mappedKey] = pair[2] ?? pair[3] ?? pair[4] ?? '';
       }
     }
     return step;
@@ -1001,6 +1006,8 @@ function normalizeProviderChain(value: unknown): ProviderChainStepValue[] {
           interfaceRef: stringProp(mapped, 'interfaceRef', 'INTERFACE_REF', 'interfaceref'),
           providerRef: stringProp(mapped, 'providerRef', 'PROVIDER_REF', 'providerref'),
           providerPolicy: stringProp(mapped, 'providerPolicy', 'PROVIDER_POLICY', 'providerpolicy'),
+          environment: stringProp(mapped, 'environment', 'ENVIRONMENT'),
+          mock: mapped.mock === true || mapped.MOCK === true || String(mapped.mock ?? mapped.MOCK ?? '').toLowerCase() === 'true',
           resourceRef: stringProp(mapped, 'resourceRef', 'RESOURCE_REF', 'resourceref'),
           namespace: stringProp(mapped, 'namespace', 'NAMESPACE'),
           sourcePath: stringProp(mapped, 'sourcePath', 'SOURCE_PATH', 'sourcepath'),
@@ -1150,12 +1157,13 @@ function compactProviderChain(steps: ProviderChainStepValue[]): ProviderChainSte
   return steps.map((step) => {
     const next: ProviderChainStepValue = { source: step.source || 'SERVICE_INTERFACE' };
     if (step.source === 'SERVICE_INTERFACE') next.targetType = 'SERVICE_INTERFACE';
-    (['targetType', 'serviceRef', 'interfaceRef', 'providerRef', 'providerPolicy', 'resourceRef', 'namespace', 'sourcePath', 'cachePath', 'keyTemplate', 'valuePath', 'endpoint', 'method', 'authRef', 'providerCode', 'redisRef', 'grpcTarget', 'pluginCode', 'operation', 'outputAs', 'timeoutSeconds', 'cacheTtlSeconds', 'onMiss'] as const).forEach((key) => {
+    (['targetType', 'serviceRef', 'interfaceRef', 'providerRef', 'providerPolicy', 'environment', 'resourceRef', 'namespace', 'sourcePath', 'cachePath', 'keyTemplate', 'valuePath', 'endpoint', 'method', 'authRef', 'providerCode', 'redisRef', 'grpcTarget', 'pluginCode', 'operation', 'outputAs', 'timeoutSeconds', 'cacheTtlSeconds', 'onMiss'] as const).forEach((key) => {
       const value = step[key];
       if (typeof value === 'string' && value.trim()) {
         next[key] = value.trim();
       }
     });
+    if (step.mock) next.mock = true;
     if (!next.onMiss) next.onMiss = 'NEXT';
     return next;
   });
@@ -1336,7 +1344,22 @@ function ProviderChainEditor({
                       <label>
                         <span>Policy</span>
                         <select value={step.providerPolicy ?? 'PRIMARY'} onChange={(event) => patchStep(index, { providerPolicy: event.target.value })}>
-                          <option value="PRIMARY">PRIMARY</option>
+                          {SERVICE_PROVIDER_POLICY_OPTIONS.map((policy) => <option key={policy} value={policy}>{policy}</option>)}
+                        </select>
+                      </label>
+                      <label>
+                        <span>Provider Ref</span>
+                        <input value={step.providerRef ?? ''} placeholder="留空由 policy 自动选择" onChange={(event) => patchStep(index, { providerRef: event.target.value })} />
+                      </label>
+                      <label>
+                        <span>Environment</span>
+                        <input value={step.environment ?? ''} placeholder="DEV / STAGING / PROD" onChange={(event) => patchStep(index, { environment: event.target.value })} />
+                      </label>
+                      <label>
+                        <span>Mock</span>
+                        <select value={step.mock ? 'true' : 'false'} onChange={(event) => patchStep(index, { mock: event.target.value === 'true' })}>
+                          <option value="false">禁用</option>
+                          <option value="true">启用</option>
                         </select>
                       </label>
                     </>
@@ -1436,6 +1459,11 @@ function ProviderChainEditor({
                   <span>{advancedOpen ? '收起高级设置' : '高级设置'}</span>
                   {advancedOpen ? <ChevronDown /> : <ChevronRight />}
                 </button>
+                {step.source === 'SERVICE_INTERFACE' ? (
+                  <div className="provider-chain-warning">
+                    Provider 治理由 Service Binding 校验。显式 providerRef 默认会被阻断，只有 Binding 允许且命中 allowedProviderRefs 才可发布；MOCK_ONLY 只应在测试环境使用。
+                  </div>
+                ) : null}
                 {advancedOpen ? (
                   <div className="provider-chain-fields advanced">
                     {needsTarget && !resourceOperationEditor ? (

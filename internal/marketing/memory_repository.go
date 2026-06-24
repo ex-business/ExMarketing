@@ -17,39 +17,43 @@ import (
 )
 
 type MemoryRepository struct {
-	mu                      sync.RWMutex
-	workspaces              []Workspace
-	workspaceMembers        []WorkspaceMember
-	workspaceFolders        []WorkspaceFolder
-	workspaceShareLinks     []WorkspaceShareLink
-	workspaceActivityGrants []WorkspaceActivityGrant
-	workspaceFileObjects    []WorkspaceFileObject
-	workspaceAuditLogs      []WorkspaceAuditLog
-	activities              []Activity
-	workflowDrafts          map[string]WorkflowDraft
-	workflowTemplates       []WorkflowDraftTemplate
-	workflowVersions        []WorkflowVersion
-	workflowExecutions      []WorkflowExecution
-	nodeExecutions          []WorkflowNodeExecution
-	factProviders           map[string]FactProvider
-	services                []ServiceDefinition
-	serviceInterfaces       []ServiceInterface
-	serviceProviders        []ServiceProvider
-	activityStates          []ActivityState
-	storageStates           []StorageState
-	resources               []Resource
-	resourceBindings        []ResourceBinding
-	resourceAuditLogs       []ResourceAuditLog
-	inboxByIdempotency      map[string]EventInbox
-	inboxByEventIdentity    map[string]EventInbox
-	participations          []Participation
-	grantOrders             []GrantOrder
-	quotaReservations       []QuotaReservation
-	outboxMessages          []OutboxMessage
-	quotas                  []Quota
-	manualExportFiles       []ManualGrantExportFile
-	manualExportDetails     []ManualGrantExportDetail
-	auditRecords            []AuditRecord
+	mu                       sync.RWMutex
+	workspaces               []Workspace
+	workspaceMembers         []WorkspaceMember
+	workspaceFolders         []WorkspaceFolder
+	workspaceShareLinks      []WorkspaceShareLink
+	workspaceActivityGrants  []WorkspaceActivityGrant
+	workspaceFileObjects     []WorkspaceFileObject
+	workspaceAuditLogs       []WorkspaceAuditLog
+	activities               []Activity
+	workflowDrafts           map[string]WorkflowDraft
+	workflowTemplates        []WorkflowDraftTemplate
+	workflowVersions         []WorkflowVersion
+	workflowExecutions       []WorkflowExecution
+	nodeExecutions           []WorkflowNodeExecution
+	factProviders            map[string]FactProvider
+	services                 []ServiceDefinition
+	serviceInterfaces        []ServiceInterface
+	serviceProviders         []ServiceProvider
+	serviceSchemas           []ServiceSchema
+	serviceInterfaceBindings []ServiceInterfaceBinding
+	serviceProviderStates    []ServiceProviderRuntimeState
+	serviceCallAuditLogs     []ServiceCallAuditLog
+	activityStates           []ActivityState
+	storageStates            []StorageState
+	resources                []Resource
+	resourceBindings         []ResourceBinding
+	resourceAuditLogs        []ResourceAuditLog
+	inboxByIdempotency       map[string]EventInbox
+	inboxByEventIdentity     map[string]EventInbox
+	participations           []Participation
+	grantOrders              []GrantOrder
+	quotaReservations        []QuotaReservation
+	outboxMessages           []OutboxMessage
+	quotas                   []Quota
+	manualExportFiles        []ManualGrantExportFile
+	manualExportDetails      []ManualGrantExportDetail
+	auditRecords             []AuditRecord
 }
 
 func NewMemoryRepository() *MemoryRepository {
@@ -614,6 +618,63 @@ func cloneServiceProvider(provider ServiceProvider) ServiceProvider {
 	return provider
 }
 
+func cloneServiceSchema(schema ServiceSchema) ServiceSchema {
+	if len(schema.SchemaJSON) > 0 {
+		schema.SchemaJSON = append(json.RawMessage(nil), schema.SchemaJSON...)
+	}
+	if len(schema.ExamplesJSON) > 0 {
+		schema.ExamplesJSON = append(json.RawMessage(nil), schema.ExamplesJSON...)
+	}
+	return schema
+}
+
+func cloneServiceInterfaceBinding(binding ServiceInterfaceBinding) ServiceInterfaceBinding {
+	binding.AllowedNodeTypes = slices.Clone(binding.AllowedNodeTypes)
+	binding.AllowedOperations = slices.Clone(binding.AllowedOperations)
+	binding.AllowedProviderPolicies = slices.Clone(binding.AllowedProviderPolicies)
+	binding.AllowedProviderRefs = slices.Clone(binding.AllowedProviderRefs)
+	if len(binding.Metadata) > 0 {
+		binding.Metadata = append(json.RawMessage(nil), binding.Metadata...)
+	}
+	return binding
+}
+
+func cloneServiceProviderRuntimeState(state ServiceProviderRuntimeState) ServiceProviderRuntimeState {
+	if len(state.Metadata) > 0 {
+		state.Metadata = append(json.RawMessage(nil), state.Metadata...)
+	}
+	if state.LastFailureAt != nil {
+		value := *state.LastFailureAt
+		state.LastFailureAt = &value
+	}
+	if state.LastSuccessAt != nil {
+		value := *state.LastSuccessAt
+		state.LastSuccessAt = &value
+	}
+	if state.CircuitOpenedAt != nil {
+		value := *state.CircuitOpenedAt
+		state.CircuitOpenedAt = &value
+	}
+	if state.CircuitResetAt != nil {
+		value := *state.CircuitResetAt
+		state.CircuitResetAt = &value
+	}
+	return state
+}
+
+func cloneServiceCallAuditLog(log ServiceCallAuditLog) ServiceCallAuditLog {
+	if len(log.ProviderTrace) > 0 {
+		log.ProviderTrace = append(json.RawMessage(nil), log.ProviderTrace...)
+	}
+	if len(log.SchemaTrace) > 0 {
+		log.SchemaTrace = append(json.RawMessage(nil), log.SchemaTrace...)
+	}
+	if len(log.PermissionTrace) > 0 {
+		log.PermissionTrace = append(json.RawMessage(nil), log.PermissionTrace...)
+	}
+	return log
+}
+
 func (r *MemoryRepository) SaveServiceDefinition(ctx context.Context, service ServiceDefinition) (ServiceDefinition, error) {
 	if err := ctx.Err(); err != nil {
 		return ServiceDefinition{}, err
@@ -891,6 +952,466 @@ func (r *MemoryRepository) ListServiceProviders(ctx context.Context, query Servi
 		}
 	}
 	return out, nil
+}
+
+func (r *MemoryRepository) SaveServiceSchema(ctx context.Context, schema ServiceSchema) (ServiceSchema, error) {
+	if err := ctx.Err(); err != nil {
+		return ServiceSchema{}, err
+	}
+	if schema.ID == "" {
+		schema.ID = NewID("svcschema")
+	}
+	if schema.Scope == "" {
+		schema.Scope = ServiceAssetScopeTenant
+	}
+	if schema.Version == 0 {
+		schema.Version = 1
+	}
+	if schema.Status == "" {
+		schema.Status = ServiceAssetActive
+	}
+	if schema.CreatedAt.IsZero() {
+		schema.CreatedAt = time.Now().UTC()
+	}
+	if schema.UpdatedAt.IsZero() {
+		schema.UpdatedAt = schema.CreatedAt
+	}
+	if err := schema.Validate(); err != nil {
+		return ServiceSchema{}, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.serviceSchemas {
+		sameRef := r.serviceSchemas[i].TenantID == schema.TenantID && r.serviceSchemas[i].SchemaRef == schema.SchemaRef && r.serviceSchemas[i].Version == schema.Version
+		if sameRef && r.serviceSchemas[i].ID != schema.ID {
+			return ServiceSchema{}, ErrResourceConflict
+		}
+		if r.serviceSchemas[i].ID == schema.ID || sameRef {
+			r.serviceSchemas[i] = cloneServiceSchema(schema)
+			return cloneServiceSchema(schema), nil
+		}
+	}
+	r.serviceSchemas = append(r.serviceSchemas, cloneServiceSchema(schema))
+	return cloneServiceSchema(schema), nil
+}
+
+func (r *MemoryRepository) ListServiceSchemas(ctx context.Context, query ServiceSchemaQuery) ([]ServiceSchema, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	limit := query.Limit
+	if limit <= 0 || limit > 500 {
+		limit = 500
+	}
+	out := []ServiceSchema{}
+	for _, schema := range r.serviceSchemas {
+		if query.TenantID != "" && schema.TenantID != query.TenantID {
+			continue
+		}
+		if query.WorkspaceID != "" && schema.WorkspaceID != query.WorkspaceID {
+			continue
+		}
+		if query.FolderID != "" && schema.FolderID != query.FolderID {
+			continue
+		}
+		if query.SchemaRef != "" && schema.SchemaRef != query.SchemaRef {
+			continue
+		}
+		if query.SchemaType != "" && schema.SchemaType != query.SchemaType {
+			continue
+		}
+		if query.Status != "" && schema.Status != query.Status {
+			continue
+		}
+		out = append(out, cloneServiceSchema(schema))
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
+}
+
+func (r *MemoryRepository) SaveServiceInterfaceBinding(ctx context.Context, binding ServiceInterfaceBinding) (ServiceInterfaceBinding, error) {
+	if err := ctx.Err(); err != nil {
+		return ServiceInterfaceBinding{}, err
+	}
+	if _, err := r.GetServiceInterface(ctx, binding.TenantID, binding.ServiceRef, binding.InterfaceRef); err != nil {
+		return ServiceInterfaceBinding{}, err
+	}
+	if binding.ID == "" {
+		binding.ID = NewID("svcbind")
+	}
+	if binding.Scope == "" {
+		binding.Scope = ServiceAssetScopeWorkspace
+	}
+	if binding.Status == "" {
+		binding.Status = ServiceAssetActive
+	}
+	if len(binding.Metadata) == 0 {
+		binding.Metadata = json.RawMessage(`{}`)
+	}
+	if binding.CreatedAt.IsZero() {
+		binding.CreatedAt = time.Now().UTC()
+	}
+	if binding.UpdatedAt.IsZero() {
+		binding.UpdatedAt = binding.CreatedAt
+	}
+	if err := binding.Validate(); err != nil {
+		return ServiceInterfaceBinding{}, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.serviceInterfaceBindings {
+		sameBinding := r.serviceInterfaceBindings[i].TenantID == binding.TenantID &&
+			r.serviceInterfaceBindings[i].ServiceRef == binding.ServiceRef &&
+			r.serviceInterfaceBindings[i].InterfaceRef == binding.InterfaceRef &&
+			r.serviceInterfaceBindings[i].Scope == binding.Scope &&
+			r.serviceInterfaceBindings[i].WorkspaceID == binding.WorkspaceID &&
+			r.serviceInterfaceBindings[i].FolderID == binding.FolderID &&
+			r.serviceInterfaceBindings[i].ActivityID == binding.ActivityID &&
+			r.serviceInterfaceBindings[i].NodeID == binding.NodeID &&
+			r.serviceInterfaceBindings[i].PrincipalType == binding.PrincipalType &&
+			r.serviceInterfaceBindings[i].PrincipalID == binding.PrincipalID
+		if sameBinding && r.serviceInterfaceBindings[i].ID != binding.ID {
+			return ServiceInterfaceBinding{}, ErrResourceConflict
+		}
+		if r.serviceInterfaceBindings[i].ID == binding.ID || sameBinding {
+			r.serviceInterfaceBindings[i] = cloneServiceInterfaceBinding(binding)
+			return cloneServiceInterfaceBinding(binding), nil
+		}
+	}
+	r.serviceInterfaceBindings = append(r.serviceInterfaceBindings, cloneServiceInterfaceBinding(binding))
+	return cloneServiceInterfaceBinding(binding), nil
+}
+
+func (r *MemoryRepository) ListServiceInterfaceBindings(ctx context.Context, query ServiceInterfaceBindingQuery) ([]ServiceInterfaceBinding, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	limit := query.Limit
+	if limit <= 0 || limit > 500 {
+		limit = 500
+	}
+	out := []ServiceInterfaceBinding{}
+	for _, binding := range r.serviceInterfaceBindings {
+		if query.TenantID != "" && binding.TenantID != query.TenantID {
+			continue
+		}
+		if query.ServiceRef != "" && binding.ServiceRef != query.ServiceRef {
+			continue
+		}
+		if query.InterfaceRef != "" && binding.InterfaceRef != query.InterfaceRef {
+			continue
+		}
+		if query.Scope != "" && binding.Scope != query.Scope {
+			continue
+		}
+		if query.WorkspaceID != "" && binding.WorkspaceID != query.WorkspaceID {
+			continue
+		}
+		if query.FolderID != "" && binding.FolderID != query.FolderID {
+			continue
+		}
+		if query.ActivityID != "" && binding.ActivityID != query.ActivityID {
+			continue
+		}
+		if query.NodeID != "" && binding.NodeID != query.NodeID {
+			continue
+		}
+		if query.NodeType != "" && len(binding.AllowedNodeTypes) > 0 && !slices.Contains(binding.AllowedNodeTypes, query.NodeType) {
+			continue
+		}
+		if query.Status != "" && binding.Status != query.Status {
+			continue
+		}
+		out = append(out, cloneServiceInterfaceBinding(binding))
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
+}
+
+func (r *MemoryRepository) SaveServiceProviderRuntimeState(ctx context.Context, state ServiceProviderRuntimeState) (ServiceProviderRuntimeState, error) {
+	if err := ctx.Err(); err != nil {
+		return ServiceProviderRuntimeState{}, err
+	}
+	if state.ID == "" {
+		state.ID = NewID("svcprovstate")
+	}
+	if state.HealthStatus == "" {
+		state.HealthStatus = ServiceProviderHealthHealthy
+	}
+	if state.CircuitStatus == "" {
+		state.CircuitStatus = ServiceProviderCircuitClosed
+	}
+	if len(state.Metadata) == 0 {
+		state.Metadata = json.RawMessage(`{}`)
+	}
+	now := time.Now().UTC()
+	if state.CreatedAt.IsZero() {
+		state.CreatedAt = now
+	}
+	if state.UpdatedAt.IsZero() {
+		state.UpdatedAt = now
+	}
+	if err := state.Validate(); err != nil {
+		return ServiceProviderRuntimeState{}, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.serviceProviderStates {
+		sameState := r.serviceProviderStates[i].TenantID == state.TenantID &&
+			r.serviceProviderStates[i].ServiceRef == state.ServiceRef &&
+			r.serviceProviderStates[i].InterfaceRef == state.InterfaceRef &&
+			r.serviceProviderStates[i].ProviderRef == state.ProviderRef
+		if sameState {
+			state.ID = r.serviceProviderStates[i].ID
+			state.CreatedAt = r.serviceProviderStates[i].CreatedAt
+			r.serviceProviderStates[i] = cloneServiceProviderRuntimeState(state)
+			return cloneServiceProviderRuntimeState(state), nil
+		}
+	}
+	r.serviceProviderStates = append(r.serviceProviderStates, cloneServiceProviderRuntimeState(state))
+	return cloneServiceProviderRuntimeState(state), nil
+}
+
+func (r *MemoryRepository) GetServiceProviderRuntimeState(ctx context.Context, tenantID string, serviceRef string, interfaceRef string, providerRef string) (ServiceProviderRuntimeState, error) {
+	if err := ctx.Err(); err != nil {
+		return ServiceProviderRuntimeState{}, err
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for _, state := range r.serviceProviderStates {
+		if state.TenantID == tenantID && state.ServiceRef == serviceRef && state.InterfaceRef == interfaceRef && state.ProviderRef == providerRef {
+			return cloneServiceProviderRuntimeState(state), nil
+		}
+	}
+	return ServiceProviderRuntimeState{}, ErrNotFound
+}
+
+func (r *MemoryRepository) ListServiceProviderRuntimeStates(ctx context.Context, query ServiceProviderRuntimeStateQuery) ([]ServiceProviderRuntimeState, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	limit := query.Limit
+	if limit <= 0 || limit > 500 {
+		limit = 500
+	}
+	out := []ServiceProviderRuntimeState{}
+	for _, state := range r.serviceProviderStates {
+		if query.TenantID != "" && state.TenantID != query.TenantID {
+			continue
+		}
+		if query.ServiceRef != "" && state.ServiceRef != query.ServiceRef {
+			continue
+		}
+		if query.InterfaceRef != "" && state.InterfaceRef != query.InterfaceRef {
+			continue
+		}
+		if query.ProviderRef != "" && state.ProviderRef != query.ProviderRef {
+			continue
+		}
+		if query.HealthStatus != "" && state.HealthStatus != query.HealthStatus {
+			continue
+		}
+		if query.CircuitStatus != "" && state.CircuitStatus != query.CircuitStatus {
+			continue
+		}
+		out = append(out, cloneServiceProviderRuntimeState(state))
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
+}
+
+func (r *MemoryRepository) ConsumeServiceProviderRateLimit(ctx context.Context, cmd ServiceProviderRateLimitConsume) (ServiceProviderRuntimeState, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return ServiceProviderRuntimeState{}, false, err
+	}
+	state := cmd.State
+	if state.ID == "" {
+		state.ID = NewID("svcprovstate")
+	}
+	if state.HealthStatus == "" {
+		state.HealthStatus = ServiceProviderHealthHealthy
+	}
+	if state.CircuitStatus == "" {
+		state.CircuitStatus = ServiceProviderCircuitClosed
+	}
+	if len(state.Metadata) == 0 {
+		state.Metadata = json.RawMessage(`{}`)
+	}
+	now := cmd.Now
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	if cmd.Window <= 0 {
+		cmd.Window = time.Minute
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	index := -1
+	for i := range r.serviceProviderStates {
+		sameState := r.serviceProviderStates[i].TenantID == state.TenantID &&
+			r.serviceProviderStates[i].ServiceRef == state.ServiceRef &&
+			r.serviceProviderStates[i].InterfaceRef == state.InterfaceRef &&
+			r.serviceProviderStates[i].ProviderRef == state.ProviderRef
+		if sameState {
+			state = cloneServiceProviderRuntimeState(r.serviceProviderStates[i])
+			index = i
+			break
+		}
+	}
+	if state.CreatedAt.IsZero() {
+		state.CreatedAt = now
+	}
+	if state.RateLimitWindow.IsZero() || now.Sub(state.RateLimitWindow) >= cmd.Window {
+		state.RateLimitWindow = now
+		state.RateLimitCount = 0
+	}
+	if cmd.Limit > 0 && state.RateLimitCount >= cmd.Limit {
+		state.UpdatedAt = now
+		return cloneServiceProviderRuntimeState(state), false, nil
+	}
+	state.RateLimitCount++
+	state.UpdatedAt = now
+	if err := state.Validate(); err != nil {
+		return ServiceProviderRuntimeState{}, false, err
+	}
+	if index >= 0 {
+		r.serviceProviderStates[index] = cloneServiceProviderRuntimeState(state)
+	} else {
+		r.serviceProviderStates = append(r.serviceProviderStates, cloneServiceProviderRuntimeState(state))
+	}
+	return cloneServiceProviderRuntimeState(state), true, nil
+}
+
+func (r *MemoryRepository) CreateServiceCallAuditLog(ctx context.Context, log ServiceCallAuditLog) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if log.ID == "" {
+		log.ID = NewID("svccallaudit")
+	}
+	if log.Status == "" {
+		log.Status = ServiceCallAuditSuccess
+	}
+	if log.CreatedAt.IsZero() {
+		log.CreatedAt = time.Now().UTC()
+	}
+	if err := log.Validate(); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.serviceCallAuditLogs = append(r.serviceCallAuditLogs, cloneServiceCallAuditLog(log))
+	return nil
+}
+
+func (r *MemoryRepository) ListServiceCallAuditLogs(ctx context.Context, query ServiceCallAuditQuery) ([]ServiceCallAuditLog, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	limit := query.Limit
+	if limit <= 0 || limit > 500 {
+		limit = 500
+	}
+	out := make([]ServiceCallAuditLog, 0, min(limit, len(r.serviceCallAuditLogs)))
+	cursorSeen := strings.TrimSpace(query.Cursor) == ""
+	for i := len(r.serviceCallAuditLogs) - 1; i >= 0; i-- {
+		log := r.serviceCallAuditLogs[i]
+		if !cursorSeen {
+			if serviceCallAuditCursor(log) == strings.TrimSpace(query.Cursor) {
+				cursorSeen = true
+			}
+			continue
+		}
+		if query.TenantID != "" && log.TenantID != query.TenantID {
+			continue
+		}
+		if query.WorkspaceID != "" && log.WorkspaceID != query.WorkspaceID {
+			continue
+		}
+		if query.FolderID != "" && log.FolderID != query.FolderID {
+			continue
+		}
+		if query.ActivityID != "" && log.ActivityID != query.ActivityID {
+			continue
+		}
+		if query.WorkflowID != "" && log.WorkflowID != query.WorkflowID {
+			continue
+		}
+		if query.NodeID != "" && log.NodeID != query.NodeID {
+			continue
+		}
+		if query.ServiceRef != "" && log.ServiceRef != query.ServiceRef {
+			continue
+		}
+		if query.InterfaceRef != "" && log.InterfaceRef != query.InterfaceRef {
+			continue
+		}
+		if query.ProviderRef != "" && log.ProviderRef != query.ProviderRef {
+			continue
+		}
+		if query.ResourceRef != "" && log.ResourceRef != query.ResourceRef {
+			continue
+		}
+		if query.Status != "" && log.Status != query.Status {
+			continue
+		}
+		if query.ErrorCode != "" && log.ErrorCode != query.ErrorCode {
+			continue
+		}
+		out = append(out, cloneServiceCallAuditLog(log))
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
+}
+
+func (r *MemoryRepository) PurgeServiceCallAuditLogs(ctx context.Context, tenantID string, workspaceID string, before time.Time, limit int) (int, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	if before.IsZero() {
+		return 0, nil
+	}
+	if limit <= 0 || limit > 10000 {
+		limit = 10000
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	kept := r.serviceCallAuditLogs[:0]
+	deleted := 0
+	for _, log := range r.serviceCallAuditLogs {
+		matchesTenant := strings.TrimSpace(tenantID) == "" || log.TenantID == tenantID
+		matchesWorkspace := strings.TrimSpace(workspaceID) == "" || log.WorkspaceID == workspaceID
+		if deleted < limit && matchesTenant && matchesWorkspace && log.CreatedAt.Before(before) {
+			deleted++
+			continue
+		}
+		kept = append(kept, log)
+	}
+	r.serviceCallAuditLogs = kept
+	return deleted, nil
+}
+
+func serviceCallAuditCursor(log ServiceCallAuditLog) string {
+	if log.ID == "" {
+		return ""
+	}
+	return log.CreatedAt.UTC().Format(time.RFC3339Nano) + "|" + log.ID
 }
 
 func sameActivityStateKey(state ActivityState, key ActivityStateKey) bool {

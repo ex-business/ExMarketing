@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"sort"
 	"strings"
 
@@ -86,6 +87,9 @@ func (s *Service) SaveServiceInterface(ctx context.Context, serviceInterface mar
 	if err := s.ensureBuiltInServiceDefinitionPersisted(ctx, service); err != nil {
 		return marketing.ServiceInterface{}, err
 	}
+	if err := s.validateServiceInterfaceSchemas(ctx, serviceInterface); err != nil {
+		return marketing.ServiceInterface{}, err
+	}
 	return s.repository.SaveServiceInterface(ctx, serviceInterface)
 }
 
@@ -160,6 +164,190 @@ func (s *Service) ListServiceProviders(ctx context.Context, query marketing.Serv
 	return providers, nil
 }
 
+func (s *Service) SaveServiceSchema(ctx context.Context, schema marketing.ServiceSchema) (marketing.ServiceSchema, error) {
+	now := s.now()
+	if schema.ID == "" {
+		schema.ID = marketing.NewID("svcschema")
+	}
+	if schema.Scope == "" {
+		schema.Scope = marketing.ServiceAssetScopeTenant
+	}
+	if schema.Version == 0 {
+		schema.Version = 1
+	}
+	if schema.Status == "" {
+		schema.Status = marketing.ServiceAssetActive
+	}
+	if schema.CreatedAt.IsZero() {
+		schema.CreatedAt = now
+	}
+	schema.UpdatedAt = now
+	if err := schema.Validate(); err != nil {
+		return marketing.ServiceSchema{}, err
+	}
+	validator := serviceSchemaValidator{service: s}
+	if err := validator.validateSchemaDocument(schema.SchemaJSON); err != nil {
+		return marketing.ServiceSchema{}, fmt.Errorf("SERVICE_SCHEMA_FORMAT_INVALID:%w", err)
+	}
+	if err := s.validateServiceSchemaCompatibility(ctx, schema); err != nil {
+		return marketing.ServiceSchema{}, err
+	}
+	return s.repository.SaveServiceSchema(ctx, schema)
+}
+
+func (s *Service) ListServiceSchemas(ctx context.Context, query marketing.ServiceSchemaQuery) ([]marketing.ServiceSchema, error) {
+	schemas, err := s.repository.ListServiceSchemas(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	for _, schema := range builtInServiceSchemas(firstNonEmpty(query.TenantID, "site_001")) {
+		if serviceSchemaMatchesQuery(schema, query) {
+			schemas = append([]marketing.ServiceSchema{schema}, schemas...)
+		}
+	}
+	return schemas, nil
+}
+
+func (s *Service) SaveServiceInterfaceBinding(ctx context.Context, binding marketing.ServiceInterfaceBinding) (marketing.ServiceInterfaceBinding, error) {
+	now := s.now()
+	if binding.ID == "" {
+		binding.ID = marketing.NewID("svcbind")
+	}
+	if binding.Scope == "" {
+		binding.Scope = marketing.ServiceAssetScopeWorkspace
+	}
+	if binding.Status == "" {
+		binding.Status = marketing.ServiceAssetActive
+	}
+	if len(binding.Metadata) == 0 {
+		binding.Metadata = json.RawMessage(`{}`)
+	}
+	if binding.CreatedAt.IsZero() {
+		binding.CreatedAt = now
+	}
+	binding.UpdatedAt = now
+	if err := binding.Validate(); err != nil {
+		return marketing.ServiceInterfaceBinding{}, err
+	}
+	serviceInterface, err := s.GetServiceInterface(ctx, binding.TenantID, binding.ServiceRef, binding.InterfaceRef)
+	if err != nil {
+		return marketing.ServiceInterfaceBinding{}, err
+	}
+	if err := s.ensureBuiltInServiceInterfacePersisted(ctx, serviceInterface); err != nil {
+		return marketing.ServiceInterfaceBinding{}, err
+	}
+	return s.repository.SaveServiceInterfaceBinding(ctx, binding)
+}
+
+func (s *Service) ListServiceInterfaceBindings(ctx context.Context, query marketing.ServiceInterfaceBindingQuery) ([]marketing.ServiceInterfaceBinding, error) {
+	return s.repository.ListServiceInterfaceBindings(ctx, query)
+}
+
+func (s *Service) getActiveServiceSchema(ctx context.Context, tenantID string, schemaRef string, schemaType marketing.ServiceSchemaType) (marketing.ServiceSchema, error) {
+	schemas, err := s.ListServiceSchemas(ctx, marketing.ServiceSchemaQuery{
+		TenantID:   strings.TrimSpace(tenantID),
+		SchemaRef:  strings.TrimSpace(schemaRef),
+		SchemaType: schemaType,
+		Status:     marketing.ServiceAssetActive,
+		Limit:      100,
+	})
+	if err != nil {
+		return marketing.ServiceSchema{}, err
+	}
+	var selected marketing.ServiceSchema
+	for _, schema := range schemas {
+		if schema.Status != marketing.ServiceAssetActive {
+			continue
+		}
+		if selected.ID == "" || schema.Version > selected.Version {
+			selected = schema
+		}
+	}
+	if selected.ID == "" {
+		return marketing.ServiceSchema{}, marketing.ErrNotFound
+	}
+	return selected, nil
+}
+
+func (s *Service) validateServiceInterfaceSchemas(ctx context.Context, serviceInterface marketing.ServiceInterface) error {
+	return (serviceSchemaValidator{service: s}).validateInterfaceSchemas(ctx, serviceInterface.TenantID, serviceInterface)
+}
+
+func (s *Service) validateServiceSchemaCompatibility(ctx context.Context, schema marketing.ServiceSchema) error {
+	if schema.Version <= 1 {
+		return nil
+	}
+	schemas, err := s.ListServiceSchemas(ctx, marketing.ServiceSchemaQuery{
+		TenantID:   schema.TenantID,
+		SchemaRef:  schema.SchemaRef,
+		SchemaType: schema.SchemaType,
+		Status:     marketing.ServiceAssetActive,
+		Limit:      100,
+	})
+	if err != nil {
+		return err
+	}
+	var previous marketing.ServiceSchema
+	for _, candidate := range schemas {
+		if candidate.Version >= schema.Version {
+			continue
+		}
+		if previous.ID == "" || candidate.Version > previous.Version {
+			previous = candidate
+		}
+	}
+	if previous.ID == "" {
+		return nil
+	}
+	if err := serviceSchemaCompatible(previous, schema); err != nil {
+		return fmt.Errorf("SERVICE_SCHEMA_INCOMPATIBLE:%s:%w", schema.SchemaRef, err)
+	}
+	return nil
+}
+
+type ServiceSchemaValidationResult struct {
+	Valid bool   `json:"valid"`
+	Code  string `json:"code,omitempty"`
+	Error string `json:"error,omitempty"`
+}
+
+type ServiceSchemaCompatibilityResult struct {
+	Compatible bool   `json:"compatible"`
+	Code       string `json:"code,omitempty"`
+	Error      string `json:"error,omitempty"`
+}
+
+func (s *Service) ValidateServiceSchemaDocument(schema marketing.ServiceSchema) ServiceSchemaValidationResult {
+	if err := schema.Validate(); err != nil {
+		return ServiceSchemaValidationResult{Valid: false, Code: "SERVICE_SCHEMA_INVALID", Error: err.Error()}
+	}
+	if err := (serviceSchemaValidator{service: s}).validateSchemaDocument(schema.SchemaJSON); err != nil {
+		return ServiceSchemaValidationResult{Valid: false, Code: "SERVICE_SCHEMA_FORMAT_INVALID", Error: err.Error()}
+	}
+	if len(schema.ExamplesJSON) > 0 {
+		var examples []any
+		if err := json.Unmarshal(schema.ExamplesJSON, &examples); err == nil {
+			validator := serviceSchemaValidator{service: s}
+			for index, example := range examples {
+				if err := validator.validatePayload(schema.SchemaJSON, example); err != nil {
+					return ServiceSchemaValidationResult{Valid: false, Code: "SERVICE_SCHEMA_EXAMPLE_INVALID", Error: fmt.Sprintf("examplesJson[%d]: %v", index, err)}
+				}
+			}
+		}
+	}
+	return ServiceSchemaValidationResult{Valid: true}
+}
+
+func (s *Service) CheckServiceSchemaCompatibility(ctx context.Context, schema marketing.ServiceSchema) ServiceSchemaCompatibilityResult {
+	if result := s.ValidateServiceSchemaDocument(schema); !result.Valid {
+		return ServiceSchemaCompatibilityResult{Compatible: false, Code: result.Code, Error: result.Error}
+	}
+	if err := s.validateServiceSchemaCompatibility(ctx, schema); err != nil {
+		return ServiceSchemaCompatibilityResult{Compatible: false, Code: "SERVICE_SCHEMA_INCOMPATIBLE", Error: err.Error()}
+	}
+	return ServiceSchemaCompatibilityResult{Compatible: true}
+}
+
 func (s *Service) ResolveServiceProvider(ctx context.Context, tenantID string, serviceRef string, interfaceRef string, providerRef string, providerPolicy string) (marketing.ServiceInterface, marketing.ServiceProvider, error) {
 	serviceInterface, providers, err := s.ResolveServiceProviders(ctx, tenantID, serviceRef, interfaceRef, providerRef, providerPolicy)
 	if err != nil {
@@ -172,7 +360,31 @@ func (s *Service) ResolveServiceProvider(ctx context.Context, tenantID string, s
 }
 
 func (s *Service) ResolveServiceProviders(ctx context.Context, tenantID string, serviceRef string, interfaceRef string, providerRef string, providerPolicy string) (marketing.ServiceInterface, []marketing.ServiceProvider, error) {
-	policy := strings.ToUpper(strings.TrimSpace(providerPolicy))
+	return s.resolveServiceProviders(ctx, serviceProviderResolveRequest{
+		TenantID:       tenantID,
+		ServiceRef:     serviceRef,
+		InterfaceRef:   interfaceRef,
+		ProviderRef:    providerRef,
+		ProviderPolicy: providerPolicy,
+	})
+}
+
+type serviceProviderResolveRequest struct {
+	TenantID       string
+	ServiceRef     string
+	InterfaceRef   string
+	ProviderRef    string
+	ProviderPolicy string
+	Environment    string
+	SeedParts      []string
+}
+
+func (s *Service) resolveServiceProviders(ctx context.Context, req serviceProviderResolveRequest) (marketing.ServiceInterface, []marketing.ServiceProvider, error) {
+	tenantID := strings.TrimSpace(req.TenantID)
+	serviceRef := strings.TrimSpace(req.ServiceRef)
+	interfaceRef := strings.TrimSpace(req.InterfaceRef)
+	providerRef := strings.TrimSpace(req.ProviderRef)
+	policy := strings.ToUpper(strings.TrimSpace(req.ProviderPolicy))
 	if policy == "" {
 		policy = "PRIMARY"
 	}
@@ -194,6 +406,22 @@ func (s *Service) ResolveServiceProviders(ctx context.Context, tenantID string, 
 		if provider.Status != marketing.ServiceAssetActive {
 			return marketing.ServiceInterface{}, nil, errors.New("SERVICE_PROVIDER_DISABLED")
 		}
+		if !serviceProviderEnvironmentAllowed(provider, req.Environment) {
+			return marketing.ServiceInterface{}, nil, fmt.Errorf("SERVICE_PROVIDER_ENVIRONMENT_DENIED:%s", provider.Code)
+		}
+		if err := serviceProviderMockAllowed(provider, policy); err != nil {
+			return marketing.ServiceInterface{}, nil, err
+		}
+		available, code, message, err := s.serviceProviderRuntimeAvailable(ctx, provider)
+		if err != nil {
+			return marketing.ServiceInterface{}, nil, err
+		}
+		if !available {
+			if message != "" {
+				return marketing.ServiceInterface{}, nil, fmt.Errorf("%s:%s", code, message)
+			}
+			return marketing.ServiceInterface{}, nil, errors.New(code)
+		}
 		return serviceInterface, []marketing.ServiceProvider{provider}, nil
 	}
 	providers, err := s.ListServiceProviders(ctx, marketing.ServiceProviderQuery{
@@ -207,19 +435,55 @@ func (s *Service) ResolveServiceProviders(ctx context.Context, tenantID string, 
 		return marketing.ServiceInterface{}, nil, err
 	}
 	providers = filterServiceProviderCandidates(providers, policy)
+	providers = filterServiceProviderEnvironmentCandidates(providers, req.Environment)
+	providers, err = s.filterServiceProviderRuntimeCandidates(ctx, providers)
+	if err != nil {
+		return marketing.ServiceInterface{}, nil, err
+	}
 	if len(providers) == 0 {
 		return marketing.ServiceInterface{}, nil, marketing.ErrNotFound
 	}
 	sortServiceProviderCandidates(providers)
-	if policy == "PRIMARY" || policy == "WEIGHTED" || policy == "ENVIRONMENT_MATCH" || policy == "MOCK_ONLY" {
+	if policy == "WEIGHTED" || policy == "WEIGHTED_WITH_FALLBACK" {
+		selected, err := selectWeightedServiceProvider(providers, serviceProviderSelectionSeed(req, providers))
+		if err != nil {
+			return marketing.ServiceInterface{}, nil, err
+		}
+		if policy == "WEIGHTED_WITH_FALLBACK" {
+			out := []marketing.ServiceProvider{selected}
+			for _, provider := range providers {
+				if provider.Code != selected.Code {
+					out = append(out, provider)
+				}
+			}
+			return serviceInterface, out, nil
+		}
+		return serviceInterface, []marketing.ServiceProvider{selected}, nil
+	}
+	if policy == "PRIMARY" || policy == "ENVIRONMENT_MATCH" || policy == "MOCK_ONLY" {
 		return serviceInterface, providers[:1], nil
 	}
 	return serviceInterface, providers, nil
 }
 
+func (s *Service) filterServiceProviderRuntimeCandidates(ctx context.Context, providers []marketing.ServiceProvider) ([]marketing.ServiceProvider, error) {
+	out := make([]marketing.ServiceProvider, 0, len(providers))
+	for _, provider := range providers {
+		available, _, _, err := s.serviceProviderRuntimeAvailable(ctx, provider)
+		if err != nil {
+			return nil, err
+		}
+		if !available {
+			continue
+		}
+		out = append(out, provider)
+	}
+	return out, nil
+}
+
 func serviceProviderPolicySupported(policy string) bool {
 	switch strings.ToUpper(strings.TrimSpace(policy)) {
-	case "", "PRIMARY", "PRIMARY_WITH_FALLBACK", "WEIGHTED", "ENVIRONMENT_MATCH", "MOCK_ONLY":
+	case "", "PRIMARY", "PRIMARY_WITH_FALLBACK", "WEIGHTED", "WEIGHTED_WITH_FALLBACK", "ENVIRONMENT_MATCH", "MOCK_ONLY":
 		return true
 	default:
 		return false
@@ -237,14 +501,41 @@ func filterServiceProviderCandidates(providers []marketing.ServiceProvider, poli
 			if !serviceProviderMockEnabled(provider) {
 				continue
 			}
-		case "WEIGHTED":
-			if provider.Weight <= 0 {
+		case "WEIGHTED", "WEIGHTED_WITH_FALLBACK":
+			if serviceProviderMockEnabled(provider) || provider.Weight <= 0 {
+				continue
+			}
+		default:
+			if serviceProviderMockEnabled(provider) {
 				continue
 			}
 		}
 		out = append(out, provider)
 	}
 	return out
+}
+
+func filterServiceProviderEnvironmentCandidates(providers []marketing.ServiceProvider, environment string) []marketing.ServiceProvider {
+	target := normalizeServiceProviderEnvironment(environment)
+	exact := make([]marketing.ServiceProvider, 0, len(providers))
+	fallback := make([]marketing.ServiceProvider, 0, len(providers))
+	for _, provider := range providers {
+		providerEnv := normalizeServiceProviderEnvironment(provider.Environment)
+		if serviceProviderDefaultEnvironment(providerEnv) {
+			fallback = append(fallback, provider)
+			continue
+		}
+		if target != "" && providerEnv == target {
+			exact = append(exact, provider)
+		}
+	}
+	if target == "" {
+		return fallback
+	}
+	if len(exact) > 0 {
+		return exact
+	}
+	return fallback
 }
 
 func sortServiceProviderCandidates(providers []marketing.ServiceProvider) {
@@ -261,6 +552,9 @@ func sortServiceProviderCandidates(providers []marketing.ServiceProvider) {
 }
 
 func serviceProviderMockEnabled(provider marketing.ServiceProvider) bool {
+	if normalizeServiceProviderEnvironment(provider.Environment) == "mock" {
+		return true
+	}
 	var config map[string]any
 	if len(provider.Config) == 0 || json.Unmarshal(provider.Config, &config) != nil {
 		return false
@@ -272,6 +566,90 @@ func serviceProviderMockEnabled(provider marketing.ServiceProvider) bool {
 		return enabled
 	}
 	return false
+}
+
+func serviceProviderMockAllowed(provider marketing.ServiceProvider, policy string) error {
+	mock := serviceProviderMockEnabled(provider)
+	if strings.EqualFold(strings.TrimSpace(policy), "MOCK_ONLY") {
+		if !mock {
+			return fmt.Errorf("SERVICE_PROVIDER_MOCK_REQUIRED:%s", provider.Code)
+		}
+		return nil
+	}
+	if mock {
+		return fmt.Errorf("SERVICE_PROVIDER_MOCK_DENIED:%s", provider.Code)
+	}
+	return nil
+}
+
+func serviceProviderEnvironmentAllowed(provider marketing.ServiceProvider, environment string) bool {
+	providerEnv := normalizeServiceProviderEnvironment(provider.Environment)
+	target := normalizeServiceProviderEnvironment(environment)
+	if serviceProviderDefaultEnvironment(providerEnv) {
+		return true
+	}
+	return target != "" && providerEnv == target
+}
+
+func normalizeServiceProviderEnvironment(environment string) string {
+	return strings.ToLower(strings.TrimSpace(environment))
+}
+
+func serviceProviderDefaultEnvironment(environment string) bool {
+	switch normalizeServiceProviderEnvironment(environment) {
+	case "", "default":
+		return true
+	default:
+		return false
+	}
+}
+
+func selectWeightedServiceProvider(providers []marketing.ServiceProvider, seed string) (marketing.ServiceProvider, error) {
+	total := 0
+	for _, provider := range providers {
+		if provider.Weight > 0 {
+			total += provider.Weight
+		}
+	}
+	if total <= 0 {
+		return marketing.ServiceProvider{}, errors.New("SERVICE_PROVIDER_WEIGHT_INVALID")
+	}
+	bucket := serviceProviderSelectionBucket(seed, total)
+	cursor := 0
+	for _, provider := range providers {
+		if provider.Weight <= 0 {
+			continue
+		}
+		cursor += provider.Weight
+		if bucket < cursor {
+			return provider, nil
+		}
+	}
+	return providers[len(providers)-1], nil
+}
+
+func serviceProviderSelectionBucket(seed string, total int) int {
+	if total <= 0 {
+		return 0
+	}
+	hash := fnv.New64a()
+	_, _ = hash.Write([]byte(seed))
+	return int(hash.Sum64() % uint64(total))
+}
+
+func serviceProviderSelectionSeed(req serviceProviderResolveRequest, providers []marketing.ServiceProvider) string {
+	parts := []string{
+		strings.TrimSpace(req.TenantID),
+		strings.TrimSpace(req.ServiceRef),
+		strings.TrimSpace(req.InterfaceRef),
+		strings.ToUpper(strings.TrimSpace(req.ProviderPolicy)),
+		normalizeServiceProviderEnvironment(req.Environment),
+	}
+	parts = append(parts, req.SeedParts...)
+	for _, provider := range providers {
+		parts = append(parts, provider.Code, fmt.Sprint(provider.Weight))
+	}
+	return strings.Join(parts, "|")
 }
 
 func (s *Service) ensureBuiltInServiceDefinitionPersisted(ctx context.Context, service marketing.ServiceDefinition) error {
@@ -384,6 +762,32 @@ func builtInServiceInterface(tenantID string, serviceRef string, code string) (m
 	return marketing.ServiceInterface{}, false
 }
 
+func builtInServiceSchemas(tenantID string) []marketing.ServiceSchema {
+	return []marketing.ServiceSchema{
+		builtInServiceSchema(tenantID, "user-profile-query-v1", marketing.ServiceSchemaInput, `{"type":"object","required":["factKeys"],"properties":{"factKeys":{"type":"array","items":{"type":"string"}}}}`),
+		builtInServiceSchema(tenantID, "user-profile-v1", marketing.ServiceSchemaOutput, `{"type":"object","required":["facts"],"properties":{"facts":{"type":"object","additionalProperties":true}}}`),
+		builtInServiceSchema(tenantID, "kyc-profile-query-v1", marketing.ServiceSchemaInput, `{"type":"object","required":["factKeys"],"properties":{"factKeys":{"type":"array","items":{"type":"string"}}}}`),
+		builtInServiceSchema(tenantID, "kyc-profile-v1", marketing.ServiceSchemaOutput, `{"type":"object","required":["facts"],"properties":{"facts":{"type":"object","additionalProperties":true}}}`),
+		builtInServiceSchema(tenantID, "risk-profile-query-v1", marketing.ServiceSchemaInput, `{"type":"object","required":["factKeys"],"properties":{"factKeys":{"type":"array","items":{"type":"string"}}}}`),
+		builtInServiceSchema(tenantID, "risk-profile-v1", marketing.ServiceSchemaOutput, `{"type":"object","required":["facts"],"properties":{"facts":{"type":"object","additionalProperties":true}}}`),
+	}
+}
+
+func builtInServiceSchema(tenantID string, schemaRef string, schemaType marketing.ServiceSchemaType, schemaJSON string) marketing.ServiceSchema {
+	return marketing.ServiceSchema{
+		ID:           builtInServiceAssetID(tenantID, schemaRef),
+		TenantID:     tenantID,
+		SchemaRef:    schemaRef,
+		SchemaType:   schemaType,
+		Scope:        marketing.ServiceAssetScopeTenant,
+		Version:      1,
+		Status:       marketing.ServiceAssetActive,
+		SchemaJSON:   json.RawMessage(schemaJSON),
+		ExamplesJSON: json.RawMessage(`[]`),
+		Description:  "built-in service schema",
+	}
+}
+
 func builtInServiceProviders(tenantID string) []marketing.ServiceProvider {
 	return []marketing.ServiceProvider{
 		builtInResourceBackedProvider(tenantID, "user-profile-service", "query-user-profile", "user-profile-provider-primary", defaultUserProfileProvider),
@@ -440,4 +844,13 @@ func serviceProviderMatchesQuery(provider marketing.ServiceProvider, query marke
 		(query.Protocol == "" || provider.Protocol == query.Protocol) &&
 		(query.Status == "" || provider.Status == query.Status) &&
 		(query.Code == "" || provider.Code == query.Code)
+}
+
+func serviceSchemaMatchesQuery(schema marketing.ServiceSchema, query marketing.ServiceSchemaQuery) bool {
+	return (query.TenantID == "" || schema.TenantID == query.TenantID) &&
+		(query.WorkspaceID == "" || schema.WorkspaceID == query.WorkspaceID) &&
+		(query.FolderID == "" || schema.FolderID == query.FolderID) &&
+		(query.SchemaRef == "" || schema.SchemaRef == query.SchemaRef) &&
+		(query.SchemaType == "" || schema.SchemaType == query.SchemaType) &&
+		(query.Status == "" || schema.Status == query.Status)
 }

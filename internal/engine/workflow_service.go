@@ -131,7 +131,7 @@ func (s *Service) PublishWorkflowVersion(ctx context.Context, activityID string,
 		}
 		return marketing.WorkflowVersion{}, err
 	}
-	if validation := s.validateWorkflowBeforePublish(draft.Definition); !validation.Valid {
+	if validation := s.validateWorkflowBeforePublish(ctx, activity, draft.Definition); !validation.Valid {
 		return marketing.WorkflowVersion{}, errors.Join(marketing.ErrInvalidWorkflow, errors.New(workflowValidationMessage(validation)))
 	}
 	definition, err := marketing.NormalizeWorkflowDefinition(draft.Definition)
@@ -163,8 +163,12 @@ func (s *Service) PublishWorkflowVersion(ctx context.Context, activityID string,
 	return created, nil
 }
 
-func (s *Service) validateWorkflowBeforePublish(definition json.RawMessage) marketing.WorkflowValidationResult {
-	return s.workflowValidator.ValidateDefinition(definition)
+func (s *Service) validateWorkflowBeforePublish(ctx context.Context, activity marketing.Activity, definition json.RawMessage) marketing.WorkflowValidationResult {
+	validation := s.workflowValidator.ValidateDefinition(definition)
+	if !validation.Valid {
+		return validation
+	}
+	return s.validateWorkflowServiceSchemaContracts(ctx, activity, definition, validation)
 }
 
 func (s *Service) ListWorkflowVersions(ctx context.Context, activityID string) ([]marketing.WorkflowVersion, error) {
@@ -185,7 +189,7 @@ func (s *Service) RollbackWorkflowVersion(ctx context.Context, activityID string
 	if err != nil {
 		return marketing.WorkflowVersion{}, err
 	}
-	if validation := s.validateWorkflowBeforePublish(source.Definition); !validation.Valid {
+	if validation := s.validateWorkflowBeforePublish(ctx, activity, source.Definition); !validation.Valid {
 		return marketing.WorkflowVersion{}, errors.Join(marketing.ErrInvalidWorkflow, errors.New(workflowValidationMessage(validation)))
 	}
 	definition, err := marketing.NormalizeWorkflowDefinition(source.Definition)

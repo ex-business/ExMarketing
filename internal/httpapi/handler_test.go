@@ -2102,6 +2102,98 @@ func TestServiceAssetAdminAPIs(t *testing.T) {
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"reward-command-mq-primary"`) {
 		t.Fatalf("list providers failed: %d %s", rec.Code, rec.Body.String())
 	}
+
+	bindingBody := `{
+		"tenantId":"site_001",
+		"serviceRef":"reward-grant-service",
+		"interfaceRef":"publish-reward-command",
+		"scope":"TENANT",
+		"principalType":"ROLE",
+		"principalId":"ops",
+		"allowedOperations":["PUBLISH"],
+		"allowedProviderPolicies":["PRIMARY"],
+		"status":"ACTIVE"
+	}`
+	req = httptest.NewRequest(http.MethodPost, "/admin/v1/service-interface-bindings?tenantId=site_001", strings.NewReader(bindingBody))
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	handler.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"principalId":"ops"`) {
+		t.Fatalf("save binding failed: %d %s", rec.Code, rec.Body.String())
+	}
+
+	checkBody := `{
+		"tenantId":"site_001",
+		"operation":"PUBLISH",
+		"providerPolicy":"PRIMARY"
+	}`
+	req = httptest.NewRequest(http.MethodPost, "/admin/v1/services/reward-grant-service/interfaces/publish-reward-command/bindings/check?tenantId=site_001", strings.NewReader(checkBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Actor-Roles", "ops")
+	req.Header.Set("X-Request-Id", "req-binding-check")
+	rec = httptest.NewRecorder()
+	handler.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"allowed":true`) || !strings.Contains(rec.Body.String(), `"requestId":"req-binding-check"`) {
+		t.Fatalf("binding check failed: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestServiceCallAuditListAndPurgeAPIs(t *testing.T) {
+	repo := marketing.NewMemoryRepository()
+	handler := newTestHandlerWithRepository(repo)
+	workspace := createTestWorkspace(t, handler, "ops")
+	now := time.Date(2026, 6, 24, 10, 0, 0, 0, time.UTC)
+	for _, log := range []marketing.ServiceCallAuditLog{
+		{ID: "audit-old", TenantID: "site_001", WorkspaceID: workspace.ID, ServiceRef: "svc", InterfaceRef: "iface", Status: marketing.ServiceCallAuditSuccess, LatencyMS: 1, CreatedAt: now.Add(-48 * time.Hour)},
+		{ID: "audit-new", TenantID: "site_001", WorkspaceID: workspace.ID, ServiceRef: "svc", InterfaceRef: "iface", Status: marketing.ServiceCallAuditFailed, ErrorCode: "BOOM", LatencyMS: 2, CreatedAt: now},
+	} {
+		if err := repo.CreateServiceCallAuditLog(context.Background(), log); err != nil {
+			t.Fatalf("create audit log: %v", err)
+		}
+	}
+	req := httptest.NewRequest(http.MethodGet, "/admin/v1/service-call-audit-logs?tenantId=site_001&workspaceId="+workspace.ID+"&limit=1", nil)
+	req.Header.Set("X-Actor-Id", "ops")
+	req.Header.Set("X-Request-Id", "req-audit-list")
+	rec := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"id":"audit-new"`) || !strings.Contains(rec.Body.String(), `"nextCursor"`) || !strings.Contains(rec.Body.String(), `"requestId":"req-audit-list"`) {
+		t.Fatalf("list service call audit failed: %d %s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/admin/v1/service-call-audit-logs?tenantId=site_001&limit=1", nil)
+	req.Header.Set("X-Actor-Id", "ops")
+	rec = httptest.NewRecorder()
+	handler.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "workspaceId is required") {
+		t.Fatalf("expected missing workspaceId rejection, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	purgeBody := `{"tenantId":"site_001","workspaceId":"` + workspace.ID + `","before":"` + now.Add(-24*time.Hour).Format(time.RFC3339) + `","limit":100}`
+	req = httptest.NewRequest(http.MethodPost, "/admin/v1/service-call-audit-logs/purge?tenantId=site_001", strings.NewReader(purgeBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Request-Id", "req-audit-purge")
+	rec = httptest.NewRecorder()
+	handler.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected purge without workspace admin to be forbidden, got %d %s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/admin/v1/service-call-audit-logs/purge?tenantId=site_001", strings.NewReader(purgeBody))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Actor-Id", "ops")
+	req.Header.Set("X-Request-Id", "req-audit-purge")
+	rec = httptest.NewRecorder()
+	handler.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"deleted":1`) || !strings.Contains(rec.Body.String(), `"requestId":"req-audit-purge"`) {
+		t.Fatalf("purge service call audit failed: %d %s", rec.Code, rec.Body.String())
+	}
+	logs, err := repo.ListServiceCallAuditLogs(context.Background(), marketing.ServiceCallAuditQuery{TenantID: "site_001", Limit: 10})
+	if err != nil {
+		t.Fatalf("list audit logs after purge: %v", err)
+	}
+	if len(logs) != 1 || logs[0].ID != "audit-new" {
+		t.Fatalf("expected only new audit after purge, got %+v", logs)
+	}
 }
 
 func TestCreateActivityValidatesFactProviderReferences(t *testing.T) {

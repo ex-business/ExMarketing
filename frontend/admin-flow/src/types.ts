@@ -593,6 +593,123 @@ export type ServiceProviderSummary = {
   updatedAt?: string;
 };
 
+export type ServiceSchemaSummary = {
+  id: string;
+  tenantId: string;
+  workspaceId?: string;
+  folderId?: string;
+  schemaRef: string;
+  schemaType: 'INPUT' | 'OUTPUT' | 'ERROR' | string;
+  scope: string;
+  version: number;
+  status: string;
+  schemaJson: unknown;
+  examplesJson?: unknown;
+  description?: string;
+  createdBy?: string;
+  updatedBy?: string;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type ServiceInterfaceBindingSummary = {
+  id: string;
+  tenantId: string;
+  serviceRef: string;
+  interfaceRef: string;
+  scope: string;
+  workspaceId?: string;
+  folderId?: string;
+  activityId?: string;
+  nodeId?: string;
+  principalType: string;
+  principalId: string;
+  allowedNodeTypes?: string[];
+  allowedOperations?: string[];
+  allowedProviderPolicies?: string[];
+  allowExplicitProviderRef?: boolean;
+  allowedProviderRefs?: string[];
+  luaCallable?: boolean;
+  requireApproval?: boolean;
+  deny?: boolean;
+  status: string;
+  metadata?: Record<string, unknown>;
+  createdBy?: string;
+  updatedBy?: string;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type ServiceProviderRuntimeStateSummary = {
+  id: string;
+  tenantId: string;
+  serviceRef: string;
+  interfaceRef: string;
+  providerRef: string;
+  healthStatus: string;
+  healthMessage?: string;
+  circuitStatus: string;
+  failureCount: number;
+  successCount: number;
+  consecutiveFailures: number;
+  rateLimitWindow?: string;
+  rateLimitCount: number;
+  halfOpenProbeCount?: number;
+  halfOpenProbeLimit?: number;
+  halfOpenSuccessCount?: number;
+  halfOpenSuccessThreshold?: number;
+  lastFailureAt?: string;
+  lastSuccessAt?: string;
+  circuitOpenedAt?: string;
+  circuitResetAt?: string;
+  metadata?: Record<string, unknown>;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type ServiceCallAuditLogSummary = {
+  id: string;
+  tenantId: string;
+  workspaceId?: string;
+  folderId?: string;
+  activityId?: string;
+  workflowId?: string;
+  nodeId?: string;
+  nodeType?: string;
+  serviceRef: string;
+  interfaceRef: string;
+  providerRef?: string;
+  resourceRef?: string;
+  stepId?: string;
+  attempt?: number;
+  status: string;
+  errorCode?: string;
+  errorMessage?: string;
+  latencyMs?: number;
+  requestHash?: string;
+  responseHash?: string;
+  providerTrace?: Record<string, unknown>;
+  schemaTrace?: Record<string, unknown>;
+  permissionTrace?: Record<string, unknown>;
+  actor?: string;
+  createdAt?: string;
+};
+
+export type ServiceCallAuditListResponse = {
+  items: ServiceCallAuditLogSummary[];
+  nextCursor?: string;
+  limit?: number;
+  requestId?: string;
+};
+
+export type ServiceInterfaceBindingCheckResult = {
+  allowed: boolean;
+  code?: string;
+  message?: string;
+  matchedBindingIds?: string[];
+  requestId?: string;
+};
+
 export type WorkflowNodeInputVar = {
   key: string;
   label: string;

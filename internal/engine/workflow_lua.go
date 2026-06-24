@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -23,16 +24,17 @@ const (
 )
 
 func executeWorkflowLua(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime, source string) (map[string]any, error) {
-	return executeWorkflowLuaWithResourceAPI(ctx, node, runtime, source, nil)
+	return executeWorkflowLuaWithResourceAPI(ctx, node, runtime, source, nil, nil)
 }
 
 func (s *Service) executeWorkflowLua(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime, source string) (map[string]any, error) {
-	return executeWorkflowLuaWithResourceAPI(ctx, node, runtime, source, s.workflowLuaResourceAPI)
+	return executeWorkflowLuaWithResourceAPI(ctx, node, runtime, source, s.workflowLuaResourceAPI, s.workflowLuaServiceAPI)
 }
 
 type workflowLuaResourceAPI func(context.Context, marketing.WorkflowNode, workflowRuntime, marketing.ResourceOperation, string, string, any, map[string]any) (map[string]any, error)
+type workflowLuaServiceAPI func(context.Context, marketing.WorkflowNode, workflowRuntime, string, string, any, map[string]any) (map[string]any, error)
 
-func executeWorkflowLuaWithResourceAPI(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime, source string, resourceAPI workflowLuaResourceAPI) (map[string]any, error) {
+func executeWorkflowLuaWithResourceAPI(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime, source string, resourceAPI workflowLuaResourceAPI, serviceAPI workflowLuaServiceAPI) (map[string]any, error) {
 	executionContext, _ := ctx.Value(workflowNodeExecutionContextKey{}).(workflowNodeExecutionContext)
 	state := lua.NewState(lua.Options{SkipOpenLibs: true})
 	defer state.Close()
@@ -227,6 +229,7 @@ func executeWorkflowLuaWithResourceAPI(ctx context.Context, node marketing.Workf
 		return 1
 	}))
 	resourceCall := registerLuaResourceFunctions(ctx, state, node, runtime, resourceAPI)
+	registerLuaServiceFunctions(ctx, state, node, runtime, serviceAPI)
 	registerLuaDecimalFunctions(state)
 	registerLuaTimeFunctions(state)
 	ctxValue := workflowLuaContext(ctx, node, runtime)
@@ -253,7 +256,7 @@ func executeWorkflowLuaWithResourceAPI(ctx context.Context, node marketing.Workf
 }
 
 func (s *Service) workflowLuaResourceAPI(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime, operation marketing.ResourceOperation, resourceRef string, key string, value any, options map[string]any) (map[string]any, error) {
-	return s.workflowExecuteResourceAPI(ctx, node, runtime, workflowResourceAPIRequest{
+	return newWorkflowResourceOperator(s).ExecuteResourceAPI(ctx, node, runtime, workflowResourceAPIRequest{
 		Operation:   operation,
 		ResourceRef: resourceRef,
 		Namespace:   workflowConfigString(options, "namespace"),
@@ -262,6 +265,45 @@ func (s *Service) workflowLuaResourceAPI(ctx context.Context, node marketing.Wor
 		ValueType:   firstWorkflowString(workflowConfigString(options, "valueType"), "OBJECT"),
 		Options:     options,
 	})
+}
+
+func (s *Service) workflowLuaServiceAPI(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime, serviceRef string, interfaceRef string, payload any, options map[string]any) (map[string]any, error) {
+	step := workflowFactQueryProviderStep{
+		Source:         "SERVICE_INTERFACE",
+		ServiceRef:     serviceRef,
+		InterfaceRef:   interfaceRef,
+		ProviderRef:    workflowConfigString(options, "providerRef"),
+		ProviderPolicy: firstWorkflowString(workflowConfigString(options, "providerPolicy"), "PRIMARY"),
+		Environment:    firstWorkflowString(workflowConfigString(options, "environment"), workflowConfigString(options, "runtimeEnvironment")),
+	}
+	remaining := workflowLuaServiceFactKeys(payload)
+	result := NewProviderChainExecutor(s, nil).ExecuteServiceInterfaceFactQuery(ctx, providerChainServiceFactRequest{
+		Node:      node,
+		Runtime:   runtime,
+		Config:    workflowNodeConfigMap(node),
+		Step:      step,
+		Remaining: remaining,
+		Request:   workflowJSONValue(payload),
+		Facts:     map[string]any{},
+		Responses: []any{},
+		LuaCall:   true,
+	})
+	if result.Result.Status == marketing.WorkflowNodeFailed {
+		return map[string]any{"error": result.Result.Error, "output": result.Result.Output, "traces": result.Traces}, errors.New(result.Result.Error)
+	}
+	return map[string]any{"facts": result.Facts, "responses": result.Responses, "traces": result.Traces}, nil
+}
+
+func workflowLuaServiceFactKeys(payload any) []string {
+	mapped, _ := workflowJSONValue(payload).(map[string]any)
+	values := workflowConfigStringList(mapped, "factKeys")
+	if len(values) > 0 {
+		return values
+	}
+	if factCode := workflowConfigString(mapped, "factCode"); factCode != "" {
+		return []string{factCode}
+	}
+	return nil
 }
 
 type workflowLuaResourceCall func(*lua.LState, marketing.ResourceOperation, string, string, any, map[string]any) lua.LValue
@@ -340,6 +382,31 @@ func registerLuaResourceFunctions(ctx context.Context, state *lua.LState, node m
 		return call(l, marketing.ResourcePublish, 3)
 	}))
 	return callResource
+}
+
+func registerLuaServiceFunctions(ctx context.Context, state *lua.LState, node marketing.WorkflowNode, runtime workflowRuntime, serviceAPI workflowLuaServiceAPI) {
+	state.SetGlobal("service_call", state.NewFunction(func(l *lua.LState) int {
+		if serviceAPI == nil {
+			l.RaiseError("workflow service api is not available")
+			return 0
+		}
+		serviceRef := l.CheckString(1)
+		interfaceRef := l.CheckString(2)
+		payload := luaValueToGo(l.CheckAny(3))
+		options := map[string]any{}
+		if l.GetTop() >= 4 {
+			if mapped, ok := luaValueToGo(l.CheckAny(4)).(map[string]any); ok {
+				options = mapped
+			}
+		}
+		output, err := serviceAPI(ctx, node, runtime, serviceRef, interfaceRef, payload, options)
+		if err != nil {
+			l.RaiseError("%s", err.Error())
+			return 0
+		}
+		l.Push(goValueToLua(state, output))
+		return 1
+	}))
 }
 
 func registerLuaConvenienceObjects(ctx context.Context, state *lua.LState, node marketing.WorkflowNode, runtime workflowRuntime, ctxTable lua.LValue, resourceCall workflowLuaResourceCall) {

@@ -54,8 +54,14 @@ import type {
   ResourceBindingSummary,
   ResourceSummary,
   ServiceDefinitionSummary,
+  ServiceCallAuditListResponse,
+  ServiceCallAuditLogSummary,
+  ServiceInterfaceBindingCheckResult,
+  ServiceInterfaceBindingSummary,
   ServiceInterfaceSummary,
+  ServiceProviderRuntimeStateSummary,
   ServiceProviderSummary,
+  ServiceSchemaSummary,
   StudioFolderPatch,
   WorkspaceActivityGrantSummary,
   WorkspaceAuditLogSummary,
@@ -2403,6 +2409,12 @@ function StudioActivityStart({
   const [services, setServices] = useState<ServiceDefinitionSummary[]>([]);
   const [serviceInterfaces, setServiceInterfaces] = useState<ServiceInterfaceSummary[]>([]);
   const [serviceProviders, setServiceProviders] = useState<ServiceProviderSummary[]>([]);
+  const [serviceSchemas, setServiceSchemas] = useState<ServiceSchemaSummary[]>([]);
+  const [serviceInterfaceBindings, setServiceInterfaceBindings] = useState<ServiceInterfaceBindingSummary[]>([]);
+  const [serviceCallAudits, setServiceCallAudits] = useState<ServiceCallAuditLogSummary[]>([]);
+  const [serviceCallAuditNextCursor, setServiceCallAuditNextCursor] = useState('');
+  const [serviceCallAuditRequestId, setServiceCallAuditRequestId] = useState('');
+  const [serviceProviderRuntimeStates, setServiceProviderRuntimeStates] = useState<Record<string, ServiceProviderRuntimeStateSummary | undefined>>({});
   const [servicesLoading, setServicesLoading] = useState(false);
   const [selectedServiceCode, setSelectedServiceCode] = useState('');
   const [selectedInterfaceCode, setSelectedInterfaceCode] = useState('');
@@ -3122,12 +3134,66 @@ function StudioActivityStart({
   const refreshServiceProviders = useCallback(async (serviceCode: string, interfaceCode: string) => {
     if (!serviceCode || !interfaceCode) {
       setServiceProviders([]);
+      setServiceProviderRuntimeStates({});
       return;
     }
     const tenantId = selectedWorkspace?.tenantId || 'site_001';
     const body = await fetchJSON<{ items: ServiceProviderSummary[] }>(`/admin/v1/services/${encodeURIComponent(serviceCode)}/interfaces/${encodeURIComponent(interfaceCode)}/providers?tenantId=${encodeURIComponent(tenantId)}&limit=100`);
-    setServiceProviders(body.items ?? []);
+    const items = body.items ?? [];
+    setServiceProviders(items);
+    const states = await Promise.all(items.map(async (provider) => {
+      try {
+        const state = await fetchJSON<ServiceProviderRuntimeStateSummary>(`/admin/v1/services/${encodeURIComponent(serviceCode)}/interfaces/${encodeURIComponent(interfaceCode)}/providers/${encodeURIComponent(provider.code)}/runtime-state?tenantId=${encodeURIComponent(tenantId)}`);
+        return [provider.code, state] as const;
+      } catch (error) {
+        if (isAPIError(error) && error.status === 404) return [provider.code, undefined] as const;
+        throw error;
+      }
+    }));
+    setServiceProviderRuntimeStates(Object.fromEntries(states));
   }, [selectedWorkspace?.tenantId]);
+  const refreshServiceSchemas = useCallback(async () => {
+    const params = new URLSearchParams();
+    params.set('tenantId', selectedWorkspace?.tenantId || 'site_001');
+    params.set('limit', '500');
+    const body = await fetchJSON<{ items: ServiceSchemaSummary[] }>(`/admin/v1/service-schemas?${params.toString()}`);
+    setServiceSchemas(body.items ?? []);
+  }, [selectedWorkspace?.tenantId]);
+  const refreshServiceInterfaceBindings = useCallback(async (serviceCode = selectedServiceCode, interfaceCode = selectedInterfaceCode) => {
+    const params = new URLSearchParams();
+    params.set('tenantId', selectedWorkspace?.tenantId || 'site_001');
+    params.set('limit', '500');
+    if (serviceCode) params.set('serviceRef', serviceCode);
+    if (interfaceCode) params.set('interfaceRef', interfaceCode);
+    const body = await fetchJSON<{ items: ServiceInterfaceBindingSummary[] }>(`/admin/v1/service-interface-bindings?${params.toString()}`);
+    setServiceInterfaceBindings(body.items ?? []);
+  }, [selectedInterfaceCode, selectedServiceCode, selectedWorkspace?.tenantId]);
+  const refreshServiceCallAudits = useCallback(async (serviceCode = selectedServiceCode, interfaceCode = selectedInterfaceCode) => {
+    const params = new URLSearchParams();
+    params.set('tenantId', selectedWorkspace?.tenantId || 'site_001');
+    params.set('limit', '100');
+    if (selectedWorkspace?.id) params.set('workspaceId', selectedWorkspace.id);
+    if (serviceCode) params.set('serviceRef', serviceCode);
+    if (interfaceCode) params.set('interfaceRef', interfaceCode);
+    const body = await fetchJSON<ServiceCallAuditListResponse>(`/admin/v1/service-call-audit-logs?${params.toString()}`);
+    setServiceCallAudits(body.items ?? []);
+    setServiceCallAuditNextCursor(body.nextCursor ?? '');
+    setServiceCallAuditRequestId(body.requestId ?? '');
+  }, [selectedInterfaceCode, selectedServiceCode, selectedWorkspace?.id, selectedWorkspace?.tenantId]);
+  const loadMoreServiceCallAudits = useCallback(async () => {
+    if (!serviceCallAuditNextCursor) return;
+    const params = new URLSearchParams();
+    params.set('tenantId', selectedWorkspace?.tenantId || 'site_001');
+    params.set('limit', '100');
+    params.set('cursor', serviceCallAuditNextCursor);
+    if (selectedWorkspace?.id) params.set('workspaceId', selectedWorkspace.id);
+    if (selectedServiceCode) params.set('serviceRef', selectedServiceCode);
+    if (selectedInterfaceCode) params.set('interfaceRef', selectedInterfaceCode);
+    const body = await fetchJSON<ServiceCallAuditListResponse>(`/admin/v1/service-call-audit-logs?${params.toString()}`);
+    setServiceCallAudits((items) => [...items, ...(body.items ?? [])]);
+    setServiceCallAuditNextCursor(body.nextCursor ?? '');
+    setServiceCallAuditRequestId(body.requestId ?? '');
+  }, [selectedInterfaceCode, selectedServiceCode, selectedWorkspace?.id, selectedWorkspace?.tenantId, serviceCallAuditNextCursor]);
   const refreshServiceInterfaces = useCallback(async (serviceCode: string, selectInterfaceCode = selectedInterfaceCode) => {
     if (!serviceCode) {
       setServiceInterfaces([]);
@@ -3141,8 +3207,12 @@ function StudioActivityStart({
     setServiceInterfaces(items);
     const nextInterface = selectInterfaceCode || items[0]?.code || '';
     setSelectedInterfaceCode(nextInterface);
-    await refreshServiceProviders(serviceCode, nextInterface);
-  }, [refreshServiceProviders, selectedInterfaceCode, selectedWorkspace?.tenantId]);
+    await Promise.all([
+      refreshServiceProviders(serviceCode, nextInterface),
+      refreshServiceInterfaceBindings(serviceCode, nextInterface),
+      refreshServiceCallAudits(serviceCode, nextInterface),
+    ]);
+  }, [refreshServiceCallAudits, refreshServiceInterfaceBindings, refreshServiceProviders, selectedInterfaceCode, selectedWorkspace?.tenantId]);
   const refreshServices = useCallback(async (selectCode = selectedServiceCode) => {
     setServicesLoading(true);
     try {
@@ -3154,17 +3224,20 @@ function StudioActivityStart({
       setServices(items);
       const nextCode = selectCode || items[0]?.code || '';
       setSelectedServiceCode(nextCode);
-      await refreshServiceInterfaces(nextCode, '');
+      await Promise.all([
+        refreshServiceSchemas(),
+        refreshServiceInterfaces(nextCode, ''),
+      ]);
       setServiceMessage('服务能力已刷新');
     } catch (error) {
       setServiceMessage((error as Error).message);
     } finally {
       setServicesLoading(false);
     }
-  }, [refreshServiceInterfaces, selectedServiceCode, selectedWorkspace?.tenantId]);
+  }, [refreshServiceInterfaces, refreshServiceSchemas, selectedServiceCode, selectedWorkspace?.tenantId]);
   const openServiceManager = () => {
     setHomeUtilityDialog('services');
-    void Promise.all([refreshResources(), refreshServices()]);
+    void Promise.all([refreshResources(), refreshServices(), refreshServiceSchemas(), refreshServiceInterfaceBindings(), refreshServiceCallAudits()]);
   };
   const selectServiceCapability = useCallback((code: string) => {
     setSelectedServiceCode(code);
@@ -3173,9 +3246,13 @@ function StudioActivityStart({
   const selectServiceInterface = useCallback((code: string) => {
     setSelectedInterfaceCode(code);
     if (selectedServiceCode) {
-      void refreshServiceProviders(selectedServiceCode, code).catch((error) => setServiceMessage((error as Error).message));
+      void Promise.all([
+        refreshServiceProviders(selectedServiceCode, code),
+        refreshServiceInterfaceBindings(selectedServiceCode, code),
+        refreshServiceCallAudits(selectedServiceCode, code),
+      ]).catch((error) => setServiceMessage((error as Error).message));
     }
-  }, [refreshServiceProviders, selectedServiceCode]);
+  }, [refreshServiceCallAudits, refreshServiceInterfaceBindings, refreshServiceProviders, selectedServiceCode]);
   const saveServiceDefinition = async (service: Partial<ServiceDefinitionSummary> & { code: string }) => {
     if (!service.code.trim()) throw new Error('Service Code 必填');
     const tenantId = service.tenantId || selectedWorkspace?.tenantId || 'site_001';
@@ -3206,11 +3283,86 @@ function StudioActivityStart({
     setServiceMessage(`提供者已保存：${provider.code}`);
     await refreshServiceProviders(serviceCode, interfaceCode);
   };
+  const saveServiceSchema = async (schema: Partial<ServiceSchemaSummary> & { schemaRef: string }) => {
+    if (!schema.schemaRef.trim()) throw new Error('Schema Ref 必填');
+    const tenantId = schema.tenantId || selectedWorkspace?.tenantId || 'site_001';
+    await fetchJSON<ServiceSchemaSummary>(`/admin/v1/service-schemas?tenantId=${encodeURIComponent(tenantId)}`, {
+      method: 'POST',
+      body: JSON.stringify({ ...schema, tenantId }),
+    });
+    setServiceMessage(`Schema 已保存：${schema.schemaRef}`);
+    await refreshServiceSchemas();
+  };
+  const saveServiceInterfaceBinding = async (binding: Partial<ServiceInterfaceBindingSummary>) => {
+    if (!binding.serviceRef?.trim()) throw new Error('Service Ref 必填');
+    if (!binding.interfaceRef?.trim()) throw new Error('Interface Ref 必填');
+    if (!binding.principalId?.trim()) throw new Error('Principal ID 必填');
+    const tenantId = binding.tenantId || selectedWorkspace?.tenantId || 'site_001';
+    await fetchJSON<ServiceInterfaceBindingSummary>(`/admin/v1/service-interface-bindings?tenantId=${encodeURIComponent(tenantId)}`, {
+      method: 'POST',
+      body: JSON.stringify({ ...binding, tenantId }),
+    });
+    setServiceMessage(`Binding 已保存：${binding.serviceRef}/${binding.interfaceRef}`);
+    await refreshServiceInterfaceBindings(binding.serviceRef, binding.interfaceRef);
+  };
+  const resetServiceProviderCircuit = async (serviceCode: string, interfaceCode: string, providerCode: string) => {
+    if (!providerCode.trim()) throw new Error('Provider Code 必填');
+    const tenantId = selectedWorkspace?.tenantId || 'site_001';
+    const state = await fetchJSON<ServiceProviderRuntimeStateSummary>(`/admin/v1/services/${encodeURIComponent(serviceCode)}/interfaces/${encodeURIComponent(interfaceCode)}/providers/${encodeURIComponent(providerCode)}/reset-circuit?tenantId=${encodeURIComponent(tenantId)}`, {
+      method: 'POST',
+    });
+    setServiceProviderRuntimeStates((items) => ({ ...items, [providerCode]: state }));
+    setServiceMessage(`熔断已重置：${providerCode}`);
+  };
+  const checkServiceProviderHealth = async (serviceCode: string, interfaceCode: string, providerCode: string) => {
+    if (!providerCode.trim()) throw new Error('Provider Code 必填');
+    const tenantId = selectedWorkspace?.tenantId || 'site_001';
+    const state = await fetchJSON<ServiceProviderRuntimeStateSummary>(`/admin/v1/services/${encodeURIComponent(serviceCode)}/interfaces/${encodeURIComponent(interfaceCode)}/providers/${encodeURIComponent(providerCode)}/health-check?tenantId=${encodeURIComponent(tenantId)}`, {
+      method: 'POST',
+    });
+    setServiceProviderRuntimeStates((items) => ({ ...items, [providerCode]: state }));
+    setServiceMessage(`健康检查完成：${providerCode} ${state.healthStatus}`);
+  };
+  const validateServiceSchema = async (schema: Partial<ServiceSchemaSummary> & { schemaRef: string }) => {
+    const tenantId = schema.tenantId || selectedWorkspace?.tenantId || 'site_001';
+    return fetchJSON<{ valid?: boolean; compatible?: boolean; code?: string; error?: string }>(`/admin/v1/service-schemas/validate?tenantId=${encodeURIComponent(tenantId)}`, {
+      method: 'POST',
+      body: JSON.stringify({ ...schema, tenantId }),
+    });
+  };
+  const validateServiceSchemaExample = async (schema: Partial<ServiceSchemaSummary> & { schemaRef: string }, example: unknown) => {
+    const tenantId = schema.tenantId || selectedWorkspace?.tenantId || 'site_001';
+    return fetchJSON<{ valid?: boolean; code?: string; error?: string }>(`/admin/v1/service-schemas/validate?tenantId=${encodeURIComponent(tenantId)}`, {
+      method: 'POST',
+      body: JSON.stringify({ ...schema, tenantId, examplesJson: [example] }),
+    });
+  };
+  const checkServiceInterfaceBinding = async (binding: Partial<ServiceInterfaceBindingSummary>): Promise<ServiceInterfaceBindingCheckResult> => {
+    const tenantId = binding.tenantId || selectedWorkspace?.tenantId || 'site_001';
+    return fetchJSON<ServiceInterfaceBindingCheckResult>(`/admin/v1/service-interface-bindings/check?tenantId=${encodeURIComponent(tenantId)}`, {
+      method: 'POST',
+      body: JSON.stringify({
+        tenantId,
+        workspaceId: selectedWorkspace?.id,
+        folderId: selectedFolder?.id,
+        serviceRef: binding.serviceRef || selectedServiceCode,
+        interfaceRef: binding.interfaceRef || selectedInterfaceCode,
+        nodeType: binding.allowedNodeTypes?.[0] || 'fact-query',
+        operation: binding.allowedOperations?.[0] || 'CALL',
+        providerPolicy: binding.allowedProviderPolicies?.[0] || 'PRIMARY',
+        providerRef: binding.allowedProviderRefs?.[0] || '',
+        luaCall: Boolean(binding.luaCallable),
+      }),
+    });
+  };
   const testServiceInterface = async (serviceCode: string, interfaceCode: string) => {
     const tenantId = selectedWorkspace?.tenantId || 'site_001';
     const result = await fetchJSON<{ ok?: boolean; errorCode?: string }>(`/admin/v1/services/${encodeURIComponent(serviceCode)}/interfaces/${encodeURIComponent(interfaceCode)}/test?tenantId=${encodeURIComponent(tenantId)}`, { method: 'POST' });
     setServiceMessage(result.ok ? `接口测试通过：${interfaceCode}` : `接口测试失败：${result.errorCode || interfaceCode}`);
-    await refreshServiceProviders(serviceCode, interfaceCode);
+    await Promise.all([
+      refreshServiceProviders(serviceCode, interfaceCode),
+      refreshServiceCallAudits(serviceCode, interfaceCode),
+    ]);
   };
   const normalizeDetailVisibility = (value?: string): WorkspaceDetailTarget['visibility'] => {
     const normalized = (value || '').toLowerCase();
@@ -4047,6 +4199,10 @@ function StudioActivityStart({
                 services={services}
                 interfaces={serviceInterfaces}
                 providers={serviceProviders}
+                schemas={serviceSchemas}
+                bindings={serviceInterfaceBindings}
+                audits={serviceCallAudits}
+                runtimeStates={serviceProviderRuntimeStates}
                 selectedServiceCode={selectedService?.code || selectedServiceCode}
                 selectedInterfaceCode={selectedInterface?.code || selectedInterfaceCode}
                 selectedService={selectedService}
@@ -4059,6 +4215,16 @@ function StudioActivityStart({
                 onSaveService={saveServiceDefinition}
                 onSaveInterface={saveServiceInterface}
                 onSaveProvider={saveServiceProvider}
+                onSaveSchema={saveServiceSchema}
+                onSaveBinding={saveServiceInterfaceBinding}
+                onResetProviderCircuit={resetServiceProviderCircuit}
+                onCheckProviderHealth={checkServiceProviderHealth}
+                onValidateSchema={validateServiceSchema}
+                onValidateSchemaExample={validateServiceSchemaExample}
+                onCheckBinding={checkServiceInterfaceBinding}
+                auditNextCursor={serviceCallAuditNextCursor}
+                auditRequestId={serviceCallAuditRequestId}
+                onLoadMoreAudits={loadMoreServiceCallAudits}
                 onTestInterface={testServiceInterface}
               />
             ) : homeUtilityDialog === 'members' ? (

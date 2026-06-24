@@ -878,6 +878,39 @@ func (r *workerTestRepo) GetServiceProvider(context.Context, string, string, str
 func (r *workerTestRepo) ListServiceProviders(context.Context, marketing.ServiceProviderQuery) ([]marketing.ServiceProvider, error) {
 	panic("not implemented")
 }
+func (r *workerTestRepo) SaveServiceSchema(context.Context, marketing.ServiceSchema) (marketing.ServiceSchema, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) ListServiceSchemas(context.Context, marketing.ServiceSchemaQuery) ([]marketing.ServiceSchema, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) SaveServiceInterfaceBinding(context.Context, marketing.ServiceInterfaceBinding) (marketing.ServiceInterfaceBinding, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) ListServiceInterfaceBindings(context.Context, marketing.ServiceInterfaceBindingQuery) ([]marketing.ServiceInterfaceBinding, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) SaveServiceProviderRuntimeState(context.Context, marketing.ServiceProviderRuntimeState) (marketing.ServiceProviderRuntimeState, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) GetServiceProviderRuntimeState(context.Context, string, string, string, string) (marketing.ServiceProviderRuntimeState, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) ListServiceProviderRuntimeStates(context.Context, marketing.ServiceProviderRuntimeStateQuery) ([]marketing.ServiceProviderRuntimeState, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) ConsumeServiceProviderRateLimit(context.Context, marketing.ServiceProviderRateLimitConsume) (marketing.ServiceProviderRuntimeState, bool, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) CreateServiceCallAuditLog(context.Context, marketing.ServiceCallAuditLog) error {
+	panic("not implemented")
+}
+func (r *workerTestRepo) ListServiceCallAuditLogs(context.Context, marketing.ServiceCallAuditQuery) ([]marketing.ServiceCallAuditLog, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) PurgeServiceCallAuditLogs(context.Context, string, string, time.Time, int) (int, error) {
+	panic("not implemented")
+}
 func (r *workerTestRepo) GetActivityState(context.Context, marketing.ActivityStateKey) (marketing.ActivityState, error) {
 	panic("not implemented")
 }

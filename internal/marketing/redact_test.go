@@ -46,3 +46,17 @@ func TestRedactSensitiveStringHandlesProviderStatusAndDSNLikeText(t *testing.T) 
 		}
 	}
 }
+
+func TestSensitivePayloadHashUsesRedactedPayload(t *testing.T) {
+	left := SensitivePayloadHash(map[string]any{"headers": map[string]any{"Authorization": "Bearer token-a"}, "query": "ok"})
+	right := SensitivePayloadHash(map[string]any{"headers": map[string]any{"Authorization": "Bearer token-b"}, "query": "ok"})
+	if left == "" || !strings.HasPrefix(left, "hmac-sha256:") {
+		t.Fatalf("expected hmac-sha256 hash, got %q", left)
+	}
+	if left != right {
+		t.Fatalf("expected hashes to match after secret redaction, got %s and %s", left, right)
+	}
+	if strings.Contains(left, "token-a") || strings.Contains(right, "token-b") {
+		t.Fatalf("hash leaked secret values: %s %s", left, right)
+	}
+}

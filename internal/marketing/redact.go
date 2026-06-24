@@ -1,8 +1,12 @@
 package marketing
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
 )
@@ -40,6 +44,24 @@ func RedactSensitiveString(value string) string {
 		}
 		return prefix + redactedValue
 	})
+}
+
+func SensitivePayloadHash(value any) string {
+	redacted := RedactSensitive(value)
+	payload, err := json.Marshal(redacted)
+	if err != nil {
+		payload = []byte(RedactSensitiveString(err.Error()))
+	}
+	mac := hmac.New(sha256.New, []byte(serviceCallAuditHashSecret()))
+	_, _ = mac.Write(payload)
+	return "hmac-sha256:" + hex.EncodeToString(mac.Sum(nil))
+}
+
+func serviceCallAuditHashSecret() string {
+	if value := strings.TrimSpace(os.Getenv("EX_MARKETING_AUDIT_HASH_SECRET")); value != "" {
+		return value
+	}
+	return "exmarketing-service-call-audit-v1"
 }
 
 func normalizeForRedaction(value any) (any, error) {

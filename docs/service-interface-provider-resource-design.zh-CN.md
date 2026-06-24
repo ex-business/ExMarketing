@@ -1039,17 +1039,17 @@ Provider 策略属于服务治理，不应该由节点脚本硬编码实现。
 | `PRIMARY` | 当前支持 | 如果指定 `providerRef`，直接使用该 provider；否则选择 `status=ACTIVE` 且 `priority` 最小的 provider | provider 失败后按 step 的 `onMiss` 或节点失败策略处理，不自动 fallback | 非 ACTIVE provider 不可选；同 priority 按更新时间/code 稳定排序 |
 | `PRIMARY_WITH_FALLBACK` | 第一阶段已在 `fact-query` 落地 | 按 `priority ASC` 依次尝试 ACTIVE provider | 当前第一阶段 provider 执行失败会尝试下一候选；后续补错误分类后再区分 4xx/schema/auth 是否 fallback | trace 必须记录每个尝试的 provider 和失败原因 |
 | `CACHE_ASIDE` | 规划支持 | 先选择 `config.role=CACHE` 或 `tags/cache` provider，miss 后选择 PRIMARY | cache miss 不算失败；cache error 是否 fallback 由 `config.cacheErrorPolicy` 决定 | 必须定义 miss 判断路径，例如 `config.missPath` |
-| `WEIGHTED` | 第一阶段策略入口已开放 | 当前按 `weight > 0` 过滤并按 `priority/weight/code` 选择；完整稳定 hash 灰度后续补齐 | 被选 provider 失败不自动重抽，除非同时配置 fallback policy | 完整阶段要求权重总和大于 0；同一用户在同一活动内选择稳定 |
-| `ENVIRONMENT` | 第一阶段策略入口已开放 | 当前保留入口；接入 runtime environment 后按环境过滤 | 环境无匹配时失败，除非配置 fallback environment | DEV/STAGING/PROD 隔离，不允许生产误用 DEV provider |
-| `MOCK` | 第一阶段策略入口已开放 | 当前按 `mockEnabled/mock` 过滤候选；正式发布阻断后续接 release gate | 正式 execution 禁止 | 正式发布校验必须拒绝 MOCK |
+| `WEIGHTED` | 已进入实现 | 先过滤 ACTIVE、非 mock、runtime 可用、`weight > 0` provider，再用 deterministic hash seed 选择一个 provider | 被选 provider 失败不自动重抽，除非配置 `PRIMARY_WITH_FALLBACK` 类策略 | 总权重大于 0；同一 tenant/activity/node/service/interface/event/provider set 选择稳定 |
+| `ENVIRONMENT` | 已进入实现 | 运行时/发布时读取 providerChain 的 `environment/runtimeEnvironment`，优先选择同环境 provider；无同环境时允许空/default provider 兜底 | 显式 providerRef 环境不匹配直接失败；候选过滤后无 provider 则失败 | PROD/DEV/STAGING 隔离，不允许生产误用 DEV provider |
+| `MOCK` | 已进入实现 | `MOCK_ONLY` 只选择显式 mock provider；普通策略会跳过 mock provider | 非 MOCK 策略显式引用 mock provider 返回 `SERVICE_PROVIDER_MOCK_DENIED` | mock provider 必须 `config.mockEnabled=true`、`config.mock=true` 或 `environment=mock` |
 
 第一阶段规则：
 
 - workflow validation 和 runtime 允许 `PRIMARY`、`PRIMARY_WITH_FALLBACK`、`WEIGHTED`、`ENVIRONMENT_MATCH`、`MOCK_ONLY` 策略入口。
 - `PRIMARY_WITH_FALLBACK` 已在 `fact-query` 的 `SERVICE_INTERFACE` providerChain 执行链中落地，会按候选 provider 逐个尝试。
-- `WEIGHTED` 当前只完成候选过滤和 priority/weight 排序，不代表完整稳定 hash 灰度。
-- `ENVIRONMENT_MATCH` 当前只保留策略入口，接入 runtime environment 后才能完成环境隔离。
-- `MOCK_ONLY` 当前可按 provider config 的 `mockEnabled/mock` 过滤候选，正式发布阻断需要 release gate 后续补齐。
+- `WEIGHTED` 已使用 deterministic hash，不再按排序取第一；seed 来自 tenant、activity、activity version、node、service/interface、event/idempotency 和 provider set。
+- `ENVIRONMENT_MATCH` 已支持 providerChain 的 `environment` / `runtimeEnvironment`，同环境优先，空/default provider 作为兜底。
+- `MOCK_ONLY` 已支持 `mockEnabled/mock/environment=mock` 判定；普通策略不会误选 mock provider。
 - Studio 前端可以先只展示 `PRIMARY` 和 `PRIMARY_WITH_FALLBACK`，其它策略进入高级配置或隐藏。
 
 ### Provider 治理层设计
@@ -1203,15 +1203,26 @@ PERMISSION_DENIED
 推荐选择公式：
 
 ```text
-hash(tenantId + activityId + subject.id + interfaceRef) % totalWeight
+hash(
+  tenantId,
+  activityId,
+  activityVersion,
+  nodeId,
+  serviceRef,
+  interfaceRef,
+  eventId,
+  idempotencyKey,
+  providerCode:weight set
+) % totalWeight
 ```
 
 要求：
 
-- 只在 `HEALTHY` provider 中分配权重；
+- 只在 `ACTIVE` 且 runtime 可用 provider 中分配权重；
+- 普通 `WEIGHTED` 不选择 mock provider；
 - `weight > 0`；
 - 总权重大于 0；
-- 同一用户在同一活动内命中同一 Provider；
+- 同一 seed 和 provider set 下命中同一 Provider；
 - 需要记录 selected bucket 和 selected provider。
 
 #### ENVIRONMENT
@@ -1224,8 +1235,9 @@ runtime.environment = provider.environment
 
 如果没有匹配 provider：
 
-- 默认失败；
-- 只有配置 `fallbackEnvironment` 时才允许降级；
+- 空环境或 `default` provider 可以作为默认兜底；
+- 如果存在同环境 provider，则只使用同环境 provider；
+- 如果没有同环境 provider，才允许回退到空/default provider；
 - `PROD` runtime 禁止选择 `DEV/STAGING` provider。
 
 #### CACHE_ASIDE
@@ -1272,7 +1284,9 @@ Provider 角色：
 
 - 只允许 `preview`、`test`、`simulation`；
 - 正式发布和正式 execution 禁止；
-- mock provider 必须显式 `role=MOCK`；
+- mock provider 必须显式 `config.mockEnabled=true`、`config.mock=true` 或 `environment=mock`；
+- `MOCK_ONLY` 只选 mock provider；
+- `PRIMARY`、`PRIMARY_WITH_FALLBACK`、`WEIGHTED`、`ENVIRONMENT_MATCH` 默认跳过 mock provider；
 - mock 响应必须通过 `outputSchemaRef`；
 - Run History 必须标记 `mock=true`。
 
@@ -1884,6 +1898,62 @@ risk-evaluation-error-v1
 
 第一阶段可以先复用 Resource schema 或内置 schema registry，但最终需要独立的 Service Schema Registry。
 
+当前实现状态（2026-06-24）：
+
+| 项目 | 状态 | 说明 |
+| --- | --- | --- |
+| 独立 schema registry 表 | 已进入实现 | `marketing_service_schema` 已设计 migration，Admin API 支持 `GET/POST /admin/v1/service-schemas` |
+| 内置 schema catalog | 已进入实现 | `user-profile/kyc/risk` 内置 interface 已有内置 input/output schema，可在 DB 未 seed 时参与校验 |
+| 保存 schema 格式校验 | 已进入实现 | 当前校验 JSON Schema 基础子集和 examplesJson，非法 schema 或 example 在保存/validate 时阻断 |
+| schema 版本兼容性 | 已进入实现 | v2+ 保存时和上一版 ACTIVE schema 做保守兼容检查：顶层 type、旧 required、旧 properties/type 不能破坏 |
+| 保存 interface schemaRef 校验 | 已进入实现 | `inputSchemaRef/outputSchemaRef/errorSchemaRef` 非空时必须能找到 ACTIVE schema |
+| 发布阶段 schema 强校验 | 已进入实现 | 发布时会扫描 workflow `SERVICE_INTERFACE` step，校验 interface/schema、provider mapping 和下游 output 引用 |
+| runtime input/output/error 校验 | 已进入实现 | `SERVICE_INTERFACE` providerChain 调用前校验 input payload，成功后校验 output，失败结果按 error schema 校验 |
+| provider mapping 兼容校验 | 已进入实现 | request/response/error mapping 已做最小静态校验，复杂表达式仍按 runtime schema 兜底 |
+| 下游字段引用校验 | 已进入实现 | 发布期检查下游 `inputMapping.path` 是否能被 output schema 基础子集覆盖 |
+
+### Service Binding 治理当前实现状态
+
+当前实现状态（2026-06-24）：
+
+| 项目 | 状态 | 说明 |
+| --- | --- | --- |
+| 发布阶段 binding 强校验 | 已进入实现 | 发布 workflow 时扫描 `SERVICE_INTERFACE` step，必须命中至少一条 `ACTIVE` binding，否则阻断 |
+| 运行时 binding 复检 | 已进入实现 | `fact-query` 的 `SERVICE_INTERFACE` providerChain 调用 Provider 前再次校验，binding 被禁用/删除后会在运行时失败 |
+| scope 匹配 | 已进入实现 | 支持 `SYSTEM/TENANT/WORKSPACE/FOLDER/ACTIVITY/NODE`，按 tenant/workspace/folder/activity/node 覆盖关系匹配 |
+| nodeType / nodeId | 已进入实现 | `allowedNodeTypes` 非空时必须包含当前 node type；`NODE` scope 可限定具体 nodeId |
+| principal 匹配 | 已进入实现 | 已支持 `ROLE/USER/GROUP/SERVICE_ACCOUNT/WORKSPACE/FOLDER/ACTIVITY/NODE`，Admin check 从 actor/roles/groups/serviceAccount 上下文读取 |
+| operation 校验 | 已进入实现 | interface operation 和 binding `allowedOperations` 都会参与校验 |
+| providerPolicy 校验 | 已进入实现 | binding `allowedProviderPolicies` 非空时必须包含 step 的 providerPolicy |
+| explicit providerRef 绕行拦截 | 已进入实现 | 默认阻断显式 `providerRef`；只有 `allowExplicitProviderRef=true` 且 providerRef 在 `allowedProviderRefs` 中才允许 |
+| deny binding | 已进入实现 | 命中 `deny=true` 的 ACTIVE binding 会优先阻断 |
+| luaCallable | 已进入实现 | Lua `service_call` 统一走 ProviderChainExecutor、binding checker、schema 校验和 service call audit |
+| requireApproval | 部分完成 | checker 已支持 `requireApproval` 判断；审批快照语义仍需和正式发布审批流对齐 |
+| trace | 已进入实现 | runtime 输出 `serviceAccess` trace，包含 matched binding、providerPolicy、providerRef 和拒绝原因 |
+
+### Provider Runtime Governance 当前实现状态
+
+当前实现状态（2026-06-24）：
+
+| 项目 | 状态 | 说明 |
+| --- | --- | --- |
+| provider runtime state 表 | 已进入实现 | 新增 `marketing_service_provider_runtime_state`，按 `tenantId/serviceRef/interfaceRef/providerRef` 保存 health、circuit、失败计数、限流窗口和更新时间 |
+| 内存 runtime state | 已进入实现 | MemoryRepository 支持保存、查询和列表，用于本地测试和无 Postgres 场景 |
+| Postgres runtime state | 已进入实现 | Postgres Repository 支持 upsert/get/list，migration 为 `015_service_provider_runtime_state.sql` |
+| health 状态过滤 | 已进入实现 | Provider 解析时跳过 `UNHEALTHY`；显式 `providerRef` 指向 unhealthy provider 时返回 `SERVICE_PROVIDER_UNHEALTHY` |
+| circuit breaker | 已进入实现 | provider 调用失败累计 `consecutiveFailures`，达到阈值后置 `OPEN`；`OPEN` provider 被解析阶段跳过或显式阻断 |
+| circuit reset | 已进入实现 | 提供 engine reset 方法和 Admin API：`POST /admin/v1/services/{serviceCode}/interfaces/{interfaceCode}/providers/{providerCode}/reset-circuit` |
+| half-open 恢复 | 已进入实现 | `OPEN` 超过 cooldown 后进入 `HALF_OPEN`；支持 `halfOpenProbeLimit`、`halfOpenSuccessThreshold`、失败回退 OPEN |
+| rate limit 运行时执行 | 已进入实现 | 调用前按 provider config 或默认值原子检查并递增窗口计数，Postgres 使用事务锁单行避免多实例超发 |
+| fallback 跳过不可用 provider | 已进入实现 | `PRIMARY_WITH_FALLBACK` 候选会跳过 unhealthy/open/limited provider，后续 provider 可用则继续 |
+| weighted 稳定选择 | 已进入实现 | `WEIGHTED` 按 deterministic hash(seed + provider set) 选单个 provider，不再排序取第一 |
+| environment 过滤 | 已进入实现 | 发布和运行时按 providerChain `environment/runtimeEnvironment` 过滤 provider，同环境优先，空/default 兜底 |
+| mock provider 策略 | 已进入实现 | `MOCK_ONLY` 只选显式 mock；普通策略跳过 mock；显式引用 mock 会被阻断 |
+| 主动 health check 定时器 | 未完成 | 当前支持手工写入 runtime state，尚未实现定时探活 worker |
+| ProviderChainExecutor 抽象 | 已进入实现 | `SERVICE_INTERFACE` fact-query 调用链已从 `workflow_executor` 抽到 `ProviderChainExecutor`，统一执行 access -> provider resolve -> schema -> runtime policy -> resource operator -> audit |
+| ResourceOperator 抽象 | 已进入实现 | `ServiceResourceOperator` 覆盖 `SERVICE_INTERFACE` fact-query，并暴露通用 `ExecuteResourceAPI`；Lua resource 调用已走该抽象 |
+| service call audit | 已进入实现 | 新增 `marketing_service_call_audit`、Memory/Postgres repo、Admin 查询 API；成功、权限拒绝、schema 失败、provider runtime/policy 失败都会写 hash 审计 |
+
 建议表：
 
 ```sql
@@ -1904,7 +1974,7 @@ CREATE TABLE marketing_service_schema (
     updated_by TEXT NOT NULL DEFAULT '',
     created_at TIMESTAMPTZ NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL,
-    UNIQUE (tenant_id, schema_ref)
+    UNIQUE (tenant_id, schema_ref, version)
 );
 ```
 
@@ -1933,6 +2003,18 @@ POST   /admin/v1/service-schemas/compatibility-check
 ### Schema 格式
 
 第一阶段建议采用 JSON Schema 子集，不支持任意复杂关键字，避免校验器和 UI 失控。
+
+当前代码第一阶段已实现的关键字：
+
+```text
+type
+properties
+required
+items
+additionalProperties
+```
+
+下面这些仍是设计目标，当前保存时不会完整执行语义校验：
 
 允许关键字：
 
@@ -2081,6 +2163,8 @@ AND downstream references can resolve required output fields
 | --- | --- |
 | schemaRef 找不到 | `SERVICE_SCHEMA_NOT_FOUND` |
 | schema 非 ACTIVE | `SERVICE_SCHEMA_DISABLED` |
+| schema 格式非法 | `SERVICE_SCHEMA_FORMAT_INVALID` |
+| schema 版本不兼容 | `SERVICE_SCHEMA_INCOMPATIBLE` |
 | inputMapping 缺 required 字段 | `SERVICE_INPUT_MAPPING_INCOMPLETE` |
 | inputMapping 类型不匹配 | `SERVICE_INPUT_MAPPING_TYPE_MISMATCH` |
 | provider request mapping 不兼容 | `SERVICE_PROVIDER_REQUEST_MAPPING_INVALID` |
@@ -2101,7 +2185,7 @@ validate requestPayload against inputSchema
 如果失败：
 
 ```text
-SERVICE_INPUT_SCHEMA_INVALID
+SERVICE_SCHEMA_INPUT_INVALID
 ```
 
 Provider 返回后：
@@ -2114,7 +2198,7 @@ validate normalizedOutput against outputSchema
 如果失败：
 
 ```text
-SERVICE_OUTPUT_SCHEMA_INVALID
+SERVICE_SCHEMA_OUTPUT_INVALID
 ```
 
 Provider 返回错误时：
@@ -2127,7 +2211,7 @@ validate normalizedError against errorSchema
 如果失败：
 
 ```text
-SERVICE_ERROR_SCHEMA_INVALID
+SERVICE_SCHEMA_ERROR_INVALID
 ```
 
 运行时 trace 必须记录：
@@ -2674,6 +2758,18 @@ Run History trace 至少展示：
 
 审计表默认只允许保存 `L0-L2`，`L3-L5` 必须脱敏、hash、截断或完全丢弃。
 
+当前实现状态（2026-06-24）：
+
+| 项目 | 状态 | 说明 |
+| --- | --- | --- |
+| Service Call Audit 表 | 已进入实现 | `marketing_service_call_audit` 保存 service/interface/provider/resource/status/errorCode/latency/hash/actor/createdAt |
+| 明文 payload 禁止落库 | 已进入实现 | runtime 只写 `requestHash` 和 `responseHash`，不保存 request/response body |
+| 脱敏后 hash | 已进入实现 | hash 前先走 `RedactSensitive`，token/password/secret/Authorization/Cookie 等敏感字段会被归一为 redacted marker |
+| error message 脱敏 | 已进入实现 | audit `errorMessage` 写入前执行字符串脱敏 |
+| 查询 API | 已进入实现 | `GET /admin/v1/service-call-audit-logs` 支持按 tenant/workspace/activity/node/service/interface/provider/resource/status/errorCode 过滤，返回 envelope/cursor/requestId |
+| 保留清理 job | 已进入实现 | 新增 `POST /admin/v1/service-call-audit-logs/purge` 和 Repository purge 方法，定时调度仍由运维 job 接入 |
+| 审计查看 RBAC | 已进入实现 | 查询带 workspaceId 时执行 workspace view 权限检查；tenant/folder 更细粒度权限继续按 Admin RBAC 演进 |
+
 ### 保留周期
 
 推荐按环境和数据等级设置保留周期。
@@ -2949,7 +3045,7 @@ secretRef value
 | 权限拒绝审计写入失败 | fail-close，拒绝调用 |
 | 写类副作用接口审计失败 | fail-close，避免不可追责副作用 |
 | 读类接口审计失败 | prod 默认 fail-close；preview 可 fail-open + alert |
-| Run History 展示写入失败 | 不影响核心执行，但必须告警 |
+| Run History 展示写入失败 | 不影响核心执行，但必须告警；当前写入失败会打 `exmarketing_service_call_audit_write_failed_total` |
 | Debug sample 写入失败 | 不影响核心执行，关闭采样 |
 
 错误码：
@@ -3448,6 +3544,35 @@ Binding 不建议做过强唯一约束，因为同一 scope 下可能有 allow/d
 
 Audit 表用于运行时审计和 Run History 关联。它是事实日志，不应因 service/provider/resource 删除而丢失，所以不做强 FK。
 
+当前第一阶段已落地的最小 DDL 为 `016_service_call_audit.sql`，字段覆盖：
+
+```sql
+CREATE TABLE marketing_service_call_audit (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    workspace_id TEXT NOT NULL DEFAULT '',
+    folder_id TEXT NOT NULL DEFAULT '',
+    activity_id TEXT NOT NULL DEFAULT '',
+    workflow_id TEXT NOT NULL DEFAULT '',
+    node_id TEXT NOT NULL DEFAULT '',
+    node_type TEXT NOT NULL DEFAULT '',
+    service_ref TEXT NOT NULL,
+    interface_ref TEXT NOT NULL,
+    provider_ref TEXT NOT NULL DEFAULT '',
+    resource_ref TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL CHECK (status IN ('SUCCESS', 'FAILED', 'DENIED')),
+    error_code TEXT NOT NULL DEFAULT '',
+    error_message TEXT NOT NULL DEFAULT '',
+    latency_ms BIGINT NOT NULL DEFAULT 0 CHECK (latency_ms >= 0),
+    request_hash TEXT NOT NULL DEFAULT '',
+    response_hash TEXT NOT NULL DEFAULT '',
+    actor TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL
+);
+```
+
+当前实现不落明文 payload，不落 request/response 摘要，只落脱敏后的 hash。下面的完整 DDL 是长期治理目标，包含 attempt、stepId、permission/schema/provider trace 等扩展字段，后续需要单独 migration 演进，不能假设当前代码已全部支持。
+
 ```sql
 CREATE TABLE marketing_service_call_audit (
     id TEXT PRIMARY KEY,
@@ -3675,7 +3800,9 @@ rollback does not delete audit data
 
 ```text
 POST /admin/v1/services/{serviceCode}/interfaces/{interfaceCode}/providers/{providerCode}/health-check
-POST /admin/v1/services/{serviceCode}/interfaces/{interfaceCode}/providers/{providerCode}/circuit/reset
+GET  /admin/v1/services/{serviceCode}/interfaces/{interfaceCode}/providers/{providerCode}/runtime-state
+POST /admin/v1/services/{serviceCode}/interfaces/{interfaceCode}/providers/{providerCode}/runtime-state
+POST /admin/v1/services/{serviceCode}/interfaces/{interfaceCode}/providers/{providerCode}/reset-circuit
 POST /admin/v1/services/{serviceCode}/interfaces/{interfaceCode}/providers/{providerCode}/status
 POST /admin/v1/builtin/drift
 POST /admin/v1/builtin/reconcile
@@ -3683,7 +3810,7 @@ POST /admin/v1/workflows/{activityId}/break-glass
 POST /admin/v1/resources/{resourceCode}/status
 ```
 
-如果第一阶段没有这些 Admin API，可以先用内部命令实现，但命令输出和审计字段必须和 API 语义一致。
+当前第一阶段已落地 `runtime-state` 查询/写入和 `reset-circuit`。`health-check`、`status` 和完整审计仍是后续入口；临时用内部命令时，命令输出和审计字段必须和 API 语义一致。
 
 ### Provider Unhealthy 处置
 
@@ -3787,17 +3914,17 @@ Reset 流程：
 1. 确认 OPEN 原因：timeout、5xx、rate limit、manual open。
 2. 确认底层 provider/resource/remote 已恢复。
 3. 执行 provider test，input/output schema 必须通过。
-4. 将 circuitStatus 从 OPEN 改为 HALF_OPEN。
-5. 允许少量探测调用或手工 test run。
-6. 探测成功达到阈值后改为 CLOSED。
-7. 探测失败重新 OPEN，并记录 lastErrorCode。
+4. 第一阶段调用 `reset-circuit` 将 circuitStatus 恢复为 `CLOSED` 并清零连续失败数。
+5. 完整阶段先改为 `HALF_OPEN`，允许少量探测调用或手工 test run。
+6. 探测成功达到阈值后改为 `CLOSED`。
+7. 探测失败重新 `OPEN`，并记录 lastErrorCode。
 ```
 
 Admin API 请求示例：
 
 ```json
 {
-  "action": "RESET_TO_HALF_OPEN",
+  "action": "RESET_TO_CLOSED",
   "reason": "remote service recovered and health check passed",
   "actorId": "ops_admin",
   "probeLimit": 5,
@@ -3811,7 +3938,7 @@ Reset 审计字段：
 {
   "providerRef": "wallet-balance-http-primary",
   "previousCircuitStatus": "OPEN",
-  "newCircuitStatus": "HALF_OPEN",
+  "newCircuitStatus": "CLOSED",
   "reason": "remote service recovered and health check passed",
   "actorId": "ops_admin"
 }
@@ -4212,7 +4339,7 @@ export masks secretRef and never includes secret value
 | nodeType/nodeId 不允许 | `SERVICE_INTERFACE_NODE_DENIED` |
 | role 不足 | `SERVICE_INTERFACE_ROLE_DENIED` |
 | operation 不允许 | `SERVICE_INTERFACE_OPERATION_DENIED` |
-| Lua 调用未授权接口 | `SERVICE_INTERFACE_LUA_DENIED` |
+| Lua 调用未授权接口 | `SERVICE_INTERFACE_LUA_FORBIDDEN` |
 
 验收：
 
@@ -4431,7 +4558,7 @@ env
 | --- | --- |
 | 动态拼接能力名 | `LUA_DYNAMIC_CAPABILITY_DENIED` |
 | 未声明依赖 | `LUA_DEPENDENCY_DECLARATION_REQUIRED` |
-| 调用非 luaCallable 接口 | `SERVICE_INTERFACE_LUA_DENIED` |
+| 调用非 luaCallable 接口 | `SERVICE_INTERFACE_LUA_FORBIDDEN` |
 | 调用不允许资源操作 | `LUA_RESOURCE_OPERATION_DENIED` |
 | 触碰沙箱禁用 API | `LUA_SANDBOX_VIOLATION` |
 | 超时/超步数/超输出 | `LUA_RUNTIME_LIMIT_EXCEEDED` |
@@ -4793,17 +4920,20 @@ go test covers materialization and disabled fallback
 Workflow Runtime
   -> Node Executor
   -> ProviderChain Resolver
+  -> ProviderChainExecutor
   -> Service Interface Resolver
   -> Service Permission Guard
   -> Provider Selector
   -> Provider Governance Guard
   -> Schema Validator
+  -> ResourceOperator
   -> Resource Resolver
   -> Resource Permission Guard
   -> Resource Adapter / Protocol Client
   -> Output Mapper
   -> Output Schema Validator
-  -> Audit / Trace Writer
+  -> ServiceCallAudit Writer
+  -> Resource Audit / Trace Writer
   -> Node Output Merger
 ```
 
@@ -4814,30 +4944,46 @@ sequenceDiagram
   participant WF as Workflow Runtime
   participant Node as Node Executor
   participant Chain as ProviderChain Resolver
+  participant Exec as ProviderChainExecutor
   participant SI as Service Interface
   participant Perm as Permission Guard
   participant Sel as Provider Selector
   participant Gov as Provider Governance
   participant Sch as Schema Registry
+  participant Op as ResourceOperator
   participant Res as Resource Resolver
   participant Adp as Resource/Protocol Adapter
   participant Audit as Audit/Trace
 
   WF->>Node: execute node with runtime context
   Node->>Chain: resolve providerChain steps
-  Chain->>SI: resolve serviceCode/interfaceCode
+  Chain->>Exec: execute SERVICE_INTERFACE step
+  Exec->>SI: resolve serviceCode/interfaceCode
   SI->>Perm: check interface binding
   Perm->>Sel: allow provider selection
-  Sel->>Gov: check status/health/circuit/rate/env
+  Sel->>Sel: apply policy(PRIMARY/FALLBACK/WEIGHTED/ENVIRONMENT/MOCK)
+  Sel->>Sel: deterministic weighted hash by runtime seed and provider set
+  Sel->>Sel: filter environment, skip mock unless MOCK_ONLY
+  Sel->>Gov: check status/health/circuit/rate
   Gov->>Sch: validate mapped input
-  Sch->>Res: resolve resourceRefs if needed
+  Sch->>Op: execute resource boundary
+  Op->>Res: resolve resourceRefs if needed
   Res->>Perm: check resource binding
   Perm->>Adp: execute protocol/resource adapter
-  Adp->>Sch: validate mapped output or error
-  Sch->>Audit: write service/resource call trace
-  Audit->>Node: return normalized result
+  Adp->>Op: return normalized resource result
+  Op->>Sch: validate mapped output or error
+  Sch->>Audit: write service call audit and resource audit
+  Audit->>Exec: return normalized result
+  Exec->>Node: return facts/trace/fallback status
   Node->>WF: merge outputAs/facts/state
 ```
+
+当前代码落地状态：
+
+- `ProviderChainExecutor` 已覆盖 `fact-query` 的 `SERVICE_INTERFACE` step。
+- `ServiceResourceOperator` 已作为 Resource 调用边界，默认实现代理到现有 Resource API/fact-query resource 路径。
+- `ServiceCallAudit` 已在成功、binding/provider policy 拒绝、schema 输入/输出/错误校验失败、provider runtime policy 失败、resource/provider 执行失败时写入。
+- 审计只保存 `requestHash` / `responseHash` 和治理元信息，不保存 request/response 明文 payload。
 
 ### 入口和上下文初始化
 
@@ -5292,7 +5438,7 @@ AND publish target environment matches provider/resource environment
 | interface operation 覆盖 step operation | 是 | `SERVICE_INTERFACE_OPERATION_DENIED` |
 | interface 未被废弃；废弃只给 warning | 否 | `SERVICE_INTERFACE_DEPRECATED` |
 | interface timeout 不超过节点和平台上限 | 是 | `SERVICE_INTERFACE_TIMEOUT_INVALID` |
-| Lua 调用时 interface 允许 `luaCallable` | 是 | `SERVICE_INTERFACE_LUA_DENIED` |
+| Lua 调用时 interface 允许 `luaCallable` | 是 | `SERVICE_INTERFACE_LUA_FORBIDDEN` |
 
 ### Service 权限 Checklist
 
@@ -5306,7 +5452,7 @@ AND publish target environment matches provider/resource environment
 | operation 在 `allowedOperations` 内 | 是 | `SERVICE_INTERFACE_OPERATION_DENIED` |
 | providerPolicy 被允许 | 是 | `SERVICE_PROVIDER_POLICY_DENIED` |
 | 显式 providerRef 被允许 | 是 | `SERVICE_PROVIDER_REF_DENIED` |
-| Lua 调用时 binding 允许 `luaCallable` | 是 | `SERVICE_INTERFACE_LUA_DENIED` |
+| Lua 调用时 binding 允许 `luaCallable` | 是 | `SERVICE_INTERFACE_LUA_FORBIDDEN` |
 | 需要审批时已有有效审批快照 | 是 | `SERVICE_INTERFACE_APPROVAL_REQUIRED` |
 | binding environment 匹配发布目标 | 是 | `SERVICE_INTERFACE_ENVIRONMENT_DENIED` |
 
@@ -5369,6 +5515,7 @@ AND publish target environment matches provider/resource environment
 | `outputSchemaRef` 存在且 `ACTIVE` | 是 | `SERVICE_SCHEMA_OUTPUT_NOT_FOUND` |
 | `errorSchemaRef` 存在且 `ACTIVE`，如果非空 | 是 | `SERVICE_SCHEMA_ERROR_NOT_FOUND` |
 | schema 格式是允许的 JSON Schema 子集 | 是 | `SERVICE_SCHEMA_FORMAT_INVALID` |
+| schema 新版本保持向后兼容 | 是 | `SERVICE_SCHEMA_INCOMPATIBLE` |
 | inputMapping 覆盖 required 字段 | 是 | `SERVICE_MAPPING_INPUT_REQUIRED_MISSING` |
 | inputMapping 表达式可解析 | 是 | `SERVICE_MAPPING_INPUT_INVALID` |
 | outputMapping/valuePath 可解析 | 是 | `SERVICE_MAPPING_OUTPUT_INVALID` |
@@ -5395,8 +5542,8 @@ AND publish target environment matches provider/resource environment
 | --- | --- | --- |
 | Lua 节点声明所有 service/resource dependency | 是 | `LUA_DEPENDENCY_DECLARATION_REQUIRED` |
 | Lua 不动态拼 service/interface/resource code | 是 | `LUA_DYNAMIC_CAPABILITY_DENIED` |
-| Lua 调用的 interface 允许 `luaCallable` | 是 | `SERVICE_INTERFACE_LUA_DENIED` |
-| Lua 调用的 binding 允许 `luaCallable` | 是 | `SERVICE_INTERFACE_LUA_DENIED` |
+| Lua 调用的 interface 允许 `luaCallable` | 是 | `SERVICE_INTERFACE_LUA_FORBIDDEN` |
+| Lua 调用的 binding 允许 `luaCallable` | 是 | `SERVICE_INTERFACE_LUA_FORBIDDEN` |
 | Lua resource 操作在允许函数集内 | 是 | `LUA_RESOURCE_OPERATION_DENIED` |
 | Lua 超时、内存、执行步数有上限 | 是 | `LUA_RUNTIME_LIMIT_REQUIRED` |
 | Lua 不访问网络、文件系统、系统命令 | 是 | `LUA_SANDBOX_VIOLATION` |
@@ -5437,12 +5584,13 @@ AND publish target environment matches provider/resource environment
 | `SERVICE_INTERFACE_DEPRECATED` | WARNING | validate/publish | interface | 允许发布但提示迁移 |
 | `SERVICE_INTERFACE_TIMEOUT_INVALID` | ERROR | publish | interface | 阻断 |
 | `SERVICE_INTERFACE_BINDING_REQUIRED` | ERROR | publish/runtime | binding | 阻断 |
+| `SERVICE_INTERFACE_ACCESS_DENIED` | ERROR | publish/runtime | binding | 阻断 |
 | `SERVICE_INTERFACE_SCOPE_DENIED` | ERROR | publish/runtime | binding | 阻断 |
 | `SERVICE_INTERFACE_NODE_DENIED` | ERROR | publish/runtime | binding | 阻断 |
 | `SERVICE_INTERFACE_ROLE_DENIED` | ERROR | publish/runtime | binding | 阻断 |
 | `SERVICE_INTERFACE_APPROVAL_REQUIRED` | ERROR | publish/runtime | binding | 阻断 |
 | `SERVICE_INTERFACE_ENVIRONMENT_DENIED` | ERROR | publish/runtime | binding | 阻断 |
-| `SERVICE_INTERFACE_LUA_DENIED` | ERROR | publish/runtime | lua | 阻断 |
+| `SERVICE_INTERFACE_LUA_FORBIDDEN` | ERROR | publish/runtime | lua | 阻断 |
 | `SERVICE_PROVIDER_REQUIRED` | ERROR | publish/runtime | provider | 阻断 |
 | `SERVICE_PROVIDER_NOT_ACTIVE` | ERROR | publish/runtime | provider | 阻断 |
 | `SERVICE_PROVIDER_ENVIRONMENT_DENIED` | ERROR | publish/runtime | provider | 阻断 |
@@ -5452,10 +5600,15 @@ AND publish target environment matches provider/resource environment
 | `SERVICE_PROVIDER_PRIMARY_REQUIRED` | ERROR | publish/runtime | provider | 阻断 |
 | `SERVICE_PROVIDER_FALLBACK_NOT_CONFIGURED` | WARNING | validate/publish | provider | 允许发布但提示无降级 |
 | `SERVICE_PROVIDER_WEIGHT_INVALID` | ERROR | publish | provider | 阻断 |
-| `SERVICE_PROVIDER_MOCK_DENIED` | ERROR | publish | provider | 阻断 |
+| `SERVICE_PROVIDER_MOCK_REQUIRED` | ERROR | publish/runtime | provider | 阻断 |
+| `SERVICE_PROVIDER_MOCK_DENIED` | ERROR | publish/runtime | provider | 阻断 |
 | `SERVICE_PROVIDER_HEALTH_UNKNOWN` | WARNING | publish | provider | 允许发布但提示先测试 |
 | `SERVICE_PROVIDER_UNHEALTHY` | ERROR | publish/runtime | provider | 阻断 |
 | `SERVICE_PROVIDER_CIRCUIT_OPEN` | ERROR | publish/runtime | provider | 阻断 |
+| `SERVICE_PROVIDER_RATE_LIMITED` | ERROR | runtime | provider | fallback 或阻断 |
+| `SERVICE_INTERFACE_PROVIDER_NOT_RESOLVED` | ERROR | runtime | provider | fallback 耗尽后阻断 |
+| `SERVICE_PROVIDER_RUNTIME_STATE_FAILED` | ERROR | runtime | provider | 阻断并报警 |
+| `SERVICE_CALL_AUDIT_WRITE_FAILED` | WARNING | runtime | audit | 不阻断业务调用，但必须报警 |
 | `SERVICE_PROVIDER_RATE_LIMIT_INVALID` | ERROR | publish | provider | 阻断 |
 | `SERVICE_PROVIDER_RETRY_POLICY_INVALID` | ERROR | publish | provider | 阻断 |
 | `SERVICE_PROVIDER_PROTOCOL_UNSUPPORTED` | ERROR | publish/runtime | provider | 阻断 |
@@ -5485,6 +5638,10 @@ AND publish target environment matches provider/resource environment
 | `SERVICE_SCHEMA_OUTPUT_NOT_FOUND` | ERROR | publish/runtime | schema | 阻断 |
 | `SERVICE_SCHEMA_ERROR_NOT_FOUND` | ERROR | publish/runtime | schema | 阻断 |
 | `SERVICE_SCHEMA_FORMAT_INVALID` | ERROR | save/publish | schema | 阻断 |
+| `SERVICE_SCHEMA_INCOMPATIBLE` | ERROR | save | schema | 阻断 |
+| `SERVICE_SCHEMA_INPUT_INVALID` | ERROR | runtime | schema | 阻断 |
+| `SERVICE_SCHEMA_OUTPUT_INVALID` | ERROR | runtime | schema | 阻断 |
+| `SERVICE_SCHEMA_ERROR_INVALID` | ERROR | runtime | schema | 阻断 |
 | `SERVICE_SCHEMA_BREAKING_CHANGE` | ERROR | publish | schema | 阻断 |
 | `SERVICE_SCHEMA_EXAMPLE_INVALID` | WARNING | save/publish | schema | 允许保存但提示修复示例 |
 | `SERVICE_MAPPING_INPUT_REQUIRED_MISSING` | ERROR | publish/runtime | mapping | 阻断 |
@@ -5611,7 +5768,7 @@ all built-in catalog entries can seed and pass drift check
 | 缺 input schema | `operation=CALL` 且 inputSchemaRef 空 | 保存失败 | `SERVICE_SCHEMA_INPUT_NOT_FOUND` |
 | output schema 不存在 | outputSchemaRef 指向不存在 schema | 保存失败 | `SERVICE_SCHEMA_OUTPUT_NOT_FOUND` |
 | error schema 非空但不存在 | errorSchemaRef 无效 | 保存失败 | `SERVICE_SCHEMA_ERROR_NOT_FOUND` |
-| Lua callable 无 schema | `luaCallable=true` 且 schema 缺失 | 保存失败 | `SERVICE_INTERFACE_LUA_DENIED` |
+| Lua callable 无 schema | `luaCallable=true` 且 schema 缺失 | 保存失败 | `SERVICE_INTERFACE_LUA_FORBIDDEN` |
 | operation 不匹配 | step 用 `PUBLISH` 调 `CALL` interface | 发布失败 | `SERVICE_INTERFACE_OPERATION_DENIED` |
 | 不兼容 schema 变更 | v1 required 字段增加 | compatibility-check 失败 | `SERVICE_SCHEMA_BREAKING_CHANGE` |
 | deprecated interface | status=`DEPRECATED` | 发布 warning，运行允许 | `SERVICE_INTERFACE_DEPRECATED` |
@@ -5628,11 +5785,17 @@ all built-in catalog entries can seed and pass drift check
 | health unknown | 未 health check | 发布 warning | `SERVICE_PROVIDER_HEALTH_UNKNOWN` |
 | health unhealthy | healthStatus=`UNHEALTHY` | 正式发布失败 | `SERVICE_PROVIDER_UNHEALTHY` |
 | circuit open | circuitStatus=`OPEN` | 正式发布失败 | `SERVICE_PROVIDER_CIRCUIT_OPEN` |
+| runtime unhealthy skip | primary `UNHEALTHY` 且 fallback healthy | 运行时跳过 primary 并选 fallback | `SERVICE_PROVIDER_UNHEALTHY` |
+| runtime circuit open | 连续失败达到阈值 | 后续运行时阻断或 fallback | `SERVICE_PROVIDER_CIRCUIT_OPEN` |
+| circuit reset | open 后调用 reset API | 状态回到 `CLOSED`，允许再次选择 | - |
+| runtime rate limited | 窗口内调用数超过配置 | 当前 provider 被跳过或显式阻断 | `SERVICE_PROVIDER_RATE_LIMITED` |
 | unsupported policy | 未知 providerPolicy，例如 `RANDOM` | 发布失败 | `SERVICE_PROVIDER_POLICY_UNSUPPORTED` |
 | mock in prod | providerPolicy=`MOCK` 或 mockEnabled 强制 | 发布失败 | `SERVICE_PROVIDER_MOCK_DENIED` |
 | fallback 候选缺失 | `PRIMARY_WITH_FALLBACK` 只有主 provider | warning 或按策略失败 | `SERVICE_PROVIDER_FALLBACK_NOT_CONFIGURED` |
-| WEIGHTED 第一阶段 | 至少一个 ACTIVE provider weight > 0 | 允许选择；不宣称完整稳定 hash 灰度 | - |
-| 权重非法 | weight < 0 或总和为 0 | 完整 WEIGHTED 阶段发布失败 | `SERVICE_PROVIDER_WEIGHT_INVALID` |
+| WEIGHTED 稳定选择 | 多个 ACTIVE provider weight > 0 | 同一 seed/provider set 选择稳定；不同 seed 按权重分布 | - |
+| 权重非法 | weight < 0 或总和为 0 | 发布失败 | `SERVICE_PROVIDER_WEIGHT_INVALID` |
+| environment mismatch | 显式 providerRef 指向其它环境 | 发布/运行失败 | `SERVICE_PROVIDER_ENVIRONMENT_DENIED` |
+| mock only 非 mock provider | `MOCK_ONLY` 显式 providerRef 指向真实 provider | 发布/运行失败 | `SERVICE_PROVIDER_MOCK_REQUIRED` |
 
 ### Provider 协议测试矩阵
 
@@ -5673,10 +5836,10 @@ all built-in catalog entries can seed and pass drift check
 
 | 用例 | 输入 | 期望 | 覆盖错误码 |
 | --- | --- | --- | --- |
-| JSON Schema 子集合法 | type/properties/required | 保存成功 | - |
+| JSON Schema 子集合法 | type/properties/required/items/additionalProperties | 保存成功 | - |
 | 使用 forbidden keyword | oneOf/remote ref/custom validator | 保存失败 | `SERVICE_SCHEMA_FORMAT_INVALID` |
 | validate payload 成功 | payload 满足 schema | `valid=true` | - |
-| validate payload 失败 | 类型错误或缺 required | 返回 path 级错误 | `SERVICE_SCHEMA_VALIDATION_FAILED` |
+| validate payload 失败 | 类型错误或缺 required | 返回 path 级错误 | `SERVICE_SCHEMA_INPUT_INVALID` / `SERVICE_SCHEMA_OUTPUT_INVALID` |
 | inputMapping 覆盖 required | required 字段都能映射 | 发布成功 | - |
 | inputMapping 缺 required | 缺 userId | 发布失败 | `SERVICE_MAPPING_INPUT_REQUIRED_MISSING` |
 | inputMapping 表达式非法 | `${event..id}` | 发布失败 | `SERVICE_MAPPING_INPUT_INVALID` |
@@ -5690,6 +5853,7 @@ all built-in catalog entries can seed and pass drift check
 | --- | --- | --- | --- |
 | 命中 tenant binding | tenant scope binding | allowed=true | - |
 | 无 binding | interface 没授权 | allowed=false / 发布失败 | `SERVICE_INTERFACE_BINDING_REQUIRED` |
+| deny binding | 命中 `deny=true` binding | allowed=false / 发布失败 | `SERVICE_INTERFACE_ACCESS_DENIED` |
 | workspace 不匹配 | binding workspaceId 不同 | 发布失败 | `SERVICE_INTERFACE_SCOPE_DENIED` |
 | folder 不匹配 | folderId 不同且 includeSubfolders=false | 发布失败 | `SERVICE_INTERFACE_SCOPE_DENIED` |
 | nodeType 不允许 | allowedNodeTypes 不含当前节点 | 发布失败 | `SERVICE_INTERFACE_NODE_DENIED` |
@@ -5697,7 +5861,7 @@ all built-in catalog entries can seed and pass drift check
 | providerPolicy 不允许 | binding 不含 PRIMARY_WITH_FALLBACK | 发布失败 | `SERVICE_PROVIDER_POLICY_DENIED` |
 | 显式 providerRef 禁止 | allowExplicitProviderRef=false | 发布失败 | `SERVICE_PROVIDER_REF_DENIED` |
 | 需要审批但无快照 | requireApproval=true | 发布失败 | `SERVICE_INTERFACE_APPROVAL_REQUIRED` |
-| Lua binding 禁止 | luaCallable=false | 发布失败 | `SERVICE_INTERFACE_LUA_DENIED` |
+| Lua binding 禁止 | luaCallable=false | 发布失败 | `SERVICE_INTERFACE_LUA_FORBIDDEN` |
 
 ### 发布校验测试矩阵
 
@@ -5720,11 +5884,20 @@ all built-in catalog entries can seed and pass drift check
 | SERVICE_INTERFACE 成功 | 权限、schema、provider、resource 都合法 | 输出写入 `outputAs`，trace 成功 | `SUCCESS` |
 | RESOURCE 成功 | resource read/write 合法 | 输出写入节点结果 | `SUCCESS` |
 | 权限失败 | runtime binding 被禁用 | 节点失败，不 fallback | `SERVICE_INTERFACE_BINDING_REQUIRED` |
-| input schema 失败 | event 缺 required 字段 | 节点失败，不触达 resource | `SERVICE_SCHEMA_VALIDATION_FAILED` |
+| 显式 providerRef 未授权 | runtime step 指定 providerRef 但 binding 未允许 | 节点失败，不触达 provider | `SERVICE_PROVIDER_REF_DENIED` |
+| input schema 失败 | event 缺 required 字段 | 节点失败，不触达 resource | `SERVICE_SCHEMA_INPUT_INVALID` |
 | provider timeout | PRIMARY 超时，fallback 可用 | fallback 成功，记录两次 attempt | `TIMEOUT` -> `SUCCESS` |
 | provider unhealthy | primary unhealthy | 跳过或 fallback | `SERVICE_PROVIDER_UNHEALTHY` |
+| provider circuit open | primary circuit open | 跳过或 fallback；显式 providerRef 阻断 | `SERVICE_PROVIDER_CIRCUIT_OPEN` |
+| provider rate limited | primary 达到窗口限流 | 跳过或 fallback；无候选则失败 | `SERVICE_PROVIDER_RATE_LIMITED` |
+| provider reset 后恢复 | circuit reset 后 provider 再次调用成功 | 熔断关闭，trace 成功 | `SUCCESS` |
 | resource 权限失败 | keyPolicy 越界 | 节点失败，不 fallback | `RESOURCE_KEY_POLICY_DENIED` |
-| output schema 失败 | provider 返回脏数据 | 节点失败，写 service audit | `SERVICE_SCHEMA_VALIDATION_FAILED` |
+| output schema 失败 | provider 返回脏数据 | 节点失败，写 service audit | `SERVICE_SCHEMA_OUTPUT_INVALID` |
+| ProviderChainExecutor 边界 | `SERVICE_INTERFACE` fact-query step | workflow executor 只调用 executor，executor 统一治理链路 | `SUCCESS` |
+| ResourceOperator 边界 | 注入 fake ResourceOperator | providerChain 不直接散落 resource 调用，fake 被调用一次 | `SUCCESS` |
+| service audit 成功 | provider/resource/schema 全部成功 | 写 `SUCCESS` audit，含 service/interface/provider/resource/hash | `SUCCESS` |
+| service audit 权限拒绝 | binding providerPolicy 不允许 | 不触达 ResourceOperator，写 `DENIED` audit | `SERVICE_PROVIDER_POLICY_DENIED` |
+| service audit schema 失败 | output schema 不匹配 | 写 `FAILED` audit，request/response 只存 hash | `SERVICE_SCHEMA_OUTPUT_INVALID` |
 | onMiss NEXT | 第一 step 合法空结果 | 继续下一 step | `MISS` |
 | onMiss BLOCK | 合法空结果且 BLOCK | 节点按未命中失败 | `MISS_BLOCKED` |
 | 业务 4xx | provider 返回业务拒绝 | 默认不 fallback | `BUSINESS_REJECTED` |
@@ -5769,6 +5942,7 @@ all built-in catalog entries can seed and pass drift check
 | `POST /service-schemas/{ref}/validate` | valid/invalid payload | 返回 path 级错误 |
 | `POST /compatibility-check` | backward compatible / breaking | 返回 breakingChanges |
 | `POST /test` | dryRun、真实读、无权限 | 执行完整校验并返回 trace |
+| `GET /service-call-audit-logs` | status/errorCode/service/provider/resource 过滤 | 返回 hash 审计，不返回明文 payload |
 | `GET /service-catalog/options` | 不同 nodeType/scope | 只返回可选项或不可选原因 |
 | `migration/analyze` | legacy FACT_SERVICE/providerCode/endpoint | 返回建议和 confidence |
 | `migration/apply` | 全部成功/部分失败 | 成功生成新 draft；失败不部分保存 |
@@ -5800,18 +5974,23 @@ all built-in catalog entries can seed and pass drift check
 
 ### Studio / 前端验收矩阵
 
-| 场景 | 期望 |
-| --- | --- |
-| 打开 fact-query | 默认展示 Service Interface 选择入口 |
-| 选择 Service | Interface 列表联动刷新 |
-| 选择 Interface | ProviderPolicy、Provider、input schema 联动刷新 |
-| 选择 Resource | operation、namespace、key policy 联动刷新 |
-| 无权限接口 | 不可选或显示不可选原因 |
-| provider unhealthy | 显示 health warning |
-| schema required 字段 | inputMapping 表单提示必填 |
-| 发布校验错误 | 高亮 nodeId/path/field |
-| legacy workflow | 展示兼容模式和迁移入口 |
-| 新建 workflow | 不出现直接 URL/topic/secret 输入框 |
+当前实现状态（2026-06-24）：
+
+| 场景 | 期望 | 当前状态 |
+| --- | --- | --- |
+| 打开 fact-query | 默认展示 Service Interface 选择入口 | 已进入实现，`providerChain` 默认使用 `SERVICE_INTERFACE` step |
+| 选择 Service | Interface 列表联动刷新 | 已进入实现，节点编辑器和能力页都支持 service/interface 选择 |
+| 选择 Interface | ProviderPolicy、Provider、input schema 联动刷新 | 部分实现，ProviderPolicy 可配置；schema preview / mapping builder 仍需补齐 |
+| 选择 Resource | operation、namespace、key policy 联动刷新 | 部分实现，Resource step 可选资源和 operation；keyPolicy 解释仍需补齐 |
+| 无权限接口 | 不可选或显示不可选原因 | 部分实现，发布/运行时会阻断；前端选择器尚未展示不可选原因 |
+| provider unhealthy | 显示 health warning | 已进入实现，服务能力页展示 provider runtime health/circuit，并提供 reset circuit |
+| schema required 字段 | inputMapping 表单提示必填 | 未完成，schema registry 已可管理，但 required 字段未驱动 mapping builder |
+| 发布校验错误 | 高亮 nodeId/path/field | 部分实现，检查清单已按 schema/binding/provider policy 归类并沿用 node/path focus |
+| legacy workflow | 展示兼容模式和迁移入口 | 部分实现，旧 providerChain 可读；迁移 diff 面板未完成 |
+| 新建 workflow | 不出现直接 URL/topic/secret 输入框 | 部分实现，Service Interface 路径已主推；旧 HTTP_PROVIDER 兼容输入仍存在 |
+| Service Schema 管理 | 能查看/创建 input/output/error schema | 已进入实现，能力资产页新增 Schema tab |
+| Service Binding 管理 | 能查看/创建 interface binding | 已进入实现，能力资产页新增 Binding tab |
+| Service Call Audit | 能查看调用审计且不展示明文 payload | 已进入实现，能力资产页新增 Audit tab，展示 hash/status/error |
 
 ### 观测和审计验收矩阵
 
@@ -6072,6 +6251,50 @@ Admin API 必须服务两个场景：
 | `RESOURCE_*` | Resource 解析、权限或测试错误 |
 | `WORKFLOW_MIGRATION_*` | 旧模型迁移错误 |
 | `VALIDATION_*` | 通用字段校验错误 |
+
+#### Service Call Audit API
+
+`GET /admin/v1/service-call-audit-logs`
+
+用于 Studio Run History、Provider 调试和安全审计查询。响应只包含治理元数据和 hash，不返回 request/response 明文。
+
+查询参数：
+
+| 参数 | 说明 |
+| --- | --- |
+| `workspaceId` / `folderId` / `activityId` | 按运行上下文过滤 |
+| `workflowId` / `nodeId` | 定位具体 workflow execution 或节点 |
+| `serviceRef` / `interfaceRef` | 按业务接口过滤 |
+| `providerRef` / `resourceRef` | 按 Provider 或底层 Resource 过滤 |
+| `status` | `SUCCESS/FAILED/DENIED` |
+| `errorCode` | 按错误码过滤 |
+| `limit` | 默认 500，上限 500 |
+
+响应示例：
+
+```json
+{
+  "items": [
+    {
+      "tenantId": "site_001",
+      "activityId": "activity_handler",
+      "workflowId": "wfexec_001",
+      "nodeId": "fact",
+      "nodeType": "fact-query",
+      "serviceRef": "user-profile-service",
+      "interfaceRef": "query-user-profile",
+      "providerRef": "user-profile-resource-provider",
+      "resourceRef": "default_user_profile_store",
+      "status": "SUCCESS",
+      "latencyMs": 12,
+      "requestHash": "sha256:...",
+      "responseHash": "sha256:...",
+      "actor": "system",
+      "createdAt": "2026-06-24T00:00:00Z"
+    }
+  ]
+}
+```
 
 #### Service API
 
@@ -6424,6 +6647,53 @@ HTTP Provider 请求：
 - `outputMapping/valuePath` 不能把错误响应映射成成功输出；
 - `weight` 只对 `WEIGHTED` 策略生效，但字段可提前保存；
 - `environment` 必须和资源环境兼容。
+
+Provider Runtime State API：
+
+```text
+GET /admin/v1/services/{serviceCode}/interfaces/{interfaceCode}/providers/{providerCode}/runtime-state
+POST /admin/v1/services/{serviceCode}/interfaces/{interfaceCode}/providers/{providerCode}/runtime-state
+POST /admin/v1/services/{serviceCode}/interfaces/{interfaceCode}/providers/{providerCode}/reset-circuit
+```
+
+`runtime-state` 响应：
+
+```json
+{
+  "id": "svcprovstate_001",
+  "tenantId": "site_001",
+  "serviceRef": "wallet-service",
+  "interfaceRef": "query-wallet-balance",
+  "providerRef": "wallet-balance-resource-primary",
+  "healthStatus": "HEALTHY",
+  "healthMessage": "",
+  "circuitStatus": "CLOSED",
+  "failureCount": 0,
+  "successCount": 10,
+  "consecutiveFailures": 0,
+  "rateLimitWindow": "2026-06-24T10:00:00Z",
+  "rateLimitCount": 12,
+  "metadata": {},
+  "createdAt": "2026-06-24T09:00:00Z",
+  "updatedAt": "2026-06-24T10:00:00Z"
+}
+```
+
+`POST runtime-state` 第一阶段用于运维手工标记 health/circuit：
+
+```json
+{
+  "healthStatus": "UNHEALTHY",
+  "healthMessage": "health check failed",
+  "circuitStatus": "CLOSED",
+  "metadata": {
+    "reason": "remote timeout",
+    "actorId": "ops_admin"
+  }
+}
+```
+
+`reset-circuit` 响应返回更新后的 runtime state。第一阶段 reset 会将 `circuitStatus` 置为 `CLOSED`、清零 `consecutiveFailures` 并写入 `circuitResetAt`；完整阶段再扩展审批、审计和 half-open probe 参数。
 
 `PATCH /admin/v1/services/{serviceCode}/interfaces/{interfaceCode}/providers/{providerCode}`
 
@@ -7726,16 +7996,29 @@ io.open(...)
   - Resources
 ```
 
+当前落地状态（2026-06-24）：
+
+| 模块 | 状态 | 说明 |
+| --- | --- | --- |
+| Service/Interface/Provider 管理页 | 已进入实现 | 复用现有能力页，支持服务、接口、提供者保存和刷新 |
+| Schema 管理 | 已进入实现 | 新增 Schema tab，可查看和创建 `INPUT/OUTPUT/ERROR` schema，保存走 `/admin/v1/service-schemas` |
+| Binding 管理 | 已进入实现 | 新增 Binding tab，可查看和创建 interface binding，支持 allowed operations/provider policies/provider refs/lua/approval/deny |
+| Provider runtime | 已进入实现 | Provider tab 展示 health/circuit/failure 计数，接入 reset circuit 和 health-check API；运行时支持 `DEGRADED` 自动降级 |
+| Service call audit | 已进入实现 | 新增 Audit tab，展示 service/interface/provider/status/error/hash/trace；request/response 仅保存 HMAC-SHA256 hash，不展示明文 payload |
+| ProviderChain 治理字段 | 已进入实现 | `SERVICE_INTERFACE` step 支持 `providerPolicy/providerRef/environment/mock`，支持 `WEIGHTED_WITH_FALLBACK`、生产 mock gate 和 weighted trace |
+| 发布错误定位 | 已进入实现 | 检查清单新增服务治理分类，沿用 node/path focus；PropertyPanel 可按 fieldKey 聚焦配置项，后续再做跨资产详情跳转 |
+| 静态资源构建 | 已验证 | `npm run typecheck:admin-flow` 和 `npm run build:admin-flow` 通过 |
+
 节点配置面板改造：
 
 | 功能 | 要求 |
 | --- | --- |
-| providerChain 编辑器 | 支持 `targetType` 切换 |
-| Service 选择 | 选择 Service 后联动 Interface |
-| Interface 选择 | 展示 operation、schema、Provider 策略 |
-| Resource 选择 | 展示 capability、namespace、key policy |
-| Lua 面板 | 展示当前节点可调用服务和资源 |
-| 校验提示 | 未授权、schema 不匹配、operation 不支持时直接提示 |
+| providerChain 编辑器 | 支持 `targetType` 切换；当前已支持 `SERVICE_INTERFACE` 和 `RESOURCE` step |
+| Service 选择 | 选择 Service 后联动 Interface；当前已实现 |
+| Interface 选择 | 展示 operation、schema、Provider 策略；当前 Provider 策略已实现，Schema tab 已提供 schema preview/example validate |
+| Resource 选择 | 展示 capability、namespace、key policy；当前资源和 operation 可配置，key policy 详情待补 |
+| Lua 面板 | 展示当前节点可调用服务和资源；后端 `service_call` 已统一走 ProviderChainExecutor/binding/audit，Binding tab 展示 Lua 可调用权限提示 |
+| 校验提示 | 未授权、schema 不匹配、operation 不支持时直接提示；发布检查清单和 PropertyPanel field focus 已接入 |
 
 Studio 不应该让用户在节点里手填：
 
@@ -7746,6 +8029,58 @@ DB table
 MQ broker
 secret
 ```
+
+第 17 项当前长期增强项（2026-06-24，本轮更新后）：
+
+1. schema example validate 已能逐条校验 examplesJson；后续可在 UI 展示每条 example 的独立 path/result。
+2. inputMapping builder 已能按 required 自动生成缺失映射；后续可接 service input schema 生成更精细表单。
+3. Binding check 已接 `/bindings/check`；后续可增加批量 check 和跨 workspace/folder 差异视图。
+4. Provider 选择器已展示不可选原因、environment、half-open 状态；weighted bucket 目前主要在 runtime trace/audit 中展示。
+5. 发布错误已支持 node/path/field focus；跨资产跳转到 Schema/Binding/Provider tab 仍可增强。
+6. schema/binding/audit 列表已支持 audit cursor/requestId 和只读权限说明；后续补更完整筛选器。
+7. legacy migration diff 已有最小面板；后续补 analyze/apply 交互。
+8. Lua `service_call` 已有权限提示；后续补可调用服务自动列表和代码依赖扫描面板。
+
+本轮 36 个缺口推进状态：
+
+| 编号 | 状态 | 说明 |
+| --- | --- | --- |
+| 1 | 已进入实现 | Provider request/response/error mapping 发布期按 schema 路径静态校验 |
+| 2 | 已进入实现 | 下游 `inputMapping.path` 引用 SERVICE_INTERFACE output schema 时做覆盖校验 |
+| 3 | 已进入实现 | JSON Schema 子集补充 `enum/minimum/maximum/exclusive*/minLength/maxLength/pattern/format` |
+| 4 | 已进入实现 | Admin API 增加 `/admin/v1/service-schemas/validate` 和 `/compatibility-check` |
+| 5 | 已进入实现 | Binding checker 支持 `ROLE/USER/GROUP/SERVICE_ACCOUNT`，从 audit context 读取 actor/roles/groups/serviceAccount |
+| 6 | 已进入实现 | `requireApproval` 改为要求当前 activity version 的 `APPROVED` 快照 |
+| 7 | 已进入实现 | Lua `service_call` 统一走 ProviderChainExecutor、binding checker、schema 和 audit |
+| 8 | 已进入实现 | audit provider trace 已记录 `providerRef`、`requestedProviderRef` 和 `providerRefOverride`，并补测试 |
+| 9 | 已进入实现 | Provider health-check Admin API 已落地 |
+| 10 | 已进入实现 | runtime state 支持 `DEGRADED`，失败未达熔断阈值时自动降级 |
+| 11 | 已进入实现 | Postgres rate limit 使用事务 `FOR UPDATE` 单行原子消费；Redis 分布式限流作为后续横向扩展 |
+| 12 | 已进入实现 | 发布阶段通过 provider resolver 执行 health/circuit/rate-limit gate |
+| 13 | 已进入实现 | half-open 支持 `halfOpenProbeLimit`、`halfOpenSuccessThreshold`、失败回退 OPEN，状态字段和测试已补 |
+| 14 | 已进入实现 | weighted selection trace 写入 provider trace |
+| 15 | 已进入实现 | 发布校验读取 workflow meta 的 `releaseEnvironment/runtimeEnvironment/environment` |
+| 16 | 已进入实现 | production/prod release 强阻断 mock provider 和 `MOCK_ONLY` |
+| 17 | 已进入实现 | 新增 `WEIGHTED_WITH_FALLBACK` 一等策略 |
+| 18 | 已进入实现 | mock provider 的 `mockOutput/mockResponse/mockPayload` 按 output schema 静态预检 |
+| 19 | 已进入实现 | ResourceOperator 扩展通用 `ExecuteResourceAPI`，Lua resource 调用和 SERVICE_INTERFACE fact-query 已走抽象；普通节点继续按兼容路径调用底层 Resource API |
+| 20 | 已进入实现 | `service_call_audit` 扩展 `stepId/attempt/providerTrace/schemaTrace/permissionTrace` |
+| 21 | 已进入实现 | audit 查询 API 返回 envelope/cursor/requestId，保留 `items` 兼容 |
+| 22 | 已进入实现 | audit 查询按 workspaceId 接入 workspace view 权限并补测试，tenant/folder/service 细粒度作为后续增强 |
+| 23 | 已进入实现 | 新增 audit purge Repository/Engine/Admin API，定时调度由运维 job 接入 |
+| 24 | 已进入实现 | audit 写失败打 `exmarketing_service_call_audit_write_failed_total` metric，purge 打 `exmarketing_service_call_audit_purge_total` |
+| 25 | 已进入实现 | request/response hash 升级为带 secret 的 HMAC-SHA256，默认使用 `EX_MARKETING_AUDIT_HASH_SECRET` |
+| 26 | 已进入实现 | Lua `service_call` 统一走 ProviderChainExecutor 和 service call audit |
+| 27 | 已进入实现 | Studio Schema tab 支持 schema preview、schema validate 和 example validate |
+| 28 | 已进入实现 | inputMapping builder 按 schema required 自动生成缺失映射 |
+| 29 | 已进入实现 | Binding check API 和 Studio 预检面板已落地 |
+| 30 | 已进入实现 | Provider tab 增加主动 health-check 按钮 |
+| 31 | 已进入实现 | Provider tab 展示不可选原因、environment、half-open 状态；weighted bucket 在 runtime trace/audit 展示 |
+| 32 | 已进入实现 | PropertyPanel 按 validation fieldKey 聚焦字段，发布检查清单可定位 node/path/field |
+| 33 | 已进入实现 | audit API 和前端列表支持 cursor/requestId，并展示只读权限说明 |
+| 34 | 已进入实现 | 服务能力页新增 legacy migration diff 最小面板 |
+| 35 | 已进入实现 | 后端 Lua `service_call` 权限闭环已落地，Studio Binding 面板展示 Lua 可调用权限提示 |
+| 36 | 已进入实现 | 本节已同步完成项/剩余项/API/错误码/测试矩阵状态 |
 
 ### P7 迁移和兼容
 

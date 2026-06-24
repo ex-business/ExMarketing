@@ -1239,6 +1239,520 @@ func (r *Repository) ListServiceProviders(ctx context.Context, query marketing.S
 	return out, rows.Err()
 }
 
+func (r *Repository) SaveServiceSchema(ctx context.Context, schema marketing.ServiceSchema) (marketing.ServiceSchema, error) {
+	if schema.ID == "" {
+		schema.ID = marketing.NewID("svcschema")
+	}
+	if schema.Scope == "" {
+		schema.Scope = marketing.ServiceAssetScopeTenant
+	}
+	if schema.Version == 0 {
+		schema.Version = 1
+	}
+	if schema.Status == "" {
+		schema.Status = marketing.ServiceAssetActive
+	}
+	if len(schema.ExamplesJSON) == 0 {
+		schema.ExamplesJSON = json.RawMessage(`[]`)
+	}
+	if schema.CreatedAt.IsZero() {
+		schema.CreatedAt = time.Now().UTC()
+	}
+	if schema.UpdatedAt.IsZero() {
+		schema.UpdatedAt = schema.CreatedAt
+	}
+	if err := schema.Validate(); err != nil {
+		return marketing.ServiceSchema{}, err
+	}
+	row := r.db.QueryRowContext(ctx, `
+		INSERT INTO marketing_service_schema (
+			id, tenant_id, workspace_id, folder_id, schema_ref, schema_type, scope,
+			version, status, schema_json, examples_json, description,
+			created_by, updated_by, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+		ON CONFLICT (tenant_id, schema_ref, version) DO UPDATE SET
+			workspace_id = EXCLUDED.workspace_id,
+			folder_id = EXCLUDED.folder_id,
+			schema_type = EXCLUDED.schema_type,
+			scope = EXCLUDED.scope,
+			status = EXCLUDED.status,
+			schema_json = EXCLUDED.schema_json,
+			examples_json = EXCLUDED.examples_json,
+			description = EXCLUDED.description,
+			updated_by = EXCLUDED.updated_by,
+			updated_at = EXCLUDED.updated_at
+		RETURNING id, tenant_id, workspace_id, folder_id, schema_ref, schema_type, scope,
+		          version, status, schema_json, examples_json, description,
+		          created_by, updated_by, created_at, updated_at
+	`, schema.ID, schema.TenantID, schema.WorkspaceID, schema.FolderID, schema.SchemaRef, schema.SchemaType,
+		schema.Scope, schema.Version, schema.Status, schema.SchemaJSON, schema.ExamplesJSON, schema.Description,
+		schema.CreatedBy, schema.UpdatedBy, schema.CreatedAt, schema.UpdatedAt)
+	saved, err := scanServiceSchema(row)
+	if err != nil {
+		return marketing.ServiceSchema{}, mapPostgresResourceError(err)
+	}
+	return saved, nil
+}
+
+func (r *Repository) ListServiceSchemas(ctx context.Context, query marketing.ServiceSchemaQuery) ([]marketing.ServiceSchema, error) {
+	limit := query.Limit
+	if limit <= 0 || limit > 500 {
+		limit = 500
+	}
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, tenant_id, workspace_id, folder_id, schema_ref, schema_type, scope,
+		       version, status, schema_json, examples_json, description,
+		       created_by, updated_by, created_at, updated_at
+		FROM marketing_service_schema
+		WHERE ($1 = '' OR tenant_id = $1)
+		  AND ($2 = '' OR workspace_id = $2)
+		  AND ($3 = '' OR folder_id = $3)
+		  AND ($4 = '' OR schema_ref = $4)
+		  AND ($5 = '' OR schema_type = $5)
+		  AND ($6 = '' OR status = $6)
+		ORDER BY updated_at DESC, schema_ref ASC, version DESC
+		LIMIT $7
+	`, query.TenantID, query.WorkspaceID, query.FolderID, query.SchemaRef, query.SchemaType, query.Status, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []marketing.ServiceSchema{}
+	for rows.Next() {
+		schema, err := scanServiceSchema(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, schema)
+	}
+	return out, rows.Err()
+}
+
+func (r *Repository) SaveServiceInterfaceBinding(ctx context.Context, binding marketing.ServiceInterfaceBinding) (marketing.ServiceInterfaceBinding, error) {
+	if binding.ID == "" {
+		binding.ID = marketing.NewID("svcbind")
+	}
+	if binding.Scope == "" {
+		binding.Scope = marketing.ServiceAssetScopeWorkspace
+	}
+	if binding.Status == "" {
+		binding.Status = marketing.ServiceAssetActive
+	}
+	if len(binding.Metadata) == 0 {
+		binding.Metadata = json.RawMessage(`{}`)
+	}
+	if binding.CreatedAt.IsZero() {
+		binding.CreatedAt = time.Now().UTC()
+	}
+	if binding.UpdatedAt.IsZero() {
+		binding.UpdatedAt = binding.CreatedAt
+	}
+	if err := binding.Validate(); err != nil {
+		return marketing.ServiceInterfaceBinding{}, err
+	}
+	allowedNodeTypes, err := json.Marshal(binding.AllowedNodeTypes)
+	if err != nil {
+		return marketing.ServiceInterfaceBinding{}, err
+	}
+	allowedOperations, err := json.Marshal(binding.AllowedOperations)
+	if err != nil {
+		return marketing.ServiceInterfaceBinding{}, err
+	}
+	allowedProviderPolicies, err := json.Marshal(binding.AllowedProviderPolicies)
+	if err != nil {
+		return marketing.ServiceInterfaceBinding{}, err
+	}
+	allowedProviderRefs, err := json.Marshal(binding.AllowedProviderRefs)
+	if err != nil {
+		return marketing.ServiceInterfaceBinding{}, err
+	}
+	row := r.db.QueryRowContext(ctx, `
+		INSERT INTO marketing_service_interface_binding (
+			id, tenant_id, service_ref, interface_ref, scope, workspace_id, folder_id,
+			activity_id, node_id, principal_type, principal_id, allowed_node_types_json,
+			allowed_operations_json, allowed_provider_policies_json, allow_explicit_provider_ref,
+			allowed_provider_refs_json, lua_callable, require_approval, deny, status, metadata_json,
+			created_by, updated_by, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
+		ON CONFLICT (tenant_id, service_ref, interface_ref, scope, workspace_id, folder_id, activity_id, node_id, principal_type, principal_id) DO UPDATE SET
+			allowed_node_types_json = EXCLUDED.allowed_node_types_json,
+			allowed_operations_json = EXCLUDED.allowed_operations_json,
+			allowed_provider_policies_json = EXCLUDED.allowed_provider_policies_json,
+			allow_explicit_provider_ref = EXCLUDED.allow_explicit_provider_ref,
+			allowed_provider_refs_json = EXCLUDED.allowed_provider_refs_json,
+			lua_callable = EXCLUDED.lua_callable,
+			require_approval = EXCLUDED.require_approval,
+			deny = EXCLUDED.deny,
+			status = EXCLUDED.status,
+			metadata_json = EXCLUDED.metadata_json,
+			updated_by = EXCLUDED.updated_by,
+			updated_at = EXCLUDED.updated_at
+		RETURNING id, tenant_id, service_ref, interface_ref, scope, workspace_id, folder_id,
+		          activity_id, node_id, principal_type, principal_id, allowed_node_types_json,
+		          allowed_operations_json, allowed_provider_policies_json, allow_explicit_provider_ref,
+		          allowed_provider_refs_json, lua_callable, require_approval, deny, status, metadata_json,
+		          created_by, updated_by, created_at, updated_at
+	`, binding.ID, binding.TenantID, binding.ServiceRef, binding.InterfaceRef, binding.Scope, binding.WorkspaceID,
+		binding.FolderID, binding.ActivityID, binding.NodeID, binding.PrincipalType, binding.PrincipalID,
+		json.RawMessage(allowedNodeTypes), json.RawMessage(allowedOperations), json.RawMessage(allowedProviderPolicies),
+		binding.AllowExplicitProviderRef, json.RawMessage(allowedProviderRefs), binding.LuaCallable,
+		binding.RequireApproval, binding.Deny, binding.Status, binding.Metadata, binding.CreatedBy,
+		binding.UpdatedBy, binding.CreatedAt, binding.UpdatedAt)
+	saved, err := scanServiceInterfaceBinding(row)
+	if err != nil {
+		return marketing.ServiceInterfaceBinding{}, mapPostgresResourceError(err)
+	}
+	return saved, nil
+}
+
+func (r *Repository) ListServiceInterfaceBindings(ctx context.Context, query marketing.ServiceInterfaceBindingQuery) ([]marketing.ServiceInterfaceBinding, error) {
+	limit := query.Limit
+	if limit <= 0 || limit > 500 {
+		limit = 500
+	}
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, tenant_id, service_ref, interface_ref, scope, workspace_id, folder_id,
+		       activity_id, node_id, principal_type, principal_id, allowed_node_types_json,
+		       allowed_operations_json, allowed_provider_policies_json, allow_explicit_provider_ref,
+		       allowed_provider_refs_json, lua_callable, require_approval, deny, status, metadata_json,
+		       created_by, updated_by, created_at, updated_at
+		FROM marketing_service_interface_binding
+		WHERE ($1 = '' OR tenant_id = $1)
+		  AND ($2 = '' OR service_ref = $2)
+		  AND ($3 = '' OR interface_ref = $3)
+		  AND ($4 = '' OR scope = $4)
+		  AND ($5 = '' OR workspace_id = $5)
+		  AND ($6 = '' OR folder_id = $6)
+		  AND ($7 = '' OR activity_id = $7)
+		  AND ($8 = '' OR node_id = $8)
+		  AND ($9 = '' OR status = $9)
+		  AND ($10 = '' OR allowed_node_types_json = '[]'::jsonb OR allowed_node_types_json ? $10)
+		ORDER BY updated_at DESC, service_ref ASC, interface_ref ASC
+		LIMIT $11
+	`, query.TenantID, query.ServiceRef, query.InterfaceRef, query.Scope, query.WorkspaceID, query.FolderID,
+		query.ActivityID, query.NodeID, query.Status, query.NodeType, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []marketing.ServiceInterfaceBinding{}
+	for rows.Next() {
+		binding, err := scanServiceInterfaceBinding(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, binding)
+	}
+	return out, rows.Err()
+}
+
+func (r *Repository) SaveServiceProviderRuntimeState(ctx context.Context, state marketing.ServiceProviderRuntimeState) (marketing.ServiceProviderRuntimeState, error) {
+	if state.ID == "" {
+		state.ID = marketing.NewID("svcprovstate")
+	}
+	if state.HealthStatus == "" {
+		state.HealthStatus = marketing.ServiceProviderHealthHealthy
+	}
+	if state.CircuitStatus == "" {
+		state.CircuitStatus = marketing.ServiceProviderCircuitClosed
+	}
+	if len(state.Metadata) == 0 {
+		state.Metadata = json.RawMessage(`{}`)
+	}
+	if state.CreatedAt.IsZero() {
+		state.CreatedAt = time.Now().UTC()
+	}
+	if state.UpdatedAt.IsZero() {
+		state.UpdatedAt = state.CreatedAt
+	}
+	if err := state.Validate(); err != nil {
+		return marketing.ServiceProviderRuntimeState{}, err
+	}
+	row := r.db.QueryRowContext(ctx, serviceProviderRuntimeStateUpsertSQL(), serviceProviderRuntimeStateArgs(state)...)
+	saved, err := scanServiceProviderRuntimeState(row)
+	if err != nil {
+		return marketing.ServiceProviderRuntimeState{}, mapPostgresResourceError(err)
+	}
+	return saved, nil
+}
+
+func postgresSaveServiceProviderRuntimeStateTx(ctx context.Context, tx *sql.Tx, state marketing.ServiceProviderRuntimeState) (marketing.ServiceProviderRuntimeState, error) {
+	row := tx.QueryRowContext(ctx, serviceProviderRuntimeStateUpsertSQL(), serviceProviderRuntimeStateArgs(state)...)
+	saved, err := scanServiceProviderRuntimeState(row)
+	if err != nil {
+		return marketing.ServiceProviderRuntimeState{}, mapPostgresResourceError(err)
+	}
+	return saved, nil
+}
+
+func serviceProviderRuntimeStateUpsertSQL() string {
+	return `
+		INSERT INTO marketing_service_provider_runtime_state (
+			id, tenant_id, service_ref, interface_ref, provider_ref, health_status, health_message,
+			circuit_status, failure_count, success_count, consecutive_failures,
+			rate_limit_window, rate_limit_count, half_open_probe_count, half_open_probe_limit,
+			half_open_success_count, half_open_success_threshold, last_failure_at, last_success_at,
+			circuit_opened_at, circuit_reset_at, metadata_json, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
+		ON CONFLICT (tenant_id, service_ref, interface_ref, provider_ref) DO UPDATE SET
+			health_status = EXCLUDED.health_status,
+			health_message = EXCLUDED.health_message,
+			circuit_status = EXCLUDED.circuit_status,
+			failure_count = EXCLUDED.failure_count,
+			success_count = EXCLUDED.success_count,
+			consecutive_failures = EXCLUDED.consecutive_failures,
+			rate_limit_window = EXCLUDED.rate_limit_window,
+			rate_limit_count = EXCLUDED.rate_limit_count,
+			half_open_probe_count = EXCLUDED.half_open_probe_count,
+			half_open_probe_limit = EXCLUDED.half_open_probe_limit,
+			half_open_success_count = EXCLUDED.half_open_success_count,
+			half_open_success_threshold = EXCLUDED.half_open_success_threshold,
+			last_failure_at = EXCLUDED.last_failure_at,
+			last_success_at = EXCLUDED.last_success_at,
+			circuit_opened_at = EXCLUDED.circuit_opened_at,
+			circuit_reset_at = EXCLUDED.circuit_reset_at,
+			metadata_json = EXCLUDED.metadata_json,
+			updated_at = EXCLUDED.updated_at
+		RETURNING id, tenant_id, service_ref, interface_ref, provider_ref, health_status, health_message,
+		          circuit_status, failure_count, success_count, consecutive_failures,
+		          rate_limit_window, rate_limit_count, half_open_probe_count, half_open_probe_limit,
+		          half_open_success_count, half_open_success_threshold, last_failure_at, last_success_at,
+		          circuit_opened_at, circuit_reset_at, metadata_json, created_at, updated_at
+	`
+}
+
+func serviceProviderRuntimeStateArgs(state marketing.ServiceProviderRuntimeState) []any {
+	return []any{state.ID, state.TenantID, state.ServiceRef, state.InterfaceRef, state.ProviderRef, state.HealthStatus, state.HealthMessage,
+		state.CircuitStatus, state.FailureCount, state.SuccessCount, state.ConsecutiveFailures, nullableTime(state.RateLimitWindow),
+		state.RateLimitCount, state.HalfOpenProbeCount, state.HalfOpenProbeLimit, state.HalfOpenSuccessCount,
+		state.HalfOpenSuccessThreshold, nullableTimePtr(state.LastFailureAt), nullableTimePtr(state.LastSuccessAt),
+		nullableTimePtr(state.CircuitOpenedAt), nullableTimePtr(state.CircuitResetAt), state.Metadata, state.CreatedAt, state.UpdatedAt}
+}
+
+func (r *Repository) GetServiceProviderRuntimeState(ctx context.Context, tenantID string, serviceRef string, interfaceRef string, providerRef string) (marketing.ServiceProviderRuntimeState, error) {
+	row := r.db.QueryRowContext(ctx, `
+		SELECT id, tenant_id, service_ref, interface_ref, provider_ref, health_status, health_message,
+		       circuit_status, failure_count, success_count, consecutive_failures,
+		       rate_limit_window, rate_limit_count, half_open_probe_count, half_open_probe_limit,
+		       half_open_success_count, half_open_success_threshold, last_failure_at, last_success_at,
+		       circuit_opened_at, circuit_reset_at, metadata_json, created_at, updated_at
+		FROM marketing_service_provider_runtime_state
+		WHERE tenant_id = $1 AND service_ref = $2 AND interface_ref = $3 AND provider_ref = $4
+	`, tenantID, serviceRef, interfaceRef, providerRef)
+	state, err := scanServiceProviderRuntimeState(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return marketing.ServiceProviderRuntimeState{}, marketing.ErrNotFound
+		}
+		return marketing.ServiceProviderRuntimeState{}, err
+	}
+	return state, nil
+}
+
+func (r *Repository) ListServiceProviderRuntimeStates(ctx context.Context, query marketing.ServiceProviderRuntimeStateQuery) ([]marketing.ServiceProviderRuntimeState, error) {
+	limit := query.Limit
+	if limit <= 0 || limit > 500 {
+		limit = 500
+	}
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, tenant_id, service_ref, interface_ref, provider_ref, health_status, health_message,
+		       circuit_status, failure_count, success_count, consecutive_failures,
+		       rate_limit_window, rate_limit_count, half_open_probe_count, half_open_probe_limit,
+		       half_open_success_count, half_open_success_threshold, last_failure_at, last_success_at,
+		       circuit_opened_at, circuit_reset_at, metadata_json, created_at, updated_at
+		FROM marketing_service_provider_runtime_state
+		WHERE ($1 = '' OR tenant_id = $1)
+		  AND ($2 = '' OR service_ref = $2)
+		  AND ($3 = '' OR interface_ref = $3)
+		  AND ($4 = '' OR provider_ref = $4)
+		  AND ($5 = '' OR health_status = $5)
+		  AND ($6 = '' OR circuit_status = $6)
+		ORDER BY updated_at DESC, service_ref ASC, interface_ref ASC, provider_ref ASC
+		LIMIT $7
+	`, query.TenantID, query.ServiceRef, query.InterfaceRef, query.ProviderRef, query.HealthStatus, query.CircuitStatus, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []marketing.ServiceProviderRuntimeState{}
+	for rows.Next() {
+		state, err := scanServiceProviderRuntimeState(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, state)
+	}
+	return out, rows.Err()
+}
+
+func (r *Repository) ConsumeServiceProviderRateLimit(ctx context.Context, cmd marketing.ServiceProviderRateLimitConsume) (marketing.ServiceProviderRuntimeState, bool, error) {
+	state := cmd.State
+	if state.ID == "" {
+		state.ID = marketing.NewID("svcprovstate")
+	}
+	if state.HealthStatus == "" {
+		state.HealthStatus = marketing.ServiceProviderHealthHealthy
+	}
+	if state.CircuitStatus == "" {
+		state.CircuitStatus = marketing.ServiceProviderCircuitClosed
+	}
+	if len(state.Metadata) == 0 {
+		state.Metadata = json.RawMessage(`{}`)
+	}
+	now := cmd.Now
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	if cmd.Window <= 0 {
+		cmd.Window = time.Minute
+	}
+	if state.CreatedAt.IsZero() {
+		state.CreatedAt = now
+	}
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return marketing.ServiceProviderRuntimeState{}, false, err
+	}
+	defer rollback(tx)
+	row := tx.QueryRowContext(ctx, `
+		SELECT id, tenant_id, service_ref, interface_ref, provider_ref, health_status, health_message,
+		       circuit_status, failure_count, success_count, consecutive_failures,
+		       rate_limit_window, rate_limit_count, half_open_probe_count, half_open_probe_limit,
+		       half_open_success_count, half_open_success_threshold, last_failure_at, last_success_at,
+		       circuit_opened_at, circuit_reset_at, metadata_json, created_at, updated_at
+		FROM marketing_service_provider_runtime_state
+		WHERE tenant_id = $1 AND service_ref = $2 AND interface_ref = $3 AND provider_ref = $4
+		FOR UPDATE
+	`, state.TenantID, state.ServiceRef, state.InterfaceRef, state.ProviderRef)
+	existing, err := scanServiceProviderRuntimeState(row)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return marketing.ServiceProviderRuntimeState{}, false, err
+	}
+	if err == nil {
+		state = existing
+	}
+	if state.RateLimitWindow.IsZero() || now.Sub(state.RateLimitWindow) >= cmd.Window {
+		state.RateLimitWindow = now
+		state.RateLimitCount = 0
+	}
+	if cmd.Limit > 0 && state.RateLimitCount >= cmd.Limit {
+		state.UpdatedAt = now
+		if err := tx.Commit(); err != nil {
+			return marketing.ServiceProviderRuntimeState{}, false, err
+		}
+		return state, false, nil
+	}
+	state.RateLimitCount++
+	state.UpdatedAt = now
+	saved, err := postgresSaveServiceProviderRuntimeStateTx(ctx, tx, state)
+	if err != nil {
+		return marketing.ServiceProviderRuntimeState{}, false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return marketing.ServiceProviderRuntimeState{}, false, err
+	}
+	return saved, true, nil
+}
+
+func (r *Repository) CreateServiceCallAuditLog(ctx context.Context, log marketing.ServiceCallAuditLog) error {
+	if log.ID == "" {
+		log.ID = marketing.NewID("svccallaudit")
+	}
+	if log.Status == "" {
+		log.Status = marketing.ServiceCallAuditSuccess
+	}
+	if log.CreatedAt.IsZero() {
+		log.CreatedAt = time.Now().UTC()
+	}
+	if err := log.Validate(); err != nil {
+		return err
+	}
+	_, err := r.db.ExecContext(ctx, `
+		INSERT INTO marketing_service_call_audit (
+			id, tenant_id, workspace_id, folder_id, activity_id, workflow_id,
+			node_id, node_type, service_ref, interface_ref, provider_ref, resource_ref,
+			step_id, attempt, status, error_code, error_message, latency_ms, request_hash, response_hash,
+			provider_trace_json, schema_trace_json, permission_trace_json, actor, created_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
+	`, log.ID, log.TenantID, log.WorkspaceID, log.FolderID, log.ActivityID, log.WorkflowID,
+		log.NodeID, log.NodeType, log.ServiceRef, log.InterfaceRef, log.ProviderRef, log.ResourceRef,
+		log.StepID, log.Attempt, log.Status, log.ErrorCode, log.ErrorMessage, log.LatencyMS, log.RequestHash, log.ResponseHash,
+		jsonOrObject(log.ProviderTrace), jsonOrObject(log.SchemaTrace), jsonOrObject(log.PermissionTrace), log.Actor, log.CreatedAt)
+	return err
+}
+
+func (r *Repository) ListServiceCallAuditLogs(ctx context.Context, query marketing.ServiceCallAuditQuery) ([]marketing.ServiceCallAuditLog, error) {
+	limit := query.Limit
+	if limit <= 0 || limit > 500 {
+		limit = 500
+	}
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, tenant_id, workspace_id, folder_id, activity_id, workflow_id,
+		       node_id, node_type, service_ref, interface_ref, provider_ref, resource_ref,
+		       step_id, attempt, status, error_code, error_message, latency_ms, request_hash, response_hash,
+		       provider_trace_json, schema_trace_json, permission_trace_json, actor, created_at
+		FROM marketing_service_call_audit
+		WHERE ($1 = '' OR tenant_id = $1)
+		  AND ($2 = '' OR workspace_id = $2)
+		  AND ($3 = '' OR folder_id = $3)
+		  AND ($4 = '' OR activity_id = $4)
+		  AND ($5 = '' OR workflow_id = $5)
+		  AND ($6 = '' OR node_id = $6)
+		  AND ($7 = '' OR service_ref = $7)
+		  AND ($8 = '' OR interface_ref = $8)
+		  AND ($9 = '' OR provider_ref = $9)
+		  AND ($10 = '' OR resource_ref = $10)
+		  AND ($11 = '' OR status = $11)
+		  AND ($12 = '' OR error_code = $12)
+		  AND ($13 = '' OR (created_at, id) < (split_part($13, '|', 1)::timestamptz, split_part($13, '|', 2)))
+		ORDER BY created_at DESC, id DESC
+		LIMIT $14
+	`, query.TenantID, query.WorkspaceID, query.FolderID, query.ActivityID, query.WorkflowID,
+		query.NodeID, query.ServiceRef, query.InterfaceRef, query.ProviderRef, query.ResourceRef,
+		query.Status, query.ErrorCode, query.Cursor, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []marketing.ServiceCallAuditLog{}
+	for rows.Next() {
+		log, err := scanServiceCallAuditLog(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, log)
+	}
+	return out, rows.Err()
+}
+
+func (r *Repository) PurgeServiceCallAuditLogs(ctx context.Context, tenantID string, workspaceID string, before time.Time, limit int) (int, error) {
+	if before.IsZero() {
+		return 0, nil
+	}
+	if limit <= 0 || limit > 10000 {
+		limit = 10000
+	}
+	tag, err := r.db.ExecContext(ctx, `
+		WITH expired AS (
+				SELECT id
+				FROM marketing_service_call_audit
+				WHERE ($1 = '' OR tenant_id = $1)
+				  AND ($2 = '' OR workspace_id = $2)
+				  AND created_at < $3
+				ORDER BY created_at ASC, id ASC
+				LIMIT $4
+			)
+			DELETE FROM marketing_service_call_audit a
+			USING expired
+			WHERE a.id = expired.id
+		`, strings.TrimSpace(tenantID), strings.TrimSpace(workspaceID), before, limit)
+	if err != nil {
+		return 0, err
+	}
+	rows, _ := tag.RowsAffected()
+	return int(rows), nil
+}
+
 func (r *Repository) GetActivityState(ctx context.Context, key marketing.ActivityStateKey) (marketing.ActivityState, error) {
 	row := r.db.QueryRowContext(ctx, `
 		SELECT id, tenant_id, activity_id, namespace, state_key, COALESCE(subject_type, ''), COALESCE(subject_id, ''),
@@ -3466,6 +3980,138 @@ func scanServiceProvider(scanner outboxScanner) (marketing.ServiceProvider, erro
 		provider.Config = json.RawMessage(`{}`)
 	}
 	return provider, nil
+}
+
+func scanServiceSchema(scanner outboxScanner) (marketing.ServiceSchema, error) {
+	var schema marketing.ServiceSchema
+	if err := scanner.Scan(&schema.ID, &schema.TenantID, &schema.WorkspaceID, &schema.FolderID,
+		&schema.SchemaRef, &schema.SchemaType, &schema.Scope, &schema.Version, &schema.Status,
+		&schema.SchemaJSON, &schema.ExamplesJSON, &schema.Description, &schema.CreatedBy,
+		&schema.UpdatedBy, &schema.CreatedAt, &schema.UpdatedAt); err != nil {
+		return marketing.ServiceSchema{}, err
+	}
+	if len(schema.ExamplesJSON) == 0 {
+		schema.ExamplesJSON = json.RawMessage(`[]`)
+	}
+	return schema, nil
+}
+
+func scanServiceInterfaceBinding(scanner outboxScanner) (marketing.ServiceInterfaceBinding, error) {
+	var binding marketing.ServiceInterfaceBinding
+	var allowedNodeTypes json.RawMessage
+	var allowedOperations json.RawMessage
+	var allowedProviderPolicies json.RawMessage
+	var allowedProviderRefs json.RawMessage
+	if err := scanner.Scan(&binding.ID, &binding.TenantID, &binding.ServiceRef, &binding.InterfaceRef,
+		&binding.Scope, &binding.WorkspaceID, &binding.FolderID, &binding.ActivityID, &binding.NodeID,
+		&binding.PrincipalType, &binding.PrincipalID, &allowedNodeTypes, &allowedOperations,
+		&allowedProviderPolicies, &binding.AllowExplicitProviderRef, &allowedProviderRefs,
+		&binding.LuaCallable, &binding.RequireApproval, &binding.Deny, &binding.Status, &binding.Metadata,
+		&binding.CreatedBy, &binding.UpdatedBy, &binding.CreatedAt, &binding.UpdatedAt); err != nil {
+		return marketing.ServiceInterfaceBinding{}, err
+	}
+	if len(allowedNodeTypes) > 0 {
+		_ = json.Unmarshal(allowedNodeTypes, &binding.AllowedNodeTypes)
+	}
+	if len(allowedOperations) > 0 {
+		_ = json.Unmarshal(allowedOperations, &binding.AllowedOperations)
+	}
+	if len(allowedProviderPolicies) > 0 {
+		_ = json.Unmarshal(allowedProviderPolicies, &binding.AllowedProviderPolicies)
+	}
+	if len(allowedProviderRefs) > 0 {
+		_ = json.Unmarshal(allowedProviderRefs, &binding.AllowedProviderRefs)
+	}
+	if binding.AllowedNodeTypes == nil {
+		binding.AllowedNodeTypes = []string{}
+	}
+	if binding.AllowedOperations == nil {
+		binding.AllowedOperations = []marketing.ServiceInterfaceOperation{}
+	}
+	if binding.AllowedProviderPolicies == nil {
+		binding.AllowedProviderPolicies = []string{}
+	}
+	if binding.AllowedProviderRefs == nil {
+		binding.AllowedProviderRefs = []string{}
+	}
+	if len(binding.Metadata) == 0 {
+		binding.Metadata = json.RawMessage(`{}`)
+	}
+	return binding, nil
+}
+
+func scanServiceProviderRuntimeState(scanner outboxScanner) (marketing.ServiceProviderRuntimeState, error) {
+	var state marketing.ServiceProviderRuntimeState
+	var rateLimitWindow sql.NullTime
+	var lastFailureAt sql.NullTime
+	var lastSuccessAt sql.NullTime
+	var circuitOpenedAt sql.NullTime
+	var circuitResetAt sql.NullTime
+	if err := scanner.Scan(&state.ID, &state.TenantID, &state.ServiceRef, &state.InterfaceRef, &state.ProviderRef,
+		&state.HealthStatus, &state.HealthMessage, &state.CircuitStatus, &state.FailureCount,
+		&state.SuccessCount, &state.ConsecutiveFailures, &rateLimitWindow, &state.RateLimitCount,
+		&state.HalfOpenProbeCount, &state.HalfOpenProbeLimit, &state.HalfOpenSuccessCount, &state.HalfOpenSuccessThreshold,
+		&lastFailureAt, &lastSuccessAt, &circuitOpenedAt, &circuitResetAt, &state.Metadata,
+		&state.CreatedAt, &state.UpdatedAt); err != nil {
+		return marketing.ServiceProviderRuntimeState{}, err
+	}
+	if rateLimitWindow.Valid {
+		state.RateLimitWindow = rateLimitWindow.Time
+	}
+	if lastFailureAt.Valid {
+		value := lastFailureAt.Time
+		state.LastFailureAt = &value
+	}
+	if lastSuccessAt.Valid {
+		value := lastSuccessAt.Time
+		state.LastSuccessAt = &value
+	}
+	if circuitOpenedAt.Valid {
+		value := circuitOpenedAt.Time
+		state.CircuitOpenedAt = &value
+	}
+	if circuitResetAt.Valid {
+		value := circuitResetAt.Time
+		state.CircuitResetAt = &value
+	}
+	if len(state.Metadata) == 0 {
+		state.Metadata = json.RawMessage(`{}`)
+	}
+	return state, nil
+}
+
+func scanServiceCallAuditLog(scanner outboxScanner) (marketing.ServiceCallAuditLog, error) {
+	var log marketing.ServiceCallAuditLog
+	if err := scanner.Scan(&log.ID, &log.TenantID, &log.WorkspaceID, &log.FolderID,
+		&log.ActivityID, &log.WorkflowID, &log.NodeID, &log.NodeType, &log.ServiceRef,
+		&log.InterfaceRef, &log.ProviderRef, &log.ResourceRef, &log.StepID, &log.Attempt,
+		&log.Status, &log.ErrorCode, &log.ErrorMessage, &log.LatencyMS, &log.RequestHash,
+		&log.ResponseHash, &log.ProviderTrace, &log.SchemaTrace, &log.PermissionTrace,
+		&log.Actor, &log.CreatedAt); err != nil {
+		return marketing.ServiceCallAuditLog{}, err
+	}
+	return log, nil
+}
+
+func jsonOrObject(value json.RawMessage) json.RawMessage {
+	if len(value) == 0 {
+		return json.RawMessage(`{}`)
+	}
+	return value
+}
+
+func nullableTime(value time.Time) any {
+	if value.IsZero() {
+		return nil
+	}
+	return value
+}
+
+func nullableTimePtr(value *time.Time) any {
+	if value == nil || value.IsZero() {
+		return nil
+	}
+	return *value
 }
 
 func scanResource(scanner outboxScanner) (marketing.Resource, error) {

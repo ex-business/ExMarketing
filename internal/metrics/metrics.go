@@ -150,6 +150,8 @@ func (r *Registry) RenderPrometheus() []byte {
 	writeMetricFamily(&out, "exmarketing_db_operation_latency_seconds", "histogram", "Database operation latency in seconds.")
 	writeMetricFamily(&out, "exmarketing_fact_query_total", "counter", "Fact query results.")
 	writeMetricFamily(&out, "exmarketing_fact_query_latency_seconds", "histogram", "Fact query latency in seconds.")
+	writeMetricFamily(&out, "exmarketing_service_call_audit_write_failed_total", "counter", "Service call audit write failures.")
+	writeMetricFamily(&out, "exmarketing_service_call_audit_purge_total", "counter", "Service call audit retention purge results.")
 
 	for _, k := range sortedKeys(r.counters) {
 		fmt.Fprintf(&out, "%s %s\n", k, formatFloat(r.counters[k]))

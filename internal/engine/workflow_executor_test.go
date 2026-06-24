@@ -3859,6 +3859,21 @@ func TestFactQueryWorkflowNodeHandlerProviderChainUsesServiceInterfaceFallbackPo
 		},
 	}
 	service := NewService(repo)
+	if _, err := service.SaveServiceInterfaceBinding(ctx, marketing.ServiceInterfaceBinding{
+		TenantID:                runtime.Activity.TenantID,
+		ServiceRef:              "user-profile-service",
+		InterfaceRef:            "query-user-profile",
+		Scope:                   marketing.ServiceAssetScopeActivity,
+		ActivityID:              runtime.Activity.ID,
+		PrincipalType:           marketing.ServicePrincipalRole,
+		PrincipalID:             "*",
+		AllowedNodeTypes:        []string{"fact-query"},
+		AllowedOperations:       []marketing.ServiceInterfaceOperation{marketing.ServiceOperationCall},
+		AllowedProviderPolicies: []string{"PRIMARY_WITH_FALLBACK"},
+		Status:                  marketing.ServiceAssetActive,
+	}); err != nil {
+		t.Fatalf("save service interface binding: %v", err)
+	}
 	node := marketing.WorkflowNode{
 		ID:   "fact-query",
 		Type: "fact-query",
@@ -3955,6 +3970,21 @@ func TestFactQueryWorkflowNodeHandlerServiceInterfaceFallbackAttemptsNextProvide
 		if _, err := service.SaveServiceProvider(ctx, provider); err != nil {
 			t.Fatalf("save provider %s: %v", provider.Code, err)
 		}
+	}
+	if _, err := service.SaveServiceInterfaceBinding(ctx, marketing.ServiceInterfaceBinding{
+		TenantID:                runtime.Activity.TenantID,
+		ServiceRef:              "custom-profile-service",
+		InterfaceRef:            "query-profile",
+		Scope:                   marketing.ServiceAssetScopeActivity,
+		ActivityID:              runtime.Activity.ID,
+		PrincipalType:           marketing.ServicePrincipalRole,
+		PrincipalID:             "*",
+		AllowedNodeTypes:        []string{"fact-query"},
+		AllowedOperations:       []marketing.ServiceInterfaceOperation{marketing.ServiceOperationCall},
+		AllowedProviderPolicies: []string{"PRIMARY_WITH_FALLBACK"},
+		Status:                  marketing.ServiceAssetActive,
+	}); err != nil {
+		t.Fatalf("save service interface binding: %v", err)
 	}
 	node := marketing.WorkflowNode{
 		ID:   "fact-query",

@@ -90,6 +90,13 @@ const CHECKLIST_DEFINITIONS: ChecklistDefinition[] = [
     match: (item) => item.code.startsWith('WORKFLOW_NODE_INPUT_MAPPING_'),
   },
   {
+    id: 'service-governance',
+    title: '服务治理契约有效',
+    description: 'Service Interface、Schema、Binding、Provider Policy 和 runtime gate 必须可解析。',
+    match: (item) => /SERVICE_|PROVIDER_|SCHEMA_|BINDING_|CIRCUIT|RATE_LIMIT|MOCK|ENVIRONMENT/.test(item.code)
+      || /providerChain|serviceRef|interfaceRef|providerRef|providerPolicy|schema/i.test(`${item.path ?? ''} ${item.message}`),
+  },
+  {
     id: 'routes',
     title: '分支路由合法',
     description: 'route model、默认分支和分支覆盖必须完整。',

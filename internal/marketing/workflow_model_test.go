@@ -252,6 +252,9 @@ func TestValidateWorkflowDefinitionValidatesFactQueryProviderTargets(t *testing.
 	if !validHTTP.Valid {
 		t.Fatalf("expected HTTP provider endpoint to pass validation, got %+v", validHTTP.Items)
 	}
+	if validHTTP.Summary.WarningCount != 1 || validHTTP.Items[0].Code != "LEGACY_NODE_CONFIG_MIGRATION_AVAILABLE" {
+		t.Fatalf("expected HTTP provider endpoint to pass with legacy migration warning, got %+v", validHTTP.Items)
+	}
 
 	legacyUseEmpty := ValidateWorkflowDefinition(json.RawMessage(`{
 		"meta": {"activityId": "activity-1", "workspaceId": "workspace-1", "folderId": "folder-1"},
@@ -280,7 +283,7 @@ func TestValidateWorkflowDefinitionValidatesFactQueryProviderTargets(t *testing.
 	if missingBlockingFactServiceTarget.Valid {
 		t.Fatalf("expected BLOCK FACT_SERVICE config without target to fail")
 	}
-	if len(missingBlockingFactServiceTarget.Items) != 1 || missingBlockingFactServiceTarget.Items[0].Code != "WORKFLOW_FACT_PROVIDER_TARGET_REQUIRED" || missingBlockingFactServiceTarget.Items[0].Path != "nodes[1].config.endpoint" {
+	if !workflowValidationHasIssue(missingBlockingFactServiceTarget, "WORKFLOW_FACT_PROVIDER_TARGET_REQUIRED", "nodes[1].config.endpoint") {
 		t.Fatalf("expected missing FACT_SERVICE target issue, got %+v", missingBlockingFactServiceTarget.Items)
 	}
 
@@ -297,6 +300,9 @@ func TestValidateWorkflowDefinitionValidatesFactQueryProviderTargets(t *testing.
 	if !validRedisRef.Valid {
 		t.Fatalf("expected REDIS provider with redisRef to pass, got %+v", validRedisRef.Items)
 	}
+	if validRedisRef.Summary.WarningCount != 1 || validRedisRef.Items[0].Code != "LEGACY_NODE_CONFIG_MIGRATION_AVAILABLE" {
+		t.Fatalf("expected REDIS provider with redisRef to pass with legacy migration warning, got %+v", validRedisRef.Items)
+	}
 
 	missingProviderRef := ValidateWorkflowDefinition(json.RawMessage(`{
 		"meta": {"activityId": "activity-1", "workspaceId": "workspace-1", "folderId": "folder-1"},
@@ -311,7 +317,7 @@ func TestValidateWorkflowDefinitionValidatesFactQueryProviderTargets(t *testing.
 	if missingProviderRef.Valid {
 		t.Fatalf("expected PROVIDER without resourceRef to fail")
 	}
-	if len(missingProviderRef.Items) != 1 || missingProviderRef.Items[0].Code != "WORKFLOW_FACT_PROVIDER_TARGET_REQUIRED" || missingProviderRef.Items[0].Path != "nodes[1].config.resourceRef" {
+	if !workflowValidationHasIssue(missingProviderRef, "WORKFLOW_FACT_PROVIDER_TARGET_REQUIRED", "nodes[1].config.resourceRef") {
 		t.Fatalf("expected provider resourceRef target issue, got %+v", missingProviderRef.Items)
 	}
 
@@ -327,6 +333,9 @@ func TestValidateWorkflowDefinitionValidatesFactQueryProviderTargets(t *testing.
 	}`))
 	if !validProviderRef.Valid {
 		t.Fatalf("expected PROVIDER with resourceRef to pass, got %+v", validProviderRef.Items)
+	}
+	if validProviderRef.Summary.WarningCount != 1 || validProviderRef.Items[0].Code != "LEGACY_NODE_CONFIG_MIGRATION_AVAILABLE" {
+		t.Fatalf("expected PROVIDER with resourceRef to pass with legacy migration warning, got %+v", validProviderRef.Items)
 	}
 
 	validChain := ValidateWorkflowDefinition(json.RawMessage(`{
@@ -345,6 +354,9 @@ func TestValidateWorkflowDefinitionValidatesFactQueryProviderTargets(t *testing.
 	if !validChain.Valid {
 		t.Fatalf("expected resource-backed provider chain to pass validation, got %+v", validChain.Items)
 	}
+	if validChain.Summary.WarningCount != 1 {
+		t.Fatalf("expected resource-backed legacy provider chain warning, got %+v", validChain.Items)
+	}
 
 	validRedisChain := ValidateWorkflowDefinition(json.RawMessage(`{
 		"meta": {"activityId": "activity-1", "workspaceId": "workspace-1", "folderId": "folder-1"},
@@ -361,13 +373,16 @@ func TestValidateWorkflowDefinitionValidatesFactQueryProviderTargets(t *testing.
 	if !validRedisChain.Valid {
 		t.Fatalf("expected provider chain REDIS step with redisRef to pass, got %+v", validRedisChain.Items)
 	}
+	if validRedisChain.Summary.WarningCount != 1 {
+		t.Fatalf("expected provider chain REDIS step to pass with legacy migration warning, got %+v", validRedisChain.Items)
+	}
 
 	validServiceInterfaceChain := ValidateWorkflowDefinition(json.RawMessage(`{
 		"meta": {"activityId": "activity-1", "workspaceId": "workspace-1", "folderId": "folder-1"},
 		"nodes": [
 			{"id": "event-in", "type": "event-in", "kind": "entry"},
 			{"id": "facts", "type": "fact-query", "config": {"factKeys": ["USER_PROFILE"], "providerChain": [
-				{"targetType": "SERVICE_INTERFACE", "serviceRef": "user-profile-service", "interfaceRef": "query-user-profile", "providerPolicy": "PRIMARY", "onMiss": "BLOCK"}
+				{"targetType": "SERVICE_INTERFACE", "source": "HTTP", "serviceRef": "user-profile-service", "interfaceRef": "query-user-profile", "providerPolicy": "PRIMARY", "onMiss": "BLOCK"}
 			]}}
 		],
 		"edges": [
@@ -393,7 +408,7 @@ func TestValidateWorkflowDefinitionValidatesFactQueryProviderTargets(t *testing.
 	if missingChainResource.Valid {
 		t.Fatalf("expected provider chain REDIS step without redisRef/resourceRef to fail")
 	}
-	if len(missingChainResource.Items) != 1 || missingChainResource.Items[0].Code != "WORKFLOW_FACT_PROVIDER_TARGET_REQUIRED" || missingChainResource.Items[0].Path != "nodes[1].config.providerChain[0].redisRef" {
+	if !workflowValidationHasIssue(missingChainResource, "WORKFLOW_FACT_PROVIDER_TARGET_REQUIRED", "nodes[1].config.providerChain[0].redisRef") {
 		t.Fatalf("expected provider chain redisRef target issue, got %+v", missingChainResource.Items)
 	}
 
@@ -412,11 +427,11 @@ func TestValidateWorkflowDefinitionValidatesFactQueryProviderTargets(t *testing.
 	if missingServiceInterfaceTarget.Valid {
 		t.Fatalf("expected provider chain SERVICE_INTERFACE step without interfaceRef to fail")
 	}
-	if len(missingServiceInterfaceTarget.Items) != 1 || missingServiceInterfaceTarget.Items[0].Code != "WORKFLOW_FACT_PROVIDER_TARGET_REQUIRED" || missingServiceInterfaceTarget.Items[0].Path != "nodes[1].config.providerChain[0].serviceRef" {
+	if !workflowValidationHasIssue(missingServiceInterfaceTarget, "SERVICE_INTERFACE_REF_REQUIRED", "nodes[1].config.providerChain[0].serviceRef") {
 		t.Fatalf("expected provider chain serviceRef target issue, got %+v", missingServiceInterfaceTarget.Items)
 	}
 
-	unsupportedServiceInterfacePolicy := ValidateWorkflowDefinition(json.RawMessage(`{
+	supportedFallbackServiceInterfacePolicy := ValidateWorkflowDefinition(json.RawMessage(`{
 		"meta": {"activityId": "activity-1", "workspaceId": "workspace-1", "folderId": "folder-1"},
 		"nodes": [
 			{"id": "event-in", "type": "event-in", "kind": "entry"},
@@ -428,10 +443,26 @@ func TestValidateWorkflowDefinitionValidatesFactQueryProviderTargets(t *testing.
 			{"id": "event-in-facts", "source": "event-in", "target": "facts"}
 		]
 	}`))
+	if !supportedFallbackServiceInterfacePolicy.Valid {
+		t.Fatalf("expected provider chain SERVICE_INTERFACE step with fallback providerPolicy to pass, got %+v", supportedFallbackServiceInterfacePolicy.Items)
+	}
+
+	unsupportedServiceInterfacePolicy := ValidateWorkflowDefinition(json.RawMessage(`{
+		"meta": {"activityId": "activity-1", "workspaceId": "workspace-1", "folderId": "folder-1"},
+		"nodes": [
+			{"id": "event-in", "type": "event-in", "kind": "entry"},
+			{"id": "facts", "type": "fact-query", "config": {"factKeys": ["USER_PROFILE"], "providerChain": [
+				{"source": "SERVICE_INTERFACE", "serviceRef": "user-profile-service", "interfaceRef": "query-user-profile", "providerPolicy": "RANDOM", "onMiss": "BLOCK"}
+			]}}
+		],
+		"edges": [
+			{"id": "event-in-facts", "source": "event-in", "target": "facts"}
+		]
+	}`))
 	if unsupportedServiceInterfacePolicy.Valid {
 		t.Fatalf("expected provider chain SERVICE_INTERFACE step with unsupported providerPolicy to fail")
 	}
-	if len(unsupportedServiceInterfacePolicy.Items) != 1 || unsupportedServiceInterfacePolicy.Items[0].Code != "WORKFLOW_FACT_PROVIDER_POLICY_UNSUPPORTED" || unsupportedServiceInterfacePolicy.Items[0].Path != "nodes[1].config.providerChain[0].providerPolicy" {
+	if !workflowValidationHasIssue(unsupportedServiceInterfacePolicy, "WORKFLOW_FACT_PROVIDER_POLICY_UNSUPPORTED", "nodes[1].config.providerChain[0].providerPolicy") {
 		t.Fatalf("expected provider chain providerPolicy issue, got %+v", unsupportedServiceInterfacePolicy.Items)
 	}
 
@@ -450,7 +481,7 @@ func TestValidateWorkflowDefinitionValidatesFactQueryProviderTargets(t *testing.
 	if missingStateResource.Valid {
 		t.Fatalf("expected activity-state RESOURCE step without resourceRef to fail")
 	}
-	if len(missingStateResource.Items) != 1 || missingStateResource.Items[0].Code != "WORKFLOW_ACTIVITY_STATE_RESOURCE_REQUIRED" || missingStateResource.Items[0].Path != "nodes[1].config.providerChain[0].resourceRef" {
+	if !workflowValidationHasIssue(missingStateResource, "RESOURCE_OPERATION_REQUIRED", "nodes[1].config.providerChain[0].resourceRef") {
 		t.Fatalf("expected activity-state resourceRef issue, got %+v", missingStateResource.Items)
 	}
 
@@ -469,7 +500,7 @@ func TestValidateWorkflowDefinitionValidatesFactQueryProviderTargets(t *testing.
 	if missingQuotaResource.Valid {
 		t.Fatalf("expected quota-check RESOURCE step without resourceRef to fail")
 	}
-	if len(missingQuotaResource.Items) != 1 || missingQuotaResource.Items[0].Code != "WORKFLOW_QUOTA_RESOURCE_REQUIRED" || missingQuotaResource.Items[0].Path != "nodes[1].config.providerChain[0].resourceRef" {
+	if !workflowValidationHasIssue(missingQuotaResource, "RESOURCE_OPERATION_REQUIRED", "nodes[1].config.providerChain[0].resourceRef") {
 		t.Fatalf("expected quota-check resourceRef issue, got %+v", missingQuotaResource.Items)
 	}
 
@@ -488,7 +519,7 @@ func TestValidateWorkflowDefinitionValidatesFactQueryProviderTargets(t *testing.
 	if missingCandidateRewardResource.Valid {
 		t.Fatalf("expected candidate-reward RESOURCE step without resourceRef to fail")
 	}
-	if len(missingCandidateRewardResource.Items) != 1 || missingCandidateRewardResource.Items[0].Code != "WORKFLOW_CANDIDATE_REWARD_RESOURCE_REQUIRED" || missingCandidateRewardResource.Items[0].Path != "nodes[1].config.providerChain[0].resourceRef" {
+	if !workflowValidationHasIssue(missingCandidateRewardResource, "RESOURCE_OPERATION_REQUIRED", "nodes[1].config.providerChain[0].resourceRef") {
 		t.Fatalf("expected candidate-reward resourceRef issue, got %+v", missingCandidateRewardResource.Items)
 	}
 
@@ -505,6 +536,15 @@ func TestValidateWorkflowDefinitionValidatesFactQueryProviderTargets(t *testing.
 	if !validLuaQuery.Valid {
 		t.Fatalf("expected lua-query source script to pass provider target validation, got %+v", validLuaQuery.Items)
 	}
+}
+
+func workflowValidationHasIssue(result WorkflowValidationResult, code string, path string) bool {
+	for _, item := range result.Items {
+		if item.Code == code && item.Path == path {
+			return true
+		}
+	}
+	return false
 }
 
 func TestValidateWorkflowDefinitionValidatesInputMappingReferences(t *testing.T) {

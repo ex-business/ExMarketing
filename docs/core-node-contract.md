@@ -55,6 +55,16 @@ The node library should group by this product-facing category and keep
 
 - Core handlers must prefer resolved node input and upstream node output over
   global runtime fields. Runtime fields are allowed as compatibility fallback.
+- Core handlers must not expose raw infrastructure connection fields in new
+  node configs. HTTP URL, Redis address, DB DSN, MQ broker, topic credentials,
+  and secrets belong to Service Provider or Resource definitions.
+- Nodes that need external facts or business capabilities must use
+  `ProviderChainStep(targetType=SERVICE_INTERFACE)` and call a registered
+  Service Interface. Direct `resourceRef` is reserved for controlled state,
+  counter, lock, cache, store, and other low-level Resource operations.
+- Legacy `resourceRef`, `providerCode`, `endpoint`, `redisRef`, and
+  `source=PROVIDER/FACT_SERVICE` fields may be read for compatibility, but new
+  schemas and templates must not make them the default configuration path.
 - Every core handler must write a stable top-level output key matching the node
   schema.
 - Every core handler must include `audit` metadata in output.
@@ -109,15 +119,15 @@ The node library should group by this product-facing category and keep
 | `inbox` | `raw_event` | `idempotencyKeyTemplate`, `duplicatePolicy`, `ttlSeconds` | `event_context` | duplicate policy decides return/reject/reprocess |
 | `normalize` | `raw_event` | `mapping`, `defaults` | `normalized_event` | fail only on invalid mapping |
 | `match` | `event_context`, optional `activity_config` | `mode`, `tenantMatchPolicy`, `fallbackAction` | `matched_activity` | fail/skip according to fallback action |
-| `fact-query` | `subject`, `fact_keys` | `factKeys`, `resourceRef`, `subjectPath`, `timeoutSeconds`, `failureAction` | `facts` | block/use-empty/skip according to failure action; see [Fact Query node guide](fact-query-node.zh-CN.md) |
-| `activity-state` | `event_context`, optional `state_patch` | `providerChain[0].source=INTERNAL`, `keyTemplate`, `namespace`, `operation`, `outputAs`; `resourceRef` only when `source=RESOURCE` | `activity_state`, `state_version` | durable state authority remains ActivityPlugin/StateStore |
-| `quota-check` | `subject`, `activity_id` | `providerChain[0].source=RESOURCE`, `resourceRef`, `keyTemplate`, `namespace`, `scope`, `scopeKeyTemplate`, `window`, `maxCount`, `consumeMode` | `quota_check`, `limit_hold` | frequency/limit semantics; emits `limit_hold` as a stable downstream field |
+| `fact-query` | `subject`, `fact_keys` | `providerChain[]` with `targetType=SERVICE_INTERFACE` by default; `factKeys`, `subjectPath`, `inputMapping`, `outputAs`, `timeoutMs`, `onMiss`; `RESOURCE/PROVIDER/FACT_SERVICE` only for controlled store or compatibility | `facts` | block/use-empty/skip according to failure action; see [Fact Query node guide](fact-query-node.zh-CN.md) |
+| `activity-state` | `event_context`, optional `state_patch` | `providerChain[]` with `targetType=RESOURCE` or internal state adapter, `resourceRef`, `operation`, `keyTemplate`, `namespace`, `valuePath`, `outputAs`; no endpoint/redisRef | `activity_state`, `state_version` | durable state authority remains ActivityPlugin/StateStore |
+| `quota-check` | `subject`, `activity_id` | `providerChain[]` with `targetType=RESOURCE`, `resourceRef`, `operation=COUNTER_CHECK/COUNTER_CONSUME`, `keyTemplate`, `namespace`, `scope`, `scopeKeyTemplate`, `window`, `maxCount`, `consumeMode` | `quota_check`, `limit_hold` | frequency/limit semantics; emits `limit_hold` as a stable downstream field |
 | `qualify` | `event_context`, `matched_activity`, optional `facts` | `ruleCodes`, `evaluationMode`, `riskPolicy`, `blockAction` | `stage_result`, `PASS`, `BLOCK`, `RISK`, `decision` | route by `PASS/BLOCK/RISK` |
-| `candidate-reward` | `qualified_context`, optional `plugin_result` | `providerChain[0].source=RESOURCE`, `resourceRef`, `keyTemplate`, `namespace`, `candidatePolicy`, `notQualifiedAction`, `emptyAction` | `candidate_rewards`, `reward_items` | apply candidate policy; skip/block when not qualified or empty |
-| `budget-reserve` | `candidate_rewards`, optional `reward_items` | `reserveProviderRef`, `failAction`, `releaseOnFailure` | `budget_reservation`, `quota_hold` | budget/inventory reservation semantics; internal quota fields live in the selected reserve Ref |
+| `candidate-reward` | `qualified_context`, optional `plugin_result` | `providerChain[]` with `targetType=RESOURCE` or `SERVICE_INTERFACE`, `resourceRef` or `serviceRef/interfaceRef`, `keyTemplate`, `namespace`, `candidatePolicy`, `notQualifiedAction`, `emptyAction` | `candidate_rewards`, `reward_items` | apply candidate policy; skip/block when not qualified or empty |
+| `budget-reserve` | `candidate_rewards`, optional `reward_items` | `providerChain[]` with `targetType=SERVICE_INTERFACE`, `serviceRef/interfaceRef`, `providerPolicy`, `idempotencyKeyTemplate`, `failAction`, `releaseOnFailure`; legacy `reserveProviderRef` only as compatibility alias | `budget_reservation`, `quota_hold` | budget/inventory reservation semantics; internal quota fields live in the selected service provider |
 | `participation` | `qualified_context`, optional `quota_hold` | `status`, `deduplicate` | `participation_id`, `commitMode`, `commitAuthority` | fail if participation snapshot cannot be created |
 | `grant-order` | `participation_id`, `reward_items` | `provider`, `expireSeconds` | `grant_order`, `grant_orders`, `commitMode`, `commitAuthority` | skip if no reward; fail on state-machine violation |
-| `outbox` | `grant_order` | `channel`, `maxAttempts` | `HTTP`, `MQ`, `Webhook`, `Failed`, `commitMode`, `commitAuthority` | failed dispatch must remain replayable |
+| `outbox` | `grant_order` | `channel`, `maxAttempts`; optional `targetType=SERVICE_INTERFACE` for controlled publish interface or `resourceRef` for existing outbox target compatibility | `HTTP`, `MQ`, `Webhook`, `Failed`, `commitMode`, `commitAuthority` | failed dispatch must remain replayable |
 | `audit` | optional routed payload | `action`, `severity`, `targetType`, `includePayload`, `retentionPolicy` | `audit_log` | can terminate multiple PASS/BLOCK/RISK branches without a fixed upstream input |
 
 ## Template Requirements

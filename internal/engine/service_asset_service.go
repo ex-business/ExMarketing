@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/ex-stack/ExMarketing/internal/marketing"
@@ -160,25 +161,40 @@ func (s *Service) ListServiceProviders(ctx context.Context, query marketing.Serv
 }
 
 func (s *Service) ResolveServiceProvider(ctx context.Context, tenantID string, serviceRef string, interfaceRef string, providerRef string, providerPolicy string) (marketing.ServiceInterface, marketing.ServiceProvider, error) {
-	if policy := strings.ToUpper(strings.TrimSpace(providerPolicy)); policy != "" && policy != "PRIMARY" {
-		return marketing.ServiceInterface{}, marketing.ServiceProvider{}, fmt.Errorf("SERVICE_PROVIDER_POLICY_UNSUPPORTED:%s", policy)
-	}
-	serviceInterface, err := s.GetServiceInterface(ctx, tenantID, serviceRef, interfaceRef)
+	serviceInterface, providers, err := s.ResolveServiceProviders(ctx, tenantID, serviceRef, interfaceRef, providerRef, providerPolicy)
 	if err != nil {
 		return marketing.ServiceInterface{}, marketing.ServiceProvider{}, err
 	}
+	if len(providers) == 0 {
+		return marketing.ServiceInterface{}, marketing.ServiceProvider{}, marketing.ErrNotFound
+	}
+	return serviceInterface, providers[0], nil
+}
+
+func (s *Service) ResolveServiceProviders(ctx context.Context, tenantID string, serviceRef string, interfaceRef string, providerRef string, providerPolicy string) (marketing.ServiceInterface, []marketing.ServiceProvider, error) {
+	policy := strings.ToUpper(strings.TrimSpace(providerPolicy))
+	if policy == "" {
+		policy = "PRIMARY"
+	}
+	if !serviceProviderPolicySupported(policy) {
+		return marketing.ServiceInterface{}, nil, fmt.Errorf("SERVICE_PROVIDER_POLICY_UNSUPPORTED:%s", policy)
+	}
+	serviceInterface, err := s.GetServiceInterface(ctx, tenantID, serviceRef, interfaceRef)
+	if err != nil {
+		return marketing.ServiceInterface{}, nil, err
+	}
 	if serviceInterface.Status != marketing.ServiceAssetActive {
-		return marketing.ServiceInterface{}, marketing.ServiceProvider{}, errors.New("SERVICE_INTERFACE_DISABLED")
+		return marketing.ServiceInterface{}, nil, errors.New("SERVICE_INTERFACE_DISABLED")
 	}
 	if providerRef != "" {
 		provider, err := s.GetServiceProvider(ctx, tenantID, serviceRef, interfaceRef, providerRef)
 		if err != nil {
-			return marketing.ServiceInterface{}, marketing.ServiceProvider{}, err
+			return marketing.ServiceInterface{}, nil, err
 		}
 		if provider.Status != marketing.ServiceAssetActive {
-			return marketing.ServiceInterface{}, marketing.ServiceProvider{}, errors.New("SERVICE_PROVIDER_DISABLED")
+			return marketing.ServiceInterface{}, nil, errors.New("SERVICE_PROVIDER_DISABLED")
 		}
-		return serviceInterface, provider, nil
+		return serviceInterface, []marketing.ServiceProvider{provider}, nil
 	}
 	providers, err := s.ListServiceProviders(ctx, marketing.ServiceProviderQuery{
 		TenantID:     tenantID,
@@ -188,13 +204,74 @@ func (s *Service) ResolveServiceProvider(ctx context.Context, tenantID string, s
 		Limit:        50,
 	})
 	if err != nil {
-		return marketing.ServiceInterface{}, marketing.ServiceProvider{}, err
+		return marketing.ServiceInterface{}, nil, err
 	}
+	providers = filterServiceProviderCandidates(providers, policy)
 	if len(providers) == 0 {
-		return marketing.ServiceInterface{}, marketing.ServiceProvider{}, marketing.ErrNotFound
+		return marketing.ServiceInterface{}, nil, marketing.ErrNotFound
 	}
-	// PRIMARY and omitted policy resolve to the first priority provider.
-	return serviceInterface, providers[0], nil
+	sortServiceProviderCandidates(providers)
+	if policy == "PRIMARY" || policy == "WEIGHTED" || policy == "ENVIRONMENT_MATCH" || policy == "MOCK_ONLY" {
+		return serviceInterface, providers[:1], nil
+	}
+	return serviceInterface, providers, nil
+}
+
+func serviceProviderPolicySupported(policy string) bool {
+	switch strings.ToUpper(strings.TrimSpace(policy)) {
+	case "", "PRIMARY", "PRIMARY_WITH_FALLBACK", "WEIGHTED", "ENVIRONMENT_MATCH", "MOCK_ONLY":
+		return true
+	default:
+		return false
+	}
+}
+
+func filterServiceProviderCandidates(providers []marketing.ServiceProvider, policy string) []marketing.ServiceProvider {
+	out := make([]marketing.ServiceProvider, 0, len(providers))
+	for _, provider := range providers {
+		if provider.Status != marketing.ServiceAssetActive {
+			continue
+		}
+		switch strings.ToUpper(strings.TrimSpace(policy)) {
+		case "MOCK_ONLY":
+			if !serviceProviderMockEnabled(provider) {
+				continue
+			}
+		case "WEIGHTED":
+			if provider.Weight <= 0 {
+				continue
+			}
+		}
+		out = append(out, provider)
+	}
+	return out
+}
+
+func sortServiceProviderCandidates(providers []marketing.ServiceProvider) {
+	sort.SliceStable(providers, func(i, j int) bool {
+		left, right := providers[i], providers[j]
+		if left.Priority != right.Priority {
+			return left.Priority < right.Priority
+		}
+		if left.Weight != right.Weight {
+			return left.Weight > right.Weight
+		}
+		return left.Code < right.Code
+	})
+}
+
+func serviceProviderMockEnabled(provider marketing.ServiceProvider) bool {
+	var config map[string]any
+	if len(provider.Config) == 0 || json.Unmarshal(provider.Config, &config) != nil {
+		return false
+	}
+	if enabled, ok := config["mockEnabled"].(bool); ok {
+		return enabled
+	}
+	if enabled, ok := config["mock"].(bool); ok {
+		return enabled
+	}
+	return false
 }
 
 func (s *Service) ensureBuiltInServiceDefinitionPersisted(ctx context.Context, service marketing.ServiceDefinition) error {

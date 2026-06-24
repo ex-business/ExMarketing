@@ -76,6 +76,35 @@ type WorkflowNodeInputMappingRef struct {
 	Path         string `json:"path,omitempty"`
 }
 
+type ProviderChainTargetType string
+
+const (
+	ProviderChainTargetServiceInterface ProviderChainTargetType = "SERVICE_INTERFACE"
+	ProviderChainTargetResource         ProviderChainTargetType = "RESOURCE"
+	ProviderChainTargetWorkflowContext  ProviderChainTargetType = "WORKFLOW_CONTEXT"
+	ProviderChainTargetLocalCache       ProviderChainTargetType = "LOCAL_CACHE"
+	ProviderChainTargetProvider         ProviderChainTargetType = "PROVIDER"
+	ProviderChainTargetFactService      ProviderChainTargetType = "FACT_SERVICE"
+)
+
+type ProviderChainStep struct {
+	TargetType     ProviderChainTargetType `json:"targetType,omitempty"`
+	Source         string                  `json:"source,omitempty"`
+	ServiceRef     string                  `json:"serviceRef,omitempty"`
+	InterfaceRef   string                  `json:"interfaceRef,omitempty"`
+	ProviderPolicy string                  `json:"providerPolicy,omitempty"`
+	ProviderRef    string                  `json:"providerRef,omitempty"`
+	ResourceRef    string                  `json:"resourceRef,omitempty"`
+	Operation      string                  `json:"operation,omitempty"`
+	Namespace      string                  `json:"namespace,omitempty"`
+	KeyTemplate    string                  `json:"keyTemplate,omitempty"`
+	InputMapping   map[string]any          `json:"inputMapping,omitempty"`
+	ValuePath      string                  `json:"valuePath,omitempty"`
+	OutputAs       string                  `json:"outputAs,omitempty"`
+	TimeoutMS      int                     `json:"timeoutMs,omitempty"`
+	OnMiss         string                  `json:"onMiss,omitempty"`
+}
+
 type WorkflowPosition struct {
 	X float64 `json:"x"`
 	Y float64 `json:"y"`

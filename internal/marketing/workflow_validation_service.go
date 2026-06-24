@@ -511,16 +511,6 @@ func (s WorkflowValidationService) validateActivityStateChainConfig(result *Work
 			continue
 		}
 		operation := strings.ToUpper(firstNonEmptyConfigString(step, "operation", "action"))
-		if operation == "" {
-			result.addIssue(
-				WorkflowValidationBlock,
-				"WORKFLOW_ACTIVITY_STATE_OPERATION_REQUIRED",
-				fmt.Sprintf("节点 %q 的状态操作步骤 #%d 必须配置 operation。", nodeID, index+1),
-				path+".operation",
-				nodeID,
-				"",
-			)
-		}
 		switch operation {
 		case "", "READ", "WRITE", "UPSERT", "APPEND", "DELETE", "CAS", "INCREMENT", "CHECK_AND_INCREMENT", "CALL", "PUBLISH":
 		default:
@@ -533,14 +523,15 @@ func (s WorkflowValidationService) validateActivityStateChainConfig(result *Work
 				"",
 			)
 		}
-		source := strings.ToUpper(firstNonEmptyConfigString(step, "source", "provider"))
+		source := normalizedProviderChainTarget(step)
 		if source == "" && configString(step, "resourceRef") != "" {
 			source = "RESOURCE"
 		}
+		s.validateProviderChainForbiddenInfraFields(result, nodeID, path, source, step)
 		if configString(step, "resourceRef") == "" && (source == "RESOURCE" || strings.EqualFold(configString(step, "storeType"), "EXTERNAL")) {
 			result.addIssue(
 				WorkflowValidationBlock,
-				"WORKFLOW_ACTIVITY_STATE_RESOURCE_REQUIRED",
+				"RESOURCE_OPERATION_REQUIRED",
 				fmt.Sprintf("节点 %q 的资源状态操作步骤 #%d 必须配置 resourceRef。", nodeID, index+1),
 				path+".resourceRef",
 				nodeID,
@@ -573,14 +564,15 @@ func (s WorkflowValidationService) validateQuotaCheckProviderConfig(result *Work
 			)
 			continue
 		}
-		source := strings.ToUpper(firstNonEmptyConfigString(step, "source", "provider"))
+		source := normalizedProviderChainTarget(step)
 		if source == "" && configString(step, "resourceRef") != "" {
 			source = "RESOURCE"
 		}
+		s.validateProviderChainForbiddenInfraFields(result, nodeID, path, source, step)
 		if source == "RESOURCE" && configString(step, "resourceRef") == "" {
 			result.addIssue(
 				WorkflowValidationBlock,
-				"WORKFLOW_QUOTA_RESOURCE_REQUIRED",
+				"RESOURCE_OPERATION_REQUIRED",
 				fmt.Sprintf("节点 %q 的频控 RESOURCE 操作 #%d 必须配置 resourceRef。", nodeID, index+1),
 				path+".resourceRef",
 				nodeID,
@@ -613,14 +605,15 @@ func (s WorkflowValidationService) validateCandidateRewardProviderConfig(result 
 			)
 			continue
 		}
-		source := strings.ToUpper(firstNonEmptyConfigString(step, "source", "provider"))
+		source := normalizedProviderChainTarget(step)
 		if source == "" && configString(step, "resourceRef") != "" {
 			source = "RESOURCE"
 		}
+		s.validateProviderChainForbiddenInfraFields(result, nodeID, path, source, step)
 		if source == "RESOURCE" && configString(step, "resourceRef") == "" {
 			result.addIssue(
 				WorkflowValidationBlock,
-				"WORKFLOW_CANDIDATE_REWARD_RESOURCE_REQUIRED",
+				"RESOURCE_OPERATION_REQUIRED",
 				fmt.Sprintf("节点 %q 的奖励来源 RESOURCE 操作 #%d 必须配置 resourceRef。", nodeID, index+1),
 				path+".resourceRef",
 				nodeID,
@@ -635,11 +628,12 @@ func (s WorkflowValidationService) validateFactQueryProviderConfig(result *Workf
 		s.validateFactQueryProviderChain(result, nodeIndex, nodeID, config, chain)
 		return
 	}
-	source := strings.ToUpper(firstNonEmptyConfigString(config, "source", "provider"))
+	source := normalizedProviderChainTarget(config)
 	if source == "" {
 		source = "FACT_SERVICE"
 	}
 	if factQueryLegacyTargetOptional(source, config) {
+		s.addLegacyProviderChainWarning(result, nodeID, fmt.Sprintf("nodes[%d].config", nodeIndex), source)
 		return
 	}
 	s.validateFactQueryProviderTarget(result, nodeID, fmt.Sprintf("nodes[%d].config", nodeIndex), source, config)
@@ -654,7 +648,7 @@ func (s WorkflowValidationService) validateFactQueryProviderChain(result *Workfl
 		path := fmt.Sprintf("nodes[%d].config.providerChain[%d]", nodeIndex, index)
 		switch step := rawStep.(type) {
 		case map[string]any:
-			source := strings.ToUpper(firstNonEmptyConfigString(step, "source", "provider", "targetType"))
+			source := normalizedProviderChainTarget(step)
 			if source == "" && configString(step, "resourceRef") != "" {
 				source = "RESOURCE"
 			}
@@ -699,14 +693,28 @@ func factQueryLegacyTargetOptional(source string, config map[string]any) bool {
 
 func (s WorkflowValidationService) validateFactQueryProviderTarget(result *WorkflowValidationResult, nodeID string, path string, source string, config map[string]any) {
 	switch strings.ToUpper(strings.TrimSpace(source)) {
-	case "", "WORKFLOW_CONTEXT", "CONTEXT", "LOCAL_CACHE", "CACHE", "RESOURCE":
+	case "", "WORKFLOW_CONTEXT", "CONTEXT", "LOCAL_CACHE", "CACHE":
 		return
+	case "RESOURCE":
+		s.validateProviderChainForbiddenInfraFields(result, nodeID, path, "RESOURCE", config)
+		if configString(config, "resourceRef") != "" {
+			return
+		}
+		result.addIssue(
+			WorkflowValidationBlock,
+			"RESOURCE_OPERATION_REQUIRED",
+			fmt.Sprintf("节点 %q 的 RESOURCE 数据提供者必须配置 resourceRef。", nodeID),
+			path+".resourceRef",
+			nodeID,
+			"",
+		)
 	case "SERVICE_INTERFACE":
-		if policy := strings.ToUpper(configString(config, "providerPolicy")); policy != "" && policy != "PRIMARY" {
+		s.validateProviderChainForbiddenInfraFields(result, nodeID, path, "SERVICE_INTERFACE", config)
+		if policy := strings.ToUpper(configString(config, "providerPolicy")); policy != "" && !serviceProviderPolicySupported(policy) {
 			result.addIssue(
 				WorkflowValidationBlock,
 				"WORKFLOW_FACT_PROVIDER_POLICY_UNSUPPORTED",
-				fmt.Sprintf("节点 %q 的 SERVICE_INTERFACE 数据提供者暂只支持 PRIMARY providerPolicy。", nodeID),
+				fmt.Sprintf("节点 %q 的 SERVICE_INTERFACE 数据提供者不支持 providerPolicy %q。", nodeID, policy),
 				path+".providerPolicy",
 				nodeID,
 				"",
@@ -718,13 +726,14 @@ func (s WorkflowValidationService) validateFactQueryProviderTarget(result *Workf
 		}
 		result.addIssue(
 			WorkflowValidationBlock,
-			"WORKFLOW_FACT_PROVIDER_TARGET_REQUIRED",
+			"SERVICE_INTERFACE_REF_REQUIRED",
 			fmt.Sprintf("节点 %q 的 SERVICE_INTERFACE 数据提供者必须配置 serviceRef 和 interfaceRef。", nodeID),
 			path+".serviceRef",
 			nodeID,
 			"",
 		)
 	case "PROVIDER":
+		s.addLegacyProviderChainWarning(result, nodeID, path, source)
 		if configString(config, "resourceRef") != "" || configString(config, "providerRef") != "" {
 			return
 		}
@@ -737,6 +746,7 @@ func (s WorkflowValidationService) validateFactQueryProviderTarget(result *Workf
 			"",
 		)
 	case "FACT_SERVICE", "HTTP_PROVIDER", "HTTP":
+		s.addLegacyProviderChainWarning(result, nodeID, path, source)
 		if configString(config, "resourceRef") != "" || configString(config, "providerCode") != "" || configString(config, "endpoint") != "" || configString(config, "providerEndpoint") != "" {
 			return
 		}
@@ -749,6 +759,7 @@ func (s WorkflowValidationService) validateFactQueryProviderTarget(result *Workf
 			"",
 		)
 	case "REDIS":
+		s.addLegacyProviderChainWarning(result, nodeID, path, source)
 		if configString(config, "resourceRef") != "" || configString(config, "redisRef") != "" {
 			return
 		}
@@ -761,6 +772,7 @@ func (s WorkflowValidationService) validateFactQueryProviderTarget(result *Workf
 			"",
 		)
 	case "GRPC":
+		s.addLegacyProviderChainWarning(result, nodeID, path, source)
 		if configString(config, "resourceRef") != "" || configString(config, "grpcTarget") != "" {
 			return
 		}
@@ -773,6 +785,7 @@ func (s WorkflowValidationService) validateFactQueryProviderTarget(result *Workf
 			"",
 		)
 	case "PLUGIN":
+		s.addLegacyProviderChainWarning(result, nodeID, path, source)
 		if configString(config, "resourceRef") != "" || configString(config, "pluginCode") != "" {
 			return
 		}
@@ -785,6 +798,7 @@ func (s WorkflowValidationService) validateFactQueryProviderTarget(result *Workf
 			"",
 		)
 	case "CUSTOM", "LUA_QUERY":
+		s.addLegacyProviderChainWarning(result, nodeID, path, source)
 		if configString(config, "resourceRef") != "" || configString(config, "providerCode") != "" || configString(config, "endpoint") != "" {
 			return
 		}
@@ -815,6 +829,59 @@ func firstNonEmptyConfigString(config map[string]any, keys ...string) string {
 		}
 	}
 	return ""
+}
+
+func normalizedProviderChainTarget(config map[string]any) string {
+	target := strings.ToUpper(firstNonEmptyConfigString(config, "targetType", "source", "provider"))
+	switch target {
+	case "CONTEXT":
+		return "WORKFLOW_CONTEXT"
+	case "CACHE":
+		return "LOCAL_CACHE"
+	default:
+		return target
+	}
+}
+
+func serviceProviderPolicySupported(policy string) bool {
+	switch strings.ToUpper(strings.TrimSpace(policy)) {
+	case "", "PRIMARY", "PRIMARY_WITH_FALLBACK", "WEIGHTED", "ENVIRONMENT_MATCH", "MOCK_ONLY":
+		return true
+	default:
+		return false
+	}
+}
+
+func (s WorkflowValidationService) validateProviderChainForbiddenInfraFields(result *WorkflowValidationResult, nodeID string, path string, target string, config map[string]any) {
+	switch strings.ToUpper(strings.TrimSpace(target)) {
+	case "SERVICE_INTERFACE", "RESOURCE":
+	default:
+		return
+	}
+	for _, field := range []string{"endpoint", "providerEndpoint", "redisRef", "grpcTarget", "broker", "rawTopic", "dbDsn", "secret", "token", "rawSql"} {
+		if configString(config, field) == "" {
+			continue
+		}
+		result.addIssue(
+			WorkflowValidationBlock,
+			"NODE_FORBIDDEN_INFRA_FIELD",
+			fmt.Sprintf("节点 %q 的 %s step 不允许直接配置底层字段 %s，请改到 Service Provider 或 Resource 定义。", nodeID, target, field),
+			path+"."+field,
+			nodeID,
+			"",
+		)
+	}
+}
+
+func (s WorkflowValidationService) addLegacyProviderChainWarning(result *WorkflowValidationResult, nodeID string, path string, source string) {
+	result.addIssue(
+		WorkflowValidationWarning,
+		"LEGACY_NODE_CONFIG_MIGRATION_AVAILABLE",
+		fmt.Sprintf("节点 %q 使用旧数据提供者 %s；新配置应迁移为 SERVICE_INTERFACE 或 RESOURCE step。", nodeID, source),
+		path,
+		nodeID,
+		"",
+	)
 }
 
 func configString(config map[string]any, key string) string {

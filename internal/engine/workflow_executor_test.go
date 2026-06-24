@@ -3840,6 +3840,156 @@ func TestFactQueryWorkflowNodeHandlerProviderChainTakesPrecedenceOverTopLevelRes
 	}
 }
 
+func TestFactQueryWorkflowNodeHandlerProviderChainUsesServiceInterfaceFallbackPolicy(t *testing.T) {
+	ctx := context.Background()
+	baseRepo := marketing.NewMemoryRepository()
+	runtime := testWorkflowHandlerRuntime(true)
+	runtime.Inbox.Event.Subject = marketing.EventSubject{Type: "USER", ID: "u_service_interface"}
+	repo := workflowUserProfileTestRepository{
+		Repository: baseRepo,
+		profiles: map[string]marketing.UserProfile{
+			runtime.Activity.TenantID + "|USER|u_service_interface": {
+				TenantID:    runtime.Activity.TenantID,
+				SubjectType: "USER",
+				SubjectID:   "u_service_interface",
+				UserLevel:   5,
+				VIPLevel:    3,
+				Status:      "ACTIVE",
+			},
+		},
+	}
+	service := NewService(repo)
+	node := marketing.WorkflowNode{
+		ID:   "fact-query",
+		Type: "fact-query",
+		Config: json.RawMessage(`{
+			"factKeys":["USER_PROFILE"],
+			"subjectPath":"subject.id",
+			"providerChain":[
+				{"targetType":"SERVICE_INTERFACE","source":"HTTP","serviceRef":"user-profile-service","interfaceRef":"query-user-profile","providerPolicy":"PRIMARY_WITH_FALLBACK","onMiss":"BLOCK"}
+			],
+			"failureAction":"BLOCK"
+		}`),
+	}
+	result := service.factQueryWorkflowNodeHandler(ctx, node, runtime)
+	if result.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected service interface provider chain success, got %+v", result)
+	}
+	profile := result.Output["facts"].(map[string]any)["USER_PROFILE"].(map[string]any)
+	if profile["vipLevel"] != 3 || profile["level"] != 5 {
+		t.Fatalf("expected user profile facts from service interface, got %+v", profile)
+	}
+	chain := result.Output["providerChain"].([]any)
+	step := chain[0].(map[string]any)
+	if step["source"] != "SERVICE_INTERFACE" || step["providerPolicy"] != "PRIMARY_WITH_FALLBACK" || step["providerRef"] == "" {
+		t.Fatalf("expected service interface trace with selected provider, got %+v", step)
+	}
+}
+
+func TestFactQueryWorkflowNodeHandlerServiceInterfaceFallbackAttemptsNextProvider(t *testing.T) {
+	ctx := context.Background()
+	baseRepo := marketing.NewMemoryRepository()
+	runtime := testWorkflowHandlerRuntime(true)
+	runtime.Inbox.Event.Subject = marketing.EventSubject{Type: "USER", ID: "u_service_fallback"}
+	repo := workflowUserProfileTestRepository{
+		Repository: baseRepo,
+		profiles: map[string]marketing.UserProfile{
+			runtime.Activity.TenantID + "|USER|u_service_fallback": {
+				TenantID:    runtime.Activity.TenantID,
+				SubjectType: "USER",
+				SubjectID:   "u_service_fallback",
+				UserLevel:   6,
+				VIPLevel:    4,
+				Status:      "ACTIVE",
+			},
+		},
+	}
+	service := NewService(repo)
+	if _, err := service.SaveServiceDefinition(ctx, marketing.ServiceDefinition{
+		TenantID:    runtime.Activity.TenantID,
+		Code:        "custom-profile-service",
+		Name:        "Custom Profile Service",
+		ServiceType: marketing.ServiceTypeInternal,
+		Scope:       marketing.ServiceAssetScopeTenant,
+		Status:      marketing.ServiceAssetActive,
+	}); err != nil {
+		t.Fatalf("save service: %v", err)
+	}
+	if _, err := service.SaveServiceInterface(ctx, marketing.ServiceInterface{
+		TenantID:   runtime.Activity.TenantID,
+		ServiceRef: "custom-profile-service",
+		Code:       "query-profile",
+		Name:       "Query profile",
+		Operation:  marketing.ServiceOperationCall,
+		TimeoutMS:  1000,
+		Status:     marketing.ServiceAssetActive,
+	}); err != nil {
+		t.Fatalf("save interface: %v", err)
+	}
+	for _, provider := range []marketing.ServiceProvider{
+		{
+			TenantID:     runtime.Activity.TenantID,
+			ServiceRef:   "custom-profile-service",
+			InterfaceRef: "query-profile",
+			Code:         "missing-primary",
+			Name:         "Missing primary",
+			Protocol:     marketing.ServiceProviderResource,
+			ResourceRefs: []string{"missing_profile_store"},
+			Priority:     0,
+			Weight:       100,
+			Status:       marketing.ServiceAssetActive,
+		},
+		{
+			TenantID:     runtime.Activity.TenantID,
+			ServiceRef:   "custom-profile-service",
+			InterfaceRef: "query-profile",
+			Code:         "resource-fallback",
+			Name:         "Resource fallback",
+			Protocol:     marketing.ServiceProviderResource,
+			ResourceRefs: []string{"default_user_profile_store"},
+			Priority:     10,
+			Weight:       1,
+			Status:       marketing.ServiceAssetActive,
+		},
+	} {
+		if _, err := service.SaveServiceProvider(ctx, provider); err != nil {
+			t.Fatalf("save provider %s: %v", provider.Code, err)
+		}
+	}
+	node := marketing.WorkflowNode{
+		ID:   "fact-query",
+		Type: "fact-query",
+		Config: json.RawMessage(`{
+			"factKeys":["USER_PROFILE"],
+			"subjectPath":"subject.id",
+			"providerChain":[
+				{"targetType":"SERVICE_INTERFACE","serviceRef":"custom-profile-service","interfaceRef":"query-profile","providerPolicy":"PRIMARY_WITH_FALLBACK","onMiss":"BLOCK"}
+			],
+			"failureAction":"BLOCK"
+		}`),
+	}
+	result := service.factQueryWorkflowNodeHandler(ctx, node, runtime)
+	if result.Status != marketing.WorkflowNodeSuccess {
+		t.Fatalf("expected fallback provider chain success, got %+v", result)
+	}
+	profile := result.Output["facts"].(map[string]any)["USER_PROFILE"].(map[string]any)
+	if profile["vipLevel"] != 4 || profile["level"] != 6 {
+		t.Fatalf("expected user profile facts from fallback provider, got %+v", profile)
+	}
+	chain := result.Output["providerChain"].([]any)
+	if len(chain) != 2 {
+		t.Fatalf("expected primary failure and fallback traces, got %+v", chain)
+	}
+	first := chain[0].(map[string]any)
+	second := chain[1].(map[string]any)
+	if first["providerRef"] != "missing-primary" || first["status"] != "FAILED_NEXT" {
+		t.Fatalf("expected failed primary trace, got %+v", first)
+	}
+	if second["providerRef"] != "resource-fallback" || second["status"] != "DONE" {
+		t.Fatalf("expected successful fallback trace, got %+v", second)
+	}
+}
+
 func TestFactQueryWorkflowNodeHandlerProviderChainBlocksOnLocalCacheMiss(t *testing.T) {
 	ctx := context.Background()
 	repo := marketing.NewMemoryRepository()

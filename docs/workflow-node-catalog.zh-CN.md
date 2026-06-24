@@ -15,6 +15,94 @@ Workflow Studio 的节点面板推荐按产品使用方式分为 4 类。这个�
 
 说明：下文的 `EVENT_INPUT`、`CORE`、`ADVANCED`、`OPS` 是执行域和历史实现分类，用于解释节点边界；Studio 节点面板和节点介绍应优先使用上面的产品展示分类。
 
+## 节点规范改造原则
+
+服务、接口、提供者和资源模型落地后，节点规范必须统一成“业务意图 + 能力引用”，不再让每个节点各自暴露底层连接字段。
+
+统一规则：
+
+| 规则 | 要求 |
+| --- | --- |
+| 业务事实和外部业务能力 | 使用 `ProviderChainStep(targetType=SERVICE_INTERFACE)`，通过 `serviceRef/interfaceRef/providerPolicy` 调用服务接口 |
+| 底层状态、计数、锁、缓存、Store | 使用 `ProviderChainStep(targetType=RESOURCE)`，通过 `resourceRef/operation/namespace/keyTemplate` 操作受控资源 |
+| 上下文和本地缓存 | 使用 `WORKFLOW_CONTEXT` 或 `LOCAL_CACHE`，不进入 Provider/Resource 治理 |
+| 旧 Provider Resource | 只作为兼容入口，旧 draft 可读，新建节点不默认展示 |
+| HTTP/RPC/MQ/Plugin/Lua 实现 | 作为 Service Provider 协议或 Resource adapter，不作为普通节点配置项 |
+
+节点配置禁止直接出现：
+
+```text
+endpoint
+providerEndpoint
+redisRef
+grpcTarget
+broker
+topic password
+db dsn
+secret/token 明文
+raw SQL
+```
+
+标准 `SERVICE_INTERFACE` step：
+
+```json
+{
+  "targetType": "SERVICE_INTERFACE",
+  "source": "SERVICE_INTERFACE",
+  "serviceRef": "user-profile-service",
+  "interfaceRef": "query-user-profile",
+  "providerPolicy": "PRIMARY",
+  "inputMapping": {
+    "tenantId": "${tenantId}",
+    "userId": "${subject.id}"
+  },
+  "outputAs": "facts.USER_PROFILE",
+  "timeoutMs": 1000,
+  "onMiss": "BLOCK"
+}
+```
+
+标准 `RESOURCE` step：
+
+```json
+{
+  "targetType": "RESOURCE",
+  "source": "RESOURCE",
+  "resourceRef": "default_checkin_quota_counter",
+  "operation": "COUNTER_CHECK",
+  "namespace": "checkin",
+  "keyTemplate": "${tenantId}:${activityId}:${subject.id}",
+  "outputAs": "quota_check",
+  "timeoutMs": 500,
+  "onMiss": "BLOCK"
+}
+```
+
+节点分层改造：
+
+| 节点类型 | 新规范 |
+| --- | --- |
+| `fact-query` | 默认调用事实类 Service Interface；Store/Cache 只作为受控 Resource fallback；旧 `PROVIDER/FACT_SERVICE` 仅兼容 |
+| `activity-state` | 内部活动状态或 `RESOURCE` step；不直接配置 Redis/HTTP |
+| `quota-check` | `RESOURCE` counter/lock step；后续可升级为 quota Service Interface |
+| `candidate-reward` | 奖励配置读取可用 `RESOURCE`；复杂奖励生成走 reward Service Interface |
+| `budget-reserve` | 预算/库存锁定应走 quota Service Interface，旧 `reserveProviderRef` 兼容读取 |
+| `outbox` / `mq-publish` / `http-call` | 表达投递意图；真实协议实现落到 Service Provider 或 OutboxWorker 依赖的 Resource |
+| `code` / `lua-query` / `combine` / `split` | 只能调用已授权 Service Interface 和 Resource API，不能直连底层系统 |
+| `http-query` / `redis-query` / `grpc-query` / `plugin-query` | 新建入口默认隐藏，旧流程只读兼容并引导迁移 |
+
+发布校验必须能定位到：
+
+```text
+nodeId
+config.providerChain[index]
+targetType
+serviceRef/interfaceRef/resourceRef
+field
+errorCode
+suggestion
+```
+
 ### Studio 展示分类
 
 #### 基础节点

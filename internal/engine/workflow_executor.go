@@ -3660,7 +3660,7 @@ func workflowFactQueryProviderChain(config map[string]any) []workflowFactQueryPr
 			switch normalized := workflowJSONValue(item).(type) {
 			case map[string]any:
 				step := workflowFactQueryProviderStep{
-					Source:         firstWorkflowString(strings.ToUpper(workflowConfigString(normalized, "source")), strings.ToUpper(workflowConfigString(normalized, "provider"))),
+					Source:         firstWorkflowString(strings.ToUpper(workflowConfigString(normalized, "targetType")), firstWorkflowString(strings.ToUpper(workflowConfigString(normalized, "source")), strings.ToUpper(workflowConfigString(normalized, "provider")))),
 					TargetType:     strings.ToUpper(workflowConfigString(normalized, "targetType")),
 					ServiceRef:     workflowConfigString(normalized, "serviceRef"),
 					InterfaceRef:   workflowConfigString(normalized, "interfaceRef"),
@@ -3805,6 +3805,10 @@ func (s *Service) workflowResolveServiceInterfaceProviderStep(ctx context.Contex
 	if err != nil {
 		return nil, step, err
 	}
+	return workflowServiceInterfaceProviderStepConfig(step, config, serviceRef, interfaceRef, providerRef, providerPolicy, provider)
+}
+
+func workflowServiceInterfaceProviderStepConfig(step workflowFactQueryProviderStep, config map[string]any, serviceRef string, interfaceRef string, providerRef string, providerPolicy string, provider marketing.ServiceProvider) (map[string]any, workflowFactQueryProviderStep, error) {
 	next := workflowCopyMap(config)
 	next["targetType"] = "SERVICE_INTERFACE"
 	next["serviceRef"] = serviceRef
@@ -3967,29 +3971,57 @@ func (s *Service) factQueryProviderChainWorkflowNodeHandler(ctx context.Context,
 				return workflowFactQueryFailure(node, runtime, config, "", "FACT_QUERY_PROVIDER_MISS", "providerChain step did not resolve requested facts", facts, responses)
 			}
 		case "SERVICE_INTERFACE":
-			resolvedConfig, resolvedStep, err := s.workflowResolveServiceInterfaceProviderStep(ctx, runtime, step, stepConfig)
+			serviceRef := firstWorkflowString(step.ServiceRef, workflowConfigString(stepConfig, "serviceRef"))
+			interfaceRef := firstWorkflowString(step.InterfaceRef, workflowConfigString(stepConfig, "interfaceRef"))
+			providerRef := firstWorkflowString(step.ProviderRef, workflowConfigString(stepConfig, "providerRef"))
+			providerPolicy := firstWorkflowString(firstWorkflowString(step.ProviderPolicy, workflowConfigString(stepConfig, "providerPolicy")), "PRIMARY")
+			_, providers, err := s.ResolveServiceProviders(ctx, runtime.Activity.TenantID, serviceRef, interfaceRef, providerRef, providerPolicy)
 			if err != nil {
 				return workflowFactQueryFailure(node, runtime, config, "", "SERVICE_INTERFACE_PROVIDER_NOT_RESOLVED", err.Error(), facts, responses)
 			}
-			stepConfig = resolvedConfig
-			stepNode = workflowFactQueryProviderStepNode(node, stepConfig)
-			resourceResult := s.factQueryResourceRefWorkflowNodeHandler(ctx, stepNode, runtime, stepConfig)
-			responses = append(responses, resourceResult.Output)
-			if resourceResult.Status == marketing.WorkflowNodeFailed {
-				return resourceResult
-			}
-			if mapped, ok := resourceResult.Output["facts"].(map[string]any); ok {
-				for key, value := range mapped {
-					facts[key] = value
+			var lastFailed workflowNodeResult
+			for providerIndex, provider := range providers {
+				resolvedConfig, resolvedStep, err := workflowServiceInterfaceProviderStepConfig(step, stepConfig, serviceRef, interfaceRef, providerRef, providerPolicy, provider)
+				if err != nil {
+					if providerIndex == len(providers)-1 {
+						return workflowFactQueryFailure(node, runtime, config, "", "SERVICE_INTERFACE_PROVIDER_NOT_RESOLVED", err.Error(), facts, responses)
+					}
+					resolvedStep.ProviderRef = provider.Code
+					resolvedChain = append(resolvedChain, workflowFactQueryProviderStepTrace(resolvedStep, "FAILED_NEXT", remaining, map[string]any{"errorCode": err.Error()}))
+					continue
 				}
+				stepNode = workflowFactQueryProviderStepNode(node, resolvedConfig)
+				resourceResult := s.factQueryResourceRefWorkflowNodeHandler(ctx, stepNode, runtime, resolvedConfig)
+				responses = append(responses, resourceResult.Output)
+				if resourceResult.Status == marketing.WorkflowNodeFailed {
+					lastFailed = resourceResult
+					if providerIndex == len(providers)-1 {
+						return resourceResult
+					}
+					resolvedChain = append(resolvedChain, workflowFactQueryProviderStepTrace(resolvedStep, "FAILED_NEXT", remaining, resourceResult.Output))
+					continue
+				}
+				if mapped, ok := resourceResult.Output["facts"].(map[string]any); ok {
+					for key, value := range mapped {
+						facts[key] = value
+					}
+				}
+				status := "DONE"
+				if !workflowFactQueryProviderStepHasFacts(resourceResult.Output) {
+					status = "MISS"
+				}
+				resolvedChain = append(resolvedChain, workflowFactQueryProviderStepTrace(resolvedStep, status, remaining, resourceResult.Output))
+				if status == "MISS" && workflowFactQueryProviderShouldBlockOnMiss(step) {
+					if providerIndex == len(providers)-1 {
+						return workflowFactQueryFailure(node, runtime, config, "", "FACT_QUERY_PROVIDER_MISS", "providerChain step did not resolve requested facts", facts, responses)
+					}
+					continue
+				}
+				lastFailed = workflowNodeResult{}
+				break
 			}
-			status := "DONE"
-			if !workflowFactQueryProviderStepHasFacts(resourceResult.Output) {
-				status = "MISS"
-			}
-			resolvedChain = append(resolvedChain, workflowFactQueryProviderStepTrace(resolvedStep, status, remaining, resourceResult.Output))
-			if status == "MISS" && workflowFactQueryProviderShouldBlockOnMiss(step) {
-				return workflowFactQueryFailure(node, runtime, config, "", "FACT_QUERY_PROVIDER_MISS", "providerChain step did not resolve requested facts", facts, responses)
+			if lastFailed.Status == marketing.WorkflowNodeFailed {
+				return lastFailed
 			}
 		case "RESOURCE", "PROVIDER":
 			resourceResult := s.factQueryResourceRefWorkflowNodeHandler(ctx, stepNode, runtime, stepConfig)

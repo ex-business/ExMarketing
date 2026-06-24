@@ -2,6 +2,8 @@
 
 本文档定义 ExMarketing 中工作流节点如何使用服务、接口、提供者和资源。它补充 [公共资源管理设计](resource-management-design.zh-CN.md)，用于把“业务编排”和“技术能力治理”拆开。
 
+实施改造方案见 [ExMarketing 服务、接口、提供者和资源整体改造方案](service-interface-provider-resource-refactor-plan.zh-CN.md)。主设计文档回答“目标模型是什么”，改造方案文档回答“代码、DB、API、Executor、Studio 和迁移按什么顺序改”。
+
 核心原则：
 
 ```text
@@ -1035,18 +1037,20 @@ Provider 策略属于服务治理，不应该由节点脚本硬编码实现。
 | 策略 | 当前状态 | 选择规则 | 失败处理 | 验收要求 |
 | --- | --- | --- | --- | --- |
 | `PRIMARY` | 当前支持 | 如果指定 `providerRef`，直接使用该 provider；否则选择 `status=ACTIVE` 且 `priority` 最小的 provider | provider 失败后按 step 的 `onMiss` 或节点失败策略处理，不自动 fallback | 非 ACTIVE provider 不可选；同 priority 按更新时间/code 稳定排序 |
-| `PRIMARY_WITH_FALLBACK` | 规划支持 | 按 `priority ASC` 依次尝试 ACTIVE provider | 只有网络超时、5xx、provider unavailable 可 fallback；4xx、schema invalid、auth failed 不 fallback | trace 必须记录每个尝试的 provider 和失败原因 |
+| `PRIMARY_WITH_FALLBACK` | 第一阶段已在 `fact-query` 落地 | 按 `priority ASC` 依次尝试 ACTIVE provider | 当前第一阶段 provider 执行失败会尝试下一候选；后续补错误分类后再区分 4xx/schema/auth 是否 fallback | trace 必须记录每个尝试的 provider 和失败原因 |
 | `CACHE_ASIDE` | 规划支持 | 先选择 `config.role=CACHE` 或 `tags/cache` provider，miss 后选择 PRIMARY | cache miss 不算失败；cache error 是否 fallback 由 `config.cacheErrorPolicy` 决定 | 必须定义 miss 判断路径，例如 `config.missPath` |
-| `WEIGHTED` | 规划支持 | 使用 `weight` 做稳定灰度；推荐按 `tenantId + activityId + subject.id` hash 固定 | 被选 provider 失败不自动重抽，除非同时配置 fallback policy | 权重总和必须大于 0；同一用户在同一活动内选择稳定 |
-| `ENVIRONMENT` | 规划支持 | 优先选择 `environment` 等于当前 runtime environment 的 provider | 环境无匹配时失败，除非配置 fallback environment | DEV/STAGING/PROD 隔离，不允许生产误用 DEV provider |
-| `MOCK` | 规划支持 | 只允许 preview、simulation、test run 使用 mock provider | 正式 execution 禁止 | 正式发布校验必须拒绝 MOCK |
+| `WEIGHTED` | 第一阶段策略入口已开放 | 当前按 `weight > 0` 过滤并按 `priority/weight/code` 选择；完整稳定 hash 灰度后续补齐 | 被选 provider 失败不自动重抽，除非同时配置 fallback policy | 完整阶段要求权重总和大于 0；同一用户在同一活动内选择稳定 |
+| `ENVIRONMENT` | 第一阶段策略入口已开放 | 当前保留入口；接入 runtime environment 后按环境过滤 | 环境无匹配时失败，除非配置 fallback environment | DEV/STAGING/PROD 隔离，不允许生产误用 DEV provider |
+| `MOCK` | 第一阶段策略入口已开放 | 当前按 `mockEnabled/mock` 过滤候选；正式发布阻断后续接 release gate | 正式 execution 禁止 | 正式发布校验必须拒绝 MOCK |
 
 第一阶段规则：
 
-- 前端只展示 `PRIMARY`。
-- workflow validation 必须拒绝非 `PRIMARY`。
-- runtime 必须拒绝非 `PRIMARY`，错误码为 `SERVICE_PROVIDER_POLICY_UNSUPPORTED`。
-- 文档保留其它策略是为了后续演进，不能在 UI 或运行时表现为已支持。
+- workflow validation 和 runtime 允许 `PRIMARY`、`PRIMARY_WITH_FALLBACK`、`WEIGHTED`、`ENVIRONMENT_MATCH`、`MOCK_ONLY` 策略入口。
+- `PRIMARY_WITH_FALLBACK` 已在 `fact-query` 的 `SERVICE_INTERFACE` providerChain 执行链中落地，会按候选 provider 逐个尝试。
+- `WEIGHTED` 当前只完成候选过滤和 priority/weight 排序，不代表完整稳定 hash 灰度。
+- `ENVIRONMENT_MATCH` 当前只保留策略入口，接入 runtime environment 后才能完成环境隔离。
+- `MOCK_ONLY` 当前可按 provider config 的 `mockEnabled/mock` 过滤候选，正式发布阻断需要 release gate 后续补齐。
+- Studio 前端可以先只展示 `PRIMARY` 和 `PRIMARY_WITH_FALLBACK`，其它策略进入高级配置或隐藏。
 
 ### Provider 治理层设计
 
@@ -5624,10 +5628,11 @@ all built-in catalog entries can seed and pass drift check
 | health unknown | 未 health check | 发布 warning | `SERVICE_PROVIDER_HEALTH_UNKNOWN` |
 | health unhealthy | healthStatus=`UNHEALTHY` | 正式发布失败 | `SERVICE_PROVIDER_UNHEALTHY` |
 | circuit open | circuitStatus=`OPEN` | 正式发布失败 | `SERVICE_PROVIDER_CIRCUIT_OPEN` |
-| unsupported policy | `WEIGHTED` 尚未实现 | 发布失败 | `SERVICE_PROVIDER_POLICY_UNSUPPORTED` |
+| unsupported policy | 未知 providerPolicy，例如 `RANDOM` | 发布失败 | `SERVICE_PROVIDER_POLICY_UNSUPPORTED` |
 | mock in prod | providerPolicy=`MOCK` 或 mockEnabled 强制 | 发布失败 | `SERVICE_PROVIDER_MOCK_DENIED` |
 | fallback 候选缺失 | `PRIMARY_WITH_FALLBACK` 只有主 provider | warning 或按策略失败 | `SERVICE_PROVIDER_FALLBACK_NOT_CONFIGURED` |
-| 权重非法 | weight < 0 或总和为 0 | 发布失败 | `SERVICE_PROVIDER_WEIGHT_INVALID` |
+| WEIGHTED 第一阶段 | 至少一个 ACTIVE provider weight > 0 | 允许选择；不宣称完整稳定 hash 灰度 | - |
+| 权重非法 | weight < 0 或总和为 0 | 完整 WEIGHTED 阶段发布失败 | `SERVICE_PROVIDER_WEIGHT_INVALID` |
 
 ### Provider 协议测试矩阵
 

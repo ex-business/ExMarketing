@@ -104,6 +104,7 @@ type Props = {
   onCheckProviderHealth: (serviceCode: string, interfaceCode: string, providerCode: string) => Promise<void>;
   onValidateSchema: (schema: Partial<ServiceSchemaSummary> & { schemaRef: string }) => Promise<{ valid?: boolean; compatible?: boolean; code?: string; error?: string }>;
   onValidateSchemaExample: (schema: Partial<ServiceSchemaSummary> & { schemaRef: string }, example: unknown) => Promise<{ valid?: boolean; code?: string; error?: string }>;
+  onCheckSchemaCompatibility: (schema: Partial<ServiceSchemaSummary> & { schemaRef: string }) => Promise<{ compatible?: boolean; code?: string; error?: string }>;
   onCheckBinding: (binding: Partial<ServiceInterfaceBindingSummary>) => Promise<ServiceInterfaceBindingCheckResult>;
   auditNextCursor?: string;
   auditRequestId?: string;
@@ -282,6 +283,7 @@ export function ServiceCapabilityManagement({
   onCheckProviderHealth,
   onValidateSchema,
   onValidateSchemaExample,
+  onCheckSchemaCompatibility,
   onCheckBinding,
   auditNextCursor = '',
   auditRequestId = '',
@@ -297,6 +299,7 @@ export function ServiceCapabilityManagement({
   const [bindingForm, setBindingForm] = useState<BindingDraft>(() => bindingDraft(undefined, selectedServiceCode, selectedInterfaceCode, workspaceId, folderId));
   const [error, setError] = useState('');
   const [schemaCheck, setSchemaCheck] = useState('');
+  const [schemaCompatibilityCheck, setSchemaCompatibilityCheck] = useState('');
   const [schemaExampleText, setSchemaExampleText] = useState('{}');
   const [schemaExampleCheck, setSchemaExampleCheck] = useState('');
   const [bindingCheck, setBindingCheck] = useState<ServiceInterfaceBindingCheckResult | undefined>();
@@ -375,12 +378,18 @@ export function ServiceCapabilityManagement({
     setSchemaForm(schemaDraft());
     setTab('schema');
     setError('');
+    setSchemaCheck('');
+    setSchemaCompatibilityCheck('');
+    setSchemaExampleCheck('');
   };
 
   const selectSchema = (schema: ServiceSchemaSummary) => {
     setSchemaForm(schemaDraft(schema));
     setTab('schema');
     setError('');
+    setSchemaCheck('');
+    setSchemaCompatibilityCheck('');
+    setSchemaExampleCheck('');
   };
 
   const startBinding = () => {
@@ -475,22 +484,44 @@ export function ServiceCapabilityManagement({
     }
   };
 
+  const schemaPayload = (): Partial<ServiceSchemaSummary> & { schemaRef: string } => ({
+    tenantId,
+    workspaceId: schemaForm.scope === 'WORKSPACE' || schemaForm.scope === 'FOLDER' ? workspaceId : '',
+    folderId: schemaForm.scope === 'FOLDER' ? folderId : '',
+    schemaRef: schemaForm.schemaRef.trim(),
+    schemaType: schemaForm.schemaType,
+    scope: schemaForm.scope,
+    version: Number(schemaForm.version) || 1,
+    status: schemaForm.status,
+    description: schemaForm.description.trim(),
+    schemaJson: parseJson(schemaForm.schemaJsonText, {}),
+    examplesJson: parseJson(schemaForm.examplesJsonText, []),
+  });
+
+  const formatSchemaCompatibility = (result: { compatible?: boolean; code?: string; error?: string }) => (
+    result.compatible ? '兼容性通过' : `${result.code || 'SERVICE_SCHEMA_INCOMPATIBLE'} ${result.error || ''}`.trim()
+  );
+
+  const checkSchemaCompatibility = async () => {
+    try {
+      setError('');
+      const result = await onCheckSchemaCompatibility(schemaPayload());
+      const message = formatSchemaCompatibility(result);
+      setSchemaCompatibilityCheck(message);
+      return result;
+    } catch (err) {
+      const message = (err as Error).message;
+      setSchemaCompatibilityCheck(message);
+      throw err;
+    }
+  };
+
   const submitSchema = async () => {
     try {
       setError('');
-      await onSaveSchema({
-        tenantId,
-        workspaceId: schemaForm.scope === 'WORKSPACE' || schemaForm.scope === 'FOLDER' ? workspaceId : '',
-        folderId: schemaForm.scope === 'FOLDER' ? folderId : '',
-        schemaRef: schemaForm.schemaRef.trim(),
-        schemaType: schemaForm.schemaType,
-        scope: schemaForm.scope,
-        version: Number(schemaForm.version) || 1,
-        status: schemaForm.status,
-        description: schemaForm.description.trim(),
-        schemaJson: parseJson(schemaForm.schemaJsonText, {}),
-        examplesJson: parseJson(schemaForm.examplesJsonText, []),
-      });
+      const compatibility = await checkSchemaCompatibility();
+      if (!compatibility.compatible) return;
+      await onSaveSchema(schemaPayload());
     } catch (err) {
       setError((err as Error).message);
     }
@@ -499,19 +530,7 @@ export function ServiceCapabilityManagement({
   const validateSchema = async () => {
     try {
       setError('');
-      const result = await onValidateSchema({
-        tenantId,
-        workspaceId: schemaForm.scope === 'WORKSPACE' || schemaForm.scope === 'FOLDER' ? workspaceId : '',
-        folderId: schemaForm.scope === 'FOLDER' ? folderId : '',
-        schemaRef: schemaForm.schemaRef.trim(),
-        schemaType: schemaForm.schemaType,
-        scope: schemaForm.scope,
-        version: Number(schemaForm.version) || 1,
-        status: schemaForm.status,
-        description: schemaForm.description.trim(),
-        schemaJson: parseJson(schemaForm.schemaJsonText, {}),
-        examplesJson: parseJson(schemaForm.examplesJsonText, []),
-      });
+      const result = await onValidateSchema(schemaPayload());
       setSchemaCheck(result.valid || result.compatible ? '校验通过' : `${result.code || 'SCHEMA_INVALID'} ${result.error || ''}`.trim());
     } catch (err) {
       setSchemaCheck((err as Error).message);
@@ -541,17 +560,7 @@ export function ServiceCapabilityManagement({
   const validateSchemaExample = async () => {
     try {
       setError('');
-      const result = await onValidateSchemaExample({
-        tenantId,
-        workspaceId: schemaForm.scope === 'WORKSPACE' || schemaForm.scope === 'FOLDER' ? workspaceId : '',
-        folderId: schemaForm.scope === 'FOLDER' ? folderId : '',
-        schemaRef: schemaForm.schemaRef.trim(),
-        schemaType: schemaForm.schemaType,
-        scope: schemaForm.scope,
-        version: Number(schemaForm.version) || 1,
-        status: schemaForm.status,
-        schemaJson: parseJson(schemaForm.schemaJsonText, {}),
-      }, parseJson(schemaExampleText, {}));
+      const result = await onValidateSchemaExample(schemaPayload(), parseJson(schemaExampleText, {}));
       setSchemaExampleCheck(result.valid ? 'Example 校验通过' : `${result.code || 'EXAMPLE_INVALID'} ${result.error || ''}`.trim());
     } catch (err) {
       setSchemaExampleCheck((err as Error).message);
@@ -762,10 +771,12 @@ export function ServiceCapabilityManagement({
                 <pre>{schemaPreview}</pre>
               </div>
               {schemaCheck ? <div><b>校验结果</b><span>{schemaCheck}</span></div> : null}
+              {schemaCompatibilityCheck ? <div><b>兼容性结果</b><span>{schemaCompatibilityCheck}</span></div> : null}
               {schemaExampleCheck ? <div><b>Example 结果</b><span>{schemaExampleCheck}</span></div> : null}
             </div>
             <div className="resource-form-actions span-2">
               <TaButton tone="outline" onClick={() => void validateSchema()}>校验 Schema</TaButton>
+              <TaButton tone="outline" onClick={() => void checkSchemaCompatibility()}>兼容性检查</TaButton>
               <TaButton tone="outline" onClick={() => void validateSchemaExample()}>校验 Example</TaButton>
               <TaButton tone="primary" onClick={submitSchema}>保存 Schema</TaButton>
             </div>

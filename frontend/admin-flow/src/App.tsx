@@ -3337,6 +3337,13 @@ function StudioActivityStart({
       body: JSON.stringify({ ...schema, tenantId, examplesJson: [example] }),
     });
   };
+  const checkServiceSchemaCompatibility = async (schema: Partial<ServiceSchemaSummary> & { schemaRef: string }) => {
+    const tenantId = schema.tenantId || selectedWorkspace?.tenantId || 'site_001';
+    return fetchJSON<{ compatible?: boolean; code?: string; error?: string }>(`/admin/v1/service-schemas/compatibility-check?tenantId=${encodeURIComponent(tenantId)}`, {
+      method: 'POST',
+      body: JSON.stringify({ ...schema, tenantId }),
+    });
+  };
   const checkServiceInterfaceBinding = async (binding: Partial<ServiceInterfaceBindingSummary>): Promise<ServiceInterfaceBindingCheckResult> => {
     const tenantId = binding.tenantId || selectedWorkspace?.tenantId || 'site_001';
     return fetchJSON<ServiceInterfaceBindingCheckResult>(`/admin/v1/service-interface-bindings/check?tenantId=${encodeURIComponent(tenantId)}`, {
@@ -4221,6 +4228,7 @@ function StudioActivityStart({
                 onCheckProviderHealth={checkServiceProviderHealth}
                 onValidateSchema={validateServiceSchema}
                 onValidateSchemaExample={validateServiceSchemaExample}
+                onCheckSchemaCompatibility={checkServiceSchemaCompatibility}
                 onCheckBinding={checkServiceInterfaceBinding}
                 auditNextCursor={serviceCallAuditNextCursor}
                 auditRequestId={serviceCallAuditRequestId}

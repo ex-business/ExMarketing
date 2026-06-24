@@ -988,7 +988,7 @@ UI 上应根据 `targetType` 展示不同操作集合，避免把服务调用和
 | `authRef` | string | 否 | `""` | 鉴权引用；不能保存 secret 明文 |
 | `resourceRefs` | string[] | 视协议 | `[]` | Provider 依赖的 Resource；`RESOURCE` provider 必须至少一个或在 config 里提供 targetResourceRef |
 | `config` | object | 否 | `{}` | 协议扩展配置，必须是 JSON object |
-| `weight` | number | 否 | `0` | `WEIGHTED` 策略使用；当前不参与运行时选择 |
+| `weight` | number | 否 | `0` | `WEIGHTED` / `WEIGHTED_WITH_FALLBACK` 策略参与运行时选择；非 weighted 策略只用于排序旁路信息 |
 | `priority` | number | 否 | `0` | `PRIMARY` 按 `priority ASC` 选择 |
 | `environment` | string | 否 | `""` | `DEV/STAGING/PROD` 等环境标签 |
 | `status` | enum | 是 | `ACTIVE` | 运行时只选择 `ACTIVE` provider |
@@ -1010,7 +1010,7 @@ UI 上应根据 `targetType` 展示不同操作集合，避免把服务调用和
 | `serviceRef` | string | `SERVICE_INTERFACE` 必填 | 无 | 是 | 指向 service code |
 | `interfaceRef` | string | `SERVICE_INTERFACE` 必填 | 无 | 是 | 指向 interface code |
 | `providerRef` | string | 否 | `""` | 是 | 指定 provider code；为空则按策略选择 |
-| `providerPolicy` | enum | 否 | `PRIMARY` | 仅 `PRIMARY` | 当前 validation 和 runtime 都必须拒绝非 `PRIMARY` 策略 |
+| `providerPolicy` | enum | 否 | `PRIMARY` | 是 | 当前 validation/runtime 支持 `PRIMARY`、`PRIMARY_WITH_FALLBACK`、`WEIGHTED`、`WEIGHTED_WITH_FALLBACK`、`ENVIRONMENT_MATCH`、`MOCK_ONLY`；未知策略必须拒绝 |
 | `resourceRef` | string | `RESOURCE` 必填 | 无 | 是 | 指向 Resource code |
 | `operation` | enum | 否 | 目标默认 | 部分 | 服务接口默认 `CALL`；资源默认按节点语义 |
 | `inputMapping` | object | 否 | `{}` | 规划 | 服务调用输入映射；当前不得用于绕过 schema |
@@ -1027,6 +1027,7 @@ UI 上应根据 `targetType` 展示不同操作集合，避免把服务调用和
 | `PRIMARY_WITH_FALLBACK` | 主 Provider 失败后按顺序 fallback |
 | `CACHE_ASIDE` | 先读缓存 Provider，未命中再读主 Provider |
 | `WEIGHTED` | 按权重灰度选择 Provider |
+| `WEIGHTED_WITH_FALLBACK` | 先按权重选择首选 Provider，首选失败后按候选 fallback |
 | `ENVIRONMENT` | 按 DEV/STAGING/PROD 绑定 Provider |
 | `MOCK` | 测试或预览时使用 Mock Provider |
 
@@ -1040,14 +1041,16 @@ Provider 策略属于服务治理，不应该由节点脚本硬编码实现。
 | `PRIMARY_WITH_FALLBACK` | 第一阶段已在 `fact-query` 落地 | 按 `priority ASC` 依次尝试 ACTIVE provider | 当前第一阶段 provider 执行失败会尝试下一候选；后续补错误分类后再区分 4xx/schema/auth 是否 fallback | trace 必须记录每个尝试的 provider 和失败原因 |
 | `CACHE_ASIDE` | 规划支持 | 先选择 `config.role=CACHE` 或 `tags/cache` provider，miss 后选择 PRIMARY | cache miss 不算失败；cache error 是否 fallback 由 `config.cacheErrorPolicy` 决定 | 必须定义 miss 判断路径，例如 `config.missPath` |
 | `WEIGHTED` | 已进入实现 | 先过滤 ACTIVE、非 mock、runtime 可用、`weight > 0` provider，再用 deterministic hash seed 选择一个 provider | 被选 provider 失败不自动重抽，除非配置 `PRIMARY_WITH_FALLBACK` 类策略 | 总权重大于 0；同一 tenant/activity/node/service/interface/event/provider set 选择稳定 |
+| `WEIGHTED_WITH_FALLBACK` | 已进入实现 | 先执行 `WEIGHTED` 选择并保留候选序列 | 首选 provider 失败后按候选顺序 fallback | trace/audit 记录 weighted bucket、候选和 fallback 原因 |
 | `ENVIRONMENT` | 已进入实现 | 运行时/发布时读取 providerChain 的 `environment/runtimeEnvironment`，优先选择同环境 provider；无同环境时允许空/default provider 兜底 | 显式 providerRef 环境不匹配直接失败；候选过滤后无 provider 则失败 | PROD/DEV/STAGING 隔离，不允许生产误用 DEV provider |
 | `MOCK` | 已进入实现 | `MOCK_ONLY` 只选择显式 mock provider；普通策略会跳过 mock provider | 非 MOCK 策略显式引用 mock provider 返回 `SERVICE_PROVIDER_MOCK_DENIED` | mock provider 必须 `config.mockEnabled=true`、`config.mock=true` 或 `environment=mock` |
 
 第一阶段规则：
 
-- workflow validation 和 runtime 允许 `PRIMARY`、`PRIMARY_WITH_FALLBACK`、`WEIGHTED`、`ENVIRONMENT_MATCH`、`MOCK_ONLY` 策略入口。
+- workflow validation 和 runtime 允许 `PRIMARY`、`PRIMARY_WITH_FALLBACK`、`WEIGHTED`、`WEIGHTED_WITH_FALLBACK`、`ENVIRONMENT_MATCH`、`MOCK_ONLY` 策略入口。
 - `PRIMARY_WITH_FALLBACK` 已在 `fact-query` 的 `SERVICE_INTERFACE` providerChain 执行链中落地，会按候选 provider 逐个尝试。
 - `WEIGHTED` 已使用 deterministic hash，不再按排序取第一；seed 来自 tenant、activity、activity version、node、service/interface、event/idempotency 和 provider set。
+- `WEIGHTED_WITH_FALLBACK` 在 weighted 首选失败后继续尝试候选 provider。
 - `ENVIRONMENT_MATCH` 已支持 providerChain 的 `environment` / `runtimeEnvironment`，同环境优先，空/default provider 作为兜底。
 - `MOCK_ONLY` 已支持 `mockEnabled/mock/environment=mock` 判定；普通策略不会误选 mock provider。
 - Studio 前端可以先只展示 `PRIMARY` 和 `PRIMARY_WITH_FALLBACK`，其它策略进入高级配置或隐藏。
@@ -2465,12 +2468,10 @@ CREATE TABLE marketing_service_interface_binding (
     scope TEXT NOT NULL,
     workspace_id TEXT NOT NULL DEFAULT '',
     folder_id TEXT NOT NULL DEFAULT '',
-    include_subfolders BOOLEAN NOT NULL DEFAULT false,
     activity_id TEXT NOT NULL DEFAULT '',
     node_id TEXT NOT NULL DEFAULT '',
     principal_type TEXT NOT NULL DEFAULT '',
     principal_id TEXT NOT NULL DEFAULT '',
-    min_role TEXT NOT NULL DEFAULT '',
     allowed_node_types_json JSONB NOT NULL DEFAULT '[]'::jsonb,
     allowed_operations_json JSONB NOT NULL DEFAULT '[]'::jsonb,
     allowed_provider_policies_json JSONB NOT NULL DEFAULT '[]'::jsonb,
@@ -2478,8 +2479,8 @@ CREATE TABLE marketing_service_interface_binding (
     allow_explicit_provider_ref BOOLEAN NOT NULL DEFAULT false,
     lua_callable BOOLEAN NOT NULL DEFAULT false,
     require_approval BOOLEAN NOT NULL DEFAULT false,
-    environment TEXT NOT NULL DEFAULT '',
-    rate_limit_ref TEXT NOT NULL DEFAULT '',
+    deny BOOLEAN NOT NULL DEFAULT false,
+    metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
     status TEXT NOT NULL,
     created_by TEXT NOT NULL DEFAULT '',
     updated_by TEXT NOT NULL DEFAULT '',
@@ -2487,6 +2488,8 @@ CREATE TABLE marketing_service_interface_binding (
     updated_at TIMESTAMPTZ NOT NULL
 );
 ```
+
+`include_subfolders`、`min_role`、`environment`、`rate_limit_ref`、`deleted_at` 属于长期增强字段，当前第一阶段 Binding DDL 不包含这些列。
 
 建议索引：
 
@@ -3075,7 +3078,7 @@ third-party metrics contain no raw payload or secret
 
 ## 正式 DDL / Migration 设计
 
-本节定义 Service、Interface、Provider、Schema、Binding、Audit 的正式落库结构。前文的“建议表/草案”用于说明模型，本节作为后续 DB migration、Repository、Admin API 和测试验收的基准。
+本节定义 Service、Interface、Provider、Schema、Binding、Provider Runtime State、Audit 的当前正式落库结构。前文的“建议表/草案”用于说明模型，本节与当前 migration 对齐，后续增强字段必须通过新增 migration 演进。
 
 ### 命名和约束原则
 
@@ -3086,9 +3089,8 @@ third-party metrics contain no raw payload or secret
 - `status` 使用 CHECK 约束，避免写入未知状态；
 - JSONB 字段默认空对象或空数组，禁止 `NULL`；
 - 不在数据库保存明文 secret、token、header；
-- `deleted_at` 只用于软删除和排查，唯一约束仍以 `status <> 'DELETED'` 的部分唯一索引控制；
 - 跨 service/interface/provider 的 FK 使用 `(tenant_id, code)` 组合唯一键支撑；
-- 内置资产通过 `builtin=true`、`catalog_version`、`source_hash` 跟踪 seed 来源。
+- 软删除、内置 catalog 版本、source hash 等字段是长期增强，不属于当前正式 DDL。
 
 推荐状态集合：
 
@@ -3096,7 +3098,7 @@ third-party metrics contain no raw payload or secret
 asset status:    DRAFT, ACTIVE, DEPRECATED, DISABLED, DELETED
 health status:   UNKNOWN, HEALTHY, DEGRADED, UNHEALTHY
 circuit status:  CLOSED, OPEN, HALF_OPEN
-audit status:    SUCCESS, MISS, FAILED, TIMEOUT, REJECTED, SKIPPED_FALLBACK
+audit status:    SUCCESS, FAILED, DENIED
 ```
 
 ### Migration 顺序
@@ -3105,14 +3107,15 @@ DDL 必须按依赖顺序创建：
 
 ```text
 1. marketing_service_schema
-2. marketing_service_definition
+2. marketing_service
 3. marketing_service_interface
 4. marketing_service_provider
 5. marketing_service_interface_binding
-6. marketing_service_call_audit
-7. indexes
-8. built-in catalog seed
-9. drift check
+6. marketing_service_provider_runtime_state
+7. marketing_service_call_audit
+8. indexes
+9. built-in catalog seed
+10. drift check
 ```
 
 原因：
@@ -3126,203 +3129,109 @@ DDL 必须按依赖顺序创建：
 
 ```sql
 CREATE TABLE marketing_service_schema (
-    id TEXT PRIMARY KEY,
-    tenant_id TEXT NOT NULL,
-    schema_ref TEXT NOT NULL,
-    schema_type TEXT NOT NULL,
-    scope TEXT NOT NULL DEFAULT 'TENANT',
-    workspace_id TEXT NOT NULL DEFAULT '',
-    folder_id TEXT NOT NULL DEFAULT '',
-    version INTEGER NOT NULL DEFAULT 1,
-    status TEXT NOT NULL DEFAULT 'ACTIVE',
-    schema_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    id VARCHAR(64) PRIMARY KEY,
+    tenant_id VARCHAR(64) NOT NULL,
+    workspace_id VARCHAR(64) NOT NULL DEFAULT '',
+    folder_id VARCHAR(64) NOT NULL DEFAULT '',
+    schema_ref VARCHAR(128) NOT NULL,
+    schema_type VARCHAR(32) NOT NULL,
+    scope VARCHAR(32) NOT NULL,
+    version INTEGER NOT NULL,
+    status VARCHAR(32) NOT NULL,
+    schema_json JSONB NOT NULL,
     examples_json JSONB NOT NULL DEFAULT '[]'::jsonb,
     description TEXT NOT NULL DEFAULT '',
-    builtin BOOLEAN NOT NULL DEFAULT false,
-    catalog_version INTEGER NOT NULL DEFAULT 0,
-    source_hash TEXT NOT NULL DEFAULT '',
-    created_by TEXT NOT NULL DEFAULT '',
-    updated_by TEXT NOT NULL DEFAULT '',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    deleted_at TIMESTAMPTZ,
-    CONSTRAINT chk_marketing_service_schema_type
-        CHECK (schema_type IN ('INPUT', 'OUTPUT', 'ERROR', 'EVENT', 'MESSAGE')),
-    CONSTRAINT chk_marketing_service_schema_scope
-        CHECK (scope IN ('SYSTEM', 'TENANT', 'WORKSPACE', 'FOLDER')),
-    CONSTRAINT chk_marketing_service_schema_status
-        CHECK (status IN ('DRAFT', 'ACTIVE', 'DEPRECATED', 'DISABLED', 'DELETED')),
-    CONSTRAINT chk_marketing_service_schema_version
-        CHECK (version > 0),
-    CONSTRAINT chk_marketing_service_schema_json_object
-        CHECK (jsonb_typeof(schema_json) = 'object'),
-    CONSTRAINT chk_marketing_service_schema_examples_array
-        CHECK (jsonb_typeof(examples_json) = 'array')
+    created_by VARCHAR(128) NOT NULL DEFAULT '',
+    updated_by VARCHAR(128) NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL,
+    UNIQUE (tenant_id, schema_ref, version),
+    CHECK (version > 0),
+    CHECK (jsonb_typeof(schema_json) = 'object')
 );
 ```
 
 唯一索引和查询索引：
 
 ```sql
-CREATE UNIQUE INDEX ux_marketing_service_schema_ref_active
-    ON marketing_service_schema (tenant_id, schema_ref)
-    WHERE status <> 'DELETED';
-
 CREATE INDEX idx_marketing_service_schema_lookup
-    ON marketing_service_schema (tenant_id, status, schema_type, scope);
+    ON marketing_service_schema(tenant_id, schema_ref, schema_type, status);
 
-CREATE INDEX idx_marketing_service_schema_workspace
-    ON marketing_service_schema (tenant_id, workspace_id, folder_id)
-    WHERE status <> 'DELETED';
+CREATE INDEX idx_marketing_service_schema_scope
+    ON marketing_service_schema(tenant_id, workspace_id, folder_id, status);
 
-CREATE INDEX gin_marketing_service_schema_json
-    ON marketing_service_schema USING GIN (schema_json jsonb_path_ops);
-
-CREATE INDEX gin_marketing_service_schema_examples
-    ON marketing_service_schema USING GIN (examples_json jsonb_path_ops);
+CREATE INDEX idx_marketing_service_schema_json
+    ON marketing_service_schema USING GIN(schema_json);
 ```
 
-### marketing_service_definition
+### marketing_service
 
 ```sql
-CREATE TABLE marketing_service_definition (
-    id TEXT PRIMARY KEY,
-    tenant_id TEXT NOT NULL,
-    code TEXT NOT NULL,
-    name TEXT NOT NULL,
-    service_type TEXT NOT NULL DEFAULT 'BUSINESS',
-    scope TEXT NOT NULL DEFAULT 'TENANT',
-    workspace_id TEXT NOT NULL DEFAULT '',
-    folder_id TEXT NOT NULL DEFAULT '',
-    owner TEXT NOT NULL DEFAULT '',
+CREATE TABLE marketing_service (
+    id VARCHAR(64) PRIMARY KEY,
+    tenant_id VARCHAR(64) NOT NULL,
+    workspace_id VARCHAR(64) NOT NULL DEFAULT '',
+    folder_id VARCHAR(64) NOT NULL DEFAULT '',
+    code VARCHAR(128) NOT NULL,
+    name VARCHAR(160) NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    service_type VARCHAR(32) NOT NULL,
+    scope VARCHAR(32) NOT NULL,
+    status VARCHAR(32) NOT NULL,
+    owner VARCHAR(128) NOT NULL DEFAULT '',
     tags_json JSONB NOT NULL DEFAULT '[]'::jsonb,
     metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
-    description TEXT NOT NULL DEFAULT '',
-    status TEXT NOT NULL DEFAULT 'ACTIVE',
-    builtin BOOLEAN NOT NULL DEFAULT false,
-    catalog_version INTEGER NOT NULL DEFAULT 0,
-    source_hash TEXT NOT NULL DEFAULT '',
-    created_by TEXT NOT NULL DEFAULT '',
-    updated_by TEXT NOT NULL DEFAULT '',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    deleted_at TIMESTAMPTZ,
-    CONSTRAINT chk_marketing_service_definition_type
-        CHECK (service_type IN ('SYSTEM', 'BUSINESS', 'INTEGRATION', 'CUSTOM')),
-    CONSTRAINT chk_marketing_service_definition_scope
-        CHECK (scope IN ('SYSTEM', 'TENANT', 'WORKSPACE', 'FOLDER')),
-    CONSTRAINT chk_marketing_service_definition_status
-        CHECK (status IN ('DRAFT', 'ACTIVE', 'DEPRECATED', 'DISABLED', 'DELETED')),
-    CONSTRAINT chk_marketing_service_definition_tags_array
-        CHECK (jsonb_typeof(tags_json) = 'array'),
-    CONSTRAINT chk_marketing_service_definition_metadata_object
-        CHECK (jsonb_typeof(metadata_json) = 'object')
+    created_by VARCHAR(128) NOT NULL DEFAULT '',
+    updated_by VARCHAR(128) NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL,
+    UNIQUE (tenant_id, code)
 );
 ```
 
 唯一索引和查询索引：
 
 ```sql
-ALTER TABLE marketing_service_definition
-    ADD CONSTRAINT ux_marketing_service_definition_tenant_code
-    UNIQUE (tenant_id, code);
-
-CREATE UNIQUE INDEX ux_marketing_service_definition_code_active
-    ON marketing_service_definition (tenant_id, code)
-    WHERE status <> 'DELETED';
-
-CREATE INDEX idx_marketing_service_definition_list
-    ON marketing_service_definition (tenant_id, status, service_type, scope);
-
-CREATE INDEX idx_marketing_service_definition_workspace
-    ON marketing_service_definition (tenant_id, workspace_id, folder_id)
-    WHERE status <> 'DELETED';
-
-CREATE INDEX gin_marketing_service_definition_tags
-    ON marketing_service_definition USING GIN (tags_json jsonb_path_ops);
-
-CREATE INDEX gin_marketing_service_definition_metadata
-    ON marketing_service_definition USING GIN (metadata_json jsonb_path_ops);
+CREATE INDEX idx_marketing_service_scope
+    ON marketing_service(tenant_id, workspace_id, folder_id, status);
 ```
 
-`ux_marketing_service_definition_tenant_code` 必须在创建 `marketing_service_interface` 前完成，因为 PostgreSQL 外键不能引用部分唯一索引。
+`marketing_service` 是当前正式表名；旧草案里的 `marketing_service_definition` 不属于当前 migration。
 
 ### marketing_service_interface
 
 ```sql
 CREATE TABLE marketing_service_interface (
-    id TEXT PRIMARY KEY,
-    tenant_id TEXT NOT NULL,
-    service_ref TEXT NOT NULL,
-    code TEXT NOT NULL,
-    name TEXT NOT NULL,
-    operation TEXT NOT NULL DEFAULT 'CALL',
-    input_schema_ref TEXT NOT NULL DEFAULT '',
-    output_schema_ref TEXT NOT NULL DEFAULT '',
-    error_schema_ref TEXT NOT NULL DEFAULT '',
-    lua_callable BOOLEAN NOT NULL DEFAULT false,
-    timeout_ms INTEGER NOT NULL DEFAULT 1000,
-    default_provider_policy TEXT NOT NULL DEFAULT 'PRIMARY',
-    allowed_provider_policies_json JSONB NOT NULL DEFAULT '["PRIMARY"]'::jsonb,
-    side_effect_type TEXT NOT NULL DEFAULT 'NONE',
-    idempotency_key_template TEXT NOT NULL DEFAULT '',
-    retry_policy_json JSONB NOT NULL DEFAULT '{}'::jsonb,
-    metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    id VARCHAR(64) PRIMARY KEY,
+    tenant_id VARCHAR(64) NOT NULL,
+    service_ref VARCHAR(128) NOT NULL,
+    code VARCHAR(128) NOT NULL,
+    name VARCHAR(160) NOT NULL,
     description TEXT NOT NULL DEFAULT '',
-    status TEXT NOT NULL DEFAULT 'ACTIVE',
-    builtin BOOLEAN NOT NULL DEFAULT false,
-    catalog_version INTEGER NOT NULL DEFAULT 0,
-    source_hash TEXT NOT NULL DEFAULT '',
-    created_by TEXT NOT NULL DEFAULT '',
-    updated_by TEXT NOT NULL DEFAULT '',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    deleted_at TIMESTAMPTZ,
-    CONSTRAINT chk_marketing_service_interface_operation
-        CHECK (operation IN ('CALL', 'READ', 'WRITE', 'PUBLISH', 'REQUEST_REPLY', 'STREAM', 'TEST')),
-    CONSTRAINT chk_marketing_service_interface_status
-        CHECK (status IN ('DRAFT', 'ACTIVE', 'DEPRECATED', 'DISABLED', 'DELETED')),
-    CONSTRAINT chk_marketing_service_interface_policy
-        CHECK (default_provider_policy IN ('PRIMARY', 'PRIMARY_WITH_FALLBACK', 'WEIGHTED', 'CACHE_ASIDE', 'ENVIRONMENT', 'MOCK', 'PINNED')),
-    CONSTRAINT chk_marketing_service_interface_side_effect
-        CHECK (side_effect_type IN ('NONE', 'READ', 'WRITE', 'PUBLISH', 'CALL_WITH_SIDE_EFFECT')),
-    CONSTRAINT chk_marketing_service_interface_timeout
-        CHECK (timeout_ms > 0 AND timeout_ms <= 60000),
-    CONSTRAINT chk_marketing_service_interface_allowed_policies_array
-        CHECK (jsonb_typeof(allowed_provider_policies_json) = 'array'),
-    CONSTRAINT chk_marketing_service_interface_retry_policy_object
-        CHECK (jsonb_typeof(retry_policy_json) = 'object'),
-    CONSTRAINT chk_marketing_service_interface_metadata_object
-        CHECK (jsonb_typeof(metadata_json) = 'object'),
-    CONSTRAINT fk_marketing_service_interface_service
-        FOREIGN KEY (tenant_id, service_ref)
-        REFERENCES marketing_service_definition (tenant_id, code)
-        DEFERRABLE INITIALLY DEFERRED
+    operation VARCHAR(64) NOT NULL,
+    input_schema_ref VARCHAR(128) NOT NULL DEFAULT '',
+    output_schema_ref VARCHAR(128) NOT NULL DEFAULT '',
+    error_schema_ref VARCHAR(128) NOT NULL DEFAULT '',
+    idempotency_key_template TEXT NOT NULL DEFAULT '',
+    timeout_ms INTEGER NOT NULL DEFAULT 0,
+    retry_policy VARCHAR(64) NOT NULL DEFAULT '',
+    lua_callable BOOLEAN NOT NULL DEFAULT false,
+    status VARCHAR(32) NOT NULL,
+    metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_by VARCHAR(128) NOT NULL DEFAULT '',
+    updated_by VARCHAR(128) NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL,
+    UNIQUE (tenant_id, service_ref, code),
+    FOREIGN KEY (tenant_id, service_ref) REFERENCES marketing_service(tenant_id, code) ON DELETE CASCADE
 );
 ```
 
 Interface 唯一索引和查询索引：
 
 ```sql
-CREATE UNIQUE INDEX ux_marketing_service_interface_code_active
-    ON marketing_service_interface (tenant_id, service_ref, code)
-    WHERE status <> 'DELETED';
-
-ALTER TABLE marketing_service_interface
-    ADD CONSTRAINT ux_marketing_service_interface_tenant_service_code
-    UNIQUE (tenant_id, service_ref, code);
-
-CREATE INDEX idx_marketing_service_interface_list
-    ON marketing_service_interface (tenant_id, service_ref, status, operation);
-
-CREATE INDEX idx_marketing_service_interface_schema
-    ON marketing_service_interface (tenant_id, input_schema_ref, output_schema_ref, error_schema_ref);
-
-CREATE INDEX gin_marketing_service_interface_allowed_policies
-    ON marketing_service_interface USING GIN (allowed_provider_policies_json jsonb_path_ops);
-
-CREATE INDEX gin_marketing_service_interface_retry_policy
-    ON marketing_service_interface USING GIN (retry_policy_json jsonb_path_ops);
+CREATE INDEX idx_marketing_service_interface_service
+    ON marketing_service_interface(tenant_id, service_ref, status);
 ```
 
 Schema 引用不建议做硬 FK，原因是内置 schema 可能来自 `tenant_id='system'` 或 catalog fallback。保存和发布时必须由应用层校验 `schemaRef` 存在且 ACTIVE。
@@ -3331,214 +3240,147 @@ Schema 引用不建议做硬 FK，原因是内置 schema 可能来自 `tenant_id
 
 ```sql
 CREATE TABLE marketing_service_provider (
-    id TEXT PRIMARY KEY,
-    tenant_id TEXT NOT NULL,
-    service_ref TEXT NOT NULL,
-    interface_ref TEXT NOT NULL,
-    code TEXT NOT NULL,
-    name TEXT NOT NULL,
-    protocol TEXT NOT NULL,
-    environment TEXT NOT NULL DEFAULT '',
-    priority INTEGER NOT NULL DEFAULT 0,
-    weight INTEGER NOT NULL DEFAULT 100,
-    resource_refs_json JSONB NOT NULL DEFAULT '[]'::jsonb,
-    method TEXT NOT NULL DEFAULT '',
-    path TEXT NOT NULL DEFAULT '',
-    auth_ref TEXT NOT NULL DEFAULT '',
-    config_json JSONB NOT NULL DEFAULT '{}'::jsonb,
-    input_mapping_json JSONB NOT NULL DEFAULT '{}'::jsonb,
-    output_mapping_json JSONB NOT NULL DEFAULT '{}'::jsonb,
-    error_mapping_json JSONB NOT NULL DEFAULT '{}'::jsonb,
-    timeout_ms INTEGER NOT NULL DEFAULT 1000,
-    retry_policy_json JSONB NOT NULL DEFAULT '{}'::jsonb,
-    rate_limit_ref TEXT NOT NULL DEFAULT '',
-    health_status TEXT NOT NULL DEFAULT 'UNKNOWN',
-    circuit_status TEXT NOT NULL DEFAULT 'CLOSED',
-    last_health_check_at TIMESTAMPTZ,
-    last_error_code TEXT NOT NULL DEFAULT '',
-    last_error_message TEXT NOT NULL DEFAULT '',
-    mock_enabled BOOLEAN NOT NULL DEFAULT false,
-    mock_response_json JSONB NOT NULL DEFAULT '{}'::jsonb,
-    metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    id VARCHAR(64) PRIMARY KEY,
+    tenant_id VARCHAR(64) NOT NULL,
+    service_ref VARCHAR(128) NOT NULL,
+    interface_ref VARCHAR(128) NOT NULL,
+    code VARCHAR(128) NOT NULL,
+    name VARCHAR(160) NOT NULL,
     description TEXT NOT NULL DEFAULT '',
-    status TEXT NOT NULL DEFAULT 'ACTIVE',
-    builtin BOOLEAN NOT NULL DEFAULT false,
-    catalog_version INTEGER NOT NULL DEFAULT 0,
-    source_hash TEXT NOT NULL DEFAULT '',
-    created_by TEXT NOT NULL DEFAULT '',
-    updated_by TEXT NOT NULL DEFAULT '',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    deleted_at TIMESTAMPTZ,
-    CONSTRAINT chk_marketing_service_provider_protocol
-        CHECK (protocol IN ('RESOURCE', 'HTTP', 'MQ', 'RPC', 'PLUGIN', 'TCP', 'LUA_ADAPTER')),
-    CONSTRAINT chk_marketing_service_provider_status
-        CHECK (status IN ('DRAFT', 'ACTIVE', 'DEPRECATED', 'DISABLED', 'DELETED')),
-    CONSTRAINT chk_marketing_service_provider_health
-        CHECK (health_status IN ('UNKNOWN', 'HEALTHY', 'DEGRADED', 'UNHEALTHY')),
-    CONSTRAINT chk_marketing_service_provider_circuit
-        CHECK (circuit_status IN ('CLOSED', 'OPEN', 'HALF_OPEN')),
-    CONSTRAINT chk_marketing_service_provider_weight
-        CHECK (weight >= 0),
-    CONSTRAINT chk_marketing_service_provider_timeout
-        CHECK (timeout_ms > 0 AND timeout_ms <= 60000),
-    CONSTRAINT chk_marketing_service_provider_resource_refs_array
-        CHECK (jsonb_typeof(resource_refs_json) = 'array'),
-    CONSTRAINT chk_marketing_service_provider_config_object
-        CHECK (jsonb_typeof(config_json) = 'object'),
-    CONSTRAINT chk_marketing_service_provider_input_mapping_object
-        CHECK (jsonb_typeof(input_mapping_json) = 'object'),
-    CONSTRAINT chk_marketing_service_provider_output_mapping_object
-        CHECK (jsonb_typeof(output_mapping_json) = 'object'),
-    CONSTRAINT chk_marketing_service_provider_error_mapping_object
-        CHECK (jsonb_typeof(error_mapping_json) = 'object'),
-    CONSTRAINT chk_marketing_service_provider_retry_policy_object
-        CHECK (jsonb_typeof(retry_policy_json) = 'object'),
-    CONSTRAINT chk_marketing_service_provider_mock_response_object
-        CHECK (jsonb_typeof(mock_response_json) = 'object'),
-    CONSTRAINT chk_marketing_service_provider_metadata_object
-        CHECK (jsonb_typeof(metadata_json) = 'object'),
-    CONSTRAINT fk_marketing_service_provider_interface
-        FOREIGN KEY (tenant_id, service_ref, interface_ref)
-        REFERENCES marketing_service_interface (tenant_id, service_ref, code)
-        DEFERRABLE INITIALLY DEFERRED
+    protocol VARCHAR(64) NOT NULL,
+    endpoint TEXT NOT NULL DEFAULT '',
+    topic VARCHAR(256) NOT NULL DEFAULT '',
+    method VARCHAR(64) NOT NULL DEFAULT '',
+    path TEXT NOT NULL DEFAULT '',
+    auth_ref VARCHAR(256) NOT NULL DEFAULT '',
+    resource_refs_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+    config_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    weight INTEGER NOT NULL DEFAULT 0,
+    priority INTEGER NOT NULL DEFAULT 0,
+    environment VARCHAR(32) NOT NULL DEFAULT '',
+    status VARCHAR(32) NOT NULL,
+    created_by VARCHAR(128) NOT NULL DEFAULT '',
+    updated_by VARCHAR(128) NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL,
+    UNIQUE (tenant_id, service_ref, interface_ref, code),
+    FOREIGN KEY (tenant_id, service_ref, interface_ref) REFERENCES marketing_service_interface(tenant_id, service_ref, code) ON DELETE CASCADE
 );
 ```
 
 唯一索引和查询索引：
 
 ```sql
-CREATE UNIQUE INDEX ux_marketing_service_provider_code_active
-    ON marketing_service_provider (tenant_id, service_ref, interface_ref, code)
-    WHERE status <> 'DELETED';
-
-CREATE INDEX idx_marketing_service_provider_select
-    ON marketing_service_provider (
-        tenant_id,
-        service_ref,
-        interface_ref,
-        status,
-        environment,
-        priority
-    );
-
-CREATE INDEX idx_marketing_service_provider_health
-    ON marketing_service_provider (tenant_id, health_status, circuit_status, last_health_check_at);
-
-CREATE INDEX idx_marketing_service_provider_protocol
-    ON marketing_service_provider (tenant_id, protocol, status);
-
-CREATE INDEX gin_marketing_service_provider_resource_refs
-    ON marketing_service_provider USING GIN (resource_refs_json jsonb_path_ops);
-
-CREATE INDEX gin_marketing_service_provider_config
-    ON marketing_service_provider USING GIN (config_json jsonb_path_ops);
-
-CREATE INDEX gin_marketing_service_provider_input_mapping
-    ON marketing_service_provider USING GIN (input_mapping_json jsonb_path_ops);
-
-CREATE INDEX gin_marketing_service_provider_output_mapping
-    ON marketing_service_provider USING GIN (output_mapping_json jsonb_path_ops);
+CREATE INDEX idx_marketing_service_provider_interface
+    ON marketing_service_provider(tenant_id, service_ref, interface_ref, status);
 ```
 
 Provider 的 `resource_refs_json` 不做数据库 FK，因为一个 Provider 可引用多个 Resource，且 Resource 表已经存在。保存、发布和运行时必须由应用层校验 Resource 存在、ACTIVE、scope 和 capability。
+Provider 的 health/circuit/rate limit 运行态由 `marketing_service_provider_runtime_state` 承载；`rate_limit_ref`、mapping 专用列、`deleted_at`、`builtin/catalog_version/source_hash` 是长期增强字段，不属于当前正式 DDL。
+
+### marketing_service_provider_runtime_state
+
+```sql
+CREATE TABLE marketing_service_provider_runtime_state (
+    id TEXT PRIMARY KEY,
+    tenant_id TEXT NOT NULL,
+    service_ref TEXT NOT NULL,
+    interface_ref TEXT NOT NULL,
+    provider_ref TEXT NOT NULL,
+    health_status TEXT NOT NULL,
+    health_message TEXT NOT NULL DEFAULT '',
+    circuit_status TEXT NOT NULL,
+    failure_count INTEGER NOT NULL DEFAULT 0,
+    success_count INTEGER NOT NULL DEFAULT 0,
+    consecutive_failures INTEGER NOT NULL DEFAULT 0,
+    rate_limit_window TIMESTAMPTZ,
+    rate_limit_count INTEGER NOT NULL DEFAULT 0,
+    half_open_probe_count INTEGER NOT NULL DEFAULT 0,
+    half_open_probe_limit INTEGER NOT NULL DEFAULT 1,
+    half_open_success_count INTEGER NOT NULL DEFAULT 0,
+    half_open_success_threshold INTEGER NOT NULL DEFAULT 1,
+    last_failure_at TIMESTAMPTZ,
+    last_success_at TIMESTAMPTZ,
+    circuit_opened_at TIMESTAMPTZ,
+    circuit_reset_at TIMESTAMPTZ,
+    metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL,
+    CONSTRAINT marketing_service_provider_runtime_state_unique UNIQUE (tenant_id, service_ref, interface_ref, provider_ref),
+    CONSTRAINT marketing_service_provider_runtime_state_health_check CHECK (health_status IN ('UNKNOWN', 'HEALTHY', 'DEGRADED', 'UNHEALTHY')),
+    CONSTRAINT marketing_service_provider_runtime_state_circuit_check CHECK (circuit_status IN ('CLOSED', 'OPEN', 'HALF_OPEN'))
+);
+```
+
+当前实现新建 runtime state 时默认 `health_status=HEALTHY`、`circuit_status=CLOSED`，运行时跳过 `UNHEALTHY` 或 `CIRCUIT_OPEN` provider。`UNKNOWN` 作为未探活 warning 是长期增强，不能按当前行为写成已落地发布 warning。
+
+索引：
+
+```sql
+CREATE INDEX marketing_service_provider_runtime_state_lookup_idx
+    ON marketing_service_provider_runtime_state (tenant_id, service_ref, interface_ref, provider_ref);
+
+CREATE INDEX marketing_service_provider_runtime_state_health_idx
+    ON marketing_service_provider_runtime_state (tenant_id, health_status, circuit_status, updated_at DESC);
+
+CREATE INDEX marketing_service_provider_runtime_state_metadata_gin_idx
+    ON marketing_service_provider_runtime_state USING GIN (metadata_json);
+```
 
 ### marketing_service_interface_binding
 
 ```sql
 CREATE TABLE marketing_service_interface_binding (
-    id TEXT PRIMARY KEY,
-    tenant_id TEXT NOT NULL,
-    service_ref TEXT NOT NULL,
-    interface_ref TEXT NOT NULL,
-    scope TEXT NOT NULL,
-    workspace_id TEXT NOT NULL DEFAULT '',
-    folder_id TEXT NOT NULL DEFAULT '',
-    include_subfolders BOOLEAN NOT NULL DEFAULT false,
-    activity_id TEXT NOT NULL DEFAULT '',
-    node_id TEXT NOT NULL DEFAULT '',
-    principal_type TEXT NOT NULL DEFAULT 'ROLE',
-    principal_id TEXT NOT NULL DEFAULT '',
-    min_role TEXT NOT NULL DEFAULT 'EDITOR',
+    id VARCHAR(64) PRIMARY KEY,
+    tenant_id VARCHAR(64) NOT NULL,
+    service_ref VARCHAR(128) NOT NULL,
+    interface_ref VARCHAR(128) NOT NULL,
+    scope VARCHAR(32) NOT NULL,
+    workspace_id VARCHAR(64) NOT NULL DEFAULT '',
+    folder_id VARCHAR(64) NOT NULL DEFAULT '',
+    activity_id VARCHAR(64) NOT NULL DEFAULT '',
+    node_id VARCHAR(128) NOT NULL DEFAULT '',
+    principal_type VARCHAR(32) NOT NULL,
+    principal_id VARCHAR(128) NOT NULL,
     allowed_node_types_json JSONB NOT NULL DEFAULT '[]'::jsonb,
     allowed_operations_json JSONB NOT NULL DEFAULT '[]'::jsonb,
-    allowed_provider_policies_json JSONB NOT NULL DEFAULT '["PRIMARY"]'::jsonb,
-    allowed_provider_refs_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+    allowed_provider_policies_json JSONB NOT NULL DEFAULT '[]'::jsonb,
     allow_explicit_provider_ref BOOLEAN NOT NULL DEFAULT false,
+    allowed_provider_refs_json JSONB NOT NULL DEFAULT '[]'::jsonb,
     lua_callable BOOLEAN NOT NULL DEFAULT false,
     require_approval BOOLEAN NOT NULL DEFAULT false,
-    environment TEXT NOT NULL DEFAULT '',
-    rate_limit_ref TEXT NOT NULL DEFAULT '',
     deny BOOLEAN NOT NULL DEFAULT false,
+    status VARCHAR(32) NOT NULL,
     metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
-    status TEXT NOT NULL DEFAULT 'ACTIVE',
-    created_by TEXT NOT NULL DEFAULT '',
-    updated_by TEXT NOT NULL DEFAULT '',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    deleted_at TIMESTAMPTZ,
-    CONSTRAINT chk_marketing_service_interface_binding_scope
-        CHECK (scope IN ('SYSTEM', 'TENANT', 'WORKSPACE', 'FOLDER', 'ACTIVITY', 'NODE')),
-    CONSTRAINT chk_marketing_service_interface_binding_principal
-        CHECK (principal_type IN ('ROLE', 'USER', 'GROUP', 'SERVICE_ACCOUNT')),
-    CONSTRAINT chk_marketing_service_interface_binding_role
-        CHECK (min_role IN ('OWNER', 'ADMIN', 'EDITOR', 'VIEWER', 'GUEST')),
-    CONSTRAINT chk_marketing_service_interface_binding_status
-        CHECK (status IN ('DRAFT', 'ACTIVE', 'DISABLED', 'DELETED')),
-    CONSTRAINT chk_marketing_service_interface_binding_node_types_array
-        CHECK (jsonb_typeof(allowed_node_types_json) = 'array'),
-    CONSTRAINT chk_marketing_service_interface_binding_operations_array
-        CHECK (jsonb_typeof(allowed_operations_json) = 'array'),
-    CONSTRAINT chk_marketing_service_interface_binding_policies_array
-        CHECK (jsonb_typeof(allowed_provider_policies_json) = 'array'),
-    CONSTRAINT chk_marketing_service_interface_binding_provider_refs_array
-        CHECK (jsonb_typeof(allowed_provider_refs_json) = 'array'),
-    CONSTRAINT chk_marketing_service_interface_binding_metadata_object
-        CHECK (jsonb_typeof(metadata_json) = 'object'),
-    CONSTRAINT fk_marketing_service_interface_binding_interface
-        FOREIGN KEY (tenant_id, service_ref, interface_ref)
-        REFERENCES marketing_service_interface (tenant_id, service_ref, code)
-        DEFERRABLE INITIALLY DEFERRED
+    created_by VARCHAR(128) NOT NULL DEFAULT '',
+    updated_by VARCHAR(128) NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL,
+    UNIQUE (tenant_id, service_ref, interface_ref, scope, workspace_id, folder_id, activity_id, node_id, principal_type, principal_id),
+    FOREIGN KEY (tenant_id, service_ref, interface_ref) REFERENCES marketing_service_interface(tenant_id, service_ref, code) ON DELETE CASCADE,
+    CHECK (jsonb_typeof(allowed_node_types_json) = 'array'),
+    CHECK (jsonb_typeof(allowed_operations_json) = 'array'),
+    CHECK (jsonb_typeof(allowed_provider_policies_json) = 'array'),
+    CHECK (jsonb_typeof(allowed_provider_refs_json) = 'array'),
+    CHECK (jsonb_typeof(metadata_json) = 'object'),
+    CHECK (allow_explicit_provider_ref = false OR jsonb_array_length(allowed_provider_refs_json) > 0)
 );
 ```
 
 索引：
 
 ```sql
-CREATE INDEX idx_marketing_service_interface_binding_lookup
-    ON marketing_service_interface_binding (tenant_id, service_ref, interface_ref, status);
+CREATE INDEX idx_marketing_service_interface_binding_interface
+    ON marketing_service_interface_binding(tenant_id, service_ref, interface_ref, status);
 
 CREATE INDEX idx_marketing_service_interface_binding_scope
-    ON marketing_service_interface_binding (
-        tenant_id,
-        scope,
-        workspace_id,
-        folder_id,
-        activity_id,
-        node_id,
-        status
-    );
-
-CREATE INDEX idx_marketing_service_interface_binding_principal
-    ON marketing_service_interface_binding (tenant_id, principal_type, principal_id, min_role, status);
-
-CREATE INDEX idx_marketing_service_interface_binding_environment
-    ON marketing_service_interface_binding (tenant_id, environment, status);
+    ON marketing_service_interface_binding(tenant_id, scope, workspace_id, folder_id, activity_id, node_id, status);
 
 CREATE INDEX gin_marketing_service_interface_binding_node_types
-    ON marketing_service_interface_binding USING GIN (allowed_node_types_json jsonb_path_ops);
-
-CREATE INDEX gin_marketing_service_interface_binding_operations
-    ON marketing_service_interface_binding USING GIN (allowed_operations_json jsonb_path_ops);
-
-CREATE INDEX gin_marketing_service_interface_binding_policies
-    ON marketing_service_interface_binding USING GIN (allowed_provider_policies_json jsonb_path_ops);
-
-CREATE INDEX gin_marketing_service_interface_binding_provider_refs
-    ON marketing_service_interface_binding USING GIN (allowed_provider_refs_json jsonb_path_ops);
+    ON marketing_service_interface_binding USING GIN(allowed_node_types_json);
 ```
 
-Binding 不建议做过强唯一约束，因为同一 scope 下可能有 allow/deny、多 principal、多 role 的组合。应用层应做重复绑定提示。
+`include_subfolders`、`min_role`、`environment`、`rate_limit_ref`、`deleted_at` 和 principal/environment 专用索引是长期增强字段，不属于当前正式 DDL。当前权限判断使用 `principal_type/principal_id`、scope、allowed operations/provider policies/provider refs、lua/approval/deny/status。
 
 ### marketing_service_call_audit
 
@@ -3560,18 +3402,24 @@ CREATE TABLE marketing_service_call_audit (
     interface_ref TEXT NOT NULL,
     provider_ref TEXT NOT NULL DEFAULT '',
     resource_ref TEXT NOT NULL DEFAULT '',
+    step_id TEXT NOT NULL DEFAULT '',
+    attempt INTEGER NOT NULL DEFAULT 0,
     status TEXT NOT NULL CHECK (status IN ('SUCCESS', 'FAILED', 'DENIED')),
     error_code TEXT NOT NULL DEFAULT '',
     error_message TEXT NOT NULL DEFAULT '',
     latency_ms BIGINT NOT NULL DEFAULT 0 CHECK (latency_ms >= 0),
     request_hash TEXT NOT NULL DEFAULT '',
     response_hash TEXT NOT NULL DEFAULT '',
+    provider_trace_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    schema_trace_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    permission_trace_json JSONB NOT NULL DEFAULT '{}'::jsonb,
     actor TEXT NOT NULL DEFAULT '',
-    created_at TIMESTAMPTZ NOT NULL
+    created_at TIMESTAMPTZ NOT NULL,
+    CONSTRAINT marketing_service_call_audit_attempt_check CHECK (attempt >= 0)
 );
 ```
 
-当前实现不落明文 payload，不落 request/response 摘要，只落脱敏后的 hash。下面的完整 DDL 是长期治理目标，包含 attempt、stepId、permission/schema/provider trace 等扩展字段，后续需要单独 migration 演进，不能假设当前代码已全部支持。
+当前实现不落明文 payload，不落 request/response 摘要，只落脱敏后的 hash 和 trace JSON。下面的完整 DDL 是长期治理目标，包含 workflow execution/run 维度、targetType、providerPolicy、resourceRefs、duration/fallback/mock、actorRole、metadata 等扩展字段，后续需要单独 migration 演进，不能假设当前代码已全部支持。
 
 ```sql
 CREATE TABLE marketing_service_call_audit (
@@ -3810,7 +3658,7 @@ POST /admin/v1/workflows/{activityId}/break-glass
 POST /admin/v1/resources/{resourceCode}/status
 ```
 
-当前第一阶段已落地 `runtime-state` 查询/写入和 `reset-circuit`。`health-check`、`status` 和完整审计仍是后续入口；临时用内部命令时，命令输出和审计字段必须和 API 语义一致。
+当前第一阶段已落地 `runtime-state` 查询/写入、`reset-circuit` 和手动 `health-check` Admin API。定时探活 worker、独立 `status` 汇总 API 和更完整的审计审批流程仍是后续入口；临时用内部命令时，命令输出和审计字段必须和 API 语义一致。
 
 ### Provider Unhealthy 处置
 
@@ -5469,7 +5317,7 @@ AND publish target environment matches provider/resource environment
 | `PRIMARY_WITH_FALLBACK` 至少有一个 fallback 候选 | 否 | `SERVICE_PROVIDER_FALLBACK_NOT_CONFIGURED` |
 | `WEIGHTED` 权重总和有效 | 是 | `SERVICE_PROVIDER_WEIGHT_INVALID` |
 | `MOCK` 未用于正式发布 | 是 | `SERVICE_PROVIDER_MOCK_DENIED` |
-| provider health unknown 只给 warning | 否 | `SERVICE_PROVIDER_HEALTH_UNKNOWN` |
+| provider health unknown 只给 warning | 否 | 长期增强：`SERVICE_PROVIDER_HEALTH_UNKNOWN`；当前新建 runtime state 默认 `HEALTHY` |
 | provider health unhealthy 正式发布阻断 | 是 | `SERVICE_PROVIDER_UNHEALTHY` |
 | circuit open 正式发布阻断 | 是 | `SERVICE_PROVIDER_CIRCUIT_OPEN` |
 | rate limit 配置可解析 | 是 | `SERVICE_PROVIDER_RATE_LIMIT_INVALID` |
@@ -5602,7 +5450,7 @@ AND publish target environment matches provider/resource environment
 | `SERVICE_PROVIDER_WEIGHT_INVALID` | ERROR | publish | provider | 阻断 |
 | `SERVICE_PROVIDER_MOCK_REQUIRED` | ERROR | publish/runtime | provider | 阻断 |
 | `SERVICE_PROVIDER_MOCK_DENIED` | ERROR | publish/runtime | provider | 阻断 |
-| `SERVICE_PROVIDER_HEALTH_UNKNOWN` | WARNING | publish | provider | 允许发布但提示先测试 |
+| `SERVICE_PROVIDER_HEALTH_UNKNOWN` | WARNING | publish | provider | 长期增强：当前 provider runtime state 默认 `HEALTHY`，尚未把 `UNKNOWN` 接入发布 warning |
 | `SERVICE_PROVIDER_UNHEALTHY` | ERROR | publish/runtime | provider | 阻断 |
 | `SERVICE_PROVIDER_CIRCUIT_OPEN` | ERROR | publish/runtime | provider | 阻断 |
 | `SERVICE_PROVIDER_RATE_LIMITED` | ERROR | runtime | provider | fallback 或阻断 |
@@ -5782,7 +5630,7 @@ all built-in catalog entries can seed and pass drift check
 | PRIMARY 多主冲突 | 多个 priority=0 且无明确规则 | 发布失败 | `SERVICE_PROVIDER_PRIMARY_REQUIRED` |
 | provider disabled | status=`DISABLED` | 发布/运行失败 | `SERVICE_PROVIDER_NOT_ACTIVE` |
 | environment 不匹配 | prod 发布引用 draft provider | 发布失败 | `SERVICE_PROVIDER_ENVIRONMENT_DENIED` |
-| health unknown | 未 health check | 发布 warning | `SERVICE_PROVIDER_HEALTH_UNKNOWN` |
+| health unknown | 未 health check | 长期增强：发布 warning；当前默认 `HEALTHY` | `SERVICE_PROVIDER_HEALTH_UNKNOWN` |
 | health unhealthy | healthStatus=`UNHEALTHY` | 正式发布失败 | `SERVICE_PROVIDER_UNHEALTHY` |
 | circuit open | circuitStatus=`OPEN` | 正式发布失败 | `SERVICE_PROVIDER_CIRCUIT_OPEN` |
 | runtime unhealthy skip | primary `UNHEALTHY` 且 fallback healthy | 运行时跳过 primary 并选 fallback | `SERVICE_PROVIDER_UNHEALTHY` |

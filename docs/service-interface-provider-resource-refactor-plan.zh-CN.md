@@ -33,10 +33,10 @@ Workflow Node
 
 | 模块 | 当前已有 | 主要缺口 |
 | --- | --- | --- |
-| DB migration | `db/migration/012_service_assets.sql` 已有 service/interface/provider 基础表 | 缺 schema、binding、audit、health/circuit/rate-limit、JSONB 索引和状态约束 |
-| Model | `internal/marketing/service_asset_model.go` 已有 Service/Interface/Provider struct | 缺 schema registry、binding、audit、provider runtime state、兼容迁移模型 |
-| Engine service | `internal/engine/service_asset_service.go` 已有保存、列表、PRIMARY resolve | Provider 选择策略只支持 PRIMARY，未闭环权限、fallback、health、circuit、rateLimit、schema |
-| Admin API | `internal/httpapi/service_asset_admin.go` 已有基础 CRUD/test | 响应契约过简，缺统一 error/warning/meta、binding check、schema validate、migration API |
+| DB migration | `db/migration/012_service_assets.sql`、`013_service_schema_registry.sql`、`014_service_interface_bindings.sql`、`015_service_provider_runtime_state.sql`、`016_service_call_audit.sql` 已有基础表 | 缺完整 rate-limit 配置表、软删除/内置 catalog 字段、部分目标态 JSONB 索引和状态约束 |
+| Model | `internal/marketing/service_asset_model.go` 已有 Service/Interface/Provider、schema、binding、runtime state、audit 基础模型 | 缺兼容迁移模型和部分长期治理字段 |
+| Engine service | `internal/engine/service_asset_service.go` 已有保存、列表、多 providerPolicy 解析、runtime health/circuit/rate gate 和 schema 校验基础能力 | Provider 治理仍缺完整环境上下文、定时探活 worker、独立 rate-limit 配置和更细错误分类 |
+| Admin API | `internal/httpapi/service_asset_admin.go` 已有基础 CRUD/test、binding check、schema validate/compatibility-check、runtime-state/reset-circuit/health-check | 响应契约过简，缺统一 error/warning/meta 和 migration API |
 | Resource | `internal/marketing/resource_model.go`、`internal/engine/resource_service.go` 已有资源管理 | 需要和 Service Provider 依赖关系、Resource 权限、key policy、审计联动 |
 | Executor | `internal/engine/workflow_executor.go` 已有 workflow 执行 | 需要抽出统一 ProviderChainExecutor / ServiceInterfaceInvoker / ResourceOperator |
 | Studio | `frontend/admin-flow/src` 已有 workflow UI | 缺能力资产中心、Service/Interface/Provider 选择器、binding 编辑、migration diff |
@@ -373,7 +373,7 @@ fallback_policy_json
 mock_enabled
 health_check_config_json
 circuit_policy_json
-rate_limit_ref
+rate_limit_ref  # 长期增强字段，当前正式 DDL 尚未落库
 allowed_environments_json
 config_hash
 ```
@@ -491,7 +491,7 @@ go test ./internal/httpapi ./internal/engine
 
 ## P3 Provider 治理闭环
 
-当前 `ResolveServiceProvider` 只支持 PRIMARY。需要把 Provider Resolver 做成治理层。
+当前 `ResolveServiceProvider` 已支持 `PRIMARY`、`PRIMARY_WITH_FALLBACK`、`WEIGHTED`、`WEIGHTED_WITH_FALLBACK`、`ENVIRONMENT_MATCH`、`MOCK_ONLY` 的基础解析和 runtime gate。后续需要继续把 Provider Resolver 做成完整治理层。
 
 ### ProviderResolver 行为
 
@@ -529,6 +529,7 @@ warnings
 | `PRIMARY` | 选择 priority 最小且 healthy 的 provider |
 | `PRIMARY_WITH_FALLBACK` | primary 失败后按 priority 选择 fallback |
 | `WEIGHTED` | 在同一 priority 组内按 weight 选择 |
+| `WEIGHTED_WITH_FALLBACK` | 先按 weight 选择首选 provider，首选失败后按候选 fallback |
 | `ENVIRONMENT_MATCH` | 只选择当前 environment 可用 provider |
 | `MOCK_ONLY` | 只在 preview/test 环境允许 |
 

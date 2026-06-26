@@ -21,14 +21,20 @@ const (
 type ProviderHealthService interface {
 	ListServiceProviders(ctx context.Context, query marketing.ServiceProviderQuery) ([]marketing.ServiceProvider, error)
 	CheckServiceProviderHealth(ctx context.Context, tenantID string, serviceRef string, interfaceRef string, providerRef string, actor string) (marketing.ServiceProviderRuntimeState, error)
+	AcquireWorkerLease(ctx context.Context, cmd marketing.WorkerLeaseAcquireCommand) (marketing.WorkerLease, bool, error)
+	RenewWorkerLease(ctx context.Context, cmd marketing.WorkerLeaseAcquireCommand) (marketing.WorkerLease, bool, error)
+	ReleaseWorkerLease(ctx context.Context, name string, owner string) error
 }
 
 type ProviderHealthWorkerConfig struct {
-	Enabled   bool
-	Interval  time.Duration
-	Timeout   time.Duration
-	BatchSize int
-	Actor     string
+	Enabled    bool
+	Interval   time.Duration
+	Timeout    time.Duration
+	BatchSize  int
+	Actor      string
+	LeaseName  string
+	LeaseOwner string
+	LeaseTTL   time.Duration
 }
 
 type ProviderHealthWorker struct {
@@ -48,11 +54,14 @@ func NewProviderHealthWorker(service ProviderHealthService, logger *slog.Logger,
 
 func LoadProviderHealthWorkerConfigFromEnv() ProviderHealthWorkerConfig {
 	return normalizeProviderHealthWorkerConfig(ProviderHealthWorkerConfig{
-		Enabled:   strings.EqualFold(strings.TrimSpace(os.Getenv("EX_MARKETING_PROVIDER_HEALTH_WORKER")), "true"),
-		Interval:  durationEnv("EX_MARKETING_PROVIDER_HEALTH_INTERVAL", defaultProviderHealthInterval),
-		Timeout:   durationEnv("EX_MARKETING_PROVIDER_HEALTH_TIMEOUT", defaultProviderHealthTimeout),
-		BatchSize: intEnv("EX_MARKETING_PROVIDER_HEALTH_BATCH_SIZE", defaultProviderHealthBatchSize),
-		Actor:     firstProviderHealthNonEmpty(os.Getenv("EX_MARKETING_PROVIDER_HEALTH_ACTOR"), defaultProviderHealthActor),
+		Enabled:    strings.EqualFold(strings.TrimSpace(os.Getenv("EX_MARKETING_PROVIDER_HEALTH_WORKER")), "true"),
+		Interval:   durationEnv("EX_MARKETING_PROVIDER_HEALTH_INTERVAL", defaultProviderHealthInterval),
+		Timeout:    durationEnv("EX_MARKETING_PROVIDER_HEALTH_TIMEOUT", defaultProviderHealthTimeout),
+		BatchSize:  intEnv("EX_MARKETING_PROVIDER_HEALTH_BATCH_SIZE", defaultProviderHealthBatchSize),
+		Actor:      firstProviderHealthNonEmpty(os.Getenv("EX_MARKETING_PROVIDER_HEALTH_ACTOR"), defaultProviderHealthActor),
+		LeaseName:  firstProviderHealthNonEmpty(os.Getenv("EX_MARKETING_PROVIDER_HEALTH_LEASE_NAME"), defaultProviderHealthActor),
+		LeaseOwner: firstProviderHealthNonEmpty(os.Getenv("EX_MARKETING_PROVIDER_HEALTH_LEASE_OWNER"), defaultProviderHealthLeaseOwner()),
+		LeaseTTL:   durationEnv("EX_MARKETING_PROVIDER_HEALTH_LEASE_TTL", 0),
 	})
 }
 
@@ -68,6 +77,9 @@ func (w *ProviderHealthWorker) Run(ctx context.Context) {
 		"interval_ms", w.config.Interval.Milliseconds(),
 		"timeout_ms", w.config.Timeout.Milliseconds(),
 		"batch_size", w.config.BatchSize,
+		"lease_name", w.config.LeaseName,
+		"lease_owner", w.config.LeaseOwner,
+		"lease_ttl_ms", w.config.LeaseTTL.Milliseconds(),
 	)
 	ticker := time.NewTicker(w.config.Interval)
 	defer ticker.Stop()
@@ -89,53 +101,114 @@ func (w *ProviderHealthWorker) tick(ctx context.Context) {
 	if w.logger == nil {
 		w.logger = slog.Default()
 	}
-	providers, err := w.service.ListServiceProviders(ctx, marketing.ServiceProviderQuery{
-		Status: marketing.ServiceAssetActive,
-		Limit:  w.config.BatchSize,
+	lease, acquired, err := w.service.AcquireWorkerLease(ctx, marketing.WorkerLeaseAcquireCommand{
+		Name:  w.config.LeaseName,
+		Owner: w.config.LeaseOwner,
+		TTL:   w.config.LeaseTTL,
 	})
 	if err != nil {
-		w.logger.Warn("provider health worker list failed", "event", "provider_health_list_failed", "error", err)
+		w.logger.Warn("provider health worker lease failed", "event", "provider_health_lease_failed", "error", err)
 		return
 	}
-	for _, provider := range providers {
-		if ctx.Err() != nil {
+	if !acquired {
+		w.logger.Debug("provider health worker lease held",
+			"event", "provider_health_lease_held",
+			"lease_name", lease.Name,
+			"lease_owner", lease.Owner,
+			"lease_until", lease.LeaseUntil,
+		)
+		return
+	}
+	defer func() {
+		if err := w.service.ReleaseWorkerLease(context.Background(), w.config.LeaseName, w.config.LeaseOwner); err != nil {
+			w.logger.Warn("provider health worker lease release failed", "event", "provider_health_lease_release_failed", "error", err)
+		}
+	}()
+	for offset := 0; ; offset += w.config.BatchSize {
+		providers, err := w.service.ListServiceProviders(ctx, marketing.ServiceProviderQuery{
+			Status: marketing.ServiceAssetActive,
+			Limit:  w.config.BatchSize,
+			Offset: offset,
+		})
+		if err != nil {
+			w.logger.Warn("provider health worker list failed", "event", "provider_health_list_failed", "error", err, "offset", offset)
 			return
 		}
-		checkCtx := ctx
-		cancel := func() {}
-		if w.config.Timeout > 0 {
-			checkCtx, cancel = context.WithTimeout(ctx, w.config.Timeout)
+		if len(providers) == 0 {
+			return
 		}
-		state, err := w.service.CheckServiceProviderHealth(
-			checkCtx,
-			provider.TenantID,
-			provider.ServiceRef,
-			provider.InterfaceRef,
-			provider.Code,
-			w.config.Actor,
+		for _, provider := range providers {
+			if ctx.Err() != nil {
+				return
+			}
+			w.checkProvider(ctx, provider)
+		}
+		if len(providers) < w.config.BatchSize {
+			return
+		}
+		if !w.renewLease(ctx) {
+			return
+		}
+	}
+}
+
+func (w *ProviderHealthWorker) renewLease(ctx context.Context) bool {
+	lease, renewed, err := w.service.RenewWorkerLease(ctx, marketing.WorkerLeaseAcquireCommand{
+		Name:  w.config.LeaseName,
+		Owner: w.config.LeaseOwner,
+		TTL:   w.config.LeaseTTL,
+	})
+	if err != nil {
+		w.logger.Warn("provider health worker lease renew failed", "event", "provider_health_lease_renew_failed", "error", err)
+		return false
+	}
+	if !renewed {
+		w.logger.Warn("provider health worker lease lost",
+			"event", "provider_health_lease_lost",
+			"lease_name", lease.Name,
+			"lease_owner", lease.Owner,
+			"lease_until", lease.LeaseUntil,
 		)
-		cancel()
-		if err != nil {
-			w.logger.Warn("provider health check failed",
-				"event", "provider_health_check_failed",
-				"tenant_id", provider.TenantID,
-				"service_ref", provider.ServiceRef,
-				"interface_ref", provider.InterfaceRef,
-				"provider_ref", provider.Code,
-				"error", err,
-			)
-			continue
-		}
-		w.logger.Debug("provider health check completed",
-			"event", "provider_health_check_completed",
+		return false
+	}
+	return true
+}
+
+func (w *ProviderHealthWorker) checkProvider(ctx context.Context, provider marketing.ServiceProvider) {
+	checkCtx := ctx
+	cancel := func() {}
+	if w.config.Timeout > 0 {
+		checkCtx, cancel = context.WithTimeout(ctx, w.config.Timeout)
+	}
+	state, err := w.service.CheckServiceProviderHealth(
+		checkCtx,
+		provider.TenantID,
+		provider.ServiceRef,
+		provider.InterfaceRef,
+		provider.Code,
+		w.config.Actor,
+	)
+	cancel()
+	if err != nil {
+		w.logger.Warn("provider health check failed",
+			"event", "provider_health_check_failed",
 			"tenant_id", provider.TenantID,
 			"service_ref", provider.ServiceRef,
 			"interface_ref", provider.InterfaceRef,
 			"provider_ref", provider.Code,
-			"health_status", state.HealthStatus,
-			"circuit_status", state.CircuitStatus,
+			"error", err,
 		)
+		return
 	}
+	w.logger.Debug("provider health check completed",
+		"event", "provider_health_check_completed",
+		"tenant_id", provider.TenantID,
+		"service_ref", provider.ServiceRef,
+		"interface_ref", provider.InterfaceRef,
+		"provider_ref", provider.Code,
+		"health_status", state.HealthStatus,
+		"circuit_status", state.CircuitStatus,
+	)
 }
 
 func normalizeProviderHealthWorkerConfig(config ProviderHealthWorkerConfig) ProviderHealthWorkerConfig {
@@ -150,6 +223,18 @@ func normalizeProviderHealthWorkerConfig(config ProviderHealthWorkerConfig) Prov
 	}
 	if strings.TrimSpace(config.Actor) == "" {
 		config.Actor = defaultProviderHealthActor
+	}
+	if strings.TrimSpace(config.LeaseName) == "" {
+		config.LeaseName = defaultProviderHealthActor
+	}
+	if strings.TrimSpace(config.LeaseOwner) == "" {
+		config.LeaseOwner = defaultProviderHealthLeaseOwner()
+	}
+	if config.LeaseTTL <= 0 {
+		config.LeaseTTL = config.Interval * 2
+		if config.LeaseTTL < time.Minute {
+			config.LeaseTTL = time.Minute
+		}
 	}
 	return config
 }
@@ -188,4 +273,9 @@ func firstProviderHealthNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func defaultProviderHealthLeaseOwner() string {
+	hostname, _ := os.Hostname()
+	return firstProviderHealthNonEmpty(os.Getenv("HOSTNAME"), hostname, defaultProviderHealthActor)
 }

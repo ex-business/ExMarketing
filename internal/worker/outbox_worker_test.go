@@ -917,6 +917,18 @@ func (r *workerTestRepo) ListServiceCallAuditLogs(context.Context, marketing.Ser
 func (r *workerTestRepo) PurgeServiceCallAuditLogs(context.Context, string, string, time.Time, int) (int, error) {
 	panic("not implemented")
 }
+func (r *workerTestRepo) CreateProviderDecisionAuditLog(context.Context, marketing.ProviderDecisionAuditLog) error {
+	panic("not implemented")
+}
+func (r *workerTestRepo) ListProviderDecisionAuditLogs(context.Context, marketing.ProviderDecisionAuditQuery) ([]marketing.ProviderDecisionAuditLog, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) CreateMigrationAuditLog(context.Context, marketing.MigrationAuditLog) error {
+	panic("not implemented")
+}
+func (r *workerTestRepo) ListMigrationAuditLogs(context.Context, marketing.MigrationAuditQuery) ([]marketing.MigrationAuditLog, error) {
+	panic("not implemented")
+}
 func (r *workerTestRepo) GetActivityState(context.Context, marketing.ActivityStateKey) (marketing.ActivityState, error) {
 	panic("not implemented")
 }

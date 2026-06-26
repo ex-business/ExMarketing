@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 )
 
 type fakeClient struct {
@@ -87,9 +88,36 @@ func TestExecutorReloadsOnNoScriptOnce(t *testing.T) {
 	}
 }
 
+func TestConsumeRateLimitBuildsScriptRequest(t *testing.T) {
+	client := &fakeClient{result: `{"ok":true,"code":"OK","count":1,"limit":2,"windowUnixMs":1770000000000,"retryAfterMs":60000}`}
+	executor := NewExecutor(client)
+
+	result, err := ConsumeRateLimit(context.Background(), executor, RateLimitCommand{
+		Key:    "exmarketing:service-rate-limit:site:svc:iface:provider:policy",
+		Limit:  2,
+		Window: time.Minute,
+		Now:    time.UnixMilli(1770000000000).UTC(),
+	})
+	if err != nil {
+		t.Fatalf("ConsumeRateLimit returned error: %v", err)
+	}
+	if !result.OK || result.Count != 1 || result.Limit != 2 || result.WindowUnixMS != 1770000000000 {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+	if client.loads != 1 || client.evals != 1 {
+		t.Fatalf("expected one load and one eval, got loads=%d evals=%d", client.loads, client.evals)
+	}
+	if len(client.keys) != 1 || client.keys[0] != "exmarketing:service-rate-limit:site:svc:iface:provider:policy" {
+		t.Fatalf("unexpected keys: %#v", client.keys)
+	}
+	if got := client.args; len(got) != 3 || got[0] != "2" || got[1] != "60000" || got[2] != "1770000000000" {
+		t.Fatalf("unexpected args: %#v", got)
+	}
+}
+
 func TestDefaultScriptsContainQuotaOperations(t *testing.T) {
 	scripts := DefaultScripts()
-	for _, id := range []ScriptID{ScriptQuotaReserve, ScriptQuotaConfirm, ScriptQuotaRelease} {
+	for _, id := range []ScriptID{ScriptQuotaReserve, ScriptQuotaConfirm, ScriptQuotaRelease, ScriptRateLimit} {
 		if scripts[id] == "" {
 			t.Fatalf("missing script %s", id)
 		}

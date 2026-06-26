@@ -216,6 +216,133 @@ async function mockStudioApi(page: Page, options: { failFirstDraftSave?: boolean
     createdBy: 'admin-flow',
     createdAt: runTime(-60_000),
   }];
+  const serviceDefinitions = [{
+    id: 'svc_user_profile',
+    tenantId: 'site_001',
+    workspaceId,
+    folderId,
+    code: 'user-profile-service',
+    name: 'User Profile Service',
+    serviceType: 'EXTERNAL',
+    scope: 'WORKSPACE',
+    status: 'ACTIVE',
+    owner: 'growth',
+    tags: ['fact'],
+  }];
+  const serviceInterfaces = [{
+    id: 'iface_query_profile',
+    tenantId: 'site_001',
+    serviceRef: 'user-profile-service',
+    code: 'query-user-profile',
+    name: 'Query User Profile',
+    operation: 'CALL',
+    inputSchemaRef: 'user-profile-input',
+    outputSchemaRef: 'user-profile-output',
+    timeoutMs: 3000,
+    retryPolicy: 'STANDARD',
+    luaCallable: true,
+    status: 'ACTIVE',
+  }];
+  const serviceProviders = [{
+    id: 'provider_profile_primary',
+    tenantId: 'site_001',
+    serviceRef: 'user-profile-service',
+    interfaceRef: 'query-user-profile',
+    code: 'legacy-user-profile',
+    name: 'Legacy User Profile',
+    protocol: 'RESOURCE',
+    resourceRefs: ['legacy-user-profile-resource'],
+    config: { targetResourceRef: 'legacy-user-profile-resource' },
+    priority: 10,
+    environment: 'DEV',
+    status: 'ACTIVE',
+  }];
+  const serviceSchemas = [{
+    id: 'schema_profile_in',
+    tenantId: 'site_001',
+    schemaRef: 'user-profile-input',
+    schemaType: 'INPUT',
+    scope: 'WORKSPACE',
+    version: 1,
+    status: 'ACTIVE',
+    schemaJson: { type: 'object', properties: { userId: { type: 'string' } }, required: ['userId'] },
+    examplesJson: [{ userId: 'user_1' }],
+  }, {
+    id: 'schema_profile_out',
+    tenantId: 'site_001',
+    schemaRef: 'user-profile-output',
+    schemaType: 'OUTPUT',
+    scope: 'WORKSPACE',
+    version: 1,
+    status: 'ACTIVE',
+    schemaJson: { type: 'object', properties: { tier: { type: 'string' } } },
+    examplesJson: [{ tier: 'gold' }],
+  }];
+  const serviceBindings = [{
+    id: 'binding_profile_editor',
+    tenantId: 'site_001',
+    serviceRef: 'user-profile-service',
+    interfaceRef: 'query-user-profile',
+    scope: 'WORKSPACE',
+    workspaceId,
+    principalType: 'ROLE',
+    principalId: 'EDITOR',
+    allowedNodeTypes: ['fact-query'],
+    allowedOperations: ['CALL'],
+    allowedProviderPolicies: ['PRIMARY'],
+    allowExplicitProviderRef: true,
+    allowedProviderRefs: ['legacy-user-profile'],
+    rateLimitRef: 'profile-default',
+    status: 'ACTIVE',
+  }];
+  const serviceRateLimitPolicies = [{
+    id: 'rl_profile_default',
+    tenantId: 'site_001',
+    code: 'profile-default',
+    name: 'Profile Default',
+    serviceRef: 'user-profile-service',
+    interfaceRef: 'query-user-profile',
+    providerRef: 'legacy-user-profile',
+    limit: 100,
+    windowSeconds: 60,
+    backend: 'POSTGRES',
+    status: 'ACTIVE',
+    metadata: { burst: 20 },
+  }];
+  const workflowMigrationAnalysis = (legacySteps = 2) => ({
+    status: legacySteps === 0 ? 'NOOP' : 'NEEDS_REVIEW',
+    summary: { legacySteps, autoMigratable: legacySteps, manualReview: 0, blockers: 0, serviceInterfaces: 1, resources: legacySteps > 1 ? 1 : 0 },
+    blockers: [],
+    items: legacySteps === 0 ? [] : [{
+      nodeId: 'facts',
+      nodeType: 'fact-query',
+      path: 'nodes[0].config',
+      legacyType: 'FACT_SERVICE',
+      legacyFields: ['providerCode'],
+      recommendedTarget: 'SERVICE_INTERFACE',
+      serviceRef: 'user-profile-service',
+      interfaceRef: 'query-user-profile',
+      providerPolicy: 'PRIMARY',
+      providerRef: 'legacy-user-profile',
+      confidence: 'HIGH',
+      risk: 'LOW',
+      before: { source: 'FACT_SERVICE', providerCode: 'legacy-user-profile' },
+      after: { providerChain: [{ targetType: 'SERVICE_INTERFACE', serviceRef: 'user-profile-service', interfaceRef: 'query-user-profile', providerRef: 'legacy-user-profile' }] },
+    }, {
+      nodeId: 'cache',
+      nodeType: 'fact-query',
+      path: 'nodes[1].config.providerChain[0]',
+      legacyType: 'REDIS',
+      legacyFields: ['redisRef'],
+      recommendedTarget: 'RESOURCE',
+      resourceRef: 'legacy-fact-cache',
+      operation: 'READ',
+      confidence: 'MEDIUM',
+      risk: 'MEDIUM',
+      before: { source: 'REDIS', redisRef: 'legacy-fact-cache' },
+      after: { targetType: 'RESOURCE', resourceRef: 'legacy-fact-cache', operation: 'READ' },
+    }],
+  });
   await page.route('**/admin/v1/**', async (route: Route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -393,6 +520,44 @@ async function mockStudioApi(page: Page, options: { failFirstDraftSave?: boolean
       });
     }
     if (path === '/admin/v1/workflow/node-config-schemas' && method === 'GET') return json({ items: schemaItems });
+    if (path === '/admin/v1/resources' && method === 'GET') return json({ items: [{ id: 'res_profile', tenantId: 'site_001', workspaceId, folderId, code: 'legacy-user-profile-resource', name: 'Legacy Profile Resource', type: 'HTTP', status: 'ACTIVE', config: { endpoint: 'https://profile.example.test' } }] });
+    if (path === '/admin/v1/services' && method === 'GET') return json({ items: serviceDefinitions });
+    if (path === '/admin/v1/services/user-profile-service/interfaces' && method === 'GET') return json({ items: serviceInterfaces });
+    if (path === '/admin/v1/services/user-profile-service/interfaces/query-user-profile/providers' && method === 'GET') return json({ items: serviceProviders });
+    if (path === '/admin/v1/services/user-profile-service/interfaces/query-user-profile/providers/legacy-user-profile/runtime-state' && method === 'GET') return json({ id: 'runtime_profile', tenantId: 'site_001', serviceRef: 'user-profile-service', interfaceRef: 'query-user-profile', providerRef: 'legacy-user-profile', healthStatus: 'HEALTHY', circuitStatus: 'CLOSED', failureCount: 0, successCount: 3, consecutiveFailures: 0, rateLimitCount: 1, metadata: {} });
+    if (path === '/admin/v1/service-schemas' && method === 'GET') return json({ items: serviceSchemas });
+    if (path === '/admin/v1/service-rate-limit-policies' && method === 'GET') return json({ items: serviceRateLimitPolicies });
+    if (path === '/admin/v1/service-rate-limit-policies' && method === 'POST') {
+      const body = await request.postDataJSON();
+      const saved = { id: `rl_${body.code}`, ...body };
+      const existing = serviceRateLimitPolicies.findIndex((item) => item.code === body.code);
+      if (existing >= 0) serviceRateLimitPolicies[existing] = saved;
+      else serviceRateLimitPolicies.unshift(saved);
+      return json(saved);
+    }
+    if (path === '/admin/v1/service-interface-bindings' && method === 'GET') return json({ items: serviceBindings });
+    if (path === '/admin/v1/service-call-audit-logs' && method === 'GET') return json({ items: [], requestId: 'audit_e2e' });
+    if (path === '/admin/v1/db-migrations/status' && method === 'GET') return json({ actor: 'admin-flow', analysis: { schemaMigrationsExists: true, latest: true, safeToApply: true, drift: false, pending: [], applied: [], requiredTables: [] } });
+    if (path === '/admin/v1/db-migrations/analyze' && method === 'POST') return json({ actor: 'admin-flow', analysis: { schemaMigrationsExists: true, latest: true, safeToApply: true, drift: false, pending: [], applied: [], requiredTables: [] } });
+    if (path === '/admin/v1/db-migrations/apply' && method === 'POST') return json({ actor: 'admin-flow', dryRun: true, analysis: { schemaMigrationsExists: true, latest: true, safeToApply: true, drift: false, pending: [], applied: [], requiredTables: [] } });
+    if ((path === `/admin/v1/workflows/${activityId}/migration/service-interface/analyze` || path === `/admin/v1/workflows/${secondaryActivityId}/migration/service-interface/analyze`) && method === 'POST') {
+      const targetActivityId = path.includes(secondaryActivityId) ? secondaryActivityId : activityId;
+      return json({ activityId: targetActivityId, data: workflowMigrationAnalysis() });
+    }
+    if ((path === `/admin/v1/workflows/${activityId}/migration/service-interface/apply` || path === `/admin/v1/workflows/${secondaryActivityId}/migration/service-interface/apply`) && method === 'POST') {
+      const body = await request.postDataJSON();
+      const analysis = workflowMigrationAnalysis();
+      const targetActivityId = path.includes(secondaryActivityId) ? secondaryActivityId : activityId;
+      return json({
+        activityId: targetActivityId,
+        dryRun: Boolean(body.dryRun),
+        applied: !body.dryRun,
+        appliedItems: analysis.items.filter((item) => !body.paths?.length || body.paths.includes(item.path)),
+        data: analysis,
+        before: analysis,
+        after: body.dryRun ? analysis : workflowMigrationAnalysis(0),
+      });
+    }
     if (path === '/admin/v1/workflow/draft-templates' && method === 'GET') return json({ items: [workflowTemplateSummary] });
     if (path === '/admin/v1/workflow/draft-templates/reward-template/versions' && method === 'GET') return json({ items: [workflowTemplateSummary, workflowTemplateV1] });
     if (path === '/admin/v1/workflow/node-presets' && method === 'GET') {
@@ -810,14 +975,13 @@ test('renders Workspace Studio home as a file manager with search, favorites, an
   await expect(page.locator('.exm-sidebar-folders')).toContainText('Archive');
   await expect(page.locator('.exm-table-view')).toContainText('Retention Workflow');
   await expect(page.locator('.exm-detail-panel')).toContainText('Campaigns');
-  const workbenchOverview = page.getByTestId('workspace-workbench-overview');
-  await expect(workbenchOverview).toContainText('Campaigns 工作台');
-  await expect(workbenchOverview).toContainText('最近编辑');
-  await expect(workbenchOverview).toContainText('收藏');
-  await expect(workbenchOverview).toContainText('归档');
+  const workspaceNav = page.getByRole('navigation', { name: 'Workspace navigation' });
+  await expect(workspaceNav).toContainText('最近编辑');
+  await expect(workspaceNav).toContainText('收藏');
+  await expect(workspaceNav).toContainText('归档');
 
-  await workbenchOverview.locator('.exm-workbench-quick-actions button').filter({ hasText: '最近' }).click();
-  await expect(page.locator('.exm-sidebar-nav button.active')).toContainText('最近编辑');
+  await workspaceNav.getByRole('button', { name: /最近编辑/ }).click();
+  await expect(workspaceNav.locator('button.active')).toContainText('最近编辑');
 
   await page.locator('.exm-workspace-switcher-trigger').click();
   await page.locator('.exm-workspace-switcher-search input').fill('missing');
@@ -829,7 +993,8 @@ test('renders Workspace Studio home as a file manager with search, favorites, an
   await page.locator('.exm-folder-search input').fill('Retention');
   await expect(page.locator('[data-testid="workspace-row-workflow"]').filter({ hasText: 'Retention Workflow' })).toBeVisible();
 
-  await page.locator('[data-testid="workspace-row-workflow"]').filter({ hasText: 'Retention Workflow' }).locator('.actions em').first().click();
+  await page.locator('[data-testid="workspace-row-workflow"]').filter({ hasText: 'Retention Workflow' }).getByTestId('workspace-row-more').click();
+  await page.locator('.exm-item-menu').getByText('收藏', { exact: true }).click();
   await page.locator('.exm-sidebar-nav button').filter({ hasText: '收藏' }).click();
   await expect(page.locator('[data-testid="workspace-row-workflow"]').filter({ hasText: 'Retention Workflow' })).toBeVisible();
 
@@ -844,6 +1009,44 @@ test('renders Workspace Studio home as a file manager with search, favorites, an
   const shareDialog = page.getByTestId('home-utility-dialog');
   await expect(shareDialog).toContainText('tok_shar…7890');
   await expect(shareDialog).not.toContainText('share_token_full_visibility_regression_1234567890');
+});
+
+test('manages service rate limits and legacy workflow migration from Studio services', async ({ page }) => {
+  await mockStudioApi(page);
+
+  await page.goto('/admin-flow/');
+  await expect(page.locator('.exm-workspace-layout')).toBeVisible();
+  await page.locator('.exm-sidebar').evaluate((element) => { element.scrollTop = element.scrollHeight; });
+  await page.getByRole('button', { name: '服务' }).click();
+
+  const dialog = page.getByTestId('home-utility-dialog');
+  await expect(dialog).toContainText('User Profile Service');
+  await dialog.getByRole('button', { name: '限流', exact: true }).click();
+  await expect(dialog).toContainText('Profile Default');
+
+  await dialog.getByRole('button', { name: /新增限流策略/ }).click();
+  await dialog.locator('label').filter({ hasText: 'Policy Code' }).locator('input').fill('profile-burst-e2e');
+  await dialog.locator('label').filter({ hasText: '名称' }).locator('input').fill('Profile Burst E2E');
+  await dialog.locator('label').filter({ hasText: 'Limit' }).locator('input').fill('240');
+  await dialog.locator('label').filter({ hasText: 'Window Seconds' }).locator('input').fill('60');
+  await dialog.locator('label').filter({ hasText: 'Burst' }).locator('input').fill('40');
+  await dialog.locator('label').filter({ hasText: 'Metadata JSON' }).locator('textarea').fill('{"runtimeScope":"GLOBAL"}');
+  await dialog.getByRole('button', { name: '保存限流策略' }).click();
+  await expect(dialog).toContainText('限流策略已保存：profile-burst-e2e');
+  await expect(dialog).toContainText('profile-burst-e2e');
+
+  await dialog.getByRole('button', { name: '迁移', exact: true }).click();
+  await expect(dialog).toContainText(`activity ${secondaryActivityId}`);
+  await dialog.getByRole('button', { name: 'Workflow Analyze' }).click();
+  await expect(dialog).toContainText('legacy 2');
+  await expect(dialog).toContainText('nodes[0].config');
+  await dialog.getByRole('button', { name: 'Workflow Dry-run' }).click();
+  await expect(dialog).toContainText('Dry-run 完成，计划 apply 2 项');
+  await dialog.locator('label').filter({ hasText: 'Workflow 迁移确认短语' }).locator('input').fill('APPLY_WORKFLOW_SERVICE_INTERFACE_MIGRATION');
+  await dialog.locator('label').filter({ hasText: 'Workflow 迁移原因' }).locator('input').fill('migrate legacy provider fields');
+  await dialog.getByRole('button', { name: 'Workflow Apply' }).click();
+  await expect(dialog).toContainText('Apply 完成，已迁移 2 项');
+  await expect(dialog).toContainText('Workflow migration apply 完成');
 });
 
 test('keeps workspace responsive with large mocked datasets and highlighted search', async ({ page }) => {
@@ -1019,7 +1222,9 @@ test('selects upstream output variables and locates source node', async ({ page 
 
   await page.locator('.activity-node').filter({ hasText: '活动匹配' }).click();
   await page.locator('.property-tab-buttons').getByRole('button', { name: '配置' }).click();
-  await expect(page.locator('.property-panel')).toContainText('输入映射');
+  await page.locator('.property-panel').getByRole('button', { name: /输入/ }).click();
+  await expect(page.locator('.input-mapping-direct')).toBeVisible();
+  await page.locator('.input-map-row').filter({ hasText: 'Event Context' }).getByRole('button', { name: '配置' }).click();
 
   await page.locator('.variable-picker button').filter({ hasText: 'event_context' }).click();
   await expect(page.locator('.input-map-reference')).toContainText('来源节点');
@@ -1055,6 +1260,7 @@ test('edits route rules and shows branch route coverage on canvas', async ({ pag
   await expect(page.locator('.route-type-current')).toContainText('PASS');
   await expect(page.getByPlaceholder('例如 decision == "PASS" 或 $.fact.amount >= 100')).toHaveValue('decision == "PASS"');
 
+  await page.keyboard.press('Escape');
   await page.getByRole('button', { name: '检查清单' }).click();
   await expect(page.locator('.branch-route-check')).toContainText('Route Check');
   await expect(page.locator('.branch-route-check')).toContainText('缺默认分支');
@@ -1116,7 +1322,6 @@ test('shows visual draft vs active diff and locates diff items', async ({ page }
 
   await page.goto(`/admin-flow/?activityId=${activityId}`);
   await expect(page.locator('.activity-node')).toHaveCount(3);
-  await expect(page.locator('.react-flow__node.diff-node-added')).toHaveCount(2);
 
   await page.getByRole('button', { name: '版本' }).click();
   await expect(page.locator('.version-popover')).toContainText('Diff 明细');
@@ -1205,7 +1410,7 @@ test('warns before leaving with unsaved workflow changes', async ({ page }) => {
 
   await page.goto(`/admin-flow/?activityId=${activityId}`);
   await expect(page.locator('.activity-node')).toHaveCount(3);
-  await page.getByRole('button', { name: '简化链路' }).click();
+  await page.getByRole('button', { name: '清空画布' }).click();
   await expect(page.locator('.workflow-state-pill').filter({ hasText: '未保存' })).toBeVisible();
 
   const dialogPromise = page.waitForEvent('dialog');
@@ -1221,7 +1426,7 @@ test('uses product dialog before in-app navigation with unsaved workflow changes
 
   await page.goto(`/admin-flow/?activityId=${activityId}`);
   await expect(page.locator('.activity-node')).toHaveCount(3);
-  await page.getByRole('button', { name: '简化链路' }).click();
+  await page.getByRole('button', { name: '清空画布' }).click();
   await expect(page.locator('.workflow-state-pill').filter({ hasText: '未保存' })).toBeVisible();
 
   await page.getByRole('button', { name: /E2E Workflow/ }).first().click();

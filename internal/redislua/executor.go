@@ -13,6 +13,7 @@ const (
 	ScriptQuotaReserve ScriptID = "quota_reserve_v1"
 	ScriptQuotaConfirm ScriptID = "quota_confirm_v1"
 	ScriptQuotaRelease ScriptID = "quota_release_v1"
+	ScriptRateLimit    ScriptID = "rate_limit_v1"
 )
 
 type Client interface {
@@ -97,5 +98,6 @@ func DefaultScripts() map[ScriptID]string {
 		ScriptQuotaReserve: quotaReserveLua,
 		ScriptQuotaConfirm: quotaConfirmLua,
 		ScriptQuotaRelease: quotaReleaseLua,
+		ScriptRateLimit:    rateLimitLua,
 	}
 }

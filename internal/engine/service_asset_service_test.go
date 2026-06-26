@@ -510,6 +510,248 @@ func TestPublishWorkflowBlocksSoftDeletedServiceInterface(t *testing.T) {
 	}
 }
 
+func TestSaveServiceAssetsRejectSoftDeletedParents(t *testing.T) {
+	ctx := context.Background()
+	service := NewService(marketing.NewMemoryRepository())
+	mustSaveWalletServiceAssets(t, ctx, service, nil)
+
+	deletedAt := time.Date(2026, 6, 26, 14, 0, 0, 0, time.UTC)
+	serviceDefinition, err := service.GetServiceDefinition(ctx, "site_001", "wallet-service")
+	if err != nil {
+		t.Fatalf("get service: %v", err)
+	}
+	serviceDefinition.DeletedAt = &deletedAt
+	if _, err := service.SaveServiceDefinition(ctx, serviceDefinition); err != nil {
+		t.Fatalf("soft delete service: %v", err)
+	}
+
+	if _, err := service.SaveServiceInterface(ctx, marketing.ServiceInterface{
+		TenantID:   "site_001",
+		ServiceRef: "wallet-service",
+		Code:       "query-wallet-after-delete",
+		Name:       "Query Wallet After Delete",
+		Operation:  marketing.ServiceOperationCall,
+		Status:     marketing.ServiceAssetActive,
+	}); err == nil || !strings.Contains(err.Error(), "SERVICE_PARENT_DELETED") {
+		t.Fatalf("expected interface save to reject soft-deleted service, got %v", err)
+	}
+	if _, err := service.SaveServiceProvider(ctx, marketing.ServiceProvider{
+		TenantID:     "site_001",
+		ServiceRef:   "wallet-service",
+		InterfaceRef: "query-wallet-balance",
+		Code:         "wallet-provider-after-service-delete",
+		Name:         "Wallet Provider After Service Delete",
+		Protocol:     marketing.ServiceProviderResource,
+		Status:       marketing.ServiceAssetActive,
+	}); err == nil || !strings.Contains(err.Error(), "SERVICE_PARENT_DELETED") {
+		t.Fatalf("expected provider save to reject soft-deleted service, got %v", err)
+	}
+	if _, err := service.SaveServiceInterfaceBinding(ctx, marketing.ServiceInterfaceBinding{
+		TenantID:      "site_001",
+		ServiceRef:    "wallet-service",
+		InterfaceRef:  "query-wallet-balance",
+		Scope:         marketing.ServiceAssetScopeWorkspace,
+		PrincipalType: marketing.ServicePrincipalRole,
+		PrincipalID:   string(marketing.WorkspaceRoleViewer),
+		Status:        marketing.ServiceAssetActive,
+	}); err == nil || !strings.Contains(err.Error(), "SERVICE_PARENT_DELETED") {
+		t.Fatalf("expected binding save to reject soft-deleted service, got %v", err)
+	}
+	if _, err := service.SaveServiceRateLimitPolicy(ctx, marketing.ServiceRateLimitPolicy{
+		TenantID:      "site_001",
+		Code:          "wallet-policy-after-service-delete",
+		Name:          "Wallet Policy After Service Delete",
+		ServiceRef:    "wallet-service",
+		Limit:         1,
+		WindowSeconds: 60,
+		Backend:       marketing.ServiceRateLimitBackendPostgres,
+		Status:        marketing.ServiceAssetActive,
+	}); err == nil || !strings.Contains(err.Error(), "SERVICE_PARENT_DELETED") {
+		t.Fatalf("expected policy save to reject soft-deleted service, got %v", err)
+	}
+
+	serviceDefinition.DeletedAt = nil
+	if _, err := service.SaveServiceDefinition(ctx, serviceDefinition); err != nil {
+		t.Fatalf("restore service: %v", err)
+	}
+	serviceInterface, err := service.GetServiceInterface(ctx, "site_001", "wallet-service", "query-wallet-balance")
+	if err != nil {
+		t.Fatalf("get interface: %v", err)
+	}
+	serviceInterface.DeletedAt = &deletedAt
+	if _, err := service.SaveServiceInterface(ctx, serviceInterface); err != nil {
+		t.Fatalf("soft delete interface: %v", err)
+	}
+	if _, err := service.SaveServiceProvider(ctx, marketing.ServiceProvider{
+		TenantID:     "site_001",
+		ServiceRef:   "wallet-service",
+		InterfaceRef: "query-wallet-balance",
+		Code:         "wallet-provider-after-interface-delete",
+		Name:         "Wallet Provider After Interface Delete",
+		Protocol:     marketing.ServiceProviderResource,
+		Status:       marketing.ServiceAssetActive,
+	}); err == nil || !strings.Contains(err.Error(), "SERVICE_INTERFACE_PARENT_DELETED") {
+		t.Fatalf("expected provider save to reject soft-deleted interface, got %v", err)
+	}
+	if _, err := service.SaveServiceInterfaceBinding(ctx, marketing.ServiceInterfaceBinding{
+		TenantID:      "site_001",
+		ServiceRef:    "wallet-service",
+		InterfaceRef:  "query-wallet-balance",
+		Scope:         marketing.ServiceAssetScopeWorkspace,
+		WorkspaceID:   "workspace-after-interface-delete",
+		PrincipalType: marketing.ServicePrincipalRole,
+		PrincipalID:   string(marketing.WorkspaceRoleViewer),
+		Status:        marketing.ServiceAssetActive,
+	}); err == nil || !strings.Contains(err.Error(), "SERVICE_INTERFACE_PARENT_DELETED") {
+		t.Fatalf("expected binding save to reject soft-deleted interface, got %v", err)
+	}
+	if _, err := service.SaveServiceRateLimitPolicy(ctx, marketing.ServiceRateLimitPolicy{
+		TenantID:      "site_001",
+		Code:          "wallet-policy-after-interface-delete",
+		Name:          "Wallet Policy After Interface Delete",
+		ServiceRef:    "wallet-service",
+		InterfaceRef:  "query-wallet-balance",
+		Limit:         1,
+		WindowSeconds: 60,
+		Backend:       marketing.ServiceRateLimitBackendPostgres,
+		Status:        marketing.ServiceAssetActive,
+	}); err == nil || !strings.Contains(err.Error(), "SERVICE_INTERFACE_PARENT_DELETED") {
+		t.Fatalf("expected policy save to reject soft-deleted interface, got %v", err)
+	}
+}
+
+func TestPublishWorkflowPreservesBindingRateLimitRefValidationCode(t *testing.T) {
+	ctx := context.Background()
+	cases := []struct {
+		name  string
+		ref   string
+		code  string
+		setup func(t *testing.T, ctx context.Context, service *Service)
+	}{
+		{
+			name: "missing policy",
+			ref:  "wallet-missing-limit",
+			code: "SERVICE_RATE_LIMIT_POLICY_NOT_FOUND",
+		},
+		{
+			name: "disabled policy",
+			ref:  "wallet-disabled-limit",
+			code: "SERVICE_RATE_LIMIT_POLICY_DISABLED",
+			setup: func(t *testing.T, ctx context.Context, service *Service) {
+				if _, err := service.SaveServiceRateLimitPolicy(ctx, marketing.ServiceRateLimitPolicy{
+					TenantID:      "site_001",
+					Code:          "wallet-disabled-limit",
+					Name:          "Wallet disabled limit",
+					ServiceRef:    "wallet-service",
+					InterfaceRef:  "query-wallet-balance",
+					Limit:         1,
+					WindowSeconds: 60,
+					Backend:       marketing.ServiceRateLimitBackendPostgres,
+					Status:        marketing.ServiceAssetDisabled,
+				}); err != nil {
+					t.Fatalf("save disabled rate limit policy: %v", err)
+				}
+			},
+		},
+		{
+			name: "soft deleted policy",
+			ref:  "wallet-deleted-limit",
+			code: "SERVICE_RATE_LIMIT_POLICY_DISABLED",
+			setup: func(t *testing.T, ctx context.Context, service *Service) {
+				deletedAt := time.Date(2026, 6, 26, 13, 0, 0, 0, time.UTC)
+				if _, err := service.SaveServiceRateLimitPolicy(ctx, marketing.ServiceRateLimitPolicy{
+					TenantID:      "site_001",
+					Code:          "wallet-deleted-limit",
+					Name:          "Wallet deleted limit",
+					ServiceRef:    "wallet-service",
+					InterfaceRef:  "query-wallet-balance",
+					ProviderRef:   "wallet-provider",
+					Limit:         1,
+					WindowSeconds: 60,
+					Backend:       marketing.ServiceRateLimitBackendPostgres,
+					Status:        marketing.ServiceAssetActive,
+					DeletedAt:     &deletedAt,
+				}); err != nil {
+					t.Fatalf("save deleted rate limit policy: %v", err)
+				}
+			},
+		},
+		{
+			name: "tenant mismatch",
+			ref:  "wallet-other-tenant-limit",
+			code: "SERVICE_RATE_LIMIT_POLICY_TENANT_DENIED",
+			setup: func(t *testing.T, ctx context.Context, service *Service) {
+				if _, err := service.SaveServiceRateLimitPolicy(ctx, marketing.ServiceRateLimitPolicy{
+					TenantID:      "site_002",
+					Code:          "wallet-other-tenant-limit",
+					Name:          "Wallet other tenant limit",
+					Limit:         1,
+					WindowSeconds: 60,
+					Backend:       marketing.ServiceRateLimitBackendPostgres,
+					Status:        marketing.ServiceAssetActive,
+				}); err != nil {
+					t.Fatalf("save other tenant rate limit policy: %v", err)
+				}
+			},
+		},
+		{
+			name: "scope mismatch",
+			ref:  "wallet-scope-mismatch-limit",
+			code: "SERVICE_RATE_LIMIT_POLICY_SCOPE_DENIED",
+			setup: func(t *testing.T, ctx context.Context, service *Service) {
+				if _, err := service.SaveServiceRateLimitPolicy(ctx, marketing.ServiceRateLimitPolicy{
+					TenantID:      "site_001",
+					Code:          "wallet-scope-mismatch-limit",
+					Name:          "Wallet scope mismatch limit",
+					ServiceRef:    "other-service",
+					Limit:         1,
+					WindowSeconds: 60,
+					Backend:       marketing.ServiceRateLimitBackendPostgres,
+					Status:        marketing.ServiceAssetActive,
+				}); err != nil {
+					t.Fatalf("save scope mismatch rate limit policy: %v", err)
+				}
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := marketing.NewMemoryRepository()
+			service := NewService(repo)
+			activity := mustCreateServiceBindingActivity(t, ctx, repo, "act_rate_limit_"+strings.ReplaceAll(tc.name, " ", "_"))
+			mustSaveWalletServiceAssets(t, ctx, service, json.RawMessage(`{"targetResourceRef":"wallet-store"}`))
+			if tc.setup != nil {
+				tc.setup(t, ctx, service)
+			}
+			if _, err := service.SaveServiceInterfaceBinding(ctx, marketing.ServiceInterfaceBinding{
+				TenantID:                activity.TenantID,
+				ServiceRef:              "wallet-service",
+				InterfaceRef:            "query-wallet-balance",
+				Scope:                   marketing.ServiceAssetScopeActivity,
+				ActivityID:              activity.ID,
+				PrincipalType:           marketing.ServicePrincipalRole,
+				PrincipalID:             "*",
+				AllowedNodeTypes:        []string{"fact-query"},
+				AllowedOperations:       []marketing.ServiceInterfaceOperation{marketing.ServiceOperationCall},
+				AllowedProviderPolicies: []string{"PRIMARY"},
+				RateLimitRef:            tc.ref,
+				Status:                  marketing.ServiceAssetActive,
+			}); err != nil {
+				t.Fatalf("save binding: %v", err)
+			}
+			mustSaveServiceBindingWorkflowDraft(t, ctx, service, activity, `{"targetType":"SERVICE_INTERFACE","serviceRef":"wallet-service","interfaceRef":"query-wallet-balance","onMiss":"BLOCK"}`)
+
+			_, err := service.PublishWorkflowVersion(ctx, activity.ID, marketing.PublishWorkflowCommand{Operator: "tester"})
+			if err == nil || !strings.Contains(err.Error(), tc.code) {
+				t.Fatalf("expected publish error %s, got %v", tc.code, err)
+			}
+			if strings.Contains(fmt.Sprint(err), "SERVICE_PROVIDER_NOT_RESOLVED") {
+				t.Fatalf("expected specific rate limit policy code, got generic provider resolution error: %v", err)
+			}
+		})
+	}
+}
+
 func TestRuntimeBlocksServiceInterfaceWithoutBinding(t *testing.T) {
 	ctx := context.Background()
 	service := NewService(marketing.NewMemoryRepository())
@@ -731,6 +973,232 @@ func TestServiceInterfaceBindingLongTermFields(t *testing.T) {
 	}
 }
 
+func TestServiceInterfaceBindingIncludeSubfoldersMatchesChildFolder(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	mustSaveServiceAssetFixture(t, ctx, service)
+	mustCreateServiceBindingWorkspace(t, ctx, repo, "workspace-1", "site_001")
+	mustCreateServiceBindingWorkspaceFolder(t, ctx, repo, "workspace-1", "folder-parent", "")
+	mustCreateServiceBindingWorkspaceFolder(t, ctx, repo, "workspace-1", "folder-child", "folder-parent")
+	if _, err := service.SaveServiceInterfaceBinding(ctx, marketing.ServiceInterfaceBinding{
+		TenantID:                "site_001",
+		ServiceRef:              "wallet-service",
+		InterfaceRef:            "query-wallet-balance",
+		Scope:                   marketing.ServiceAssetScopeFolder,
+		WorkspaceID:             "workspace-1",
+		FolderID:                "folder-parent",
+		IncludeSubfolders:       true,
+		PrincipalType:           marketing.ServicePrincipalRole,
+		PrincipalID:             "*",
+		AllowedNodeTypes:        []string{"fact-query"},
+		AllowedOperations:       []marketing.ServiceInterfaceOperation{marketing.ServiceOperationCall},
+		AllowedProviderPolicies: []string{"PRIMARY"},
+		Status:                  marketing.ServiceAssetActive,
+	}); err != nil {
+		t.Fatalf("save binding: %v", err)
+	}
+
+	decision, err := service.checkServiceInterfaceAccess(ctx, serviceInterfaceAccessRequest{
+		TenantID:       "site_001",
+		WorkspaceID:    "workspace-1",
+		FolderID:       "folder-child",
+		NodeType:       "fact-query",
+		ServiceRef:     "wallet-service",
+		InterfaceRef:   "query-wallet-balance",
+		Operation:      marketing.ServiceOperationCall,
+		ProviderPolicy: "PRIMARY",
+	})
+	if err != nil {
+		t.Fatalf("check access: %v", err)
+	}
+	if !decision.Allowed || decision.Binding.FolderID != "folder-parent" {
+		t.Fatalf("expected parent folder binding to cover child, got %+v", decision)
+	}
+}
+
+func TestServiceInterfaceBindingIncludeSubfoldersFalseDoesNotMatchChildFolder(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	mustSaveServiceAssetFixture(t, ctx, service)
+	mustCreateServiceBindingWorkspace(t, ctx, repo, "workspace-1", "site_001")
+	mustCreateServiceBindingWorkspaceFolder(t, ctx, repo, "workspace-1", "folder-parent", "")
+	mustCreateServiceBindingWorkspaceFolder(t, ctx, repo, "workspace-1", "folder-child", "folder-parent")
+	if _, err := service.SaveServiceInterfaceBinding(ctx, marketing.ServiceInterfaceBinding{
+		TenantID:                "site_001",
+		ServiceRef:              "wallet-service",
+		InterfaceRef:            "query-wallet-balance",
+		Scope:                   marketing.ServiceAssetScopeFolder,
+		WorkspaceID:             "workspace-1",
+		FolderID:                "folder-parent",
+		PrincipalType:           marketing.ServicePrincipalRole,
+		PrincipalID:             "*",
+		AllowedNodeTypes:        []string{"fact-query"},
+		AllowedOperations:       []marketing.ServiceInterfaceOperation{marketing.ServiceOperationCall},
+		AllowedProviderPolicies: []string{"PRIMARY"},
+		Status:                  marketing.ServiceAssetActive,
+	}); err != nil {
+		t.Fatalf("save binding: %v", err)
+	}
+
+	decision, err := service.checkServiceInterfaceAccess(ctx, serviceInterfaceAccessRequest{
+		TenantID:       "site_001",
+		WorkspaceID:    "workspace-1",
+		FolderID:       "folder-child",
+		NodeType:       "fact-query",
+		ServiceRef:     "wallet-service",
+		InterfaceRef:   "query-wallet-balance",
+		Operation:      marketing.ServiceOperationCall,
+		ProviderPolicy: "PRIMARY",
+	})
+	if err != nil {
+		t.Fatalf("check access: %v", err)
+	}
+	if decision.Allowed || decision.Code != "SERVICE_INTERFACE_SCOPE_DENIED" {
+		t.Fatalf("expected child folder denied without includeSubfolders, got %+v", decision)
+	}
+}
+
+func TestServiceInterfaceBindingIncludeSubfoldersFailsClosedForInvalidFolderTree(t *testing.T) {
+	ctx := context.Background()
+	cases := []struct {
+		name  string
+		setup func(t *testing.T, ctx context.Context, repo marketing.Repository)
+		req   serviceInterfaceAccessRequest
+	}{
+		{
+			name: "missing binding folder exact match",
+			setup: func(t *testing.T, ctx context.Context, repo marketing.Repository) {
+				mustCreateServiceBindingWorkspace(t, ctx, repo, "workspace-1", "site_001")
+			},
+			req: serviceInterfaceAccessRequest{WorkspaceID: "workspace-1", FolderID: "folder-parent"},
+		},
+		{
+			name: "missing request folder",
+			setup: func(t *testing.T, ctx context.Context, repo marketing.Repository) {
+				mustCreateServiceBindingWorkspace(t, ctx, repo, "workspace-1", "site_001")
+				mustCreateServiceBindingWorkspaceFolder(t, ctx, repo, "workspace-1", "folder-parent", "")
+			},
+			req: serviceInterfaceAccessRequest{WorkspaceID: "workspace-1", FolderID: "folder-missing"},
+		},
+		{
+			name: "cross workspace request folder",
+			setup: func(t *testing.T, ctx context.Context, repo marketing.Repository) {
+				mustCreateServiceBindingWorkspace(t, ctx, repo, "workspace-1", "site_001")
+				mustCreateServiceBindingWorkspace(t, ctx, repo, "workspace-2", "site_001")
+				mustCreateServiceBindingWorkspaceFolder(t, ctx, repo, "workspace-1", "folder-parent", "")
+				mustCreateServiceBindingWorkspaceFolder(t, ctx, repo, "workspace-2", "folder-child", "")
+			},
+			req: serviceInterfaceAccessRequest{WorkspaceID: "workspace-1", FolderID: "folder-child"},
+		},
+		{
+			name: "deleted binding folder",
+			setup: func(t *testing.T, ctx context.Context, repo marketing.Repository) {
+				mustCreateServiceBindingWorkspace(t, ctx, repo, "workspace-1", "site_001")
+				parent := mustCreateServiceBindingWorkspaceFolder(t, ctx, repo, "workspace-1", "folder-parent", "")
+				parent.Status = marketing.WorkspaceFolderDeleted
+				if _, err := repo.UpdateWorkspaceFolder(ctx, parent); err != nil {
+					t.Fatalf("delete parent folder: %v", err)
+				}
+				mustCreateServiceBindingWorkspaceFolder(t, ctx, repo, "workspace-1", "folder-child", "folder-parent")
+			},
+			req: serviceInterfaceAccessRequest{WorkspaceID: "workspace-1", FolderID: "folder-child"},
+		},
+		{
+			name: "deleted request folder",
+			setup: func(t *testing.T, ctx context.Context, repo marketing.Repository) {
+				mustCreateServiceBindingWorkspace(t, ctx, repo, "workspace-1", "site_001")
+				mustCreateServiceBindingWorkspaceFolder(t, ctx, repo, "workspace-1", "folder-parent", "")
+				child := mustCreateServiceBindingWorkspaceFolder(t, ctx, repo, "workspace-1", "folder-child", "folder-parent")
+				child.Status = marketing.WorkspaceFolderDeleted
+				if _, err := repo.UpdateWorkspaceFolder(ctx, child); err != nil {
+					t.Fatalf("delete request folder: %v", err)
+				}
+			},
+			req: serviceInterfaceAccessRequest{WorkspaceID: "workspace-1", FolderID: "folder-child"},
+		},
+		{
+			name: "workspace tenant mismatch",
+			setup: func(t *testing.T, ctx context.Context, repo marketing.Repository) {
+				mustCreateServiceBindingWorkspace(t, ctx, repo, "workspace-1", "site_002")
+				mustCreateServiceBindingWorkspaceFolder(t, ctx, repo, "workspace-1", "folder-parent", "")
+				mustCreateServiceBindingWorkspaceFolder(t, ctx, repo, "workspace-1", "folder-child", "folder-parent")
+			},
+			req: serviceInterfaceAccessRequest{WorkspaceID: "workspace-1", FolderID: "folder-child"},
+		},
+		{
+			name: "cycle",
+			setup: func(t *testing.T, ctx context.Context, repo marketing.Repository) {
+				mustCreateServiceBindingWorkspace(t, ctx, repo, "workspace-1", "site_001")
+				mustCreateServiceBindingWorkspaceFolder(t, ctx, repo, "workspace-1", "folder-parent", "")
+				a := mustCreateServiceBindingWorkspaceFolder(t, ctx, repo, "workspace-1", "folder-cycle-a", "folder-cycle-b")
+				b := mustCreateServiceBindingWorkspaceFolder(t, ctx, repo, "workspace-1", "folder-cycle-b", "folder-cycle-a")
+				if _, err := repo.UpdateWorkspaceFolder(ctx, a); err != nil {
+					t.Fatalf("update cycle a: %v", err)
+				}
+				if _, err := repo.UpdateWorkspaceFolder(ctx, b); err != nil {
+					t.Fatalf("update cycle b: %v", err)
+				}
+			},
+			req: serviceInterfaceAccessRequest{WorkspaceID: "workspace-1", FolderID: "folder-cycle-a"},
+		},
+		{
+			name: "too deep",
+			setup: func(t *testing.T, ctx context.Context, repo marketing.Repository) {
+				mustCreateServiceBindingWorkspace(t, ctx, repo, "workspace-1", "site_001")
+				mustCreateServiceBindingWorkspaceFolder(t, ctx, repo, "workspace-1", "folder-parent", "")
+				parent := ""
+				for i := 0; i < 102; i++ {
+					id := fmt.Sprintf("folder-deep-%03d", i)
+					mustCreateServiceBindingWorkspaceFolder(t, ctx, repo, "workspace-1", id, parent)
+					parent = id
+				}
+			},
+			req: serviceInterfaceAccessRequest{WorkspaceID: "workspace-1", FolderID: "folder-deep-101"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := marketing.NewMemoryRepository()
+			service := NewService(repo)
+			mustSaveServiceAssetFixture(t, ctx, service)
+			tc.setup(t, ctx, repo)
+			if _, err := service.SaveServiceInterfaceBinding(ctx, marketing.ServiceInterfaceBinding{
+				TenantID:                "site_001",
+				ServiceRef:              "wallet-service",
+				InterfaceRef:            "query-wallet-balance",
+				Scope:                   marketing.ServiceAssetScopeFolder,
+				WorkspaceID:             "workspace-1",
+				FolderID:                "folder-parent",
+				IncludeSubfolders:       true,
+				PrincipalType:           marketing.ServicePrincipalRole,
+				PrincipalID:             "*",
+				AllowedNodeTypes:        []string{"fact-query"},
+				AllowedOperations:       []marketing.ServiceInterfaceOperation{marketing.ServiceOperationCall},
+				AllowedProviderPolicies: []string{"PRIMARY"},
+				Status:                  marketing.ServiceAssetActive,
+			}); err != nil {
+				t.Fatalf("save binding: %v", err)
+			}
+			req := tc.req
+			req.TenantID = "site_001"
+			req.NodeType = "fact-query"
+			req.ServiceRef = "wallet-service"
+			req.InterfaceRef = "query-wallet-balance"
+			req.Operation = marketing.ServiceOperationCall
+			req.ProviderPolicy = "PRIMARY"
+			decision, err := service.checkServiceInterfaceAccess(ctx, req)
+			if err != nil {
+				t.Fatalf("check access: %v", err)
+			}
+			if decision.Allowed || decision.Code != "SERVICE_INTERFACE_SCOPE_DENIED" {
+				t.Fatalf("expected invalid folder tree denied, got %+v", decision)
+			}
+		})
+	}
+}
+
 func mustCreateServiceBindingActivity(t *testing.T, ctx context.Context, repo marketing.Repository, id string) marketing.Activity {
 	t.Helper()
 	now := time.Date(2026, 6, 24, 8, 0, 0, 0, time.UTC)
@@ -756,6 +1224,45 @@ func mustCreateServiceBindingActivity(t *testing.T, ctx context.Context, repo ma
 		t.Fatalf("create activity: %v", err)
 	}
 	return activity
+}
+
+func mustCreateServiceBindingWorkspace(t *testing.T, ctx context.Context, repo marketing.Repository, workspaceID string, tenantID string) marketing.Workspace {
+	t.Helper()
+	now := time.Date(2026, 6, 24, 8, 0, 0, 0, time.UTC)
+	workspace := marketing.Workspace{
+		ID:          workspaceID,
+		TenantID:    tenantID,
+		Name:        workspaceID,
+		Slug:        workspaceID,
+		Visibility:  marketing.WorkspaceTeam,
+		DefaultRole: marketing.WorkspaceRoleViewer,
+		Status:      marketing.WorkspaceActive,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	if _, err := repo.CreateWorkspace(ctx, workspace); err != nil {
+		t.Fatalf("create workspace %s: %v", workspaceID, err)
+	}
+	return workspace
+}
+
+func mustCreateServiceBindingWorkspaceFolder(t *testing.T, ctx context.Context, repo marketing.Repository, workspaceID string, folderID string, parentID string) marketing.WorkspaceFolder {
+	t.Helper()
+	now := time.Date(2026, 6, 24, 8, 0, 0, 0, time.UTC)
+	folder := marketing.WorkspaceFolder{
+		ID:          folderID,
+		WorkspaceID: workspaceID,
+		ParentID:    parentID,
+		Name:        folderID,
+		Visibility:  marketing.WorkspaceFolderTeam,
+		Status:      marketing.WorkspaceFolderActive,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	if _, err := repo.CreateWorkspaceFolder(ctx, folder); err != nil {
+		t.Fatalf("create folder %s: %v", folderID, err)
+	}
+	return folder
 }
 
 func mustSaveServiceBindingWorkflowDraft(t *testing.T, ctx context.Context, service *Service, activity marketing.Activity, providerStep string) {
@@ -1280,6 +1787,124 @@ func TestServiceProviderRateLimitBlocksProvider(t *testing.T) {
 	}
 }
 
+func TestListServiceProviderHealthSummariesReportsRuntimeStatus(t *testing.T) {
+	ctx := context.Background()
+	service := NewService(marketing.NewMemoryRepository())
+	mustSaveServiceAssetFixture(t, ctx, service)
+	mustSaveWalletProvider(t, ctx, service, "wallet-unhealthy", 0, 100, nil)
+	circuitProvider := mustSaveWalletProvider(t, ctx, service, "wallet-circuit", 1, 100, []byte(`{"circuitFailureThreshold":1}`))
+	rateProvider := mustSaveWalletProvider(t, ctx, service, "wallet-rate", 2, 100, []byte(`{"rateLimitPerWindow":1,"rateLimitWindowSeconds":60}`))
+	checkedAt := time.Date(2026, 6, 26, 12, 0, 0, 0, time.UTC)
+	if _, err := service.SaveServiceProviderRuntimeState(ctx, marketing.ServiceProviderRuntimeState{
+		TenantID:      "site_001",
+		ServiceRef:    "wallet-service",
+		InterfaceRef:  "query-wallet-balance",
+		ProviderRef:   "wallet-unhealthy",
+		HealthStatus:  marketing.ServiceProviderHealthUnhealthy,
+		HealthMessage: "probe failed",
+		CircuitStatus: marketing.ServiceProviderCircuitClosed,
+		Metadata:      json.RawMessage(`{"lastHealthCheckAt":"` + checkedAt.Format(time.RFC3339Nano) + `","lastHealthCheckBy":"health-agent"}`),
+	}); err != nil {
+		t.Fatalf("save unhealthy runtime state: %v", err)
+	}
+	if err := service.recordServiceProviderFailure(ctx, circuitProvider, "boom"); err != nil {
+		t.Fatalf("record circuit failure: %v", err)
+	}
+	if _, err := service.consumeServiceProviderRuntime(ctx, rateProvider); err != nil {
+		t.Fatalf("consume rate provider: %v", err)
+	}
+
+	summaries, err := service.ListServiceProviderHealthSummaries(ctx, marketing.ServiceProviderHealthSummaryQuery{
+		TenantID: "site_001",
+		Limit:    10,
+	})
+	if err != nil {
+		t.Fatalf("list health summaries: %v", err)
+	}
+	byProvider := map[string]marketing.ServiceProviderHealthSummary{}
+	for _, summary := range summaries {
+		byProvider[summary.ProviderRef] = summary
+	}
+	if got := byProvider["wallet-unhealthy"]; got.Status != string(marketing.ServiceProviderHealthUnhealthy) || got.LastCheckedAt == nil || !got.LastCheckedAt.Equal(checkedAt) || got.LastCheckedBy != "health-agent" {
+		t.Fatalf("expected unhealthy summary with last check, got %+v", got)
+	}
+	if got := byProvider["wallet-circuit"]; got.Status != "CIRCUIT_OPEN" || got.CircuitStatus != marketing.ServiceProviderCircuitOpen {
+		t.Fatalf("expected circuit open summary, got %+v", got)
+	}
+	if got := byProvider["wallet-rate"]; got.Status != "RATE_LIMITED" || got.RateLimitCount != 1 {
+		t.Fatalf("expected rate limited summary, got %+v", got)
+	}
+
+	filtered, err := service.ListServiceProviderHealthSummaries(ctx, marketing.ServiceProviderHealthSummaryQuery{
+		TenantID: "site_001",
+		Status:   "RATE_LIMITED",
+		Limit:    10,
+	})
+	if err != nil {
+		t.Fatalf("list filtered health summaries: %v", err)
+	}
+	if len(filtered) != 1 || filtered[0].ProviderRef != "wallet-rate" {
+		t.Fatalf("expected one rate limited provider, got %+v", filtered)
+	}
+}
+
+func TestListServiceProviderHealthSummariesFiltersBeforePaging(t *testing.T) {
+	ctx := context.Background()
+	service := NewService(marketing.NewMemoryRepository())
+	mustSaveServiceAssetFixture(t, ctx, service)
+	mustSaveWalletProvider(t, ctx, service, "wallet-healthy-first", 0, 100, nil)
+	mustSaveWalletProvider(t, ctx, service, "wallet-unhealthy-second", 1, 100, nil)
+	circuitProvider := mustSaveWalletProvider(t, ctx, service, "wallet-circuit-third", 2, 100, []byte(`{"circuitFailureThreshold":1}`))
+	if _, err := service.SaveServiceProviderRuntimeState(ctx, marketing.ServiceProviderRuntimeState{
+		TenantID:      "site_001",
+		ServiceRef:    "wallet-service",
+		InterfaceRef:  "query-wallet-balance",
+		ProviderRef:   "wallet-unhealthy-second",
+		HealthStatus:  marketing.ServiceProviderHealthUnhealthy,
+		HealthMessage: "second page match",
+		CircuitStatus: marketing.ServiceProviderCircuitClosed,
+	}); err != nil {
+		t.Fatalf("save unhealthy runtime state: %v", err)
+	}
+	if err := service.recordServiceProviderFailure(ctx, circuitProvider, "boom"); err != nil {
+		t.Fatalf("record circuit failure: %v", err)
+	}
+
+	filtered, err := service.ListServiceProviderHealthSummaries(ctx, marketing.ServiceProviderHealthSummaryQuery{
+		TenantID: "site_001",
+		Status:   "UNHEALTHY",
+		Limit:    1,
+	})
+	if err != nil {
+		t.Fatalf("list filtered health summaries: %v", err)
+	}
+	if len(filtered) != 1 || filtered[0].ProviderRef != "wallet-unhealthy-second" {
+		t.Fatalf("expected second provider to survive filter-before-paging, got %+v", filtered)
+	}
+	healthFiltered, err := service.ListServiceProviderHealthSummaries(ctx, marketing.ServiceProviderHealthSummaryQuery{
+		TenantID:     "site_001",
+		HealthStatus: marketing.ServiceProviderHealthUnhealthy,
+		Limit:        1,
+	})
+	if err != nil {
+		t.Fatalf("list health-status filtered summaries: %v", err)
+	}
+	if len(healthFiltered) != 1 || healthFiltered[0].ProviderRef != "wallet-unhealthy-second" {
+		t.Fatalf("expected second provider from healthStatus filter-before-paging, got %+v", healthFiltered)
+	}
+	circuitFiltered, err := service.ListServiceProviderHealthSummaries(ctx, marketing.ServiceProviderHealthSummaryQuery{
+		TenantID:      "site_001",
+		CircuitStatus: marketing.ServiceProviderCircuitOpen,
+		Limit:         1,
+	})
+	if err != nil {
+		t.Fatalf("list circuit-status filtered summaries: %v", err)
+	}
+	if len(circuitFiltered) != 1 || circuitFiltered[0].ProviderRef != "wallet-circuit-third" {
+		t.Fatalf("expected third provider from circuitStatus filter-before-paging, got %+v", circuitFiltered)
+	}
+}
+
 func TestServiceProviderRateLimitPolicyOverridesProviderConfig(t *testing.T) {
 	ctx := context.Background()
 	service := NewService(marketing.NewMemoryRepository())
@@ -1303,8 +1928,307 @@ func TestServiceProviderRateLimitPolicyOverridesProviderConfig(t *testing.T) {
 	if _, err := service.consumeServiceProviderRuntime(ctx, provider); err != nil {
 		t.Fatalf("first consume should pass: %v", err)
 	}
+	state, err := service.serviceProviderRuntimeState(ctx, provider)
+	if err != nil {
+		t.Fatalf("load runtime state: %v", err)
+	}
+	if state.RateLimitCount != 1 {
+		t.Fatalf("expected postgres-backed policy to update repository runtime count, got %+v", state)
+	}
 	if _, _, err := service.ResolveServiceProvider(ctx, "site_001", "wallet-service", "query-wallet-balance", "wallet-primary", "PRIMARY"); err == nil || !strings.Contains(err.Error(), "SERVICE_PROVIDER_RATE_LIMITED") {
 		t.Fatalf("expected policy rate limit error, got %v", err)
+	}
+}
+
+func TestServiceProviderBindingRateLimitRefConsumesExactPolicy(t *testing.T) {
+	ctx := context.Background()
+	service := NewService(marketing.NewMemoryRepository())
+	limiter := &fakeServiceRateLimiter{}
+	service.SetRedisServiceRateLimiter(limiter)
+	mustSaveServiceAssetFixture(t, ctx, service)
+	provider := mustSaveWalletProvider(t, ctx, service, "wallet-primary", 0, 100, []byte(`{"rateLimitPerWindow":100,"rateLimitWindowSeconds":60}`))
+	if _, err := service.SaveServiceRateLimitPolicy(ctx, marketing.ServiceRateLimitPolicy{
+		TenantID:      "site_001",
+		Code:          "wallet-auto-limit",
+		Name:          "Wallet auto limit",
+		ServiceRef:    "wallet-service",
+		InterfaceRef:  "query-wallet-balance",
+		ProviderRef:   "wallet-primary",
+		Limit:         99,
+		WindowSeconds: 60,
+		Backend:       marketing.ServiceRateLimitBackendPostgres,
+		Status:        marketing.ServiceAssetActive,
+	}); err != nil {
+		t.Fatalf("save automatic rate limit policy: %v", err)
+	}
+	if _, err := service.SaveServiceRateLimitPolicy(ctx, marketing.ServiceRateLimitPolicy{
+		TenantID:      "site_001",
+		Code:          "wallet-binding-limit",
+		Name:          "Wallet binding limit",
+		ServiceRef:    "wallet-service",
+		InterfaceRef:  "query-wallet-balance",
+		Limit:         2,
+		WindowSeconds: 60,
+		Backend:       marketing.ServiceRateLimitBackendRedis,
+		Status:        marketing.ServiceAssetActive,
+	}); err != nil {
+		t.Fatalf("save binding rate limit policy: %v", err)
+	}
+	binding := marketing.ServiceInterfaceBinding{
+		TenantID:      "site_001",
+		ServiceRef:    "wallet-service",
+		InterfaceRef:  "query-wallet-balance",
+		RateLimitRef:  "wallet-binding-limit",
+		PrincipalType: marketing.ServicePrincipalRole,
+		PrincipalID:   "*",
+		Status:        marketing.ServiceAssetActive,
+	}
+
+	if _, err := service.consumeServiceProviderRuntime(ctx, provider, serviceProviderRuntimeConsumeOption{
+		Subject: marketing.EventSubject{Type: "USER", ID: "u_binding_limit"},
+		Binding: binding,
+	}); err != nil {
+		t.Fatalf("consume binding rate limit policy: %v", err)
+	}
+	if limiter.calls != 1 || len(limiter.commands) != 1 {
+		t.Fatalf("expected binding policy to use redis limiter once, got %+v", limiter)
+	}
+	if got := limiter.commands[0]; got.PolicyRef != "wallet-binding-limit" || got.Limit != 2 || got.Window != time.Minute {
+		t.Fatalf("expected exact binding rate limit policy consumed, got %+v", got)
+	}
+}
+
+func TestServiceProviderBindingRateLimitRefRejectsMissingDisabledAndScopeMismatch(t *testing.T) {
+	ctx := context.Background()
+	service := NewService(marketing.NewMemoryRepository())
+	mustSaveServiceAssetFixture(t, ctx, service)
+	provider := mustSaveWalletProvider(t, ctx, service, "wallet-primary", 0, 100, nil)
+	if _, err := service.SaveServiceRateLimitPolicy(ctx, marketing.ServiceRateLimitPolicy{
+		TenantID:      "site_001",
+		Code:          "wallet-disabled-limit",
+		Name:          "Wallet disabled limit",
+		ServiceRef:    "wallet-service",
+		InterfaceRef:  "query-wallet-balance",
+		Limit:         1,
+		WindowSeconds: 60,
+		Backend:       marketing.ServiceRateLimitBackendPostgres,
+		Status:        marketing.ServiceAssetDisabled,
+	}); err != nil {
+		t.Fatalf("save disabled rate limit policy: %v", err)
+	}
+	if _, err := service.SaveServiceRateLimitPolicy(ctx, marketing.ServiceRateLimitPolicy{
+		TenantID:      "site_001",
+		Code:          "wallet-scope-mismatch-limit",
+		Name:          "Wallet scope mismatch limit",
+		ServiceRef:    "other-service",
+		Limit:         1,
+		WindowSeconds: 60,
+		Backend:       marketing.ServiceRateLimitBackendPostgres,
+		Status:        marketing.ServiceAssetActive,
+	}); err != nil {
+		t.Fatalf("save scope mismatch rate limit policy: %v", err)
+	}
+	deletedAt := time.Date(2026, 6, 26, 13, 0, 0, 0, time.UTC)
+	if _, err := service.SaveServiceRateLimitPolicy(ctx, marketing.ServiceRateLimitPolicy{
+		TenantID:      "site_001",
+		Code:          "wallet-deleted-limit",
+		Name:          "Wallet deleted limit",
+		ServiceRef:    "wallet-service",
+		InterfaceRef:  "query-wallet-balance",
+		ProviderRef:   "wallet-primary",
+		Limit:         1,
+		WindowSeconds: 60,
+		Backend:       marketing.ServiceRateLimitBackendPostgres,
+		Status:        marketing.ServiceAssetActive,
+		DeletedAt:     &deletedAt,
+	}); err != nil {
+		t.Fatalf("save deleted rate limit policy: %v", err)
+	}
+	if _, err := service.SaveServiceRateLimitPolicy(ctx, marketing.ServiceRateLimitPolicy{
+		TenantID:      "site_002",
+		Code:          "wallet-other-tenant-limit",
+		Name:          "Wallet other tenant limit",
+		Limit:         1,
+		WindowSeconds: 60,
+		Backend:       marketing.ServiceRateLimitBackendPostgres,
+		Status:        marketing.ServiceAssetActive,
+	}); err != nil {
+		t.Fatalf("save other tenant rate limit policy: %v", err)
+	}
+	cases := []struct {
+		name string
+		ref  string
+		code string
+	}{
+		{name: "missing", ref: "wallet-missing-limit", code: "SERVICE_RATE_LIMIT_POLICY_NOT_FOUND"},
+		{name: "disabled", ref: "wallet-disabled-limit", code: "SERVICE_RATE_LIMIT_POLICY_DISABLED"},
+		{name: "deleted", ref: "wallet-deleted-limit", code: "SERVICE_RATE_LIMIT_POLICY_DISABLED"},
+		{name: "tenant mismatch", ref: "wallet-other-tenant-limit", code: "SERVICE_RATE_LIMIT_POLICY_TENANT_DENIED"},
+		{name: "scope mismatch", ref: "wallet-scope-mismatch-limit", code: "SERVICE_RATE_LIMIT_POLICY_SCOPE_DENIED"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := service.consumeServiceProviderRuntime(ctx, provider, serviceProviderRuntimeConsumeOption{
+				Binding: marketing.ServiceInterfaceBinding{RateLimitRef: tc.ref},
+			})
+			if err == nil || !strings.Contains(err.Error(), tc.code) {
+				t.Fatalf("expected %s for ref %s, got %v", tc.code, tc.ref, err)
+			}
+		})
+	}
+}
+
+func TestServiceProviderRedisRateLimitPolicyConsumesInjectedLimiter(t *testing.T) {
+	ctx := context.Background()
+	service := NewService(marketing.NewMemoryRepository())
+	limiter := &fakeServiceRateLimiter{}
+	service.SetRedisServiceRateLimiter(limiter)
+	mustSaveServiceAssetFixture(t, ctx, service)
+	provider := mustSaveWalletProvider(t, ctx, service, "wallet-primary", 0, 100, []byte(`{"rateLimitPerWindow":100,"rateLimitWindowSeconds":60}`))
+	if _, err := service.SaveServiceRateLimitPolicy(ctx, marketing.ServiceRateLimitPolicy{
+		TenantID:      "site_001",
+		Code:          "wallet-primary-redis-limit",
+		Name:          "Wallet primary Redis limit",
+		ServiceRef:    "wallet-service",
+		InterfaceRef:  "query-wallet-balance",
+		ProviderRef:   "wallet-primary",
+		Limit:         2,
+		WindowSeconds: 60,
+		Backend:       marketing.ServiceRateLimitBackendRedis,
+		Status:        marketing.ServiceAssetActive,
+	}); err != nil {
+		t.Fatalf("save redis rate limit policy: %v", err)
+	}
+
+	if _, err := service.consumeServiceProviderRuntime(ctx, provider, serviceProviderRuntimeConsumeOption{Subject: marketing.EventSubject{Type: "USER", ID: "u_redis_1"}}); err != nil {
+		t.Fatalf("first redis consume should pass: %v", err)
+	}
+	if _, err := service.consumeServiceProviderRuntime(ctx, provider, serviceProviderRuntimeConsumeOption{Subject: marketing.EventSubject{Type: "USER", ID: "u_redis_1"}}); err != nil {
+		t.Fatalf("second redis consume should pass within limit: %v", err)
+	}
+	if limiter.calls != 2 || len(limiter.commands) != 2 {
+		t.Fatalf("expected redis limiter to be called twice, got %+v", limiter)
+	}
+	last := limiter.commands[len(limiter.commands)-1]
+	if last.PolicyRef != "wallet-primary-redis-limit" || last.Limit != 2 || last.Window != time.Minute || last.Scope != "SUBJECT" || last.SubjectHash == "" {
+		t.Fatalf("expected redis limiter policy config, got %+v", last)
+	}
+}
+
+func TestServiceProviderRedisRateLimitPolicyIsolatesSubjects(t *testing.T) {
+	ctx := context.Background()
+	service := NewService(marketing.NewMemoryRepository())
+	service.SetRedisServiceRateLimiter(&fakeServiceRateLimiter{})
+	mustSaveServiceAssetFixture(t, ctx, service)
+	provider := mustSaveWalletProvider(t, ctx, service, "wallet-primary", 0, 100, nil)
+	if _, err := service.SaveServiceRateLimitPolicy(ctx, marketing.ServiceRateLimitPolicy{
+		TenantID:      "site_001",
+		Code:          "wallet-primary-redis-limit",
+		Name:          "Wallet primary Redis limit",
+		ServiceRef:    "wallet-service",
+		InterfaceRef:  "query-wallet-balance",
+		ProviderRef:   "wallet-primary",
+		Limit:         1,
+		WindowSeconds: 60,
+		Backend:       marketing.ServiceRateLimitBackendRedis,
+		Status:        marketing.ServiceAssetActive,
+	}); err != nil {
+		t.Fatalf("save redis rate limit policy: %v", err)
+	}
+
+	userA := serviceProviderRuntimeConsumeOption{Subject: marketing.EventSubject{Type: "USER", ID: "u_redis_a"}}
+	userB := serviceProviderRuntimeConsumeOption{Subject: marketing.EventSubject{Type: "USER", ID: "u_redis_b"}}
+	if _, err := service.consumeServiceProviderRuntime(ctx, provider, userA); err != nil {
+		t.Fatalf("first redis consume for user A should pass: %v", err)
+	}
+	if _, err := service.consumeServiceProviderRuntime(ctx, provider, userB); err != nil {
+		t.Fatalf("first redis consume for user B should pass independently: %v", err)
+	}
+	if _, err := service.consumeServiceProviderRuntime(ctx, provider, userA); err == nil || !strings.Contains(err.Error(), "SERVICE_PROVIDER_RATE_LIMITED") {
+		t.Fatalf("expected same-subject redis rate limit error, got %v", err)
+	}
+}
+
+func TestServiceProviderRedisRateLimitPolicyCanBeExplicitlyGlobal(t *testing.T) {
+	ctx := context.Background()
+	service := NewService(marketing.NewMemoryRepository())
+	service.SetRedisServiceRateLimiter(&fakeServiceRateLimiter{})
+	mustSaveServiceAssetFixture(t, ctx, service)
+	provider := mustSaveWalletProvider(t, ctx, service, "wallet-primary", 0, 100, nil)
+	if _, err := service.SaveServiceRateLimitPolicy(ctx, marketing.ServiceRateLimitPolicy{
+		TenantID:      "site_001",
+		Code:          "wallet-primary-global-redis-limit",
+		Name:          "Wallet primary global Redis limit",
+		ServiceRef:    "wallet-service",
+		InterfaceRef:  "query-wallet-balance",
+		ProviderRef:   "wallet-primary",
+		Limit:         1,
+		WindowSeconds: 60,
+		Backend:       marketing.ServiceRateLimitBackendRedis,
+		Status:        marketing.ServiceAssetActive,
+		Metadata:      json.RawMessage(`{"rateLimitScope":"GLOBAL"}`),
+	}); err != nil {
+		t.Fatalf("save redis rate limit policy: %v", err)
+	}
+
+	userA := serviceProviderRuntimeConsumeOption{Subject: marketing.EventSubject{Type: "USER", ID: "u_redis_global_a"}}
+	userB := serviceProviderRuntimeConsumeOption{Subject: marketing.EventSubject{Type: "USER", ID: "u_redis_global_b"}}
+	if _, err := service.consumeServiceProviderRuntime(ctx, provider, userA); err != nil {
+		t.Fatalf("first global redis consume should pass: %v", err)
+	}
+	if _, err := service.consumeServiceProviderRuntime(ctx, provider, userB); err == nil || !strings.Contains(err.Error(), "SERVICE_PROVIDER_RATE_LIMITED") {
+		t.Fatalf("expected explicit global redis rate limit to block second subject, got %v", err)
+	}
+}
+
+func TestServiceProviderRedisRateLimitPolicyRequiresConfiguredLimiter(t *testing.T) {
+	ctx := context.Background()
+	service := NewService(marketing.NewMemoryRepository())
+	mustSaveServiceAssetFixture(t, ctx, service)
+	provider := mustSaveWalletProvider(t, ctx, service, "wallet-primary", 0, 100, nil)
+	if _, err := service.SaveServiceRateLimitPolicy(ctx, marketing.ServiceRateLimitPolicy{
+		TenantID:      "site_001",
+		Code:          "wallet-primary-redis-limit",
+		Name:          "Wallet primary Redis limit",
+		ServiceRef:    "wallet-service",
+		InterfaceRef:  "query-wallet-balance",
+		ProviderRef:   "wallet-primary",
+		Limit:         1,
+		WindowSeconds: 60,
+		Backend:       marketing.ServiceRateLimitBackendRedis,
+		Status:        marketing.ServiceAssetActive,
+	}); err != nil {
+		t.Fatalf("save redis rate limit policy: %v", err)
+	}
+
+	if _, err := service.consumeServiceProviderRuntime(ctx, provider); err == nil || !strings.Contains(err.Error(), "SERVICE_RATE_LIMIT_REDIS_NOT_CONFIGURED") {
+		t.Fatalf("expected redis limiter configuration error, got %v", err)
+	}
+}
+
+func TestRedisServiceRateLimiterKeyIncludesSubjectScope(t *testing.T) {
+	ctx := context.Background()
+	client := &fakeRedisRateLimitClient{result: `{"ok":true,"code":"OK","count":1,"limit":1,"windowUnixMs":1770000000000,"retryAfterMs":60000}`}
+	limiter := NewRedisServiceRateLimiter(client, "test:rl")
+	_, consumed, err := limiter.ConsumeServiceProviderRateLimit(ctx, marketing.ServiceProviderRateLimitConsume{
+		State: marketing.ServiceProviderRuntimeState{
+			TenantID:     "site_001",
+			ServiceRef:   "wallet-service",
+			InterfaceRef: "query-wallet-balance",
+			ProviderRef:  "wallet-primary",
+		},
+		PolicyRef:   "wallet-primary-redis-limit",
+		Scope:       "SUBJECT",
+		SubjectHash: "sha256:subject-a",
+		Limit:       1,
+		Window:      time.Minute,
+		Now:         time.UnixMilli(1770000000000).UTC(),
+	})
+	if err != nil || !consumed {
+		t.Fatalf("expected redis limiter consume success, consumed=%v err=%v", consumed, err)
+	}
+	if !strings.Contains(client.key, redisRateLimitKeyPart("SUBJECT")) || !strings.Contains(client.key, redisRateLimitKeyPart("sha256:subject-a")) {
+		t.Fatalf("expected redis key to include subject scope and hash, got %s", client.key)
 	}
 }
 
@@ -1369,6 +2293,52 @@ func TestServiceProviderHalfOpenProbeLimitAndSuccessThreshold(t *testing.T) {
 	if state.CircuitStatus != marketing.ServiceProviderCircuitClosed || state.HalfOpenProbeCount != 0 || state.HalfOpenSuccessCount != 0 {
 		t.Fatalf("expected closed circuit after success threshold, got %+v", state)
 	}
+}
+
+type fakeServiceRateLimiter struct {
+	calls    int
+	commands []marketing.ServiceProviderRateLimitConsume
+	counts   map[string]int
+}
+
+func (l *fakeServiceRateLimiter) ConsumeServiceProviderRateLimit(ctx context.Context, cmd marketing.ServiceProviderRateLimitConsume) (marketing.ServiceProviderRuntimeState, bool, error) {
+	l.calls++
+	l.commands = append(l.commands, cmd)
+	if l.counts == nil {
+		l.counts = map[string]int{}
+	}
+	state := cmd.State
+	now := cmd.Now
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	key := strings.Join([]string{state.TenantID, state.ServiceRef, state.InterfaceRef, state.ProviderRef, cmd.PolicyRef, cmd.Scope, cmd.SubjectHash}, "/")
+	if cmd.Limit > 0 && l.counts[key] >= cmd.Limit {
+		state.RateLimitCount = l.counts[key]
+		state.UpdatedAt = now
+		return state, false, nil
+	}
+	l.counts[key]++
+	state.RateLimitCount = l.counts[key]
+	state.RateLimitWindow = now
+	state.UpdatedAt = now
+	return state, true, nil
+}
+
+type fakeRedisRateLimitClient struct {
+	key    string
+	result string
+}
+
+func (c *fakeRedisRateLimitClient) ScriptLoad(ctx context.Context, body string) (string, error) {
+	return "sha-rate-limit", nil
+}
+
+func (c *fakeRedisRateLimitClient) EvalSHA(ctx context.Context, sha string, keys []string, args ...string) (string, error) {
+	if len(keys) > 0 {
+		c.key = keys[0]
+	}
+	return c.result, nil
 }
 
 func mustSaveServiceAssetFixture(t *testing.T, ctx context.Context, service *Service) {

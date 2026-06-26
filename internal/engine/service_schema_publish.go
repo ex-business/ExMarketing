@@ -117,6 +117,7 @@ func (s *Service) validateWorkflowServiceSchemaContracts(ctx context.Context, ac
 				ProviderRef:    step.ProviderRef,
 				ProviderPolicy: step.ProviderPolicy,
 				Environment:    firstWorkflowString(step.Environment, releaseEnvironment),
+				Binding:        decision.Binding,
 				SeedParts: []string{
 					activity.ID,
 					activity.Code,
@@ -358,7 +359,7 @@ func serviceProviderResolveValidationCode(err error) string {
 	message := err.Error()
 	if idx := strings.Index(message, ":"); idx > 0 {
 		code := message[:idx]
-		if strings.HasPrefix(code, "SERVICE_PROVIDER_") {
+		if strings.HasPrefix(code, "SERVICE_PROVIDER_") || strings.HasPrefix(code, "SERVICE_RATE_LIMIT_POLICY_") {
 			return code
 		}
 	}

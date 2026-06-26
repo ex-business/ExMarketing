@@ -217,6 +217,29 @@ func (h *Handler) checkServiceProviderHealth(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, http.StatusOK, saved)
 }
 
+func (h *Handler) listServiceProviderHealth(w http.ResponseWriter, r *http.Request) {
+	items, err := h.engine.ListServiceProviderHealthSummaries(r.Context(), marketing.ServiceProviderHealthSummaryQuery{
+		TenantID:      tenantFromRequest(r),
+		ServiceRef:    strings.TrimSpace(r.URL.Query().Get("serviceRef")),
+		InterfaceRef:  strings.TrimSpace(r.URL.Query().Get("interfaceRef")),
+		ProviderRef:   strings.TrimSpace(r.URL.Query().Get("providerRef")),
+		HealthStatus:  marketing.ServiceProviderHealthStatus(strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("healthStatus")))),
+		CircuitStatus: marketing.ServiceProviderCircuitStatus(strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("circuitStatus")))),
+		Status:        strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("status"))),
+		Limit:         intQuery(r, "limit"),
+		Offset:        intQuery(r, "offset"),
+	})
+	if err != nil {
+		workspaceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"items":  items,
+		"limit":  intQuery(r, "limit"),
+		"offset": intQuery(r, "offset"),
+	})
+}
+
 func (h *Handler) listServiceRateLimitPolicies(w http.ResponseWriter, r *http.Request) {
 	includeDeleted := boolQuery(r, "includeDeleted")
 	items, err := h.engine.ListServiceRateLimitPolicies(r.Context(), marketing.ServiceRateLimitPolicyQuery{

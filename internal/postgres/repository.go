@@ -932,7 +932,7 @@ func (r *Repository) SaveServiceDefinition(ctx context.Context, service marketin
 			builtin, catalog_version, source_hash, deleted_at,
 			created_by, updated_by, created_at, updated_at
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
-		ON CONFLICT (tenant_id, code) DO UPDATE SET
+		ON CONFLICT (tenant_id, code) WHERE deleted_at IS NULL DO UPDATE SET
 			workspace_id = EXCLUDED.workspace_id,
 			folder_id = EXCLUDED.folder_id,
 			name = EXCLUDED.name,
@@ -949,16 +949,19 @@ func (r *Repository) SaveServiceDefinition(ctx context.Context, service marketin
 			deleted_at = EXCLUDED.deleted_at,
 			updated_by = EXCLUDED.updated_by,
 			updated_at = EXCLUDED.updated_at
-		RETURNING id, tenant_id, workspace_id, folder_id, code, name, description,
+			RETURNING id, tenant_id, workspace_id, folder_id, code, name, description,
 		          service_type, scope, status, owner, tags_json, metadata_json,
 		          builtin, catalog_version, source_hash, deleted_at,
 		          created_by, updated_by, created_at, updated_at
-	`, service.ID, service.TenantID, service.WorkspaceID, service.FolderID, service.Code, service.Name, service.Description,
+		`, service.ID, service.TenantID, service.WorkspaceID, service.FolderID, service.Code, service.Name, service.Description,
 		service.ServiceType, service.Scope, service.Status, service.Owner, json.RawMessage(tags), service.Metadata,
 		service.Builtin, service.CatalogVersion, service.SourceHash, service.DeletedAt,
 		service.CreatedBy, service.UpdatedBy, service.CreatedAt, service.UpdatedAt)
 	saved, err := scanServiceDefinition(row)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return marketing.ServiceDefinition{}, marketing.ErrResourceConflict
+		}
 		return marketing.ServiceDefinition{}, mapPostgresResourceError(err)
 	}
 	return saved, nil
@@ -972,6 +975,8 @@ func (r *Repository) GetServiceDefinition(ctx context.Context, tenantID string, 
 		       created_by, updated_by, created_at, updated_at
 		FROM marketing_service
 		WHERE tenant_id = $1 AND code = $2
+		ORDER BY (status <> 'DELETED' AND deleted_at IS NULL) DESC, updated_at DESC
+		LIMIT 1
 	`, tenantID, code)
 	service, err := scanServiceDefinition(row)
 	if err != nil {
@@ -1048,7 +1053,7 @@ func (r *Repository) SaveServiceInterface(ctx context.Context, serviceInterface 
 			builtin, catalog_version, source_hash, deleted_at,
 			created_by, updated_by, created_at, updated_at
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
-		ON CONFLICT (tenant_id, service_ref, code) DO UPDATE SET
+		ON CONFLICT (tenant_id, service_ref, code) WHERE deleted_at IS NULL DO UPDATE SET
 			name = EXCLUDED.name,
 			description = EXCLUDED.description,
 			operation = EXCLUDED.operation,
@@ -1067,7 +1072,7 @@ func (r *Repository) SaveServiceInterface(ctx context.Context, serviceInterface 
 			deleted_at = EXCLUDED.deleted_at,
 			updated_by = EXCLUDED.updated_by,
 			updated_at = EXCLUDED.updated_at
-		RETURNING id, tenant_id, service_ref, code, name, description, operation,
+			RETURNING id, tenant_id, service_ref, code, name, description, operation,
 		          input_schema_ref, output_schema_ref, error_schema_ref, idempotency_key_template,
 		          timeout_ms, retry_policy, lua_callable, status, metadata_json,
 		          builtin, catalog_version, source_hash, deleted_at,
@@ -1080,6 +1085,9 @@ func (r *Repository) SaveServiceInterface(ctx context.Context, serviceInterface 
 		serviceInterface.CreatedAt, serviceInterface.UpdatedAt)
 	saved, err := scanServiceInterface(row)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return marketing.ServiceInterface{}, marketing.ErrResourceConflict
+		}
 		return marketing.ServiceInterface{}, mapPostgresResourceError(err)
 	}
 	return saved, nil
@@ -1094,6 +1102,8 @@ func (r *Repository) GetServiceInterface(ctx context.Context, tenantID string, s
 		       created_by, updated_by, created_at, updated_at
 		FROM marketing_service_interface
 		WHERE tenant_id = $1 AND service_ref = $2 AND code = $3
+		ORDER BY (status <> 'DELETED' AND deleted_at IS NULL) DESC, updated_at DESC
+		LIMIT 1
 	`, tenantID, serviceRef, code)
 	serviceInterface, err := scanServiceInterface(row)
 	if err != nil {
@@ -1174,7 +1184,7 @@ func (r *Repository) SaveServiceProvider(ctx context.Context, provider marketing
 			builtin, catalog_version, source_hash, deleted_at,
 			created_by, updated_by, created_at, updated_at
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)
-		ON CONFLICT (tenant_id, service_ref, interface_ref, code) DO UPDATE SET
+		ON CONFLICT (tenant_id, service_ref, interface_ref, code) WHERE deleted_at IS NULL DO UPDATE SET
 			name = EXCLUDED.name,
 			description = EXCLUDED.description,
 			protocol = EXCLUDED.protocol,
@@ -1195,7 +1205,7 @@ func (r *Repository) SaveServiceProvider(ctx context.Context, provider marketing
 			deleted_at = EXCLUDED.deleted_at,
 			updated_by = EXCLUDED.updated_by,
 			updated_at = EXCLUDED.updated_at
-		RETURNING id, tenant_id, service_ref, interface_ref, code, name, description,
+			RETURNING id, tenant_id, service_ref, interface_ref, code, name, description,
 		          protocol, endpoint, topic, method, path, auth_ref, resource_refs_json,
 		          config_json, weight, priority, environment, status,
 		          builtin, catalog_version, source_hash, deleted_at,
@@ -1207,6 +1217,9 @@ func (r *Repository) SaveServiceProvider(ctx context.Context, provider marketing
 		provider.CreatedBy, provider.UpdatedBy, provider.CreatedAt, provider.UpdatedAt)
 	saved, err := scanServiceProvider(row)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return marketing.ServiceProvider{}, marketing.ErrResourceConflict
+		}
 		return marketing.ServiceProvider{}, mapPostgresResourceError(err)
 	}
 	return saved, nil
@@ -1221,6 +1234,8 @@ func (r *Repository) GetServiceProvider(ctx context.Context, tenantID string, se
 		       created_by, updated_by, created_at, updated_at
 		FROM marketing_service_provider
 		WHERE tenant_id = $1 AND service_ref = $2 AND interface_ref = $3 AND code = $4
+		ORDER BY (status <> 'DELETED' AND deleted_at IS NULL) DESC, updated_at DESC
+		LIMIT 1
 	`, tenantID, serviceRef, interfaceRef, code)
 	provider, err := scanServiceProvider(row)
 	if err != nil {
@@ -1237,6 +1252,10 @@ func (r *Repository) ListServiceProviders(ctx context.Context, query marketing.S
 	if limit <= 0 || limit > 500 {
 		limit = 500
 	}
+	offset := query.Offset
+	if offset < 0 {
+		offset = 0
+	}
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, tenant_id, service_ref, interface_ref, code, name, description,
 		       protocol, endpoint, topic, method, path, auth_ref, resource_refs_json,
@@ -1252,8 +1271,8 @@ func (r *Repository) ListServiceProviders(ctx context.Context, query marketing.S
 		  AND ($6 = '' OR code = $6)
 		  AND ($7 OR (status <> 'DELETED' AND deleted_at IS NULL))
 		ORDER BY priority ASC, updated_at DESC, code ASC
-		LIMIT $8
-	`, query.TenantID, query.ServiceRef, query.InterfaceRef, query.Protocol, query.Status, query.Code, query.IncludeDeleted, limit)
+		LIMIT $8 OFFSET $9
+	`, query.TenantID, query.ServiceRef, query.InterfaceRef, query.Protocol, query.Status, query.Code, query.IncludeDeleted, limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -1301,7 +1320,7 @@ func (r *Repository) SaveServiceSchema(ctx context.Context, schema marketing.Ser
 			builtin, catalog_version, source_hash, deleted_at,
 			created_by, updated_by, created_at, updated_at
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
-		ON CONFLICT (tenant_id, schema_ref, version) DO UPDATE SET
+		ON CONFLICT (tenant_id, schema_ref, version) WHERE deleted_at IS NULL DO UPDATE SET
 			workspace_id = EXCLUDED.workspace_id,
 			folder_id = EXCLUDED.folder_id,
 			schema_type = EXCLUDED.schema_type,
@@ -1316,7 +1335,7 @@ func (r *Repository) SaveServiceSchema(ctx context.Context, schema marketing.Ser
 			deleted_at = EXCLUDED.deleted_at,
 			updated_by = EXCLUDED.updated_by,
 			updated_at = EXCLUDED.updated_at
-		RETURNING id, tenant_id, workspace_id, folder_id, schema_ref, schema_type, scope,
+			RETURNING id, tenant_id, workspace_id, folder_id, schema_ref, schema_type, scope,
 		          version, status, schema_json, examples_json, description,
 		          builtin, catalog_version, source_hash, deleted_at,
 		          created_by, updated_by, created_at, updated_at
@@ -1326,6 +1345,9 @@ func (r *Repository) SaveServiceSchema(ctx context.Context, schema marketing.Ser
 		schema.CreatedBy, schema.UpdatedBy, schema.CreatedAt, schema.UpdatedAt)
 	saved, err := scanServiceSchema(row)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return marketing.ServiceSchema{}, marketing.ErrResourceConflict
+		}
 		return marketing.ServiceSchema{}, mapPostgresResourceError(err)
 	}
 	return saved, nil
@@ -1415,7 +1437,7 @@ func (r *Repository) SaveServiceInterfaceBinding(ctx context.Context, binding ma
 			builtin, catalog_version, source_hash,
 			created_by, updated_by, created_at, updated_at
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33)
-		ON CONFLICT (tenant_id, service_ref, interface_ref, scope, workspace_id, folder_id, activity_id, node_id, principal_type, principal_id) DO UPDATE SET
+		ON CONFLICT (tenant_id, service_ref, interface_ref, scope, workspace_id, folder_id, activity_id, node_id, principal_type, principal_id) WHERE deleted_at IS NULL DO UPDATE SET
 			allowed_node_types_json = EXCLUDED.allowed_node_types_json,
 			allowed_operations_json = EXCLUDED.allowed_operations_json,
 			allowed_provider_policies_json = EXCLUDED.allowed_provider_policies_json,
@@ -1436,7 +1458,7 @@ func (r *Repository) SaveServiceInterfaceBinding(ctx context.Context, binding ma
 			source_hash = EXCLUDED.source_hash,
 			updated_by = EXCLUDED.updated_by,
 			updated_at = EXCLUDED.updated_at
-		RETURNING id, tenant_id, service_ref, interface_ref, scope, workspace_id, folder_id,
+			RETURNING id, tenant_id, service_ref, interface_ref, scope, workspace_id, folder_id,
 		          activity_id, node_id, principal_type, principal_id, allowed_node_types_json,
 		          allowed_operations_json, allowed_provider_policies_json, allow_explicit_provider_ref,
 		          allowed_provider_refs_json, include_subfolders, min_role, environment, rate_limit_ref,
@@ -1453,6 +1475,9 @@ func (r *Repository) SaveServiceInterfaceBinding(ctx context.Context, binding ma
 		binding.CreatedBy, binding.UpdatedBy, binding.CreatedAt, binding.UpdatedAt)
 	saved, err := scanServiceInterfaceBinding(row)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return marketing.ServiceInterfaceBinding{}, marketing.ErrResourceConflict
+		}
 		return marketing.ServiceInterfaceBinding{}, mapPostgresResourceError(err)
 	}
 	return saved, nil
@@ -1611,6 +1636,10 @@ func (r *Repository) ListServiceProviderRuntimeStates(ctx context.Context, query
 	if limit <= 0 || limit > 500 {
 		limit = 500
 	}
+	offset := query.Offset
+	if offset < 0 {
+		offset = 0
+	}
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, tenant_id, service_ref, interface_ref, provider_ref, health_status, health_message,
 		       circuit_status, failure_count, success_count, consecutive_failures,
@@ -1625,8 +1654,8 @@ func (r *Repository) ListServiceProviderRuntimeStates(ctx context.Context, query
 		  AND ($5 = '' OR health_status = $5)
 		  AND ($6 = '' OR circuit_status = $6)
 		ORDER BY updated_at DESC, service_ref ASC, interface_ref ASC, provider_ref ASC
-		LIMIT $7
-	`, query.TenantID, query.ServiceRef, query.InterfaceRef, query.ProviderRef, query.HealthStatus, query.CircuitStatus, limit)
+		LIMIT $7 OFFSET $8
+	`, query.TenantID, query.ServiceRef, query.InterfaceRef, query.ProviderRef, query.HealthStatus, query.CircuitStatus, limit, offset)
 	if err != nil {
 		return nil, err
 	}
@@ -1640,6 +1669,120 @@ func (r *Repository) ListServiceProviderRuntimeStates(ctx context.Context, query
 		out = append(out, state)
 	}
 	return out, rows.Err()
+}
+
+func (r *Repository) AcquireWorkerLease(ctx context.Context, cmd marketing.WorkerLeaseAcquireCommand) (marketing.WorkerLease, bool, error) {
+	name := strings.TrimSpace(cmd.Name)
+	owner := strings.TrimSpace(cmd.Owner)
+	if name == "" {
+		return marketing.WorkerLease{}, false, errors.New("lease name is required")
+	}
+	if owner == "" {
+		return marketing.WorkerLease{}, false, errors.New("lease owner is required")
+	}
+	if cmd.TTL <= 0 {
+		return marketing.WorkerLease{}, false, errors.New("lease ttl must be positive")
+	}
+	now := cmd.Now
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	leaseUntil := now.Add(cmd.TTL)
+	row := r.db.QueryRowContext(ctx, `
+		INSERT INTO marketing_worker_lease (name, owner, lease_until, acquired_at, updated_at)
+		VALUES ($1, $2, $3, $4, $4)
+		ON CONFLICT (name) DO UPDATE SET
+			owner = EXCLUDED.owner,
+			lease_until = EXCLUDED.lease_until,
+			acquired_at = EXCLUDED.acquired_at,
+			updated_at = EXCLUDED.updated_at
+		WHERE marketing_worker_lease.lease_until <= $4 OR marketing_worker_lease.owner = $2
+		RETURNING name, owner, lease_until, acquired_at, updated_at
+	`, name, owner, leaseUntil, now)
+	lease, err := scanWorkerLease(row)
+	if err == nil {
+		lease.Status = marketing.WorkerLeaseAcquired
+		lease.LeaseTTL = cmd.TTL
+		return lease, true, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return marketing.WorkerLease{}, false, mapPostgresResourceError(err)
+	}
+	existing, err := r.getWorkerLease(ctx, name)
+	if err != nil {
+		return marketing.WorkerLease{}, false, err
+	}
+	existing.Status = marketing.WorkerLeaseHeld
+	return existing, false, nil
+}
+
+func (r *Repository) RenewWorkerLease(ctx context.Context, cmd marketing.WorkerLeaseAcquireCommand) (marketing.WorkerLease, bool, error) {
+	name := strings.TrimSpace(cmd.Name)
+	owner := strings.TrimSpace(cmd.Owner)
+	if name == "" {
+		return marketing.WorkerLease{}, false, errors.New("lease name is required")
+	}
+	if owner == "" {
+		return marketing.WorkerLease{}, false, errors.New("lease owner is required")
+	}
+	if cmd.TTL <= 0 {
+		return marketing.WorkerLease{}, false, errors.New("lease ttl must be positive")
+	}
+	now := cmd.Now
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	row := r.db.QueryRowContext(ctx, `
+		UPDATE marketing_worker_lease
+		SET lease_until = $4, updated_at = $3
+		WHERE name = $1 AND owner = $2
+		RETURNING name, owner, lease_until, acquired_at, updated_at
+	`, name, owner, now, now.Add(cmd.TTL))
+	lease, err := scanWorkerLease(row)
+	if err == nil {
+		lease.Status = marketing.WorkerLeaseAcquired
+		lease.LeaseTTL = cmd.TTL
+		return lease, true, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return marketing.WorkerLease{}, false, mapPostgresResourceError(err)
+	}
+	existing, err := r.getWorkerLease(ctx, name)
+	if err != nil {
+		return marketing.WorkerLease{}, false, err
+	}
+	existing.Status = marketing.WorkerLeaseHeld
+	return existing, false, nil
+}
+
+func (r *Repository) ReleaseWorkerLease(ctx context.Context, name string, owner string, now time.Time) error {
+	name = strings.TrimSpace(name)
+	owner = strings.TrimSpace(owner)
+	if name == "" || owner == "" {
+		return nil
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	_, err := r.db.ExecContext(ctx, `
+		UPDATE marketing_worker_lease
+		SET lease_until = $3, updated_at = $3
+		WHERE name = $1 AND owner = $2
+	`, name, owner, now)
+	return err
+}
+
+func (r *Repository) getWorkerLease(ctx context.Context, name string) (marketing.WorkerLease, error) {
+	row := r.db.QueryRowContext(ctx, `
+		SELECT name, owner, lease_until, acquired_at, updated_at
+		FROM marketing_worker_lease
+		WHERE name = $1
+	`, name)
+	lease, err := scanWorkerLease(row)
+	if err != nil {
+		return marketing.WorkerLease{}, err
+	}
+	return lease, nil
 }
 
 func (r *Repository) ConsumeServiceProviderRateLimit(ctx context.Context, cmd marketing.ServiceProviderRateLimitConsume) (marketing.ServiceProviderRuntimeState, bool, error) {
@@ -1743,7 +1886,7 @@ func (r *Repository) SaveServiceRateLimitPolicy(ctx context.Context, policy mark
 			builtin, catalog_version, source_hash, deleted_at,
 			created_by, updated_by, created_at, updated_at
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
-		ON CONFLICT (tenant_id, code) DO UPDATE SET
+		ON CONFLICT (tenant_id, code) WHERE deleted_at IS NULL DO UPDATE SET
 			name = EXCLUDED.name,
 			description = EXCLUDED.description,
 			service_ref = EXCLUDED.service_ref,
@@ -1760,7 +1903,7 @@ func (r *Repository) SaveServiceRateLimitPolicy(ctx context.Context, policy mark
 			deleted_at = EXCLUDED.deleted_at,
 			updated_by = EXCLUDED.updated_by,
 			updated_at = EXCLUDED.updated_at
-		RETURNING id, tenant_id, code, name, description, service_ref, interface_ref, provider_ref,
+			RETURNING id, tenant_id, code, name, description, service_ref, interface_ref, provider_ref,
 		          limit_count, window_seconds, backend, status, metadata_json,
 		          builtin, catalog_version, source_hash, deleted_at,
 		          created_by, updated_by, created_at, updated_at
@@ -1770,6 +1913,9 @@ func (r *Repository) SaveServiceRateLimitPolicy(ctx context.Context, policy mark
 		policy.CreatedBy, policy.UpdatedBy, policy.CreatedAt, policy.UpdatedAt)
 	saved, err := scanServiceRateLimitPolicy(row)
 	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return marketing.ServiceRateLimitPolicy{}, marketing.ErrResourceConflict
+		}
 		return marketing.ServiceRateLimitPolicy{}, mapPostgresResourceError(err)
 	}
 	return saved, nil
@@ -1908,6 +2054,131 @@ func (r *Repository) PurgeServiceCallAuditLogs(ctx context.Context, tenantID str
 	}
 	rows, _ := tag.RowsAffected()
 	return int(rows), nil
+}
+
+func (r *Repository) CreateProviderDecisionAuditLog(ctx context.Context, log marketing.ProviderDecisionAuditLog) error {
+	if log.ID == "" {
+		log.ID = marketing.NewID("provdecision")
+	}
+	if log.CreatedAt.IsZero() {
+		log.CreatedAt = time.Now().UTC()
+	}
+	if err := log.Validate(); err != nil {
+		return err
+	}
+	_, err := r.db.ExecContext(ctx, `
+		INSERT INTO marketing_service_provider_decision_audit (
+			id, tenant_id, workspace_id, folder_id, activity_id, node_id, node_type,
+			service_ref, interface_ref, provider_policy, candidate_provider_ref, decision,
+			reason, latency_ms, weight, environment, mock, trace_id, run_id, details_json, created_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
+	`, log.ID, log.TenantID, log.WorkspaceID, log.FolderID, log.ActivityID, log.NodeID, log.NodeType,
+		log.ServiceRef, log.InterfaceRef, log.ProviderPolicy, log.CandidateProviderRef, log.Decision,
+		log.Reason, log.LatencyMS, log.Weight, log.Environment, log.Mock, log.TraceID, log.RunID,
+		jsonOrObject(log.Details), log.CreatedAt)
+	return err
+}
+
+func (r *Repository) ListProviderDecisionAuditLogs(ctx context.Context, query marketing.ProviderDecisionAuditQuery) ([]marketing.ProviderDecisionAuditLog, error) {
+	limit := query.Limit
+	if limit <= 0 || limit > 500 {
+		limit = 500
+	}
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, tenant_id, workspace_id, folder_id, activity_id, node_id, node_type,
+		       service_ref, interface_ref, provider_policy, candidate_provider_ref, decision,
+		       reason, latency_ms, weight, environment, mock, trace_id, run_id, details_json, created_at
+		FROM marketing_service_provider_decision_audit
+		WHERE ($1 = '' OR tenant_id = $1)
+		  AND ($2 = '' OR workspace_id = $2)
+		  AND ($3 = '' OR folder_id = $3)
+		  AND ($4 = '' OR activity_id = $4)
+		  AND ($5 = '' OR node_id = $5)
+		  AND ($6 = '' OR service_ref = $6)
+		  AND ($7 = '' OR interface_ref = $7)
+		  AND ($8 = '' OR candidate_provider_ref = $8)
+		  AND ($9 = '' OR decision = $9)
+		  AND ($10 = '' OR (created_at, id) < (split_part($10, '|', 1)::timestamptz, split_part($10, '|', 2)))
+		ORDER BY created_at DESC, id DESC
+		LIMIT $11
+	`, query.TenantID, query.WorkspaceID, query.FolderID, query.ActivityID, query.NodeID,
+		query.ServiceRef, query.InterfaceRef, query.ProviderRef, query.Decision, query.Cursor, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []marketing.ProviderDecisionAuditLog{}
+	for rows.Next() {
+		log, err := scanProviderDecisionAuditLog(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, log)
+	}
+	return out, rows.Err()
+}
+
+func (r *Repository) CreateMigrationAuditLog(ctx context.Context, log marketing.MigrationAuditLog) error {
+	if log.ID == "" {
+		log.ID = marketing.NewID("migaudit")
+	}
+	if log.Result == "" {
+		log.Result = marketing.MigrationAuditSuccess
+	}
+	if log.CreatedAt.IsZero() {
+		log.CreatedAt = time.Now().UTC()
+	}
+	if err := log.Validate(); err != nil {
+		return err
+	}
+	_, err := r.db.ExecContext(ctx, `
+		INSERT INTO marketing_service_migration_audit (
+			id, tenant_id, workspace_id, folder_id, activity_id, migration_type, operation,
+			dry_run, actor, scope, break_glass_ticket, summary_json, items_count,
+			blockers_count, result, error, created_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+	`, log.ID, log.TenantID, log.WorkspaceID, log.FolderID, log.ActivityID, log.MigrationType, log.Operation,
+		log.DryRun, log.Actor, log.Scope, log.BreakGlassTicket, jsonOrObject(log.Summary),
+		log.ItemsCount, log.BlockersCount, log.Result, log.Error, log.CreatedAt)
+	return err
+}
+
+func (r *Repository) ListMigrationAuditLogs(ctx context.Context, query marketing.MigrationAuditQuery) ([]marketing.MigrationAuditLog, error) {
+	limit := query.Limit
+	if limit <= 0 || limit > 500 {
+		limit = 500
+	}
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, tenant_id, workspace_id, folder_id, activity_id, migration_type, operation,
+		       dry_run, actor, scope, break_glass_ticket, summary_json, items_count,
+		       blockers_count, result, error, created_at
+		FROM marketing_service_migration_audit
+		WHERE ($1 = '' OR tenant_id = $1)
+		  AND ($2 = '' OR workspace_id = $2)
+		  AND ($3 = '' OR folder_id = $3)
+		  AND ($4 = '' OR activity_id = $4)
+		  AND ($5 = '' OR migration_type = $5)
+		  AND ($6 = '' OR operation = $6)
+		  AND ($7 = '' OR actor = $7)
+		  AND ($8 = '' OR result = $8)
+		  AND ($9 = '' OR (created_at, id) < (split_part($9, '|', 1)::timestamptz, split_part($9, '|', 2)))
+		ORDER BY created_at DESC, id DESC
+		LIMIT $10
+	`, query.TenantID, query.WorkspaceID, query.FolderID, query.ActivityID, query.MigrationType,
+		query.Operation, query.Actor, query.Result, query.Cursor, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []marketing.MigrationAuditLog{}
+	for rows.Next() {
+		log, err := scanMigrationAuditLog(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, log)
+	}
+	return out, rows.Err()
 }
 
 func (r *Repository) GetActivityState(ctx context.Context, key marketing.ActivityStateKey) (marketing.ActivityState, error) {
@@ -4264,6 +4535,14 @@ func scanServiceProviderRuntimeState(scanner outboxScanner) (marketing.ServicePr
 	return state, nil
 }
 
+func scanWorkerLease(scanner outboxScanner) (marketing.WorkerLease, error) {
+	var lease marketing.WorkerLease
+	if err := scanner.Scan(&lease.Name, &lease.Owner, &lease.LeaseUntil, &lease.AcquiredAt, &lease.UpdatedAt); err != nil {
+		return marketing.WorkerLease{}, err
+	}
+	return lease, nil
+}
+
 func scanServiceRateLimitPolicy(scanner outboxScanner) (marketing.ServiceRateLimitPolicy, error) {
 	var policy marketing.ServiceRateLimitPolicy
 	var deletedAt sql.NullTime
@@ -4291,6 +4570,29 @@ func scanServiceCallAuditLog(scanner outboxScanner) (marketing.ServiceCallAuditL
 		&log.ResponseHash, &log.ProviderTrace, &log.SchemaTrace, &log.PermissionTrace,
 		&log.Actor, &log.CreatedAt); err != nil {
 		return marketing.ServiceCallAuditLog{}, err
+	}
+	return log, nil
+}
+
+func scanProviderDecisionAuditLog(scanner outboxScanner) (marketing.ProviderDecisionAuditLog, error) {
+	var log marketing.ProviderDecisionAuditLog
+	if err := scanner.Scan(&log.ID, &log.TenantID, &log.WorkspaceID, &log.FolderID,
+		&log.ActivityID, &log.NodeID, &log.NodeType, &log.ServiceRef, &log.InterfaceRef,
+		&log.ProviderPolicy, &log.CandidateProviderRef, &log.Decision, &log.Reason,
+		&log.LatencyMS, &log.Weight, &log.Environment, &log.Mock, &log.TraceID, &log.RunID,
+		&log.Details, &log.CreatedAt); err != nil {
+		return marketing.ProviderDecisionAuditLog{}, err
+	}
+	return log, nil
+}
+
+func scanMigrationAuditLog(scanner outboxScanner) (marketing.MigrationAuditLog, error) {
+	var log marketing.MigrationAuditLog
+	if err := scanner.Scan(&log.ID, &log.TenantID, &log.WorkspaceID, &log.FolderID,
+		&log.ActivityID, &log.MigrationType, &log.Operation, &log.DryRun, &log.Actor,
+		&log.Scope, &log.BreakGlassTicket, &log.Summary, &log.ItemsCount, &log.BlockersCount,
+		&log.Result, &log.Error, &log.CreatedAt); err != nil {
+		return marketing.MigrationAuditLog{}, err
 	}
 	return log, nil
 }

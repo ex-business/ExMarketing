@@ -14,6 +14,7 @@ import {
   Search,
   Share2,
   SlidersHorizontal,
+  Star,
   UserRoundCog,
   Workflow,
 } from 'lucide-react';
@@ -95,6 +96,7 @@ type WorkspaceContentProps = {
   onFolderOpen: (folderId: string) => void;
   onWorkflowOpen: (workflowId: string) => void;
   onTemplateOpen: (templateId: string) => void;
+  onCreateWorkflow: () => void;
   onToggleFavorite: (workflowId: string) => void;
   onToggleArchived: (workflowId: string) => void;
   onItemAction: (action: WorkspaceItemAction, item: { id: string; type: ItemType; name: string; visibility: string; status?: string; version?: string; owner?: string }) => void;
@@ -210,6 +212,7 @@ export function WorkspaceContent({
   onFolderOpen,
   onWorkflowOpen,
   onTemplateOpen,
+  onCreateWorkflow,
   onToggleFavorite,
   onToggleArchived,
   onItemAction,
@@ -323,6 +326,7 @@ export function WorkspaceContent({
   const checkedItems = useMemo(() => items.filter((item) => checkedItemIds.has(item.id)), [checkedItemIds, items]);
   const allPageChecked = pageItems.length > 0 && pageItems.every((item) => checkedItemIds.has(item.id));
   const isEmptyPage = !isLoading && ((tab === 'template' && pageTemplates.length === 0) || (tab !== 'template' && pageItems.length === 0));
+  const hasActiveFilters = Boolean(searchValue.trim()) || typeFilter !== 'ALL' || visibilityFilter !== 'ALL' || ownerFilter !== 'ALL' || statusFilter !== 'ALL';
   const actionPayload = (item: ContentItem) => ({
     id: item.id,
     type: item.type,
@@ -382,8 +386,34 @@ export function WorkspaceContent({
 
   const disabledReason = (action: string): string => `${capabilities.reason}，不能执行${action}。`;
 
+  const clearFilters = () => {
+    onSearchChange('');
+    setTypeFilter('ALL');
+    setVisibilityFilter('ALL');
+    setOwnerFilter('ALL');
+    onStatusFilterChange('ALL');
+    setPage(1);
+  };
+
+  const showArchivedEmpty = () => {
+    onSearchChange('');
+    setTypeFilter('ALL');
+    setVisibilityFilter('ALL');
+    setOwnerFilter('ALL');
+    onStatusFilterChange('ARCHIVED');
+    setPage(1);
+  };
+
   const renderItemMenu = (item: ContentItem) => (
     <TaMenu className="exm-item-menu exm-menu-scope" onClick={(event) => event.stopPropagation()}>
+      {item.type === 'Workflow' ? (
+        <TaMenuItem onClick={() => {
+          setOpenMenuItemId('');
+          onToggleFavorite(item.id);
+        }}>
+          <Star size={14} />{item.favorite ? '取消收藏' : '收藏'}
+        </TaMenuItem>
+      ) : null}
       {MENU_ACTIONS.map(({ action, label, icon: Icon, danger }) => (
         <TaMenuItem key={action} danger={danger} data-testid={`workspace-row-action-${action}`} disabled={!canRunAction(action, item)} title={!canRunAction(action, item) ? disabledReason(label) : label} onClick={() => {
           setOpenMenuItemId('');
@@ -511,11 +541,39 @@ export function WorkspaceContent({
       {isLoading ? (
         <div className="exm-content-loading" aria-label="工作台加载中" />
       ) : isEmptyPage ? (
-        <div className="exm-common-empty" role="status" aria-label="当前列表为空">
-          <span><Folder size={22} /></span>
-          <b>暂无内容</b>
-          <p>当前目录没有可显示的流程、文件夹或模板。</p>
-        </div>
+        tab === 'template' ? (
+          <div className="exm-content-empty template" role="status" aria-label="模板为空">
+            <b>暂无模板</b>
+            <span>当前搜索和筛选没有匹配的模板。</span>
+            <div>
+              <TaButton size="sm" onClick={clearFilters}>清除筛选</TaButton>
+            </div>
+          </div>
+        ) : statusFilter === 'ARCHIVED' || homeView === 'archived' ? (
+          <div className="exm-content-empty archived" role="status" aria-label="归档为空">
+            <b>归档为空</b>
+            <span>当前 workspace 没有归档流程，或筛选条件没有命中归档内容。</span>
+            <div>
+              <TaButton size="sm" onClick={clearFilters}>返回全部</TaButton>
+            </div>
+          </div>
+        ) : hasActiveFilters ? (
+          <div className="exm-content-empty search" role="status" aria-label="搜索无结果">
+            <b>{searchValue.trim() ? `没有找到 "${searchValue.trim()}"` : '没有找到匹配项'}</b>
+            <span>当前搜索和筛选没有匹配项。</span>
+            <div>
+              <TaButton size="sm" onClick={clearFilters}>清除筛选</TaButton>
+              <TaButton size="sm" onClick={onCreateWorkflow}>新建流程</TaButton>
+              <TaButton size="sm" onClick={showArchivedEmpty}>查看归档</TaButton>
+            </div>
+          </div>
+        ) : (
+          <div className="exm-common-empty" role="status" aria-label="当前列表为空">
+            <span><Folder size={22} /></span>
+            <b>暂无内容</b>
+            <p>当前目录没有可显示的流程、文件夹或模板。</p>
+          </div>
+        )
       ) : tab === 'template' ? (
         <div className="exm-grid-view exm-template-grid">
           {pageTemplates.map((template) => (

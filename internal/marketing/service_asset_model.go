@@ -18,6 +18,7 @@ type ServiceProviderHealthStatus string
 type ServiceProviderCircuitStatus string
 type ServiceCallAuditStatus string
 type ServiceRateLimitBackend string
+type WorkerLeaseStatus string
 
 const (
 	ServiceTypeInternal ServiceType = "INTERNAL"
@@ -77,6 +78,9 @@ const (
 
 	ServiceRateLimitBackendPostgres ServiceRateLimitBackend = "POSTGRES"
 	ServiceRateLimitBackendRedis    ServiceRateLimitBackend = "REDIS"
+
+	WorkerLeaseAcquired WorkerLeaseStatus = "ACQUIRED"
+	WorkerLeaseHeld     WorkerLeaseStatus = "HELD"
 )
 
 type ServiceDefinition struct {
@@ -246,6 +250,58 @@ type ServiceProviderRuntimeState struct {
 	CreatedAt                time.Time                    `json:"createdAt"`
 }
 
+type ServiceProviderHealthSummary struct {
+	TenantID         string                       `json:"tenantId"`
+	ServiceRef       string                       `json:"serviceRef"`
+	InterfaceRef     string                       `json:"interfaceRef"`
+	ProviderRef      string                       `json:"providerRef"`
+	ProviderName     string                       `json:"providerName,omitempty"`
+	ProviderStatus   ServiceAssetStatus           `json:"providerStatus"`
+	Protocol         ServiceProviderProtocol      `json:"protocol"`
+	HealthStatus     ServiceProviderHealthStatus  `json:"healthStatus"`
+	CircuitStatus    ServiceProviderCircuitStatus `json:"circuitStatus"`
+	Status           string                       `json:"status"`
+	HealthMessage    string                       `json:"healthMessage,omitempty"`
+	RateLimitCount   int                          `json:"rateLimitCount,omitempty"`
+	RateLimitWindow  *time.Time                   `json:"rateLimitWindow,omitempty"`
+	LastCheckedAt    *time.Time                   `json:"lastCheckedAt,omitempty"`
+	LastCheckedBy    string                       `json:"lastCheckedBy,omitempty"`
+	LastSuccessAt    *time.Time                   `json:"lastSuccessAt,omitempty"`
+	LastFailureAt    *time.Time                   `json:"lastFailureAt,omitempty"`
+	CircuitOpenedAt  *time.Time                   `json:"circuitOpenedAt,omitempty"`
+	CircuitResetAt   *time.Time                   `json:"circuitResetAt,omitempty"`
+	RuntimeUpdatedAt time.Time                    `json:"runtimeUpdatedAt,omitempty"`
+}
+
+type ServiceProviderHealthSummaryQuery struct {
+	TenantID      string
+	ServiceRef    string
+	InterfaceRef  string
+	ProviderRef   string
+	HealthStatus  ServiceProviderHealthStatus
+	CircuitStatus ServiceProviderCircuitStatus
+	Status        string
+	Limit         int
+	Offset        int
+}
+
+type WorkerLease struct {
+	Name       string            `json:"name"`
+	Owner      string            `json:"owner"`
+	Status     WorkerLeaseStatus `json:"status"`
+	LeaseTTL   time.Duration     `json:"-"`
+	LeaseUntil time.Time         `json:"leaseUntil"`
+	AcquiredAt time.Time         `json:"acquiredAt"`
+	UpdatedAt  time.Time         `json:"updatedAt"`
+}
+
+type WorkerLeaseAcquireCommand struct {
+	Name  string
+	Owner string
+	TTL   time.Duration
+	Now   time.Time
+}
+
 type ServiceRateLimitPolicy struct {
 	ID             string                  `json:"id"`
 	TenantID       string                  `json:"tenantId"`
@@ -326,6 +382,7 @@ type ServiceProviderQuery struct {
 	Code           string
 	IncludeDeleted bool
 	Limit          int
+	Offset         int
 }
 
 type ServiceSchemaQuery struct {
@@ -363,6 +420,7 @@ type ServiceProviderRuntimeStateQuery struct {
 	HealthStatus  ServiceProviderHealthStatus
 	CircuitStatus ServiceProviderCircuitStatus
 	Limit         int
+	Offset        int
 }
 
 type ServiceRateLimitPolicyQuery struct {
@@ -377,10 +435,15 @@ type ServiceRateLimitPolicyQuery struct {
 }
 
 type ServiceProviderRateLimitConsume struct {
-	State  ServiceProviderRuntimeState
-	Limit  int
-	Window time.Duration
-	Now    time.Time
+	State       ServiceProviderRuntimeState
+	PolicyRef   string
+	Scope       string
+	SubjectType string
+	SubjectID   string
+	SubjectHash string
+	Limit       int
+	Window      time.Duration
+	Now         time.Time
 }
 
 type ServiceCallAuditQuery struct {

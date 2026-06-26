@@ -145,7 +145,11 @@ func (s *Service) checkServiceInterfaceAccess(ctx context.Context, req serviceIn
 			denied = serviceInterfaceAccessDenied("SERVICE_INTERFACE_ENVIRONMENT_DENIED", fmt.Sprintf("binding environment %s does not match runtime environment %s", binding.Environment, req.Environment))
 			continue
 		}
-		if !serviceInterfaceBindingScopeMatches(binding, req) {
+		scopeMatches, err := s.serviceInterfaceBindingScopeMatches(ctx, binding, req)
+		if err != nil {
+			return serviceInterfaceAccessDecision{}, err
+		}
+		if !scopeMatches {
 			if denied.Code == "" {
 				denied = serviceInterfaceAccessDenied("SERVICE_INTERFACE_SCOPE_DENIED", fmt.Sprintf("binding scope does not cover node %s", req.NodeID))
 			}
@@ -217,42 +221,132 @@ func serviceInterfaceOperationInList(value marketing.ServiceInterfaceOperation, 
 	return false
 }
 
-func serviceInterfaceBindingScopeMatches(binding marketing.ServiceInterfaceBinding, req serviceInterfaceAccessRequest) bool {
+func (s *Service) serviceInterfaceBindingScopeMatches(ctx context.Context, binding marketing.ServiceInterfaceBinding, req serviceInterfaceAccessRequest) (bool, error) {
 	switch binding.Scope {
 	case marketing.ServiceAssetScopeSystem, marketing.ServiceAssetScopeTenant:
-		return true
+		return true, nil
 	case marketing.ServiceAssetScopeWorkspace:
-		return binding.WorkspaceID == "" || binding.WorkspaceID == req.WorkspaceID
+		return binding.WorkspaceID == "" || binding.WorkspaceID == req.WorkspaceID, nil
 	case marketing.ServiceAssetScopeFolder:
 		if binding.WorkspaceID != "" && binding.WorkspaceID != req.WorkspaceID {
-			return false
+			return false, nil
 		}
 		if binding.IncludeSubfolders {
-			return binding.FolderID == "" || binding.FolderID == req.FolderID
+			return s.serviceInterfaceBindingFolderCovers(ctx, req.TenantID, firstWorkflowString(binding.WorkspaceID, req.WorkspaceID), binding.FolderID, req.FolderID)
 		}
-		return binding.FolderID == "" || binding.FolderID == req.FolderID
+		return binding.FolderID == "" || binding.FolderID == req.FolderID, nil
 	case marketing.ServiceAssetScopeActivity:
 		if binding.WorkspaceID != "" && binding.WorkspaceID != req.WorkspaceID {
-			return false
+			return false, nil
 		}
 		if binding.FolderID != "" && binding.FolderID != req.FolderID {
-			return false
+			return false, nil
 		}
-		return binding.ActivityID == "" || binding.ActivityID == req.ActivityID
+		return binding.ActivityID == "" || binding.ActivityID == req.ActivityID, nil
 	case marketing.ServiceAssetScopeNode:
 		if binding.WorkspaceID != "" && binding.WorkspaceID != req.WorkspaceID {
-			return false
+			return false, nil
 		}
 		if binding.FolderID != "" && binding.FolderID != req.FolderID {
-			return false
+			return false, nil
 		}
 		if binding.ActivityID != "" && binding.ActivityID != req.ActivityID {
-			return false
+			return false, nil
 		}
-		return binding.NodeID == "" || binding.NodeID == req.NodeID
+		return binding.NodeID == "" || binding.NodeID == req.NodeID, nil
 	default:
-		return false
+		return false, nil
 	}
+}
+
+func (s *Service) serviceInterfaceBindingFolderCovers(ctx context.Context, tenantID string, workspaceID string, bindingFolderID string, requestFolderID string) (bool, error) {
+	bindingFolderID = strings.TrimSpace(bindingFolderID)
+	requestFolderID = strings.TrimSpace(requestFolderID)
+	if bindingFolderID == "" {
+		return true, nil
+	}
+	if requestFolderID == "" {
+		return false, nil
+	}
+	workspaceID = strings.TrimSpace(workspaceID)
+	bindingFolder, ok, err := s.serviceInterfaceActiveWorkspaceFolder(ctx, tenantID, workspaceID, bindingFolderID)
+	if err != nil || !ok {
+		return false, err
+	}
+	requestFolder, ok, err := s.serviceInterfaceActiveWorkspaceFolder(ctx, tenantID, firstWorkflowString(workspaceID, bindingFolder.WorkspaceID), requestFolderID)
+	if err != nil || !ok {
+		return false, err
+	}
+	if bindingFolder.WorkspaceID != requestFolder.WorkspaceID {
+		return false, nil
+	}
+	if bindingFolder.ID == requestFolder.ID {
+		return true, nil
+	}
+	seen := map[string]bool{}
+	current := strings.TrimSpace(requestFolder.ParentID)
+	for depth := 0; depth < 100; depth++ {
+		if current == "" {
+			return false, nil
+		}
+		if seen[current] {
+			return false, nil
+		}
+		seen[current] = true
+		folder, err := s.repository.GetWorkspaceFolder(ctx, current)
+		if err != nil {
+			if errors.Is(err, marketing.ErrNotFound) {
+				return false, nil
+			}
+			return false, err
+		}
+		if workspaceID != "" && folder.WorkspaceID != workspaceID {
+			return false, nil
+		}
+		if folder.WorkspaceID != bindingFolder.WorkspaceID || folder.Status == marketing.WorkspaceFolderDeleted {
+			return false, nil
+		}
+		if folder.ID == bindingFolder.ID {
+			return true, nil
+		}
+		current = strings.TrimSpace(folder.ParentID)
+	}
+	return false, nil
+}
+
+func (s *Service) serviceInterfaceActiveWorkspaceFolder(ctx context.Context, tenantID string, workspaceID string, folderID string) (marketing.WorkspaceFolder, bool, error) {
+	folderID = strings.TrimSpace(folderID)
+	if folderID == "" {
+		return marketing.WorkspaceFolder{}, false, nil
+	}
+	folder, err := s.repository.GetWorkspaceFolder(ctx, folderID)
+	if err != nil {
+		if errors.Is(err, marketing.ErrNotFound) {
+			return marketing.WorkspaceFolder{}, false, nil
+		}
+		return marketing.WorkspaceFolder{}, false, err
+	}
+	if folder.Status == marketing.WorkspaceFolderDeleted {
+		return marketing.WorkspaceFolder{}, false, nil
+	}
+	workspaceID = strings.TrimSpace(workspaceID)
+	if workspaceID != "" && folder.WorkspaceID != workspaceID {
+		return marketing.WorkspaceFolder{}, false, nil
+	}
+	workspace, err := s.repository.GetWorkspace(ctx, folder.WorkspaceID)
+	if err != nil {
+		if errors.Is(err, marketing.ErrNotFound) {
+			return marketing.WorkspaceFolder{}, false, nil
+		}
+		return marketing.WorkspaceFolder{}, false, err
+	}
+	if workspace.Status == marketing.WorkspaceDeleted {
+		return marketing.WorkspaceFolder{}, false, nil
+	}
+	if tenantID = strings.TrimSpace(tenantID); tenantID != "" && workspace.TenantID != tenantID {
+		return marketing.WorkspaceFolder{}, false, nil
+	}
+	return folder, true, nil
 }
 
 func serviceInterfaceBindingEnvironmentMatches(binding marketing.ServiceInterfaceBinding, req serviceInterfaceAccessRequest) bool {

@@ -93,6 +93,9 @@ func (s *Service) SaveServiceInterface(ctx context.Context, serviceInterface mar
 	if err != nil {
 		return marketing.ServiceInterface{}, err
 	}
+	if !serviceAssetStatusActive(service.Status, service.DeletedAt) {
+		return marketing.ServiceInterface{}, errors.New("SERVICE_PARENT_DELETED")
+	}
 	if err := s.ensureBuiltInServiceDefinitionPersisted(ctx, service); err != nil {
 		return marketing.ServiceInterface{}, err
 	}
@@ -146,6 +149,12 @@ func (s *Service) SaveServiceProvider(ctx context.Context, provider marketing.Se
 	serviceInterface, err := s.GetServiceInterface(ctx, provider.TenantID, provider.ServiceRef, provider.InterfaceRef)
 	if err != nil {
 		return marketing.ServiceProvider{}, err
+	}
+	if err := s.ensureServiceDefinitionActive(ctx, provider.TenantID, provider.ServiceRef); err != nil {
+		return marketing.ServiceProvider{}, err
+	}
+	if !serviceAssetStatusActive(serviceInterface.Status, serviceInterface.DeletedAt) {
+		return marketing.ServiceProvider{}, errors.New("SERVICE_INTERFACE_PARENT_DELETED")
 	}
 	if err := s.ensureBuiltInServiceInterfacePersisted(ctx, serviceInterface); err != nil {
 		return marketing.ServiceProvider{}, err
@@ -242,6 +251,12 @@ func (s *Service) SaveServiceInterfaceBinding(ctx context.Context, binding marke
 	if err != nil {
 		return marketing.ServiceInterfaceBinding{}, err
 	}
+	if err := s.ensureServiceDefinitionActive(ctx, binding.TenantID, binding.ServiceRef); err != nil {
+		return marketing.ServiceInterfaceBinding{}, err
+	}
+	if !serviceAssetStatusActive(serviceInterface.Status, serviceInterface.DeletedAt) {
+		return marketing.ServiceInterfaceBinding{}, errors.New("SERVICE_INTERFACE_PARENT_DELETED")
+	}
 	if err := s.ensureBuiltInServiceInterfacePersisted(ctx, serviceInterface); err != nil {
 		return marketing.ServiceInterfaceBinding{}, err
 	}
@@ -250,6 +265,62 @@ func (s *Service) SaveServiceInterfaceBinding(ctx context.Context, binding marke
 
 func (s *Service) ListServiceInterfaceBindings(ctx context.Context, query marketing.ServiceInterfaceBindingQuery) ([]marketing.ServiceInterfaceBinding, error) {
 	return s.repository.ListServiceInterfaceBindings(ctx, query)
+}
+
+func (s *Service) ensureServiceDefinitionActive(ctx context.Context, tenantID string, serviceRef string) error {
+	service, err := s.GetServiceDefinition(ctx, tenantID, serviceRef)
+	if err != nil {
+		return err
+	}
+	if !serviceAssetStatusActive(service.Status, service.DeletedAt) {
+		return errors.New("SERVICE_PARENT_DELETED")
+	}
+	return nil
+}
+
+func (s *Service) ensureServiceInterfaceActive(ctx context.Context, tenantID string, serviceRef string, interfaceRef string) error {
+	if err := s.ensureServiceDefinitionActive(ctx, tenantID, serviceRef); err != nil {
+		return err
+	}
+	serviceInterface, err := s.GetServiceInterface(ctx, tenantID, serviceRef, interfaceRef)
+	if err != nil {
+		return err
+	}
+	if !serviceAssetStatusActive(serviceInterface.Status, serviceInterface.DeletedAt) {
+		return errors.New("SERVICE_INTERFACE_PARENT_DELETED")
+	}
+	return nil
+}
+
+func (s *Service) ensureServiceDefinitionActiveIfPresent(ctx context.Context, tenantID string, serviceRef string) error {
+	service, err := s.GetServiceDefinition(ctx, tenantID, serviceRef)
+	if err != nil {
+		if errors.Is(err, marketing.ErrNotFound) {
+			return nil
+		}
+		return err
+	}
+	if !serviceAssetStatusActive(service.Status, service.DeletedAt) {
+		return errors.New("SERVICE_PARENT_DELETED")
+	}
+	return nil
+}
+
+func (s *Service) ensureServiceInterfaceActiveIfPresent(ctx context.Context, tenantID string, serviceRef string, interfaceRef string) error {
+	if err := s.ensureServiceDefinitionActiveIfPresent(ctx, tenantID, serviceRef); err != nil {
+		return err
+	}
+	serviceInterface, err := s.GetServiceInterface(ctx, tenantID, serviceRef, interfaceRef)
+	if err != nil {
+		if errors.Is(err, marketing.ErrNotFound) {
+			return nil
+		}
+		return err
+	}
+	if !serviceAssetStatusActive(serviceInterface.Status, serviceInterface.DeletedAt) {
+		return errors.New("SERVICE_INTERFACE_PARENT_DELETED")
+	}
+	return nil
 }
 
 func (s *Service) getActiveServiceSchema(ctx context.Context, tenantID string, schemaRef string, schemaType marketing.ServiceSchemaType) (marketing.ServiceSchema, error) {
@@ -385,6 +456,7 @@ type serviceProviderResolveRequest struct {
 	ProviderRef    string
 	ProviderPolicy string
 	Environment    string
+	Binding        marketing.ServiceInterfaceBinding
 	SeedParts      []string
 }
 
@@ -421,7 +493,7 @@ func (s *Service) resolveServiceProviders(ctx context.Context, req serviceProvid
 		if err := serviceProviderMockAllowed(provider, policy); err != nil {
 			return marketing.ServiceInterface{}, nil, err
 		}
-		available, code, message, err := s.serviceProviderRuntimeAvailable(ctx, provider)
+		available, code, message, err := s.serviceProviderRuntimeAvailable(ctx, provider, serviceProviderGovernanceConfigOption{Binding: req.Binding})
 		if err != nil {
 			return marketing.ServiceInterface{}, nil, err
 		}
@@ -449,7 +521,7 @@ func (s *Service) resolveServiceProviders(ctx context.Context, req serviceProvid
 	} else {
 		providers = filterServiceProviderEnvironmentCandidates(providers, req.Environment)
 	}
-	providers, err = s.filterServiceProviderRuntimeCandidates(ctx, providers)
+	providers, err = s.filterServiceProviderRuntimeCandidates(ctx, providers, req.Binding)
 	if err != nil {
 		return marketing.ServiceInterface{}, nil, err
 	}
@@ -491,10 +563,10 @@ func (s *Service) resolveServiceProviders(ctx context.Context, req serviceProvid
 	return serviceInterface, providers, nil
 }
 
-func (s *Service) filterServiceProviderRuntimeCandidates(ctx context.Context, providers []marketing.ServiceProvider) ([]marketing.ServiceProvider, error) {
+func (s *Service) filterServiceProviderRuntimeCandidates(ctx context.Context, providers []marketing.ServiceProvider, binding marketing.ServiceInterfaceBinding) ([]marketing.ServiceProvider, error) {
 	out := make([]marketing.ServiceProvider, 0, len(providers))
 	for _, provider := range providers {
-		available, _, _, err := s.serviceProviderRuntimeAvailable(ctx, provider)
+		available, _, _, err := s.serviceProviderRuntimeAvailable(ctx, provider, serviceProviderGovernanceConfigOption{Binding: binding})
 		if err != nil {
 			return nil, err
 		}

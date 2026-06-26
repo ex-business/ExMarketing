@@ -1281,6 +1281,7 @@ function isTestActivity(activity: ActivityOption): boolean {
 
 function ValidationIssueRow({ item, onFocus }: { item: WorkflowValidationIssue; onFocus: (item: WorkflowValidationIssue) => void }) {
   const target = [item.nodeId ? `node ${item.nodeId}` : '', item.edgeId ? `edge ${item.edgeId}` : '', item.path ?? ''].filter(Boolean).join(' · ');
+  const assetTarget = [item.assetType ? `asset ${item.assetType}` : '', item.assetRef ? `ref ${item.assetRef}` : '', item.field ? `field ${item.field}` : ''].filter(Boolean).join(' · ');
   const canFocus = Boolean(item.nodeId || item.edgeId);
   return (
     <button
@@ -1293,6 +1294,7 @@ function ValidationIssueRow({ item, onFocus }: { item: WorkflowValidationIssue; 
       <span>
         <b>{item.code}</b>
         <em>{item.message}</em>
+        {assetTarget ? <small>{assetTarget}</small> : null}
         {target ? <small>{target}</small> : null}
       </span>
     </button>

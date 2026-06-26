@@ -981,6 +981,85 @@ curl -X POST http://localhost:8080/openapi/v1/reward/callback \
 签名缺失、过期或不匹配会返回 CALLBACK_SIGNATURE_MISSING / CALLBACK_TIMESTAMP_INVALID / CALLBACK_SIGNATURE_INVALID，且不会更新业务状态
 ```
 
+## Admin Service Governance APIs
+
+Provider health summary:
+
+```http
+GET /admin/v1/provider-health?tenantId=site_001&serviceRef=wallet-service&status=UNHEALTHY
+```
+
+支持按 `tenantId`、`serviceRef`、`interfaceRef`、`providerRef`、`healthStatus`、`circuitStatus`、`status`、`limit`、`offset` 查询。响应返回 `items`、`limit`、`offset`；每项包含 service/interface/provider 引用、运行时 health/circuit 状态、聚合 `status`、最近探活时间/执行人和限流窗口摘要。
+
+Rate-limit policy:
+
+```http
+GET  /admin/v1/service-rate-limit-policies?tenantId=site_001&serviceRef=wallet-service&interfaceRef=query-wallet&providerRef=wallet-primary
+POST /admin/v1/service-rate-limit-policies?tenantId=site_001
+```
+
+`GET` 支持按 `tenantId`、`code`、`serviceRef`、`interfaceRef`、`providerRef`、`status`、`includeDeleted` 和 `limit` 过滤。`POST` 保存 service/interface/provider 维度限流策略，常用字段包括 `code`、`name`、`serviceRef`、`interfaceRef`、`providerRef`、`limit`、`windowSeconds`、`backend`、`scope`、`subjectPath` 和 `status`。Binding 的 `rateLimitRef` 非空时运行时按 policy `code` 精确解析；为空时按 provider -> interface -> service -> tenant 维度匹配。
+
+## Admin Migration APIs
+
+DB migration:
+
+```http
+GET  /admin/v1/db-migrations/status
+POST /admin/v1/db-migrations/analyze
+POST /admin/v1/db-migrations/apply
+```
+
+权限：必须带 `X-Actor-Id`，并满足 `X-Platform-Admin: true` + `X-Platform-Role: ADMIN|OWNER|PLATFORM_ADMIN`，或 actor 是当前 `tenantId` 下 active workspace 的 `OWNER/ADMIN`。
+
+真实 apply 除管理员权限外，还必须提交：
+
+```json
+{
+  "confirm": true,
+  "confirmation": "APPLY_DB_MIGRATIONS",
+  "breakGlass": true,
+  "breakGlassScope": "db-migration:apply",
+  "breakGlassActor": "ops",
+  "breakGlassExpiresAt": "2026-06-26T10:00:00Z",
+  "breakGlassTicket": "OPS-123",
+  "reason": "release migration"
+}
+```
+
+`breakGlassActor` 必须等于 `X-Actor-Id`，`breakGlassExpiresAt` 必须未过期且不超过 2 小时。空 body 或 `{"dryRun":true}` 只返回 analyze 结果，不执行 apply。
+
+Workflow legacy service-interface migration:
+
+```http
+POST /admin/v1/workflows/{activityId}/migration/service-interface/analyze
+POST /admin/v1/workflows/{activityId}/migration/service-interface/apply
+```
+
+权限：actor 必须对 activity 所在 workspace 具备 `ADMIN/OWNER`。接口只作用于 draft，不改已发布 version。
+
+`analyze` 返回 `data.status`、`summary`、`items` 和 `blockers`。`apply` 支持：
+
+```json
+{
+  "dryRun": false,
+  "confirm": true,
+  "confirmation": "APPLY_WORKFLOW_SERVICE_INTERFACE_MIGRATION",
+  "paths": ["nodes[0].config.providerChain[0]"],
+  "reason": "migrate legacy provider fields"
+}
+```
+
+有 `serviceRef + interfaceRef` 的 legacy provider/fact step 会迁为 `SERVICE_INTERFACE`；有 `resourceRef` 或 `redisRef` 的 legacy resource/redis step 会迁为 `RESOURCE`。只有直接 `endpoint/providerEndpoint/providerCode/grpcTarget/pluginCode` 且缺少治理引用的项只返回 blocker，不会被 apply 自动修改。
+
+Migration audit:
+
+```http
+GET /admin/v1/migration-audit-logs?tenantId=site_001&migrationType=DB&operation=DRY_RUN
+```
+
+支持按 `tenantId`、`workspaceId`、`folderId`、`activityId`、`migrationType`、`operation`、`actor`、`result`、`cursor`、`limit` 查询。`migrationType` 当前包括 `DB` 和 `WORKFLOW_SERVICE_INTERFACE`；`operation` 包括 `ANALYZE`、`DRY_RUN`、`APPLY`。记录字段包含 actor、scope、breakGlassTicket、summary、itemsCount、blockersCount、result、error、createdAt。summary/error 写入前会脱敏并做大小限制。
+
 ## 审计查询
 
 ```http
@@ -1012,3 +1091,11 @@ MANUAL_GRANT_EXPORT_STATUS
 `tenantId` 必填。支持按 `tenantId`、`actor`、`action`、`resource`、`resourceId`、`activityId`、`eventId`、`commandId`、`startTime`、`endTime`、`traceId`、`requestId` 和 `limit` 过滤，默认 `limit=100`，最大 `500`。默认按 `createdAt` 倒序返回。`startTime` / `endTime` 使用 RFC3339，服务端按 `createdAt >= startTime` 且 `createdAt < endTime` 过滤；`traceId` / `requestId` 精确匹配 `payload.source.traceId` / `payload.source.requestId`，历史缺少 source 摘要的记录不会被补造。
 
 创建、配置修改、审批和模拟类审计 payload 包含 `beforeSnapshot` / `afterSnapshot`；失败类审计在 payload 中记录错误上下文。所有审计 payload 包含 `source` 摘要。人工 HTTP 来源只记录 method、path、requestId/traceId、脱敏 IP 和 userAgent 摘要，不记录 Authorization、Cookie、token 或 secret。`QUOTA_EXCEEDED` payload 包含 `activityId`、`eventInboxId`、`subject`、`biz`、`quotaType`、`scope`、`scopeKey`、`amount`、`reason` 和 `error`，用于排查预算、库存或次数不足导致的发奖回滚。`GRANT_FAILED` payload 包含 `grantOrderId`、`commandId`、失败状态、消息摘要和完成时间。
+
+Provider decision audit:
+
+```http
+GET /admin/v1/provider-decision-audit-logs?tenantId=site_001&activityId=activity_handler&serviceRef=user-profile-service&interfaceRef=query-user-profile&providerRef=user-profile-provider-primary
+```
+
+支持按 `tenantId`、`workspaceId`、`folderId`、`activityId`、`nodeId`、`serviceRef`、`interfaceRef`、`providerRef`、`decision`、`cursor`、`limit` 查询。`decision` 包括 `selected`、`skipped`、`fallback`、`rate_limited`、`unhealthy`、`circuit_open`、`schema_failed`。记录字段包含 providerPolicy、candidateProviderRef、reason、latencyMs、weight、environment、mock、traceId/runId、createdAt 和 details 摘要；details 只保存类型、top-level keys、size/hash 和状态字段，不保存 provider output/request/response 明文值。

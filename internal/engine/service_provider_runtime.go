@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,10 +27,17 @@ type serviceProviderRuntimeConfig struct {
 	RateLimitWindow          time.Duration
 	RateLimitPolicyRef       string
 	RateLimitBackend         marketing.ServiceRateLimitBackend
+	RateLimitScope           string
 	CircuitThreshold         int
 	CircuitCooldown          time.Duration
 	HalfOpenProbeLimit       int
 	HalfOpenSuccessThreshold int
+}
+
+type workerLeaseRepository interface {
+	AcquireWorkerLease(ctx context.Context, cmd marketing.WorkerLeaseAcquireCommand) (marketing.WorkerLease, bool, error)
+	RenewWorkerLease(ctx context.Context, cmd marketing.WorkerLeaseAcquireCommand) (marketing.WorkerLease, bool, error)
+	ReleaseWorkerLease(ctx context.Context, name string, owner string, now time.Time) error
 }
 
 func (s *Service) SaveServiceProviderRuntimeState(ctx context.Context, state marketing.ServiceProviderRuntimeState) (marketing.ServiceProviderRuntimeState, error) {
@@ -44,10 +52,114 @@ func (s *Service) ListServiceProviderRuntimeStates(ctx context.Context, query ma
 	return s.repository.ListServiceProviderRuntimeStates(ctx, query)
 }
 
+func (s *Service) AcquireWorkerLease(ctx context.Context, cmd marketing.WorkerLeaseAcquireCommand) (marketing.WorkerLease, bool, error) {
+	repository, ok := s.repository.(workerLeaseRepository)
+	if !ok {
+		return marketing.WorkerLease{}, false, errors.New("WORKER_LEASE_REPOSITORY_NOT_CONFIGURED")
+	}
+	if cmd.Now.IsZero() {
+		cmd.Now = s.now()
+	}
+	return repository.AcquireWorkerLease(ctx, cmd)
+}
+
+func (s *Service) ReleaseWorkerLease(ctx context.Context, name string, owner string) error {
+	repository, ok := s.repository.(workerLeaseRepository)
+	if !ok {
+		return errors.New("WORKER_LEASE_REPOSITORY_NOT_CONFIGURED")
+	}
+	return repository.ReleaseWorkerLease(ctx, name, owner, s.now())
+}
+
+func (s *Service) RenewWorkerLease(ctx context.Context, cmd marketing.WorkerLeaseAcquireCommand) (marketing.WorkerLease, bool, error) {
+	repository, ok := s.repository.(workerLeaseRepository)
+	if !ok {
+		return marketing.WorkerLease{}, false, errors.New("WORKER_LEASE_REPOSITORY_NOT_CONFIGURED")
+	}
+	if cmd.Now.IsZero() {
+		cmd.Now = s.now()
+	}
+	return repository.RenewWorkerLease(ctx, cmd)
+}
+
+func (s *Service) ListServiceProviderHealthSummaries(ctx context.Context, query marketing.ServiceProviderHealthSummaryQuery) ([]marketing.ServiceProviderHealthSummary, error) {
+	limit := query.Limit
+	if limit <= 0 || limit > 500 {
+		limit = 500
+	}
+	offset := query.Offset
+	if offset < 0 {
+		offset = 0
+	}
+	const providerPageSize = 500
+	items := make([]marketing.ServiceProviderHealthSummary, 0, limit)
+	matched := 0
+	for providerOffset := 0; ; providerOffset += providerPageSize {
+		providers, err := s.ListServiceProviders(ctx, marketing.ServiceProviderQuery{
+			TenantID:     query.TenantID,
+			ServiceRef:   query.ServiceRef,
+			InterfaceRef: query.InterfaceRef,
+			Status:       marketing.ServiceAssetActive,
+			Code:         query.ProviderRef,
+			Limit:        providerPageSize,
+			Offset:       providerOffset,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if len(providers) == 0 {
+			break
+		}
+		for _, provider := range providers {
+			state, err := s.serviceProviderRuntimeState(ctx, provider)
+			if err != nil {
+				return nil, err
+			}
+			if query.HealthStatus != "" && state.HealthStatus != query.HealthStatus {
+				continue
+			}
+			if query.CircuitStatus != "" && state.CircuitStatus != query.CircuitStatus {
+				continue
+			}
+			summary, err := s.serviceProviderHealthSummary(ctx, provider, state)
+			if err != nil {
+				return nil, err
+			}
+			if query.Status != "" && !strings.EqualFold(summary.Status, query.Status) {
+				continue
+			}
+			if matched < offset {
+				matched++
+				continue
+			}
+			if len(items) < limit {
+				items = append(items, summary)
+			}
+			matched++
+			if len(items) >= limit {
+				return items, nil
+			}
+		}
+		if len(providers) < providerPageSize {
+			break
+		}
+	}
+	return items, nil
+}
+
 func (s *Service) SaveServiceRateLimitPolicy(ctx context.Context, policy marketing.ServiceRateLimitPolicy) (marketing.ServiceRateLimitPolicy, error) {
 	policy = s.normalizeServiceRateLimitPolicy(policy)
 	if err := policy.Validate(); err != nil {
 		return marketing.ServiceRateLimitPolicy{}, err
+	}
+	if strings.TrimSpace(policy.InterfaceRef) != "" {
+		if err := s.ensureServiceInterfaceActiveIfPresent(ctx, policy.TenantID, policy.ServiceRef, policy.InterfaceRef); err != nil {
+			return marketing.ServiceRateLimitPolicy{}, err
+		}
+	} else if strings.TrimSpace(policy.ServiceRef) != "" {
+		if err := s.ensureServiceDefinitionActiveIfPresent(ctx, policy.TenantID, policy.ServiceRef); err != nil {
+			return marketing.ServiceRateLimitPolicy{}, err
+		}
 	}
 	return s.repository.SaveServiceRateLimitPolicy(ctx, policy)
 }
@@ -204,12 +316,16 @@ func (s *Service) serviceProviderRuntimeState(ctx context.Context, provider mark
 	return s.SaveServiceProviderRuntimeState(ctx, state)
 }
 
-func (s *Service) serviceProviderRuntimeAvailable(ctx context.Context, provider marketing.ServiceProvider) (bool, string, string, error) {
+type serviceProviderGovernanceConfigOption struct {
+	Binding marketing.ServiceInterfaceBinding
+}
+
+func (s *Service) serviceProviderRuntimeAvailable(ctx context.Context, provider marketing.ServiceProvider, options ...serviceProviderGovernanceConfigOption) (bool, string, string, error) {
 	state, err := s.serviceProviderRuntimeState(ctx, provider)
 	if err != nil {
 		return false, "", "", err
 	}
-	cfg, err := s.serviceProviderGovernanceConfig(ctx, provider)
+	cfg, err := s.serviceProviderGovernanceConfig(ctx, provider, options...)
 	if err != nil {
 		return false, "", "", err
 	}
@@ -227,18 +343,23 @@ func (s *Service) serviceProviderRuntimeAvailable(ctx context.Context, provider 
 	if state.HealthStatus == marketing.ServiceProviderHealthUnhealthy && !halfOpenEligible && state.CircuitStatus != marketing.ServiceProviderCircuitHalfOpen {
 		return false, "SERVICE_PROVIDER_UNHEALTHY", state.HealthMessage, nil
 	}
-	if serviceProviderRateLimitExceeded(state, cfg, now) {
+	if cfg.RateLimitBackend != marketing.ServiceRateLimitBackendRedis && serviceProviderRateLimitExceeded(state, cfg, now) {
 		return false, "SERVICE_PROVIDER_RATE_LIMITED", "provider rate limit exceeded", nil
 	}
 	return true, "", "", nil
 }
 
-func (s *Service) consumeServiceProviderRuntime(ctx context.Context, provider marketing.ServiceProvider) (marketing.ServiceProviderRuntimeState, error) {
+type serviceProviderRuntimeConsumeOption struct {
+	Subject marketing.EventSubject
+	Binding marketing.ServiceInterfaceBinding
+}
+
+func (s *Service) consumeServiceProviderRuntime(ctx context.Context, provider marketing.ServiceProvider, options ...serviceProviderRuntimeConsumeOption) (marketing.ServiceProviderRuntimeState, error) {
 	state, err := s.serviceProviderRuntimeState(ctx, provider)
 	if err != nil {
 		return marketing.ServiceProviderRuntimeState{}, err
 	}
-	cfg, err := s.serviceProviderGovernanceConfig(ctx, provider)
+	cfg, err := s.serviceProviderGovernanceConfig(ctx, provider, serviceProviderRuntimeGovernanceOption(options))
 	if err != nil {
 		return marketing.ServiceProviderRuntimeState{}, err
 	}
@@ -268,12 +389,27 @@ func (s *Service) consumeServiceProviderRuntime(ctx context.Context, provider ma
 		}
 		state = saved
 	}
-	state, consumed, err := s.repository.ConsumeServiceProviderRateLimit(ctx, marketing.ServiceProviderRateLimitConsume{
-		State:  state,
-		Limit:  cfg.RateLimitPerWindow,
-		Window: cfg.RateLimitWindow,
-		Now:    now,
-	})
+	subject := serviceProviderRuntimeSubject(options)
+	consume := marketing.ServiceProviderRateLimitConsume{
+		State:       state,
+		PolicyRef:   cfg.RateLimitPolicyRef,
+		Limit:       cfg.RateLimitPerWindow,
+		Window:      cfg.RateLimitWindow,
+		Now:         now,
+		Scope:       serviceProviderRateLimitScope(cfg, subject),
+		SubjectType: strings.TrimSpace(subject.Type),
+		SubjectID:   strings.TrimSpace(subject.ID),
+		SubjectHash: serviceProviderRateLimitSubjectHash(cfg, subject),
+	}
+	var consumed bool
+	if cfg.RateLimitBackend == marketing.ServiceRateLimitBackendRedis {
+		if s.redisRateLimiter == nil {
+			return marketing.ServiceProviderRuntimeState{}, ErrServiceRateLimitRedisNotConfigured
+		}
+		state, consumed, err = s.redisRateLimiter.ConsumeServiceProviderRateLimit(ctx, consume)
+	} else {
+		state, consumed, err = s.repository.ConsumeServiceProviderRateLimit(ctx, consume)
+	}
 	if err != nil {
 		return marketing.ServiceProviderRuntimeState{}, err
 	}
@@ -346,6 +482,65 @@ func (s *Service) recordServiceProviderFailure(ctx context.Context, provider mar
 	return err
 }
 
+func (s *Service) serviceProviderHealthSummary(ctx context.Context, provider marketing.ServiceProvider, state marketing.ServiceProviderRuntimeState) (marketing.ServiceProviderHealthSummary, error) {
+	status := string(state.HealthStatus)
+	cfg, err := s.serviceProviderGovernanceConfig(ctx, provider)
+	if err != nil {
+		return marketing.ServiceProviderHealthSummary{}, err
+	}
+	if state.CircuitStatus == marketing.ServiceProviderCircuitOpen {
+		status = "CIRCUIT_OPEN"
+	} else if cfg.RateLimitBackend != marketing.ServiceRateLimitBackendRedis && serviceProviderRateLimitExceeded(state, cfg, s.now()) {
+		status = "RATE_LIMITED"
+	}
+	lastCheckedAt, lastCheckedBy := serviceProviderLastHealthCheck(state.Metadata)
+	rateLimitWindow := (*time.Time)(nil)
+	if !state.RateLimitWindow.IsZero() {
+		value := state.RateLimitWindow
+		rateLimitWindow = &value
+	}
+	return marketing.ServiceProviderHealthSummary{
+		TenantID:         provider.TenantID,
+		ServiceRef:       provider.ServiceRef,
+		InterfaceRef:     provider.InterfaceRef,
+		ProviderRef:      provider.Code,
+		ProviderName:     provider.Name,
+		ProviderStatus:   provider.Status,
+		Protocol:         provider.Protocol,
+		HealthStatus:     state.HealthStatus,
+		CircuitStatus:    state.CircuitStatus,
+		Status:           status,
+		HealthMessage:    state.HealthMessage,
+		RateLimitCount:   state.RateLimitCount,
+		RateLimitWindow:  rateLimitWindow,
+		LastCheckedAt:    lastCheckedAt,
+		LastCheckedBy:    lastCheckedBy,
+		LastSuccessAt:    state.LastSuccessAt,
+		LastFailureAt:    state.LastFailureAt,
+		CircuitOpenedAt:  state.CircuitOpenedAt,
+		CircuitResetAt:   state.CircuitResetAt,
+		RuntimeUpdatedAt: state.UpdatedAt,
+	}, nil
+}
+
+func serviceProviderLastHealthCheck(raw json.RawMessage) (*time.Time, string) {
+	metadata := map[string]any{}
+	if len(raw) == 0 || json.Unmarshal(raw, &metadata) != nil {
+		return nil, ""
+	}
+	actor, _ := metadata["lastHealthCheckBy"].(string)
+	value, _ := metadata["lastHealthCheckAt"].(string)
+	if strings.TrimSpace(value) == "" {
+		return nil, strings.TrimSpace(actor)
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(value))
+	if err != nil {
+		return nil, strings.TrimSpace(actor)
+	}
+	parsed = parsed.UTC()
+	return &parsed, strings.TrimSpace(actor)
+}
+
 func serviceProviderHealthCheckResourceRef(provider marketing.ServiceProvider) string {
 	if len(provider.ResourceRefs) > 0 {
 		return strings.TrimSpace(provider.ResourceRefs[0])
@@ -381,7 +576,44 @@ func serviceProviderRateLimitExceeded(state marketing.ServiceProviderRuntimeStat
 	return state.RateLimitCount >= cfg.RateLimitPerWindow
 }
 
-func (s *Service) serviceProviderGovernanceConfig(ctx context.Context, provider marketing.ServiceProvider) (serviceProviderRuntimeConfig, error) {
+func serviceProviderRuntimeSubject(options []serviceProviderRuntimeConsumeOption) marketing.EventSubject {
+	if len(options) == 0 {
+		return marketing.EventSubject{}
+	}
+	return options[0].Subject
+}
+
+func serviceProviderRuntimeGovernanceOption(options []serviceProviderRuntimeConsumeOption) serviceProviderGovernanceConfigOption {
+	if len(options) == 0 {
+		return serviceProviderGovernanceConfigOption{}
+	}
+	return serviceProviderGovernanceConfigOption{Binding: options[0].Binding}
+}
+
+func serviceProviderRateLimitScope(cfg serviceProviderRuntimeConfig, subject marketing.EventSubject) string {
+	if strings.EqualFold(strings.TrimSpace(cfg.RateLimitScope), "GLOBAL") {
+		return "GLOBAL"
+	}
+	if strings.TrimSpace(subject.Type) == "" || strings.TrimSpace(subject.ID) == "" {
+		return "ANONYMOUS"
+	}
+	return "SUBJECT"
+}
+
+func serviceProviderRateLimitSubjectHash(cfg serviceProviderRuntimeConfig, subject marketing.EventSubject) string {
+	scope := serviceProviderRateLimitScope(cfg, subject)
+	switch scope {
+	case "GLOBAL":
+		return "global"
+	case "ANONYMOUS":
+		return "anonymous"
+	default:
+		sum := sha256.Sum256([]byte(strings.TrimSpace(subject.Type) + "\x00" + strings.TrimSpace(subject.ID)))
+		return fmt.Sprintf("sha256:%x", sum[:])
+	}
+}
+
+func (s *Service) serviceProviderGovernanceConfig(ctx context.Context, provider marketing.ServiceProvider, options ...serviceProviderGovernanceConfigOption) (serviceProviderRuntimeConfig, error) {
 	cfg := serviceProviderRuntimeConfig{
 		RateLimitPerWindow:       defaultProviderRateLimitPerWindow,
 		RateLimitWindow:          defaultProviderRateLimitWindow,
@@ -404,13 +636,25 @@ func (s *Service) serviceProviderGovernanceConfig(ctx context.Context, provider 
 		cfg.HalfOpenProbeLimit = serviceProviderConfigInt(raw, cfg.HalfOpenProbeLimit, "halfOpenProbeLimit", "probeLimit")
 		cfg.HalfOpenSuccessThreshold = serviceProviderConfigInt(raw, cfg.HalfOpenSuccessThreshold, "halfOpenSuccessThreshold", "probeSuccessThreshold")
 	}
-	if policy, ok, err := s.matchServiceRateLimitPolicy(ctx, provider); err != nil {
+	binding := serviceProviderGovernanceBinding(options)
+	if strings.TrimSpace(binding.RateLimitRef) != "" {
+		policy, err := s.matchBindingServiceRateLimitPolicy(ctx, provider, binding)
+		if err != nil {
+			return cfg, err
+		}
+		cfg.RateLimitPolicyRef = policy.Code
+		cfg.RateLimitPerWindow = policy.Limit
+		cfg.RateLimitWindow = time.Duration(policy.WindowSeconds) * time.Second
+		cfg.RateLimitBackend = policy.Backend
+		cfg.RateLimitScope = serviceRateLimitPolicyRuntimeScope(policy)
+	} else if policy, ok, err := s.matchServiceRateLimitPolicy(ctx, provider); err != nil {
 		return cfg, err
 	} else if ok {
 		cfg.RateLimitPolicyRef = policy.Code
 		cfg.RateLimitPerWindow = policy.Limit
 		cfg.RateLimitWindow = time.Duration(policy.WindowSeconds) * time.Second
 		cfg.RateLimitBackend = policy.Backend
+		cfg.RateLimitScope = serviceRateLimitPolicyRuntimeScope(policy)
 	}
 	if cfg.RateLimitPerWindow < 0 {
 		cfg.RateLimitPerWindow = 0
@@ -431,6 +675,25 @@ func (s *Service) serviceProviderGovernanceConfig(ctx context.Context, provider 
 		cfg.HalfOpenSuccessThreshold = defaultProviderHalfOpenSuccessThreshold
 	}
 	return cfg, nil
+}
+
+func serviceProviderGovernanceBinding(options []serviceProviderGovernanceConfigOption) marketing.ServiceInterfaceBinding {
+	if len(options) == 0 {
+		return marketing.ServiceInterfaceBinding{}
+	}
+	return options[0].Binding
+}
+
+func serviceRateLimitPolicyRuntimeScope(policy marketing.ServiceRateLimitPolicy) string {
+	var metadata map[string]any
+	if len(policy.Metadata) > 0 && json.Unmarshal(policy.Metadata, &metadata) == nil {
+		for _, key := range []string{"rateLimitScope", "runtimeScope", "redisScope"} {
+			if value := workflowOutputString(metadata[key]); strings.EqualFold(strings.TrimSpace(value), "GLOBAL") {
+				return "GLOBAL"
+			}
+		}
+	}
+	return "SUBJECT"
 }
 
 func (s *Service) matchServiceRateLimitPolicy(ctx context.Context, provider marketing.ServiceProvider) (marketing.ServiceRateLimitPolicy, bool, error) {
@@ -455,6 +718,47 @@ func (s *Service) matchServiceRateLimitPolicy(ctx context.Context, provider mark
 		}
 	}
 	return best, bestScore >= 0, nil
+}
+
+func (s *Service) matchBindingServiceRateLimitPolicy(ctx context.Context, provider marketing.ServiceProvider, binding marketing.ServiceInterfaceBinding) (marketing.ServiceRateLimitPolicy, error) {
+	ref := strings.TrimSpace(binding.RateLimitRef)
+	if ref == "" {
+		return marketing.ServiceRateLimitPolicy{}, errors.New("SERVICE_RATE_LIMIT_POLICY_REF_REQUIRED")
+	}
+	policies, err := s.repository.ListServiceRateLimitPolicies(ctx, marketing.ServiceRateLimitPolicyQuery{
+		Code:           ref,
+		IncludeDeleted: true,
+		Limit:          500,
+	})
+	if err != nil {
+		return marketing.ServiceRateLimitPolicy{}, err
+	}
+	var tenantMatched marketing.ServiceRateLimitPolicy
+	otherTenant := false
+	for _, policy := range policies {
+		if policy.Code != ref {
+			continue
+		}
+		if policy.TenantID != provider.TenantID {
+			otherTenant = true
+			continue
+		}
+		tenantMatched = policy
+		break
+	}
+	if tenantMatched.Code == "" {
+		if otherTenant {
+			return marketing.ServiceRateLimitPolicy{}, fmt.Errorf("SERVICE_RATE_LIMIT_POLICY_TENANT_DENIED:%s", ref)
+		}
+		return marketing.ServiceRateLimitPolicy{}, fmt.Errorf("SERVICE_RATE_LIMIT_POLICY_NOT_FOUND:%s", ref)
+	}
+	if !serviceAssetStatusActive(tenantMatched.Status, tenantMatched.DeletedAt) {
+		return marketing.ServiceRateLimitPolicy{}, fmt.Errorf("SERVICE_RATE_LIMIT_POLICY_DISABLED:%s", ref)
+	}
+	if _, ok := serviceRateLimitPolicyMatchScore(tenantMatched, provider); !ok {
+		return marketing.ServiceRateLimitPolicy{}, fmt.Errorf("SERVICE_RATE_LIMIT_POLICY_SCOPE_DENIED:%s", ref)
+	}
+	return tenantMatched, nil
 }
 
 func serviceRateLimitPolicyMatchScore(policy marketing.ServiceRateLimitPolicy, provider marketing.ServiceProvider) (int, bool) {

@@ -85,6 +85,51 @@ func TestPendingMigrationsSkipsSuccessfulRecords(t *testing.T) {
 	}
 }
 
+func TestServiceAssetSoftDeleteUniqueMigrationDefinesPartialIndexes(t *testing.T) {
+	migrations, err := LoadMigrations("../../db/migration")
+	if err != nil {
+		t.Fatalf("load project migrations: %v", err)
+	}
+	var bindingFields Migration
+	var migration Migration
+	for _, candidate := range migrations {
+		if candidate.FileName == "018_service_interface_binding_long_term_fields.sql" {
+			bindingFields = candidate
+		}
+		if candidate.FileName == "021_service_asset_soft_delete_unique_indexes.sql" {
+			migration = candidate
+		}
+	}
+	if bindingFields.FileName == "" {
+		t.Fatalf("expected service interface binding long-term fields migration")
+	}
+	if migration.FileName == "" {
+		t.Fatalf("expected service asset soft-delete unique migration")
+	}
+	if bindingFields.Version >= migration.Version {
+		t.Fatalf("binding deleted_at migration must run before partial unique indexes: %d >= %d", bindingFields.Version, migration.Version)
+	}
+	if !strings.Contains(bindingFields.SQL, "ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ") {
+		t.Fatalf("expected binding long-term fields migration to add deleted_at")
+	}
+	for _, want := range []string{
+		"marketing_service_active_code_uidx",
+		"marketing_service_interface_active_code_uidx",
+		"marketing_service_provider_active_code_uidx",
+		"marketing_service_schema_active_ref_version_uidx",
+		"marketing_service_interface_binding_active_scope_uidx",
+		"marketing_service_rate_limit_policy_active_code_uidx",
+		"marketing_service_rate_limit_policy_active_scope_uidx",
+	} {
+		if !strings.Contains(migration.SQL, want) {
+			t.Fatalf("expected migration to define %s", want)
+		}
+	}
+	if got := strings.Count(migration.SQL, "WHERE deleted_at IS NULL"); got < 7 {
+		t.Fatalf("expected partial unique indexes on deleted_at, got %d predicates", got)
+	}
+}
+
 func writeMigration(t *testing.T, dir, name, content string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {

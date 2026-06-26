@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Activity, DatabaseZap, FileJson, History, Link2, Network, PlayCircle, Plus, RefreshCw, RotateCcw, Route, ServerCog, ShieldAlert } from 'lucide-react';
-import type { DBMigrationAnalysis, DBMigrationApplyResponse, ResourceSummary, ServiceCallAuditLogSummary, ServiceDefinitionSummary, ServiceInterfaceBindingCheckResult, ServiceInterfaceBindingSummary, ServiceInterfaceSummary, ServiceProviderRuntimeStateSummary, ServiceProviderSummary, ServiceRateLimitPolicySummary, ServiceSchemaSummary } from '../../types';
+import { Activity, DatabaseZap, FileJson, Gauge, GitCompare, History, Link2, Network, PlayCircle, Plus, RefreshCw, RotateCcw, Route, ServerCog, ShieldAlert } from 'lucide-react';
+import type { DBMigrationAnalysis, DBMigrationApplyResponse, ResourceSummary, ServiceCallAuditLogSummary, ServiceDefinitionSummary, ServiceInterfaceBindingCheckResult, ServiceInterfaceBindingSummary, ServiceInterfaceSummary, ServiceProviderRuntimeStateSummary, ServiceProviderSummary, ServiceRateLimitPolicySummary, ServiceSchemaSummary, WorkflowServiceInterfaceMigrationAnalysis, WorkflowServiceInterfaceMigrationApplyResponse } from '../../types';
 import { TaBadge, TaButton, TaEmptyState, TaInput, TaSelect, TaTab, TaTabs } from './TailAdminPrimitives';
 
 type ServiceDraft = {
@@ -79,8 +79,38 @@ type BindingDraft = {
   status: string;
 };
 
+type RateLimitDraft = {
+  code: string;
+  name: string;
+  description: string;
+  serviceRef: string;
+  interfaceRef: string;
+  providerRef: string;
+  backend: string;
+  limit: string;
+  windowSeconds: string;
+  burst: string;
+  status: string;
+  metadataText: string;
+};
+
+type DBMigrationApplyInput = {
+  dryRun: boolean;
+  confirm: boolean;
+  confirmation: string;
+  breakGlass: boolean;
+  breakGlassScope?: string;
+  breakGlassActor?: string;
+  breakGlassExpiresAt?: string;
+  breakGlassTicket?: string;
+  reason: string;
+};
+
 type Props = {
   tenantId: string;
+  actorId?: string;
+  activityId?: string;
+  workflowMigrationTargets?: Array<{ id: string; label: string }>;
   workspaceId?: string;
   folderId?: string;
   resources: ResourceSummary[];
@@ -94,6 +124,8 @@ type Props = {
   rateLimitPolicies: ServiceRateLimitPolicySummary[];
   migrationAnalysis?: DBMigrationAnalysis;
   migrationMessage?: string;
+  workflowMigrationAnalysis?: WorkflowServiceInterfaceMigrationAnalysis;
+  workflowMigrationMessage?: string;
   selectedServiceCode: string;
   selectedInterfaceCode: string;
   selectedService?: ServiceDefinitionSummary;
@@ -108,6 +140,7 @@ type Props = {
   onSaveProvider: (serviceCode: string, interfaceCode: string, provider: Partial<ServiceProviderSummary> & { code: string }) => Promise<void>;
   onSaveSchema: (schema: Partial<ServiceSchemaSummary> & { schemaRef: string }) => Promise<void>;
   onSaveBinding: (binding: Partial<ServiceInterfaceBindingSummary>) => Promise<void>;
+  onSaveRateLimitPolicy: (policy: Partial<ServiceRateLimitPolicySummary> & { code: string }) => Promise<void>;
   onResetProviderCircuit: (serviceCode: string, interfaceCode: string, providerCode: string) => Promise<void>;
   onCheckProviderHealth: (serviceCode: string, interfaceCode: string, providerCode: string) => Promise<void>;
   onValidateSchema: (schema: Partial<ServiceSchemaSummary> & { schemaRef: string }) => Promise<{ valid?: boolean; compatible?: boolean; code?: string; error?: string }>;
@@ -120,7 +153,9 @@ type Props = {
   onTestInterface: (serviceCode: string, interfaceCode: string) => Promise<void>;
   onRefreshMigrationStatus: () => Promise<DBMigrationAnalysis>;
   onAnalyzeMigrations: () => Promise<DBMigrationAnalysis>;
-  onApplyMigrations: (input: { dryRun: boolean; confirm: boolean; confirmation: string; breakGlass: boolean; reason: string }) => Promise<DBMigrationApplyResponse>;
+  onApplyMigrations: (input: DBMigrationApplyInput) => Promise<DBMigrationApplyResponse>;
+  onAnalyzeWorkflowMigration: (activityId: string) => Promise<WorkflowServiceInterfaceMigrationAnalysis>;
+  onApplyWorkflowMigration: (activityId: string, input: { dryRun: boolean; confirm: boolean; confirmation: string; paths: string[]; reason: string }) => Promise<WorkflowServiceInterfaceMigrationApplyResponse>;
 };
 
 const SERVICE_TYPES = ['EXTERNAL', 'INTERNAL', 'SYSTEM'];
@@ -129,6 +164,7 @@ const STATUSES = ['ACTIVE', 'DRAFT', 'DISABLED'];
 const INTERFACE_OPERATIONS = ['CALL', 'PUBLISH', 'REQUEST_REPLY', 'SUBSCRIBE_TRIGGER'];
 const PROVIDER_PROTOCOLS = ['RESOURCE', 'HTTP', 'RPC', 'MQ', 'PLUGIN', 'TCP', 'LUA_ADAPTER'];
 const SCHEMA_TYPES = ['INPUT', 'OUTPUT', 'ERROR'];
+const RATE_LIMIT_BACKENDS = ['POSTGRES', 'REDIS'];
 const PRINCIPAL_TYPES = ['ROLE', 'USER', 'GROUP', 'SERVICE_ACCOUNT', 'WORKSPACE', 'FOLDER', 'ACTIVITY', 'NODE'];
 const PROVIDER_POLICIES = ['PRIMARY', 'PRIMARY_WITH_FALLBACK', 'CACHE_ASIDE', 'WEIGHTED', 'WEIGHTED_WITH_FALLBACK', 'ENVIRONMENT_MATCH', 'MOCK_ONLY'];
 
@@ -168,6 +204,14 @@ function parseJson(text: string, fallback: unknown): unknown {
   const trimmed = text.trim();
   if (!trimmed) return fallback;
   return JSON.parse(trimmed) as unknown;
+}
+
+function parseIntegerField(value: string, label: string, min: number): number {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < min) {
+    throw new Error(`${label} 必须是${min > 0 ? '正整数' : '非负整数'}`);
+  }
+  return parsed;
 }
 
 function serviceDraft(service: ServiceDefinitionSummary | undefined, workspaceId?: string, folderId?: string): ServiceDraft {
@@ -262,6 +306,24 @@ function bindingDraft(binding: ServiceInterfaceBindingSummary | undefined, servi
   };
 }
 
+function rateLimitDraft(policy: ServiceRateLimitPolicySummary | undefined, serviceCode: string, interfaceCode: string, providerCode = ''): RateLimitDraft {
+  const metadata = policy?.metadata ?? {};
+  return {
+    code: policy?.code ?? '',
+    name: policy?.name ?? '',
+    description: policy?.description ?? '',
+    serviceRef: policy?.serviceRef ?? serviceCode,
+    interfaceRef: policy?.interfaceRef ?? interfaceCode,
+    providerRef: policy?.providerRef ?? providerCode,
+    backend: policy?.backend ?? 'POSTGRES',
+    limit: String(policy?.limit ?? 100),
+    windowSeconds: String(policy?.windowSeconds ?? 60),
+    burst: metadata.burst == null ? '' : String(metadata.burst),
+    status: policy?.status ?? 'ACTIVE',
+    metadataText: JSON.stringify(metadata, null, 2),
+  };
+}
+
 function statusTone(status: string): 'success' | 'warning' | 'error' | 'gray' {
   if (status === 'ACTIVE') return 'success';
   if (status === 'DRAFT') return 'warning';
@@ -285,6 +347,14 @@ function rateLimitPolicyLabel(policy: ServiceRateLimitPolicySummary): string {
   return `${policy.code} · ${target} · ${policy.limit}/${policy.windowSeconds}s · ${policy.backend}`;
 }
 
+function workflowMigrationTone(analysis?: WorkflowServiceInterfaceMigrationAnalysis): 'success' | 'warning' | 'error' | 'gray' {
+  if (!analysis) return 'gray';
+  if (analysis.status === 'BLOCKED' || analysis.summary.blockers > 0) return 'error';
+  if (analysis.status === 'NEEDS_REVIEW' || analysis.summary.manualReview > 0) return 'warning';
+  if (analysis.summary.legacySteps === 0) return 'success';
+  return 'warning';
+}
+
 function migrationTone(analysis?: DBMigrationAnalysis): 'success' | 'warning' | 'error' | 'gray' {
   if (!analysis) return 'gray';
   if (analysis.drift || analysis.errors?.length) return 'error';
@@ -294,6 +364,9 @@ function migrationTone(analysis?: DBMigrationAnalysis): 'success' | 'warning' | 
 
 export function ServiceCapabilityManagement({
   tenantId,
+  actorId = '',
+  activityId = '',
+  workflowMigrationTargets = [],
   workspaceId,
   folderId,
   resources,
@@ -307,6 +380,8 @@ export function ServiceCapabilityManagement({
   rateLimitPolicies,
   migrationAnalysis,
   migrationMessage = '',
+  workflowMigrationAnalysis,
+  workflowMigrationMessage = '',
   selectedServiceCode,
   selectedInterfaceCode,
   selectedService,
@@ -321,6 +396,7 @@ export function ServiceCapabilityManagement({
   onSaveProvider,
   onSaveSchema,
   onSaveBinding,
+  onSaveRateLimitPolicy,
   onResetProviderCircuit,
   onCheckProviderHealth,
   onValidateSchema,
@@ -334,14 +410,17 @@ export function ServiceCapabilityManagement({
   onRefreshMigrationStatus,
   onAnalyzeMigrations,
   onApplyMigrations,
+  onAnalyzeWorkflowMigration,
+  onApplyWorkflowMigration,
 }: Props) {
-  const [tab, setTab] = useState<'overview' | 'service' | 'interface' | 'provider' | 'schema' | 'binding' | 'audit' | 'migration'>('overview');
+  const [tab, setTab] = useState<'overview' | 'service' | 'interface' | 'provider' | 'schema' | 'binding' | 'rateLimit' | 'audit' | 'migration'>('overview');
   const [query, setQuery] = useState('');
   const [serviceForm, setServiceForm] = useState<ServiceDraft>(() => serviceDraft(selectedService, workspaceId, folderId));
   const [interfaceForm, setInterfaceForm] = useState<InterfaceDraft>(() => interfaceDraft(selectedInterface));
   const [providerForm, setProviderForm] = useState<ProviderDraft>(() => providerDraft(providers[0], resources));
   const [schemaForm, setSchemaForm] = useState<SchemaDraft>(() => schemaDraft());
   const [bindingForm, setBindingForm] = useState<BindingDraft>(() => bindingDraft(undefined, selectedServiceCode, selectedInterfaceCode, workspaceId, folderId));
+  const [rateLimitForm, setRateLimitForm] = useState<RateLimitDraft>(() => rateLimitDraft(undefined, selectedServiceCode, selectedInterfaceCode));
   const [error, setError] = useState('');
   const [schemaCheck, setSchemaCheck] = useState('');
   const [schemaCompatibilityCheck, setSchemaCompatibilityCheck] = useState('');
@@ -351,7 +430,16 @@ export function ServiceCapabilityManagement({
   const [migrationApplyConfirm, setMigrationApplyConfirm] = useState('');
   const [migrationApplyReason, setMigrationApplyReason] = useState('');
   const [migrationBreakGlass, setMigrationBreakGlass] = useState(false);
+  const [migrationBreakGlassScope, setMigrationBreakGlassScope] = useState('db-migration:apply');
+  const [migrationBreakGlassActor, setMigrationBreakGlassActor] = useState('');
+  const [migrationBreakGlassTicket, setMigrationBreakGlassTicket] = useState('');
+  const [migrationBreakGlassExpiresAt, setMigrationBreakGlassExpiresAt] = useState('');
   const [migrationActionMessage, setMigrationActionMessage] = useState('');
+  const [workflowMigrationActivityId, setWorkflowMigrationActivityId] = useState(activityId || workflowMigrationTargets[0]?.id || '');
+  const [workflowMigrationConfirm, setWorkflowMigrationConfirm] = useState('');
+  const [workflowMigrationReason, setWorkflowMigrationReason] = useState('');
+  const [workflowMigrationActionMessage, setWorkflowMigrationActionMessage] = useState('');
+  const [selectedWorkflowMigrationPaths, setSelectedWorkflowMigrationPaths] = useState<Set<string>>(() => new Set());
 
   useEffect(() => {
     setServiceForm(serviceDraft(selectedService, workspaceId, folderId));
@@ -377,6 +465,39 @@ export function ServiceCapabilityManagement({
       folderId,
     ));
   }, [bindings, folderId, selectedInterfaceCode, selectedServiceCode, workspaceId]);
+
+  useEffect(() => {
+    const firstPolicy = rateLimitPolicies.find((policy) => (
+      policy.serviceRef === selectedServiceCode &&
+      policy.interfaceRef === selectedInterfaceCode &&
+      (!providerForm.code || !policy.providerRef || policy.providerRef === providerForm.code)
+    ));
+    setRateLimitForm(rateLimitDraft(firstPolicy, selectedServiceCode, selectedInterfaceCode, providerForm.code));
+  }, [providerForm.code, rateLimitPolicies, selectedInterfaceCode, selectedServiceCode]);
+
+  useEffect(() => {
+    const paths = new Set((workflowMigrationAnalysis?.items ?? [])
+      .filter((item) => !item.blockingIssues?.length)
+      .map((item) => item.path));
+    setSelectedWorkflowMigrationPaths(paths);
+  }, [workflowMigrationAnalysis]);
+
+  useEffect(() => {
+    if (!migrationBreakGlass) return;
+    if (!migrationBreakGlassScope) setMigrationBreakGlassScope('db-migration:apply');
+    if (!migrationBreakGlassActor && actorId) setMigrationBreakGlassActor(actorId);
+    if (!migrationBreakGlassExpiresAt) setMigrationBreakGlassExpiresAt(new Date(Date.now() + 30 * 60 * 1000).toISOString());
+  }, [actorId, migrationBreakGlass, migrationBreakGlassActor, migrationBreakGlassExpiresAt, migrationBreakGlassScope]);
+
+  useEffect(() => {
+    if (activityId) {
+      setWorkflowMigrationActivityId(activityId);
+      return;
+    }
+    if (!workflowMigrationActivityId && workflowMigrationTargets[0]?.id) {
+      setWorkflowMigrationActivityId(workflowMigrationTargets[0].id);
+    }
+  }, [activityId, workflowMigrationActivityId, workflowMigrationTargets]);
 
   const filteredServices = useMemo(() => {
     const keyword = query.trim().toLowerCase();
@@ -450,6 +571,18 @@ export function ServiceCapabilityManagement({
   const selectBinding = (binding: ServiceInterfaceBindingSummary) => {
     setBindingForm(bindingDraft(binding, selectedServiceCode, selectedInterfaceCode, workspaceId, folderId));
     setTab('binding');
+    setError('');
+  };
+
+  const startRateLimitPolicy = () => {
+    setRateLimitForm(rateLimitDraft(undefined, selectedServiceCode, selectedInterfaceCode, providerForm.code));
+    setTab('rateLimit');
+    setError('');
+  };
+
+  const selectRateLimitPolicy = (policy: ServiceRateLimitPolicySummary) => {
+    setRateLimitForm(rateLimitDraft(policy, selectedServiceCode, selectedInterfaceCode, providerForm.code));
+    setTab('rateLimit');
     setError('');
   };
 
@@ -640,6 +773,40 @@ export function ServiceCapabilityManagement({
     }
   };
 
+  const rateLimitPayload = (): Partial<ServiceRateLimitPolicySummary> & { code: string } => {
+    const metadata = parseObject(rateLimitForm.metadataText);
+    const limit = parseIntegerField(rateLimitForm.limit, 'Limit', 0);
+    const windowSeconds = parseIntegerField(rateLimitForm.windowSeconds, 'Window Seconds', 1);
+    if (rateLimitForm.burst.trim()) {
+      metadata.burst = parseIntegerField(rateLimitForm.burst, 'Burst', 0);
+    } else {
+      delete metadata.burst;
+    }
+    return {
+      tenantId,
+      code: rateLimitForm.code.trim(),
+      name: rateLimitForm.name.trim(),
+      description: rateLimitForm.description.trim(),
+      serviceRef: rateLimitForm.serviceRef.trim(),
+      interfaceRef: rateLimitForm.interfaceRef.trim(),
+      providerRef: rateLimitForm.providerRef.trim(),
+      backend: rateLimitForm.backend,
+      limit,
+      windowSeconds,
+      status: rateLimitForm.status,
+      metadata,
+    };
+  };
+
+  const submitRateLimitPolicy = async () => {
+    try {
+      setError('');
+      await onSaveRateLimitPolicy(rateLimitPayload());
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+
   const selectedProviderRuntime = providerForm.code ? runtimeStates[providerForm.code] : undefined;
   const selectedProviderUnavailableReason = selectedProviderRuntime?.circuitStatus === 'OPEN'
     ? 'CIRCUIT_OPEN'
@@ -671,6 +838,11 @@ export function ServiceCapabilityManagement({
   const activeSchemas = schemas.filter(isActiveAsset);
   const activeBindings = bindings.filter(isActiveAsset);
   const activeRateLimitPolicies = rateLimitPolicies.filter(isActiveAsset);
+  const matchingRateLimitPolicies = rateLimitPolicies.filter((policy) => (
+    (!policy.serviceRef || policy.serviceRef === selectedServiceCode) &&
+    (!policy.interfaceRef || policy.interfaceRef === selectedInterfaceCode) &&
+    (!policy.providerRef || policy.providerRef === providerForm.code)
+  ));
   const assetCompleteness = [
     { label: 'Services', value: services.length, risk: services.some((item) => !isActiveAsset(item)) ? '含禁用/删除项' : '' },
     { label: 'Interfaces', value: interfaces.length, risk: activeInterfaces.length === 0 ? '缺少 ACTIVE interface' : '' },
@@ -680,6 +852,7 @@ export function ServiceCapabilityManagement({
     { label: 'Rate Limit', value: rateLimitPolicies.length, risk: activeRateLimitPolicies.length === 0 ? '未配置限流策略' : '' },
     { label: 'Audit', value: audits.length, risk: audits.length === 0 ? '暂无调用审计' : '' },
     { label: 'Migrations', value: migrationAnalysis?.pending?.length ?? 0, risk: migrationAnalysis?.drift ? '存在 drift' : migrationAnalysis?.latest ? '' : '有 pending' },
+    { label: 'Workflow Migration', value: workflowMigrationAnalysis?.summary.legacySteps ?? 0, risk: workflowMigrationAnalysis?.summary.blockers ? '有 blocker' : workflowMigrationAnalysis?.summary.manualReview ? '需 review' : '' },
   ];
   const selectedInputSchema = schemas.find((schema) => schema.schemaRef === interfaceForm.inputSchemaRef && schema.schemaType === 'INPUT');
   const selectedOutputSchema = schemas.find((schema) => schema.schemaRef === interfaceForm.outputSchemaRef && schema.schemaType === 'OUTPUT');
@@ -725,11 +898,57 @@ export function ServiceCapabilityManagement({
         confirm: true,
         confirmation: migrationApplyConfirm,
         breakGlass: migrationBreakGlass,
+        breakGlassScope: migrationBreakGlassScope,
+        breakGlassActor: migrationBreakGlassActor,
+        breakGlassExpiresAt: migrationBreakGlassExpiresAt,
+        breakGlassTicket: migrationBreakGlassTicket,
         reason: migrationApplyReason,
       });
       setMigrationActionMessage(`Apply 完成，pending ${result.after?.pending?.length ?? 0} 项`);
     } catch (err) {
       setMigrationActionMessage((err as Error).message);
+    }
+  };
+  const runWorkflowMigrationAnalyze = async () => {
+    try {
+      setWorkflowMigrationActionMessage('');
+      if (!workflowMigrationActivityId) throw new Error('请选择 workflow draft');
+      const analysis = await onAnalyzeWorkflowMigration(workflowMigrationActivityId);
+      setWorkflowMigrationActionMessage(`Analyze 完成，legacy ${analysis.summary.legacySteps} 项，可自动迁移 ${analysis.summary.autoMigratable} 项`);
+    } catch (err) {
+      setWorkflowMigrationActionMessage((err as Error).message);
+    }
+  };
+  const runWorkflowMigrationDryRun = async () => {
+    try {
+      setWorkflowMigrationActionMessage('');
+      if (!workflowMigrationActivityId) throw new Error('请选择 workflow draft');
+      const result = await onApplyWorkflowMigration(workflowMigrationActivityId, {
+        dryRun: true,
+        confirm: false,
+        confirmation: '',
+        paths: Array.from(selectedWorkflowMigrationPaths),
+        reason: '',
+      });
+      setWorkflowMigrationActionMessage(`Dry-run 完成，计划 apply ${result.appliedItems?.length ?? 0} 项`);
+    } catch (err) {
+      setWorkflowMigrationActionMessage((err as Error).message);
+    }
+  };
+  const runWorkflowMigrationApply = async () => {
+    try {
+      setWorkflowMigrationActionMessage('');
+      if (!workflowMigrationActivityId) throw new Error('请选择 workflow draft');
+      const result = await onApplyWorkflowMigration(workflowMigrationActivityId, {
+        dryRun: false,
+        confirm: true,
+        confirmation: workflowMigrationConfirm,
+        paths: Array.from(selectedWorkflowMigrationPaths),
+        reason: workflowMigrationReason,
+      });
+      setWorkflowMigrationActionMessage(result.applied ? `Apply 完成，已迁移 ${result.appliedItems?.length ?? 0} 项` : 'Apply 完成，无可迁移项');
+    } catch (err) {
+      setWorkflowMigrationActionMessage((err as Error).message);
     }
   };
 
@@ -776,6 +995,7 @@ export function ServiceCapabilityManagement({
           <TaTab active={tab === 'provider'} onClick={() => setTab('provider')}><ServerCog size={15} />提供者</TaTab>
           <TaTab active={tab === 'schema'} onClick={() => setTab('schema')}><FileJson size={15} />Schema</TaTab>
           <TaTab active={tab === 'binding'} onClick={() => setTab('binding')}><Link2 size={15} />Binding</TaTab>
+          <TaTab active={tab === 'rateLimit'} onClick={() => setTab('rateLimit')}><Gauge size={15} />限流</TaTab>
           <TaTab active={tab === 'audit'} onClick={() => setTab('audit')}><History size={15} />审计</TaTab>
           <TaTab active={tab === 'migration'} onClick={() => setTab('migration')}><DatabaseZap size={15} />迁移</TaTab>
         </TaTabs>
@@ -806,6 +1026,7 @@ export function ServiceCapabilityManagement({
             <div className="resource-form-actions span-2">
               <TaButton tone="outline" onClick={() => setTab('schema')}>查看 Schema</TaButton>
               <TaButton tone="outline" onClick={() => setTab('binding')}>查看 Binding</TaButton>
+              <TaButton tone="outline" onClick={() => setTab('rateLimit')}>查看限流</TaButton>
               <TaButton tone="outline" onClick={() => setTab('migration')}>查看 Migration</TaButton>
             </div>
           </div>
@@ -964,8 +1185,9 @@ export function ServiceCapabilityManagement({
               <div><b>Binding 风险提示</b><span>{bindingForm.deny || bindingForm.deletedAt || bindingForm.status !== 'ACTIVE' ? '当前 binding 不会放行调用' : '当前 binding 可参与匹配'}</span></div>
               <small>minRole 只对 ROLE principal 按 VIEWER &lt; EDITOR &lt; ADMIN &lt; OWNER 比较；自定义角色保持精确匹配。</small>
               <small>environment 非空时必须和 providerChain/runtime environment 一致，否则发布或运行时会被拒绝。</small>
-              <small>rateLimitRef 当前用于表达治理关联，运行时仍按 provider/interface/service/tenant policy 优先级解析。</small>
-              <small>includeSubfolders 已保存展示，folder tree 递归匹配仍是后续增强。</small>
+              <small>rateLimitRef 非空时运行时按该 ref 精确解析限流策略；策略缺失、禁用或 scope 不覆盖会阻断调用。</small>
+              <small>includeSubfolders 会按 workspace folder parent 链覆盖子 Folder；folder 记录缺失时不扩大授权。</small>
+              {matchingRateLimitPolicies.length ? <small>匹配限流策略：{matchingRateLimitPolicies.map((policy) => policy.code).join(', ')}</small> : <small>当前 service/interface/provider 未匹配到独立限流策略。</small>}
               {bindingForm.deletedAt ? <small>deletedAt 非空会被视为软删除，不参与 binding checker。</small> : null}
             </div>
             <label className="ta-field span-2"><span>Allowed Node Types</span><textarea value={bindingForm.allowedNodeTypesText} onChange={(event) => setBindingForm((state) => ({ ...state, allowedNodeTypesText: event.target.value }))} /></label>
@@ -987,6 +1209,46 @@ export function ServiceCapabilityManagement({
             <div className="resource-form-actions span-2">
               <TaButton tone="outline" onClick={() => void checkBinding()}>预检 Binding</TaButton>
               <TaButton tone="primary" onClick={submitBinding}>保存 Binding</TaButton>
+            </div>
+          </div>
+        ) : null}
+
+        {tab === 'rateLimit' ? (
+          <div className="resource-form-grid">
+            <div className="span-2 resource-inline-list">
+              {rateLimitPolicies.map((policy) => (
+                <button key={policy.id || policy.code} onClick={() => selectRateLimitPolicy(policy)}>
+                  <Gauge size={15} />
+                  <span>
+                    {policy.name || policy.code}
+                    <small>{rateLimitPolicyLabel(policy)}</small>
+                  </span>
+                  <TaBadge tone={statusTone(policy.status)}>{policy.status}</TaBadge>
+                </button>
+              ))}
+              <TaButton tone="ghost" onClick={startRateLimitPolicy}><Plus size={15} />新增限流策略</TaButton>
+            </div>
+            <FieldInput label="Policy Code" value={rateLimitForm.code} onChange={(value) => setRateLimitForm((state) => ({ ...state, code: value }))} />
+            <FieldInput label="名称" value={rateLimitForm.name} onChange={(value) => setRateLimitForm((state) => ({ ...state, name: value }))} />
+            <FieldInput label="Service Ref" value={rateLimitForm.serviceRef} onChange={(value) => setRateLimitForm((state) => ({ ...state, serviceRef: value }))} />
+            <FieldInput label="Interface Ref" value={rateLimitForm.interfaceRef} onChange={(value) => setRateLimitForm((state) => ({ ...state, interfaceRef: value }))} />
+            <FieldInput label="Provider Ref" value={rateLimitForm.providerRef} onChange={(value) => setRateLimitForm((state) => ({ ...state, providerRef: value }))} />
+            <FieldSelect label="Backend" value={rateLimitForm.backend} options={RATE_LIMIT_BACKENDS} onChange={(value) => setRateLimitForm((state) => ({ ...state, backend: value }))} />
+            <FieldInput label="Limit" value={rateLimitForm.limit} onChange={(value) => setRateLimitForm((state) => ({ ...state, limit: value }))} />
+            <FieldInput label="Window Seconds" value={rateLimitForm.windowSeconds} onChange={(value) => setRateLimitForm((state) => ({ ...state, windowSeconds: value }))} />
+            <FieldInput label="Burst" value={rateLimitForm.burst} onChange={(value) => setRateLimitForm((state) => ({ ...state, burst: value }))} />
+            <FieldSelect label="状态" value={rateLimitForm.status} options={STATUSES} onChange={(value) => setRateLimitForm((state) => ({ ...state, status: value }))} />
+            <label className="ta-field span-2"><span>描述</span><textarea value={rateLimitForm.description} onChange={(event) => setRateLimitForm((state) => ({ ...state, description: event.target.value }))} /></label>
+            <label className="ta-field span-2"><span>Metadata JSON</span><textarea value={rateLimitForm.metadataText} onChange={(event) => setRateLimitForm((state) => ({ ...state, metadataText: event.target.value }))} /></label>
+            <div className="resource-audit-list span-2">
+              <div><b>Tenant</b><span>{tenantId}</span></div>
+              <div><b>Scope 预览</b><span>{rateLimitForm.providerRef ? 'PROVIDER' : rateLimitForm.interfaceRef ? 'INTERFACE' : rateLimitForm.serviceRef ? 'SERVICE' : 'TENANT'} · {rateLimitForm.serviceRef || '*'} / {rateLimitForm.interfaceRef || '*'} / {rateLimitForm.providerRef || '*'}</span></div>
+              <small>Provider Ref 非空时必须同时填写 Service Ref 和 Interface Ref；Interface Ref 非空时必须填写 Service Ref。</small>
+              <small>Binding 的 rateLimitRef 会精确匹配 policy code；为空时运行时按 service/interface/provider 最佳匹配。</small>
+              <small>metadata 可配置 runtimeScope/rateLimitScope=GLOBAL 让 Redis backend 使用全局维度，否则默认按 provider subject 隔离。</small>
+            </div>
+            <div className="resource-form-actions span-2">
+              <TaButton tone="primary" onClick={submitRateLimitPolicy}>保存限流策略</TaButton>
             </div>
           </div>
         ) : null}
@@ -1035,12 +1297,72 @@ export function ServiceCapabilityManagement({
               <div><b>Required Tables</b><span>{migrationAnalysis?.requiredTables?.filter((item) => item.missing).length ?? 0} missing</span></div>
               {migrationAnalysis?.requiredTables?.slice(0, 12).map((item) => <small key={item.name}>{item.exists ? 'OK' : 'MISSING'} · {item.name}</small>)}
             </div>
+            <div className="resource-audit-list span-2">
+              <div>
+                <b>Workflow Legacy Service-Interface Migration</b>
+                <span>{workflowMigrationActivityId ? `activity ${workflowMigrationActivityId}` : '请选择 workflow draft'}</span>
+                <TaBadge tone={workflowMigrationTone(workflowMigrationAnalysis)}>{workflowMigrationAnalysis?.status || 'NOT_ANALYZED'}</TaBadge>
+              </div>
+              <label className="ta-field">
+                <span>Workflow Draft</span>
+                <TaSelect value={workflowMigrationActivityId} onChange={(event) => setWorkflowMigrationActivityId(event.target.value)}>
+                  <option value="">选择 Workflow</option>
+                  {workflowMigrationTargets.map((target) => <option key={target.id} value={target.id}>{target.label}</option>)}
+                </TaSelect>
+              </label>
+              {workflowMigrationMessage ? <small>{workflowMigrationMessage}</small> : null}
+              <small>legacy {workflowMigrationAnalysis?.summary.legacySteps ?? 0} · auto {workflowMigrationAnalysis?.summary.autoMigratable ?? 0} · review {workflowMigrationAnalysis?.summary.manualReview ?? 0} · blockers {workflowMigrationAnalysis?.summary.blockers ?? 0}</small>
+              {workflowMigrationAnalysis?.blockers?.map((blocker) => <small key={`${blocker.path}:${blocker.reason}`}>blocker: {blocker.nodeId} · {blocker.path} · {blocker.reason}</small>)}
+              {!workflowMigrationActivityId ? <small>该迁移只作用于 workflow draft；请选择一个 workflow 后再 analyze/apply。</small> : null}
+            </div>
+            <div className="resource-audit-list span-2">
+              <div><b>Workflow Migration Diff Items</b><span>{workflowMigrationAnalysis?.items?.length ?? 0} 项</span></div>
+              {workflowMigrationAnalysis?.items?.length ? workflowMigrationAnalysis.items.map((item) => {
+                const selected = selectedWorkflowMigrationPaths.has(item.path);
+                const blocked = Boolean(item.blockingIssues?.length);
+                return (
+                  <div key={item.path}>
+                    <label className="ta-check">
+                      <input
+                        type="checkbox"
+                        checked={selected}
+                        disabled={blocked}
+                        onChange={(event) => setSelectedWorkflowMigrationPaths((paths) => {
+                          const next = new Set(paths);
+                          if (event.target.checked) next.add(item.path);
+                          else next.delete(item.path);
+                          return next;
+                        })}
+                      />
+                      {item.nodeId} · {item.path}
+                    </label>
+                    <span>{item.legacyType} → {item.recommendedTarget || 'MANUAL'} · confidence {item.confidence} · risk {item.risk}</span>
+                    <small>{[item.serviceRef, item.interfaceRef, item.providerRef, item.resourceRef, item.operation].filter(Boolean).join(' / ') || 'manual mapping required'}</small>
+                    {item.legacyFields?.length ? <small>legacy fields: {item.legacyFields.join(', ')}</small> : null}
+                    {item.blockingIssues?.map((issue) => <small key={issue}>blocker: {issue}</small>)}
+                    <pre>{JSON.stringify({ before: item.before, after: item.after }, null, 2)}</pre>
+                  </div>
+                );
+              }) : <small>尚未分析，或当前 draft 无 legacy provider/resource 字段。</small>}
+            </div>
+            <FieldInput label="Workflow 迁移确认短语" value={workflowMigrationConfirm} onChange={setWorkflowMigrationConfirm} placeholder="APPLY_WORKFLOW_SERVICE_INTERFACE_MIGRATION" />
+            <FieldInput label="Workflow 迁移原因" value={workflowMigrationReason} onChange={setWorkflowMigrationReason} placeholder="migrate legacy provider fields" />
+            <div className="resource-audit-list">
+              <div><b>Workflow Apply Guard</b><span>已选择 {selectedWorkflowMigrationPaths.size} 个 path</span></div>
+              <small>真实 apply 需要确认短语和 reason；blocker 项不会自动迁移。</small>
+              {workflowMigrationActionMessage ? <small>{workflowMigrationActionMessage}</small> : null}
+            </div>
             <FieldInput label="确认短语" value={migrationApplyConfirm} onChange={setMigrationApplyConfirm} placeholder="APPLY_DB_MIGRATIONS" />
             <FieldInput label="变更原因" value={migrationApplyReason} onChange={setMigrationApplyReason} placeholder="ops reviewed migration apply" />
             <label className="ta-check"><input type="checkbox" checked={migrationBreakGlass} onChange={(event) => setMigrationBreakGlass(event.target.checked)} />Break-glass 确认</label>
+            <FieldInput label="Break-glass Scope" value={migrationBreakGlassScope} onChange={setMigrationBreakGlassScope} placeholder="db-migration:apply" />
+            <FieldInput label="Break-glass Actor" value={migrationBreakGlassActor} onChange={setMigrationBreakGlassActor} placeholder="与 X-Actor-Id 一致" />
+            <FieldInput label="Break-glass Ticket" value={migrationBreakGlassTicket} onChange={setMigrationBreakGlassTicket} placeholder="INC-123 / approval ticket" />
+            <FieldInput label="Break-glass Expires At" value={migrationBreakGlassExpiresAt} onChange={setMigrationBreakGlassExpiresAt} placeholder="2026-06-26T12:30:00Z" />
             <div className="resource-audit-list">
               <div><b>Apply Guard</b><span>真实 apply 必须确认短语、break-glass 和 reason。</span></div>
-              <small>默认先 dry-run；drift 存在时后端会拒绝真实 apply。</small>
+              <small>默认先 dry-run；真实 apply 需要 scope=db-migration:apply、actor 与请求头一致、ticket 非空、expiresAt 未过期且不超过 2 小时。</small>
+              <small>当前 actor 可从请求头 X-Actor-Id 判定；expiresAt 建议填写 ISO 时间，例如当前时间后 30 分钟。</small>
               {migrationActionMessage ? <small>{migrationActionMessage}</small> : null}
             </div>
             <div className="resource-form-actions span-2">
@@ -1048,6 +1370,9 @@ export function ServiceCapabilityManagement({
               <TaButton tone="outline" onClick={() => void onAnalyzeMigrations()}>Analyze</TaButton>
               <TaButton tone="outline" onClick={() => void runMigrationDryRun()}>Dry-run Apply</TaButton>
               <TaButton tone="primary" onClick={() => void runMigrationApply()}><ShieldAlert size={15} />确认 Apply</TaButton>
+              <TaButton tone="outline" disabled={!workflowMigrationActivityId} onClick={() => void runWorkflowMigrationAnalyze()}><GitCompare size={15} />Workflow Analyze</TaButton>
+              <TaButton tone="outline" disabled={!workflowMigrationActivityId} onClick={() => void runWorkflowMigrationDryRun()}>Workflow Dry-run</TaButton>
+              <TaButton tone="primary" disabled={!workflowMigrationActivityId} onClick={() => void runWorkflowMigrationApply()}><ShieldAlert size={15} />Workflow Apply</TaButton>
             </div>
           </div>
         ) : null}

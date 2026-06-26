@@ -2166,6 +2166,71 @@ func TestServiceAssetAdminAPIs(t *testing.T) {
 	}
 }
 
+func TestProviderHealthSummaryAPI(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := engine.NewService(repo)
+	handler := NewHandler(service)
+	if _, err := service.SaveServiceDefinition(ctx, marketing.ServiceDefinition{
+		TenantID:    "site_001",
+		Code:        "wallet-service",
+		Name:        "Wallet Service",
+		ServiceType: marketing.ServiceTypeInternal,
+		Scope:       marketing.ServiceAssetScopeTenant,
+		Status:      marketing.ServiceAssetActive,
+	}); err != nil {
+		t.Fatalf("save service: %v", err)
+	}
+	if _, err := service.SaveServiceInterface(ctx, marketing.ServiceInterface{
+		TenantID:   "site_001",
+		ServiceRef: "wallet-service",
+		Code:       "query-wallet",
+		Name:       "Query Wallet",
+		Operation:  marketing.ServiceOperationCall,
+		TimeoutMS:  1000,
+		Status:     marketing.ServiceAssetActive,
+	}); err != nil {
+		t.Fatalf("save interface: %v", err)
+	}
+	if _, err := service.SaveServiceProvider(ctx, marketing.ServiceProvider{
+		TenantID:     "site_001",
+		ServiceRef:   "wallet-service",
+		InterfaceRef: "query-wallet",
+		Code:         "wallet-primary",
+		Name:         "Wallet Primary",
+		Protocol:     marketing.ServiceProviderResource,
+		Status:       marketing.ServiceAssetActive,
+	}); err != nil {
+		t.Fatalf("save provider: %v", err)
+	}
+	checkedAt := time.Date(2026, 6, 26, 12, 30, 0, 0, time.UTC)
+	if _, err := service.SaveServiceProviderRuntimeState(ctx, marketing.ServiceProviderRuntimeState{
+		TenantID:      "site_001",
+		ServiceRef:    "wallet-service",
+		InterfaceRef:  "query-wallet",
+		ProviderRef:   "wallet-primary",
+		HealthStatus:  marketing.ServiceProviderHealthUnhealthy,
+		HealthMessage: "probe failed",
+		CircuitStatus: marketing.ServiceProviderCircuitClosed,
+		Metadata:      json.RawMessage(`{"lastHealthCheckAt":"` + checkedAt.Format(time.RFC3339Nano) + `","lastHealthCheckBy":"health-agent"}`),
+	}); err != nil {
+		t.Fatalf("save runtime state: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/v1/provider-health?tenantId=site_001&serviceRef=wallet-service&status=UNHEALTHY", nil)
+	rec := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("provider health summary failed: %d %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, want := range []string{`"providerRef":"wallet-primary"`, `"status":"UNHEALTHY"`, `"lastCheckedBy":"health-agent"`, `"lastCheckedAt":"2026-06-26T12:30:00Z"`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("provider health summary missing %s: %s", want, body)
+		}
+	}
+}
+
 func TestServiceCallAuditListAndPurgeAPIs(t *testing.T) {
 	repo := marketing.NewMemoryRepository()
 	handler := newTestHandlerWithRepository(repo)
@@ -2221,6 +2286,29 @@ func TestServiceCallAuditListAndPurgeAPIs(t *testing.T) {
 	}
 	if len(logs) != 1 || logs[0].ID != "audit-new" {
 		t.Fatalf("expected only new audit after purge, got %+v", logs)
+	}
+}
+
+func TestProviderDecisionAuditListAPI(t *testing.T) {
+	repo := marketing.NewMemoryRepository()
+	handler := newTestHandlerWithRepository(repo)
+	now := time.Date(2026, 6, 24, 10, 0, 0, 0, time.UTC)
+	for _, log := range []marketing.ProviderDecisionAuditLog{
+		{ID: "decision-a", TenantID: "site_001", ServiceRef: "svc", InterfaceRef: "iface", CandidateProviderRef: "provider-a", Decision: marketing.ProviderDecisionSelected, Reason: "selected", CreatedAt: now},
+		{ID: "decision-b", TenantID: "site_002", ServiceRef: "svc", InterfaceRef: "iface", CandidateProviderRef: "provider-b", Decision: marketing.ProviderDecisionSelected, Reason: "selected", CreatedAt: now.Add(time.Second)},
+	} {
+		if err := repo.CreateProviderDecisionAuditLog(context.Background(), log); err != nil {
+			t.Fatalf("create provider decision audit: %v", err)
+		}
+	}
+	req := httptest.NewRequest(http.MethodGet, "/admin/v1/provider-decision-audit-logs?tenantId=site_001&serviceRef=svc&interfaceRef=iface&providerRef=provider-a", nil)
+	req.Header.Set("X-Actor-Id", "ops")
+	req.Header.Set("X-Platform-Admin", "true")
+	req.Header.Set("X-Platform-Role", "ADMIN")
+	rec := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"id":"decision-a"`) || strings.Contains(rec.Body.String(), "decision-b") {
+		t.Fatalf("provider decision audit query failed: %d %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -5027,6 +5115,8 @@ func TestDBMigrationAdminStatusAndAnalyzeAreReadOnly(t *testing.T) {
 
 	statusReq := httptest.NewRequest(http.MethodGet, "/admin/v1/db-migrations/status", nil)
 	statusReq.Header.Set("X-Actor-Id", "ops")
+	statusReq.Header.Set("X-Platform-Admin", "true")
+	statusReq.Header.Set("X-Platform-Role", "ADMIN")
 	statusRec := httptest.NewRecorder()
 	handler.Routes().ServeHTTP(statusRec, statusReq)
 	if statusRec.Code != http.StatusOK {
@@ -5035,6 +5125,8 @@ func TestDBMigrationAdminStatusAndAnalyzeAreReadOnly(t *testing.T) {
 
 	analyzeReq := httptest.NewRequest(http.MethodPost, "/admin/v1/db-migrations/analyze", nil)
 	analyzeReq.Header.Set("X-Actor-Id", "ops")
+	analyzeReq.Header.Set("X-Platform-Admin", "true")
+	analyzeReq.Header.Set("X-Platform-Role", "ADMIN")
 	analyzeRec := httptest.NewRecorder()
 	handler.Routes().ServeHTTP(analyzeRec, analyzeReq)
 	if analyzeRec.Code != http.StatusOK {
@@ -5049,7 +5141,8 @@ func TestDBMigrationAdminStatusAndAnalyzeAreReadOnly(t *testing.T) {
 }
 
 func TestDBMigrationAdminApplyRequiresActorAndConfirmation(t *testing.T) {
-	handler := newTestHandler()
+	repo := marketing.NewMemoryRepository()
+	handler := newTestHandlerWithRepository(repo)
 	manager := &fakeMigrationManager{analysis: dbmigration.Analysis{SchemaMigrationsExists: true}}
 	handler.SetMigrationManager(manager)
 
@@ -5061,6 +5154,8 @@ func TestDBMigrationAdminApplyRequiresActorAndConfirmation(t *testing.T) {
 
 	missingConfirmReq := httptest.NewRequest(http.MethodPost, "/admin/v1/db-migrations/apply", strings.NewReader(`{"reason":"ops change"}`))
 	missingConfirmReq.Header.Set("X-Actor-Id", "ops")
+	missingConfirmReq.Header.Set("X-Platform-Admin", "true")
+	missingConfirmReq.Header.Set("X-Platform-Role", "ADMIN")
 	missingConfirm := httptest.NewRecorder()
 	handler.Routes().ServeHTTP(missingConfirm, missingConfirmReq)
 	if missingConfirm.Code != http.StatusBadRequest {
@@ -5072,6 +5167,8 @@ func TestDBMigrationAdminApplyRequiresActorAndConfirmation(t *testing.T) {
 
 	dryRunReq := httptest.NewRequest(http.MethodPost, "/admin/v1/db-migrations/apply", nil)
 	dryRunReq.Header.Set("X-Actor-Id", "ops")
+	dryRunReq.Header.Set("X-Platform-Admin", "true")
+	dryRunReq.Header.Set("X-Platform-Role", "ADMIN")
 	dryRun := httptest.NewRecorder()
 	handler.Routes().ServeHTTP(dryRun, dryRunReq)
 	if dryRun.Code != http.StatusOK || !strings.Contains(dryRun.Body.String(), `"dryRun":true`) {
@@ -5085,9 +5182,15 @@ func TestDBMigrationAdminApplyRequiresActorAndConfirmation(t *testing.T) {
 		"confirm": true,
 		"confirmation": "APPLY_DB_MIGRATIONS",
 		"breakGlass": true,
+		"breakGlassScope": "db-migration:apply",
+		"breakGlassActor": "ops",
+		"breakGlassExpiresAt": "`+time.Now().UTC().Add(time.Hour).Format(time.RFC3339)+`",
+		"breakGlassTicket": "ops-ticket-123",
 		"reason": "release migration"
 	}`))
 	confirmedReq.Header.Set("X-Actor-Id", "ops")
+	confirmedReq.Header.Set("X-Platform-Admin", "true")
+	confirmedReq.Header.Set("X-Platform-Role", "ADMIN")
 	confirmed := httptest.NewRecorder()
 	handler.Routes().ServeHTTP(confirmed, confirmedReq)
 	if confirmed.Code != http.StatusOK {
@@ -5095,5 +5198,98 @@ func TestDBMigrationAdminApplyRequiresActorAndConfirmation(t *testing.T) {
 	}
 	if manager.applyCalls != 1 {
 		t.Fatalf("expected one apply call, got %d", manager.applyCalls)
+	}
+	audits, err := repo.ListMigrationAuditLogs(context.Background(), marketing.MigrationAuditQuery{TenantID: "site_001", MigrationType: "DB", Limit: 10})
+	if err != nil {
+		t.Fatalf("list migration audit logs: %v", err)
+	}
+	var deniedAudit, dryRunAudit, appliedAudit marketing.MigrationAuditLog
+	for _, audit := range audits {
+		if audit.Operation == "DRY_RUN" {
+			dryRunAudit = audit
+		}
+		if audit.Operation == "APPLY" && audit.Result == marketing.MigrationAuditDenied && strings.Contains(audit.Error, "confirmation") {
+			deniedAudit = audit
+		}
+		if audit.Operation == "APPLY" && audit.Result == marketing.MigrationAuditSuccess {
+			appliedAudit = audit
+		}
+	}
+	if deniedAudit.ID == "" || !strings.Contains(deniedAudit.Error, "confirmation") {
+		t.Fatalf("expected denied confirmation audit, got %+v", audits)
+	}
+	if dryRunAudit.ID == "" || !dryRunAudit.DryRun || dryRunAudit.Result != marketing.MigrationAuditSuccess {
+		t.Fatalf("expected successful dry-run audit, got %+v", audits)
+	}
+	if appliedAudit.ID == "" || appliedAudit.BreakGlassTicket != "ops-ticket-123" || appliedAudit.Scope != dbMigrationBreakGlassScope {
+		t.Fatalf("expected applied break-glass audit, got %+v", audits)
+	}
+	listReq := httptest.NewRequest(http.MethodGet, "/admin/v1/migration-audit-logs?tenantId=site_001&migrationType=DB&operation=DRY_RUN", nil)
+	listReq.Header.Set("X-Actor-Id", "ops")
+	listReq.Header.Set("X-Platform-Admin", "true")
+	listReq.Header.Set("X-Platform-Role", "ADMIN")
+	listRec := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(listRec, listReq)
+	if listRec.Code != http.StatusOK || !strings.Contains(listRec.Body.String(), `"operation":"DRY_RUN"`) || strings.Contains(listRec.Body.String(), `"operation":"APPLY"`) {
+		t.Fatalf("expected migration audit query to filter dry-run, got %d %s", listRec.Code, listRec.Body.String())
+	}
+}
+
+func TestDBMigrationAdminRequiresAdminAndValidBreakGlass(t *testing.T) {
+	repo := marketing.NewMemoryRepository()
+	handler := newTestHandlerWithRepository(repo)
+	manager := &fakeMigrationManager{analysis: dbmigration.Analysis{SchemaMigrationsExists: true}}
+	handler.SetMigrationManager(manager)
+
+	notAdminReq := httptest.NewRequest(http.MethodPost, "/admin/v1/db-migrations/analyze", nil)
+	notAdminReq.Header.Set("X-Actor-Id", "ops")
+	notAdmin := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(notAdmin, notAdminReq)
+	if notAdmin.Code != http.StatusForbidden {
+		t.Fatalf("expected non-admin to be forbidden, got %d: %s", notAdmin.Code, notAdmin.Body.String())
+	}
+	audits, err := repo.ListMigrationAuditLogs(context.Background(), marketing.MigrationAuditQuery{TenantID: "site_001", MigrationType: "DB", Operation: "ANALYZE", Result: marketing.MigrationAuditDenied})
+	if err != nil {
+		t.Fatalf("list denied migration audits: %v", err)
+	}
+	if len(audits) != 1 || audits[0].Actor != "ops" || !strings.Contains(audits[0].Error, "admin") {
+		t.Fatalf("expected DB migration auth denied audit, got %+v", audits)
+	}
+
+	missingBreakGlassReq := httptest.NewRequest(http.MethodPost, "/admin/v1/db-migrations/apply", strings.NewReader(`{
+		"confirm": true,
+		"confirmation": "APPLY_DB_MIGRATIONS",
+		"breakGlass": true,
+		"reason": "release migration"
+	}`))
+	missingBreakGlassReq.Header.Set("X-Actor-Id", "ops")
+	missingBreakGlassReq.Header.Set("X-Platform-Admin", "true")
+	missingBreakGlassReq.Header.Set("X-Platform-Role", "ADMIN")
+	missingBreakGlass := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(missingBreakGlass, missingBreakGlassReq)
+	if missingBreakGlass.Code != http.StatusForbidden {
+		t.Fatalf("expected missing break-glass metadata to be forbidden, got %d: %s", missingBreakGlass.Code, missingBreakGlass.Body.String())
+	}
+
+	expiredReq := httptest.NewRequest(http.MethodPost, "/admin/v1/db-migrations/apply", strings.NewReader(`{
+		"confirm": true,
+		"confirmation": "APPLY_DB_MIGRATIONS",
+		"breakGlass": true,
+		"breakGlassScope": "db-migration:apply",
+		"breakGlassActor": "ops",
+		"breakGlassExpiresAt": "`+time.Now().UTC().Add(-time.Minute).Format(time.RFC3339)+`",
+		"breakGlassTicket": "ops-ticket-123",
+		"reason": "release migration"
+	}`))
+	expiredReq.Header.Set("X-Actor-Id", "ops")
+	expiredReq.Header.Set("X-Platform-Admin", "true")
+	expiredReq.Header.Set("X-Platform-Role", "ADMIN")
+	expired := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(expired, expiredReq)
+	if expired.Code != http.StatusForbidden {
+		t.Fatalf("expected expired break-glass to be forbidden, got %d: %s", expired.Code, expired.Body.String())
+	}
+	if manager.applyCalls != 0 {
+		t.Fatalf("invalid break-glass must not apply migrations, applyCalls=%d", manager.applyCalls)
 	}
 }

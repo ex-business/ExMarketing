@@ -78,6 +78,10 @@ type Repository interface {
 	CreateServiceCallAuditLog(ctx context.Context, log ServiceCallAuditLog) error
 	ListServiceCallAuditLogs(ctx context.Context, query ServiceCallAuditQuery) ([]ServiceCallAuditLog, error)
 	PurgeServiceCallAuditLogs(ctx context.Context, tenantID string, workspaceID string, before time.Time, limit int) (int, error)
+	CreateProviderDecisionAuditLog(ctx context.Context, log ProviderDecisionAuditLog) error
+	ListProviderDecisionAuditLogs(ctx context.Context, query ProviderDecisionAuditQuery) ([]ProviderDecisionAuditLog, error)
+	CreateMigrationAuditLog(ctx context.Context, log MigrationAuditLog) error
+	ListMigrationAuditLogs(ctx context.Context, query MigrationAuditQuery) ([]MigrationAuditLog, error)
 	GetActivityState(ctx context.Context, key ActivityStateKey) (ActivityState, error)
 	UpsertActivityState(ctx context.Context, cmd UpsertActivityStateCommand) (ActivityState, error)
 	GetStorageState(ctx context.Context, key StorageStateKey) (StorageState, error)

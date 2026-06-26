@@ -28,6 +28,7 @@ type Service struct {
 	factClient        *fact.Client
 	metrics           *metrics.Registry
 	workflowValidator marketing.WorkflowValidationService
+	redisRateLimiter  ServiceRateLimiter
 	now               func() time.Time
 }
 

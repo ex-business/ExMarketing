@@ -357,6 +357,13 @@ export type WorkflowVersion = {
   createdAt?: string;
 };
 
+export type WorkflowDraftResponse = {
+  activityId: string;
+  definition: WorkflowDefinition;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
 export type WorkflowDiffSummary = {
   changed: boolean;
   summary: string;
@@ -389,6 +396,10 @@ export type WorkflowValidationIssue = {
   nodeId?: string;
   edgeId?: string;
   path?: string;
+  assetType?: string;
+  assetRef?: string;
+  field?: string;
+  details?: Record<string, unknown>;
 };
 
 export type WorkflowValidationResult = {
@@ -748,6 +759,65 @@ export type ServiceRateLimitPolicySummary = {
   updatedBy?: string;
   createdAt?: string;
   updatedAt?: string;
+};
+
+export type WorkflowServiceInterfaceMigrationSummary = {
+  legacySteps: number;
+  autoMigratable: number;
+  manualReview: number;
+  blockers: number;
+  serviceInterfaces: number;
+  resources: number;
+};
+
+export type WorkflowServiceInterfaceMigrationItem = {
+  nodeId: string;
+  nodeType: string;
+  path: string;
+  legacyType: string;
+  legacyFields?: string[];
+  recommendedTarget: string;
+  serviceRef?: string;
+  interfaceRef?: string;
+  providerPolicy?: string;
+  providerRef?: string;
+  resourceRef?: string;
+  operation?: string;
+  confidence: string;
+  risk: string;
+  blockingIssues?: string[];
+  before?: Record<string, unknown>;
+  after?: Record<string, unknown>;
+};
+
+export type WorkflowServiceInterfaceMigrationBlocker = {
+  nodeId: string;
+  path: string;
+  reason: string;
+};
+
+export type WorkflowServiceInterfaceMigrationAnalysis = {
+  status: string;
+  summary: WorkflowServiceInterfaceMigrationSummary;
+  items: WorkflowServiceInterfaceMigrationItem[];
+  blockers: WorkflowServiceInterfaceMigrationBlocker[];
+};
+
+export type WorkflowServiceInterfaceMigrationAnalyzeResponse = {
+  activityId: string;
+  data: WorkflowServiceInterfaceMigrationAnalysis;
+};
+
+export type WorkflowServiceInterfaceMigrationApplyResponse = {
+  activityId: string;
+  dryRun: boolean;
+  applied: boolean;
+  appliedItems: WorkflowServiceInterfaceMigrationItem[];
+  data?: WorkflowServiceInterfaceMigrationAnalysis;
+  before?: WorkflowServiceInterfaceMigrationAnalysis;
+  after?: WorkflowServiceInterfaceMigrationAnalysis;
+  definition?: WorkflowDefinition;
+  draft?: WorkflowDraftResponse;
 };
 
 export type DBMigrationSummary = {

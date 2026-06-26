@@ -40,6 +40,9 @@ type MemoryRepository struct {
 	serviceProviderStates    []ServiceProviderRuntimeState
 	serviceRateLimitPolicies []ServiceRateLimitPolicy
 	serviceCallAuditLogs     []ServiceCallAuditLog
+	providerDecisionAudits   []ProviderDecisionAuditLog
+	migrationAuditLogs       []MigrationAuditLog
+	workerLeases             map[string]WorkerLease
 	activityStates           []ActivityState
 	storageStates            []StorageState
 	resources                []Resource
@@ -63,6 +66,7 @@ func NewMemoryRepository() *MemoryRepository {
 		inboxByEventIdentity: make(map[string]EventInbox),
 		factProviders:        make(map[string]FactProvider),
 		workflowDrafts:       make(map[string]WorkflowDraft),
+		workerLeases:         make(map[string]WorkerLease),
 	}
 }
 
@@ -707,8 +711,26 @@ func cloneServiceCallAuditLog(log ServiceCallAuditLog) ServiceCallAuditLog {
 	return log
 }
 
+func cloneProviderDecisionAuditLog(log ProviderDecisionAuditLog) ProviderDecisionAuditLog {
+	if len(log.Details) > 0 {
+		log.Details = append(json.RawMessage(nil), log.Details...)
+	}
+	return log
+}
+
+func cloneMigrationAuditLog(log MigrationAuditLog) MigrationAuditLog {
+	if len(log.Summary) > 0 {
+		log.Summary = append(json.RawMessage(nil), log.Summary...)
+	}
+	return log
+}
+
 func serviceAssetDeleted(status ServiceAssetStatus, deletedAt *time.Time) bool {
 	return status == ServiceAssetDeleted || deletedAt != nil
+}
+
+func serviceAssetUniqueActive(deletedAt *time.Time) bool {
+	return deletedAt == nil
 }
 
 func (r *MemoryRepository) SaveServiceDefinition(ctx context.Context, service ServiceDefinition) (ServiceDefinition, error) {
@@ -743,10 +765,13 @@ func (r *MemoryRepository) SaveServiceDefinition(ctx context.Context, service Se
 	defer r.mu.Unlock()
 	for i := range r.services {
 		sameCode := r.services[i].TenantID == service.TenantID && r.services[i].Code == service.Code
-		if sameCode && r.services[i].ID != service.ID {
-			return ServiceDefinition{}, ErrResourceConflict
+		if r.services[i].ID == service.ID {
+			r.services[i] = cloneServiceDefinition(service)
+			return cloneServiceDefinition(service), nil
 		}
-		if r.services[i].ID == service.ID || sameCode {
+		if sameCode && serviceAssetUniqueActive(r.services[i].DeletedAt) {
+			service.ID = r.services[i].ID
+			service.CreatedAt = r.services[i].CreatedAt
 			r.services[i] = cloneServiceDefinition(service)
 			return cloneServiceDefinition(service), nil
 		}
@@ -761,10 +786,18 @@ func (r *MemoryRepository) GetServiceDefinition(ctx context.Context, tenantID st
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	var deletedCandidate *ServiceDefinition
 	for _, service := range r.services {
 		if service.TenantID == tenantID && service.Code == code {
-			return cloneServiceDefinition(service), nil
+			if !serviceAssetDeleted(service.Status, service.DeletedAt) {
+				return cloneServiceDefinition(service), nil
+			}
+			candidate := cloneServiceDefinition(service)
+			deletedCandidate = &candidate
 		}
+	}
+	if deletedCandidate != nil {
+		return cloneServiceDefinition(*deletedCandidate), nil
 	}
 	return ServiceDefinition{}, ErrNotFound
 }
@@ -839,10 +872,13 @@ func (r *MemoryRepository) SaveServiceInterface(ctx context.Context, serviceInte
 	defer r.mu.Unlock()
 	for i := range r.serviceInterfaces {
 		sameCode := r.serviceInterfaces[i].TenantID == serviceInterface.TenantID && r.serviceInterfaces[i].ServiceRef == serviceInterface.ServiceRef && r.serviceInterfaces[i].Code == serviceInterface.Code
-		if sameCode && r.serviceInterfaces[i].ID != serviceInterface.ID {
-			return ServiceInterface{}, ErrResourceConflict
+		if r.serviceInterfaces[i].ID == serviceInterface.ID {
+			r.serviceInterfaces[i] = cloneServiceInterface(serviceInterface)
+			return cloneServiceInterface(serviceInterface), nil
 		}
-		if r.serviceInterfaces[i].ID == serviceInterface.ID || sameCode {
+		if sameCode && serviceAssetUniqueActive(r.serviceInterfaces[i].DeletedAt) {
+			serviceInterface.ID = r.serviceInterfaces[i].ID
+			serviceInterface.CreatedAt = r.serviceInterfaces[i].CreatedAt
 			r.serviceInterfaces[i] = cloneServiceInterface(serviceInterface)
 			return cloneServiceInterface(serviceInterface), nil
 		}
@@ -857,10 +893,18 @@ func (r *MemoryRepository) GetServiceInterface(ctx context.Context, tenantID str
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	var deletedCandidate *ServiceInterface
 	for _, serviceInterface := range r.serviceInterfaces {
 		if serviceInterface.TenantID == tenantID && serviceInterface.ServiceRef == serviceRef && serviceInterface.Code == code {
-			return cloneServiceInterface(serviceInterface), nil
+			if !serviceAssetDeleted(serviceInterface.Status, serviceInterface.DeletedAt) {
+				return cloneServiceInterface(serviceInterface), nil
+			}
+			candidate := cloneServiceInterface(serviceInterface)
+			deletedCandidate = &candidate
 		}
+	}
+	if deletedCandidate != nil {
+		return cloneServiceInterface(*deletedCandidate), nil
 	}
 	return ServiceInterface{}, ErrNotFound
 }
@@ -932,10 +976,13 @@ func (r *MemoryRepository) SaveServiceProvider(ctx context.Context, provider Ser
 	defer r.mu.Unlock()
 	for i := range r.serviceProviders {
 		sameCode := r.serviceProviders[i].TenantID == provider.TenantID && r.serviceProviders[i].ServiceRef == provider.ServiceRef && r.serviceProviders[i].InterfaceRef == provider.InterfaceRef && r.serviceProviders[i].Code == provider.Code
-		if sameCode && r.serviceProviders[i].ID != provider.ID {
-			return ServiceProvider{}, ErrResourceConflict
+		if r.serviceProviders[i].ID == provider.ID {
+			r.serviceProviders[i] = cloneServiceProvider(provider)
+			return cloneServiceProvider(provider), nil
 		}
-		if r.serviceProviders[i].ID == provider.ID || sameCode {
+		if sameCode && serviceAssetUniqueActive(r.serviceProviders[i].DeletedAt) {
+			provider.ID = r.serviceProviders[i].ID
+			provider.CreatedAt = r.serviceProviders[i].CreatedAt
 			r.serviceProviders[i] = cloneServiceProvider(provider)
 			return cloneServiceProvider(provider), nil
 		}
@@ -950,10 +997,18 @@ func (r *MemoryRepository) GetServiceProvider(ctx context.Context, tenantID stri
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	var deletedCandidate *ServiceProvider
 	for _, provider := range r.serviceProviders {
 		if provider.TenantID == tenantID && provider.ServiceRef == serviceRef && provider.InterfaceRef == interfaceRef && provider.Code == code {
-			return cloneServiceProvider(provider), nil
+			if !serviceAssetDeleted(provider.Status, provider.DeletedAt) {
+				return cloneServiceProvider(provider), nil
+			}
+			candidate := cloneServiceProvider(provider)
+			deletedCandidate = &candidate
 		}
+	}
+	if deletedCandidate != nil {
+		return cloneServiceProvider(*deletedCandidate), nil
 	}
 	return ServiceProvider{}, ErrNotFound
 }
@@ -969,6 +1024,7 @@ func (r *MemoryRepository) ListServiceProviders(ctx context.Context, query Servi
 		limit = 500
 	}
 	out := []ServiceProvider{}
+	skipped := 0
 	for _, provider := range r.serviceProviders {
 		if !query.IncludeDeleted && serviceAssetDeleted(provider.Status, provider.DeletedAt) {
 			continue
@@ -989,6 +1045,10 @@ func (r *MemoryRepository) ListServiceProviders(ctx context.Context, query Servi
 			continue
 		}
 		if query.Code != "" && provider.Code != query.Code {
+			continue
+		}
+		if query.Offset > 0 && skipped < query.Offset {
+			skipped++
 			continue
 		}
 		out = append(out, cloneServiceProvider(provider))
@@ -1028,10 +1088,13 @@ func (r *MemoryRepository) SaveServiceSchema(ctx context.Context, schema Service
 	defer r.mu.Unlock()
 	for i := range r.serviceSchemas {
 		sameRef := r.serviceSchemas[i].TenantID == schema.TenantID && r.serviceSchemas[i].SchemaRef == schema.SchemaRef && r.serviceSchemas[i].Version == schema.Version
-		if sameRef && r.serviceSchemas[i].ID != schema.ID {
-			return ServiceSchema{}, ErrResourceConflict
+		if r.serviceSchemas[i].ID == schema.ID {
+			r.serviceSchemas[i] = cloneServiceSchema(schema)
+			return cloneServiceSchema(schema), nil
 		}
-		if r.serviceSchemas[i].ID == schema.ID || sameRef {
+		if sameRef && serviceAssetUniqueActive(r.serviceSchemas[i].DeletedAt) {
+			schema.ID = r.serviceSchemas[i].ID
+			schema.CreatedAt = r.serviceSchemas[i].CreatedAt
 			r.serviceSchemas[i] = cloneServiceSchema(schema)
 			return cloneServiceSchema(schema), nil
 		}
@@ -1122,10 +1185,13 @@ func (r *MemoryRepository) SaveServiceInterfaceBinding(ctx context.Context, bind
 			r.serviceInterfaceBindings[i].NodeID == binding.NodeID &&
 			r.serviceInterfaceBindings[i].PrincipalType == binding.PrincipalType &&
 			r.serviceInterfaceBindings[i].PrincipalID == binding.PrincipalID
-		if sameBinding && r.serviceInterfaceBindings[i].ID != binding.ID {
-			return ServiceInterfaceBinding{}, ErrResourceConflict
+		if r.serviceInterfaceBindings[i].ID == binding.ID {
+			r.serviceInterfaceBindings[i] = cloneServiceInterfaceBinding(binding)
+			return cloneServiceInterfaceBinding(binding), nil
 		}
-		if r.serviceInterfaceBindings[i].ID == binding.ID || sameBinding {
+		if sameBinding && serviceAssetUniqueActive(r.serviceInterfaceBindings[i].DeletedAt) {
+			binding.ID = r.serviceInterfaceBindings[i].ID
+			binding.CreatedAt = r.serviceInterfaceBindings[i].CreatedAt
 			r.serviceInterfaceBindings[i] = cloneServiceInterfaceBinding(binding)
 			return cloneServiceInterfaceBinding(binding), nil
 		}
@@ -1259,6 +1325,7 @@ func (r *MemoryRepository) ListServiceProviderRuntimeStates(ctx context.Context,
 		limit = 500
 	}
 	out := []ServiceProviderRuntimeState{}
+	skipped := 0
 	for _, state := range r.serviceProviderStates {
 		if query.TenantID != "" && state.TenantID != query.TenantID {
 			continue
@@ -1278,12 +1345,119 @@ func (r *MemoryRepository) ListServiceProviderRuntimeStates(ctx context.Context,
 		if query.CircuitStatus != "" && state.CircuitStatus != query.CircuitStatus {
 			continue
 		}
+		if query.Offset > 0 && skipped < query.Offset {
+			skipped++
+			continue
+		}
 		out = append(out, cloneServiceProviderRuntimeState(state))
 		if len(out) >= limit {
 			break
 		}
 	}
 	return out, nil
+}
+
+func (r *MemoryRepository) AcquireWorkerLease(ctx context.Context, cmd WorkerLeaseAcquireCommand) (WorkerLease, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return WorkerLease{}, false, err
+	}
+	if strings.TrimSpace(cmd.Name) == "" {
+		return WorkerLease{}, false, errors.New("lease name is required")
+	}
+	if strings.TrimSpace(cmd.Owner) == "" {
+		return WorkerLease{}, false, errors.New("lease owner is required")
+	}
+	if cmd.TTL <= 0 {
+		return WorkerLease{}, false, errors.New("lease ttl must be positive")
+	}
+	now := cmd.Now
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	name := strings.TrimSpace(cmd.Name)
+	owner := strings.TrimSpace(cmd.Owner)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.workerLeases == nil {
+		r.workerLeases = make(map[string]WorkerLease)
+	}
+	existing, ok := r.workerLeases[name]
+	if ok && existing.Owner != owner && existing.LeaseUntil.After(now) {
+		existing.Status = WorkerLeaseHeld
+		return existing, false, nil
+	}
+	lease := WorkerLease{
+		Name:       name,
+		Owner:      owner,
+		Status:     WorkerLeaseAcquired,
+		LeaseTTL:   cmd.TTL,
+		LeaseUntil: now.Add(cmd.TTL),
+		AcquiredAt: now,
+		UpdatedAt:  now,
+	}
+	r.workerLeases[name] = lease
+	return lease, true, nil
+}
+
+func (r *MemoryRepository) RenewWorkerLease(ctx context.Context, cmd WorkerLeaseAcquireCommand) (WorkerLease, bool, error) {
+	if err := ctx.Err(); err != nil {
+		return WorkerLease{}, false, err
+	}
+	if strings.TrimSpace(cmd.Name) == "" {
+		return WorkerLease{}, false, errors.New("lease name is required")
+	}
+	if strings.TrimSpace(cmd.Owner) == "" {
+		return WorkerLease{}, false, errors.New("lease owner is required")
+	}
+	if cmd.TTL <= 0 {
+		return WorkerLease{}, false, errors.New("lease ttl must be positive")
+	}
+	now := cmd.Now
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	name := strings.TrimSpace(cmd.Name)
+	owner := strings.TrimSpace(cmd.Owner)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	existing, ok := r.workerLeases[name]
+	if !ok {
+		return WorkerLease{}, false, ErrNotFound
+	}
+	if existing.Owner != owner {
+		existing.Status = WorkerLeaseHeld
+		return existing, false, nil
+	}
+	existing.Status = WorkerLeaseAcquired
+	existing.LeaseTTL = cmd.TTL
+	existing.LeaseUntil = now.Add(cmd.TTL)
+	existing.UpdatedAt = now
+	r.workerLeases[name] = existing
+	return existing, true, nil
+}
+
+func (r *MemoryRepository) ReleaseWorkerLease(ctx context.Context, name string, owner string, now time.Time) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	name = strings.TrimSpace(name)
+	owner = strings.TrimSpace(owner)
+	if name == "" || owner == "" {
+		return nil
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	existing, ok := r.workerLeases[name]
+	if !ok || existing.Owner != owner {
+		return nil
+	}
+	existing.LeaseUntil = now
+	existing.UpdatedAt = now
+	r.workerLeases[name] = existing
+	return nil
 }
 
 func (r *MemoryRepository) ConsumeServiceProviderRateLimit(ctx context.Context, cmd ServiceProviderRateLimitConsume) (ServiceProviderRuntimeState, bool, error) {
@@ -1382,14 +1556,20 @@ func (r *MemoryRepository) SaveServiceRateLimitPolicy(ctx context.Context, polic
 			r.serviceRateLimitPolicies[i].ServiceRef == policy.ServiceRef &&
 			r.serviceRateLimitPolicies[i].InterfaceRef == policy.InterfaceRef &&
 			r.serviceRateLimitPolicies[i].ProviderRef == policy.ProviderRef
-		if (sameCode || sameScope) && r.serviceRateLimitPolicies[i].ID != policy.ID {
-			return ServiceRateLimitPolicy{}, ErrResourceConflict
-		}
-		if r.serviceRateLimitPolicies[i].ID == policy.ID || sameCode || sameScope {
+		if r.serviceRateLimitPolicies[i].ID == policy.ID {
 			policy.ID = r.serviceRateLimitPolicies[i].ID
 			policy.CreatedAt = r.serviceRateLimitPolicies[i].CreatedAt
 			r.serviceRateLimitPolicies[i] = cloneServiceRateLimitPolicy(policy)
 			return cloneServiceRateLimitPolicy(policy), nil
+		}
+		if sameCode && serviceAssetUniqueActive(r.serviceRateLimitPolicies[i].DeletedAt) {
+			policy.ID = r.serviceRateLimitPolicies[i].ID
+			policy.CreatedAt = r.serviceRateLimitPolicies[i].CreatedAt
+			r.serviceRateLimitPolicies[i] = cloneServiceRateLimitPolicy(policy)
+			return cloneServiceRateLimitPolicy(policy), nil
+		}
+		if sameScope && serviceAssetUniqueActive(r.serviceRateLimitPolicies[i].DeletedAt) {
+			return ServiceRateLimitPolicy{}, ErrResourceConflict
 		}
 	}
 	r.serviceRateLimitPolicies = append(r.serviceRateLimitPolicies, cloneServiceRateLimitPolicy(policy))
@@ -1469,16 +1649,8 @@ func (r *MemoryRepository) ListServiceCallAuditLogs(ctx context.Context, query S
 	if limit <= 0 || limit > 500 {
 		limit = 500
 	}
-	out := make([]ServiceCallAuditLog, 0, min(limit, len(r.serviceCallAuditLogs)))
-	cursorSeen := strings.TrimSpace(query.Cursor) == ""
-	for i := len(r.serviceCallAuditLogs) - 1; i >= 0; i-- {
-		log := r.serviceCallAuditLogs[i]
-		if !cursorSeen {
-			if serviceCallAuditCursor(log) == strings.TrimSpace(query.Cursor) {
-				cursorSeen = true
-			}
-			continue
-		}
+	matches := make([]ServiceCallAuditLog, 0, len(r.serviceCallAuditLogs))
+	for _, log := range r.serviceCallAuditLogs {
 		if query.TenantID != "" && log.TenantID != query.TenantID {
 			continue
 		}
@@ -1515,7 +1687,21 @@ func (r *MemoryRepository) ListServiceCallAuditLogs(ctx context.Context, query S
 		if query.ErrorCode != "" && log.ErrorCode != query.ErrorCode {
 			continue
 		}
-		out = append(out, cloneServiceCallAuditLog(log))
+		matches = append(matches, cloneServiceCallAuditLog(log))
+	}
+	slices.SortFunc(matches, func(a, b ServiceCallAuditLog) int {
+		return auditCreatedDescCompare(a.CreatedAt, a.ID, b.CreatedAt, b.ID)
+	})
+	out := make([]ServiceCallAuditLog, 0, min(limit, len(matches)))
+	cursorSeen := strings.TrimSpace(query.Cursor) == ""
+	for _, log := range matches {
+		if !cursorSeen {
+			if serviceCallAuditCursor(log) == strings.TrimSpace(query.Cursor) {
+				cursorSeen = true
+			}
+			continue
+		}
+		out = append(out, log)
 		if len(out) >= limit {
 			break
 		}
@@ -1550,11 +1736,201 @@ func (r *MemoryRepository) PurgeServiceCallAuditLogs(ctx context.Context, tenant
 	return deleted, nil
 }
 
+func (r *MemoryRepository) CreateProviderDecisionAuditLog(ctx context.Context, log ProviderDecisionAuditLog) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if log.ID == "" {
+		log.ID = NewID("provdecision")
+	}
+	if log.CreatedAt.IsZero() {
+		log.CreatedAt = time.Now().UTC()
+	}
+	if err := log.Validate(); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.providerDecisionAudits = append(r.providerDecisionAudits, cloneProviderDecisionAuditLog(log))
+	return nil
+}
+
+func (r *MemoryRepository) ListProviderDecisionAuditLogs(ctx context.Context, query ProviderDecisionAuditQuery) ([]ProviderDecisionAuditLog, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	limit := query.Limit
+	if limit <= 0 || limit > 500 {
+		limit = 500
+	}
+	matches := make([]ProviderDecisionAuditLog, 0, len(r.providerDecisionAudits))
+	for _, log := range r.providerDecisionAudits {
+		if query.TenantID != "" && log.TenantID != query.TenantID {
+			continue
+		}
+		if query.WorkspaceID != "" && log.WorkspaceID != query.WorkspaceID {
+			continue
+		}
+		if query.FolderID != "" && log.FolderID != query.FolderID {
+			continue
+		}
+		if query.ActivityID != "" && log.ActivityID != query.ActivityID {
+			continue
+		}
+		if query.NodeID != "" && log.NodeID != query.NodeID {
+			continue
+		}
+		if query.ServiceRef != "" && log.ServiceRef != query.ServiceRef {
+			continue
+		}
+		if query.InterfaceRef != "" && log.InterfaceRef != query.InterfaceRef {
+			continue
+		}
+		if query.ProviderRef != "" && log.CandidateProviderRef != query.ProviderRef {
+			continue
+		}
+		if query.Decision != "" && log.Decision != query.Decision {
+			continue
+		}
+		matches = append(matches, cloneProviderDecisionAuditLog(log))
+	}
+	slices.SortFunc(matches, func(a, b ProviderDecisionAuditLog) int {
+		return auditCreatedDescCompare(a.CreatedAt, a.ID, b.CreatedAt, b.ID)
+	})
+	out := make([]ProviderDecisionAuditLog, 0, min(limit, len(matches)))
+	cursorSeen := strings.TrimSpace(query.Cursor) == ""
+	for _, log := range matches {
+		if !cursorSeen {
+			if providerDecisionAuditCursor(log) == strings.TrimSpace(query.Cursor) {
+				cursorSeen = true
+			}
+			continue
+		}
+		out = append(out, log)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
+}
+
+func (r *MemoryRepository) CreateMigrationAuditLog(ctx context.Context, log MigrationAuditLog) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if log.ID == "" {
+		log.ID = NewID("migaudit")
+	}
+	if log.Result == "" {
+		log.Result = MigrationAuditSuccess
+	}
+	if log.CreatedAt.IsZero() {
+		log.CreatedAt = time.Now().UTC()
+	}
+	if err := log.Validate(); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.migrationAuditLogs = append(r.migrationAuditLogs, cloneMigrationAuditLog(log))
+	return nil
+}
+
+func (r *MemoryRepository) ListMigrationAuditLogs(ctx context.Context, query MigrationAuditQuery) ([]MigrationAuditLog, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	limit := query.Limit
+	if limit <= 0 || limit > 500 {
+		limit = 500
+	}
+	matches := make([]MigrationAuditLog, 0, len(r.migrationAuditLogs))
+	for _, log := range r.migrationAuditLogs {
+		if query.TenantID != "" && log.TenantID != query.TenantID {
+			continue
+		}
+		if query.WorkspaceID != "" && log.WorkspaceID != query.WorkspaceID {
+			continue
+		}
+		if query.FolderID != "" && log.FolderID != query.FolderID {
+			continue
+		}
+		if query.ActivityID != "" && log.ActivityID != query.ActivityID {
+			continue
+		}
+		if query.MigrationType != "" && log.MigrationType != query.MigrationType {
+			continue
+		}
+		if query.Operation != "" && log.Operation != query.Operation {
+			continue
+		}
+		if query.Actor != "" && log.Actor != query.Actor {
+			continue
+		}
+		if query.Result != "" && log.Result != query.Result {
+			continue
+		}
+		matches = append(matches, cloneMigrationAuditLog(log))
+	}
+	slices.SortFunc(matches, func(a, b MigrationAuditLog) int {
+		return auditCreatedDescCompare(a.CreatedAt, a.ID, b.CreatedAt, b.ID)
+	})
+	out := make([]MigrationAuditLog, 0, min(limit, len(matches)))
+	cursorSeen := strings.TrimSpace(query.Cursor) == ""
+	for _, log := range matches {
+		if !cursorSeen {
+			if migrationAuditCursor(log) == strings.TrimSpace(query.Cursor) {
+				cursorSeen = true
+			}
+			continue
+		}
+		out = append(out, log)
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
+}
+
 func serviceCallAuditCursor(log ServiceCallAuditLog) string {
 	if log.ID == "" {
 		return ""
 	}
 	return log.CreatedAt.UTC().Format(time.RFC3339Nano) + "|" + log.ID
+}
+
+func providerDecisionAuditCursor(log ProviderDecisionAuditLog) string {
+	if log.ID == "" {
+		return ""
+	}
+	return log.CreatedAt.UTC().Format(time.RFC3339Nano) + "|" + log.ID
+}
+
+func migrationAuditCursor(log MigrationAuditLog) string {
+	if log.ID == "" {
+		return ""
+	}
+	return log.CreatedAt.UTC().Format(time.RFC3339Nano) + "|" + log.ID
+}
+
+func auditCreatedDescCompare(leftTime time.Time, leftID string, rightTime time.Time, rightID string) int {
+	if !leftTime.Equal(rightTime) {
+		if leftTime.After(rightTime) {
+			return -1
+		}
+		return 1
+	}
+	if leftID > rightID {
+		return -1
+	}
+	if leftID < rightID {
+		return 1
+	}
+	return 0
 }
 
 func sameActivityStateKey(state ActivityState, key ActivityStateKey) bool {

@@ -1305,12 +1305,12 @@ VIEWER 不能保存写资源节点
 | `outbox/callback + resourceRef` | 已完成第一版 | 核心节点可绑定资源、校验权限、生成计划并记录审计；真实投递/回调仍由 worker/API 权威 |
 | 资源审计 | 已完成第一版 | `state-store/fact-query/outbox/callback/mq-publish/Lua Resource API + resourceRef` 会记录资源调用审计 |
 
-仍需完善：
+真实后续边界：
 
 | 项目 | 状态 | 说明 |
 | --- | --- | --- |
-| 独立密钥服务 | 未完成 | `secretRef` 当前支持环境变量解析，尚未接企业 KMS/Vault |
-| 外部业务 Provider 灰度/熔断 | 未完成 | 该能力应在 Service Provider 治理层实现；Resource 层只保留 timeout/schema/dry-run 和连接安全 |
+| 独立密钥服务 | 边界 | `secretRef` 当前支持环境变量解析；企业 KMS/Vault 接入属于独立密钥服务边界 |
+| 外部业务 Provider 灰度/熔断 | 不属于 Resource 层 | 该能力已归属 Service Provider 治理层；Resource 层只保留 timeout/schema/dry-run 和连接安全 |
 
 验收：
 
@@ -1333,7 +1333,7 @@ fact-query 可使用公共表/公共事实 Resource 兼容项：已完成第一�
    - `REDIS mode=HASH`：按 `keyPrefix + keyTemplate + field` 读写 hash field 语义
    - `REDIS mode=COUNTER`：支持 `READ/WRITE/UPSERT/DELETE/CHECK_AND_INCREMENT`，可配置 `delta/max`
    - `REDIS mode=LOCK`：支持 `READ/UPSERT/DELETE`，写入时按 `ttlSeconds` 建立受控锁，锁未过期会返回 `REDIS_LOCK_HELD`
-   - 当前底层使用统一 `marketing_storage_state` 承载 Redis 语义，后续可替换为真实 Redis client adapter，节点和 Lua API 不需要改变
+   - 当前底层使用统一 `marketing_storage_state` 承载 Redis 语义；替换为真实 Redis client adapter 时，节点和 Lua API 不需要改变
 2. `mq-publish + resourceRef` 已支持 `MQ`：
    - topic/provider/destination 从资源配置读取
    - 节点负责生成受控 `PUBLISH_ACCEPTED` 意图、资源权限校验和审计
@@ -1349,7 +1349,7 @@ fact-query 可使用公共表/公共事实 Resource 兼容项：已完成第一�
 4. 高风险操作第一版支持资源级审批开关：
    - 资源配置 `requireApproval: true` 时，`DELETE/CALL/PUBLISH` 必须在 options 中传 `approved: true` 或 `approvalId`
    - 资源配置 `requireFormalApproval: true` 时，必须命中当前活动版本的正式审批快照，`approvalId` 不能绕过
-   - 后续需要接入独立资源审批单和生产 debug 写入审批链路
+   - 独立资源审批单和生产 debug 写入审批链路属于真实后续边界
 
 已完成：
 
@@ -1365,14 +1365,14 @@ fact-query 可使用公共表/公共事实 Resource 兼容项：已完成第一�
 | `lock + REDIS mode=LOCK` | 已完成第一版 | 专用 `lock` 节点支持 acquire/read/release 和 ttl |
 | CAS 语义 | 已完成第一版 | `CAS` 必须带 `expectedVersion` 或上游 `storage_version`，否则阻断 |
 
-仍需完善：
+真实后续边界：
 
 | 项目 | 状态 | 说明 |
 | --- | --- | --- |
-| 真实 Redis client adapter | 未完成 | 当前 Redis 语义由 `marketing_storage_state` 承载，未来替换成真实 Redis client |
-| MQ broker transport SDK | 未完成 | 当前有 OutboxWorker/MQSender 边界和测试 transport，生产 Kafka/RabbitMQ/Pulsar SDK 需部署侧注入 |
-| 独立资源审批单 | 未完成 | 已支持活动正式审批快照硬校验，尚未建立独立 resource approval order |
-| 生产 debug 写入审批 | 未完成 | 需要结合 Debug/Execution 权限和审批链路 |
+| 真实 Redis client adapter | 边界 | 当前 Redis 语义由 `marketing_storage_state` 承载；真实 Redis client adapter 可在不改变节点和 Lua API 的前提下替换底层 |
+| MQ broker transport SDK | 边界 | 当前有 OutboxWorker/MQSender 边界和测试 transport，生产 Kafka/RabbitMQ/Pulsar SDK 需部署侧注入 |
+| 独立资源审批单 | 边界 | 已支持活动正式审批快照硬校验；独立 resource approval order 仍需单独设计 |
+| 生产 debug 写入审批 | 边界 | 需要结合 Debug/Execution 权限和审批链路 |
 
 验收：
 

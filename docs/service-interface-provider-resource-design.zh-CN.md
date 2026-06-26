@@ -626,7 +626,7 @@ UI 文案建议：
 
 - 仍有 active production workflow 使用直接 endpoint/providerCode；
 - 仍有外部客户或运营活动依赖旧字段；
-- 新模型缺少同等能力，例如某协议 Provider 尚未支持；
+- 新模型缺少同等能力，例如某协议 Provider 还没有同等实现；
 - 没有自动或半自动迁移工具。
 
 ### Break-glass 例外
@@ -914,7 +914,7 @@ UI 上应根据 `targetType` 展示不同操作集合，避免把服务调用和
 
 ## 字段级契约
 
-本节把 Service、Interface、Provider 和 providerChain Step 的字段收敛成可开发、可测试的契约。文档里的“当前支持”表示当前代码必须满足；“规划支持”表示保留模型但运行时不能假装已经支持。
+本节把 Service、Interface、Provider 和 providerChain Step 的字段收敛成可开发、可测试的契约。文档里的“当前支持”表示当前代码必须满足；“模型保留”表示字段或枚举可以留在契约中，但运行时不能假装已经支持。
 
 ### ServiceDefinition
 
@@ -1039,7 +1039,7 @@ Provider 策略属于服务治理，不应该由节点脚本硬编码实现。
 | --- | --- | --- | --- | --- |
 | `PRIMARY` | 当前支持 | 如果指定 `providerRef`，直接使用该 provider；否则选择 `status=ACTIVE` 且 `priority` 最小的 provider | provider 失败后按 step 的 `onMiss` 或节点失败策略处理，不自动 fallback | 非 ACTIVE provider 不可选；同 priority 按更新时间/code 稳定排序 |
 | `PRIMARY_WITH_FALLBACK` | 第一阶段已在 `fact-query` 落地 | 按 `priority ASC` 依次尝试 ACTIVE provider | 当前第一阶段 provider 执行失败会尝试下一候选；后续补错误分类后再区分 4xx/schema/auth 是否 fallback | trace 必须记录每个尝试的 provider 和失败原因 |
-| `CACHE_ASIDE` | 已进入实现 | 先选择 cache provider，再选择 primary provider；cache provider 识别规则为 `config.role=CACHE`、`config.cache=true` 或 `environment=cache` | cache miss 不算失败并 fallback primary；cache error 默认 fallback primary，可用 `config.cacheErrorPolicy=FAIL` 改为直接失败 | miss 可用 `config.missPath` + `config.missValues` 判断；未配置时以 `facts` 为空、nil 或 empty 作为 miss |
+| `CACHE_ASIDE` | 已落地 | 先选择 cache provider，再选择 primary provider；cache provider 识别规则为 `config.role=CACHE`、`config.cache=true` 或 `environment=cache` | cache miss 不算失败并 fallback primary；cache error 默认 fallback primary，可用 `config.cacheErrorPolicy=FAIL` 改为直接失败；primary 成功且通过 output schema 后执行 cache write-back | miss 可用 `config.missPath` + `config.missValues` 判断；未配置时以 `facts` 为空、nil 或 empty 作为 miss；write-back 默认失败只记录 warning，`config.strict=true` 或 `config.writeBackRequired=true` 时阻断 |
 | `WEIGHTED` | 已进入实现 | 先过滤 ACTIVE、非 mock、runtime 可用、`weight > 0` provider，再用 deterministic hash seed 选择一个 provider | 被选 provider 失败不自动重抽，除非配置 `PRIMARY_WITH_FALLBACK` 类策略 | 总权重大于 0；同一 tenant/activity/node/service/interface/event/provider set 选择稳定 |
 | `WEIGHTED_WITH_FALLBACK` | 已进入实现 | 先执行 `WEIGHTED` 选择并保留候选序列 | 首选 provider 失败后按候选顺序 fallback | trace/audit 记录 weighted bucket、候选和 fallback 原因 |
 | `ENVIRONMENT` | 已进入实现 | 运行时/发布时读取 providerChain 的 `environment/runtimeEnvironment`，优先选择同环境 provider；无同环境时允许空/default provider 兜底 | 显式 providerRef 环境不匹配直接失败；候选过滤后无 provider 则失败 | PROD/DEV/STAGING 隔离，不允许生产误用 DEV provider |
@@ -1049,7 +1049,8 @@ Provider 策略属于服务治理，不应该由节点脚本硬编码实现。
 
 - workflow validation 和 runtime 允许 `PRIMARY`、`PRIMARY_WITH_FALLBACK`、`CACHE_ASIDE`、`WEIGHTED`、`WEIGHTED_WITH_FALLBACK`、`ENVIRONMENT_MATCH`、`MOCK_ONLY` 策略入口。
 - `PRIMARY_WITH_FALLBACK` 已在 `fact-query` 的 `SERVICE_INTERFACE` providerChain 执行链中落地，会按候选 provider 逐个尝试。
-- `CACHE_ASIDE` 已在 `SERVICE_INTERFACE` providerChain 执行链中落地：resolver 按 cache provider -> primary provider 返回候选，executor 在 cache hit 时停止，cache miss 时调用 primary，cache error 默认 fallback，`cacheErrorPolicy=FAIL` 时直接失败。
+- `CACHE_ASIDE` 已在 `SERVICE_INTERFACE` providerChain 执行链中落地：resolver 按 cache provider -> primary provider 返回候选，executor 在 cache hit 时停止，cache miss 时调用 primary，cache error 默认 fallback，`cacheErrorPolicy=FAIL` 时直接失败；primary 输出通过 `outputSchemaRef` 后会按 cache provider 配置写回受控 Resource。
+- CACHE_ASIDE write-back 默认按 fact key 写入 primary `facts[factCode]`，可用 `writeBackValuePath/cacheWriteBackValuePath` 显式截取 payload；写入资源默认复用 cache provider resource，可用 `writeBackResourceRef/cacheWriteBackResourceRef/writeBackStoreRef` 覆盖。payload 会先做 JSON 化和大小限制校验，默认上限 64KB，可用 `writeBackMaxBytes/cacheWriteBackMaxBytes` 调整。
 - `WEIGHTED` 已使用 deterministic hash，不再按排序取第一；seed 来自 tenant、activity、activity version、node、service/interface、event/idempotency 和 provider set。
 - `WEIGHTED_WITH_FALLBACK` 在 weighted 首选失败后继续尝试候选 provider。
 - `ENVIRONMENT_MATCH` 已支持 providerChain 的 `environment` / `runtimeEnvironment`，同环境优先，空/default provider 作为兜底。
@@ -1261,7 +1262,7 @@ Provider 角色：
 1. 调用 CACHE provider。
 2. 如果命中，返回结果。
 3. 如果 miss，调用 PRIMARY provider。
-4. PRIMARY 成功后可异步写回 CACHE。
+4. PRIMARY 成功且通过 `outputSchemaRef` 校验后，同步写回 CACHE 或配置的受控 Resource。
 ```
 
 配置示例：
@@ -1272,6 +1273,8 @@ Provider 角色：
   "missPath": "$.cache.hit",
   "missValues": ["false"],
   "cacheErrorPolicy": "FALLBACK",
+  "writeBackRequired": false,
+  "writeBackMaxBytes": 65536,
   "targetResourceRef": "user-profile-cache"
 }
 ```
@@ -1281,8 +1284,10 @@ Provider 角色：
 - cache miss 不算 provider failure，默认按 `facts` 为空、nil 或 empty 作为 miss；
 - 配置 `missPath` 后，读取响应 JSONPath；配置 `missValues` 后，命中这些值视为 miss；未配置 `missValues` 时路径值为空视为 miss；
 - cache error 默认 fallback primary，`cacheErrorPolicy=FAIL` 时直接失败；
-- cache hit 和 primary output 仍必须满足 interface output schema；cache miss 响应不做 output schema 强制校验；
-- cache 写回仍是后续增强，当前最小闭环只做 read-through fallback。
+- cache hit 和 primary output 仍必须满足 interface output schema；cache miss 响应不作为最终 interface output，不做 output schema 强制校验；miss 后 primary 分支不能绕过 `outputSchemaRef`；
+- write-back 默认按 fact key 写入 `facts[factCode]`，可用 `writeBackValuePath/cacheWriteBackValuePath` 改写 payload 来源；
+- write-back resource 默认复用 cache provider resource，可用 `writeBackResourceRef/cacheWriteBackResourceRef/writeBackStoreRef` 指向单独受控 resource；
+- write-back payload 会 JSON 化并做大小限制，默认 64KB；失败默认进入 trace/audit warning，不影响 primary 成功；`strict=true` 或 `writeBackRequired=true` 时阻断。
 
 #### MOCK
 
@@ -1620,6 +1625,18 @@ actorId
 environment
 ```
 
+服务 Provider 的 Redis backend key 维度：
+
+```text
+prefix:tenantId:serviceRef:interfaceRef:providerRef:policyRef:rateLimitScope:subjectHash
+```
+
+- 默认 `rateLimitScope=SUBJECT`，`subjectHash=sha256(subject.type + "\0" + subject.id)`，不保存 raw subject id；
+- 只有 policy `metadata.rateLimitScope` / `metadata.runtimeScope` / `metadata.redisScope` 显式为 `GLOBAL` 时才使用 `rateLimitScope=GLOBAL`；
+- 直接调用或测试入口没有 subject 时使用 `rateLimitScope=ANONYMOUS`，不会和正常 subject bucket 或显式 global bucket 混用；
+- Redis key 仍包含 tenant/service/interface/provider/policy，确保同 subject 在不同 provider 或 policy 下互不影响。
+- 测试边界：当前已有 engine fake limiter 行为测试和 Redis Lua request/adapter 构造测试；真实 Redis server、miniredis 或 testcontainers 集成测试属于生产接入前边界。
+
 原则：
 
 - prod 默认 fail-closed；
@@ -1920,7 +1937,7 @@ risk-evaluation-error-v1
 
 ### Service Binding 治理当前实现状态
 
-当前实现状态（2026-06-24）：
+当前实现状态（2026-06-26）：
 
 | 项目 | 状态 | 说明 |
 | --- | --- | --- |
@@ -1939,7 +1956,7 @@ risk-evaluation-error-v1
 
 ### Provider Runtime Governance 当前实现状态
 
-当前实现状态（2026-06-24）：
+当前实现状态（2026-06-26）：
 
 | 项目 | 状态 | 说明 |
 | --- | --- | --- |
@@ -1951,13 +1968,15 @@ risk-evaluation-error-v1
 | circuit reset | 已进入实现 | 提供 engine reset 方法和 Admin API：`POST /admin/v1/services/{serviceCode}/interfaces/{interfaceCode}/providers/{providerCode}/reset-circuit` |
 | half-open 恢复 | 已进入实现 | `OPEN` 超过 cooldown 后进入 `HALF_OPEN`；支持 `halfOpenProbeLimit`、`halfOpenSuccessThreshold`、失败回退 OPEN |
 | rate limit 配置表 | 已进入实现 | 新增 `marketing_service_rate_limit_policy`，支持 tenant/service/interface/provider 维度配置；Admin API 支持 `GET/POST /admin/v1/service-rate-limit-policies` |
-| rate limit 运行时执行 | 已进入实现 | 调用前优先读取 rate-limit 配置表；无配置时回退 provider config 或默认值；Postgres 使用事务锁单行避免多实例超发 |
-| Redis 分布式限流 | 后续增强 | `backend=REDIS` 已作为策略字段保留，但当前未接入 Redis 客户端和 Lua/原子脚本；生产多实例强一致限流仍需后续接 Redis backend |
+| rate limit 运行时执行 | 已进入实现 | 调用前优先读取 rate-limit 配置表；binding `rateLimitRef` 非空时按 ref 精确解析且不回退；无 binding ref 时回退 provider config 或默认值；Postgres 使用事务锁单行避免多实例超发 |
+| Redis 分布式限流 | 已进入实现 | `backend=REDIS` 策略在消费阶段走可注入 Redis limiter；内置 Redis Lua 固定窗口脚本使用 `PSETEX/INCR/PTTL` 原子消费。未注入 Redis limiter 时返回 `SERVICE_RATE_LIMIT_REDIS_NOT_CONFIGURED`，不再伪装为 Postgres。当前测试覆盖 engine fake limiter 和 Redis Lua request/adapter 构造；真实 Redis server/miniredis/testcontainers 集成测试和生产 Redis client 注入是边界 |
 | fallback 跳过不可用 provider | 已进入实现 | `PRIMARY_WITH_FALLBACK` 候选会跳过 unhealthy/open/limited provider，后续 provider 可用则继续 |
 | weighted 稳定选择 | 已进入实现 | `WEIGHTED` 按 deterministic hash(seed + provider set) 选单个 provider，不再排序取第一 |
 | environment 过滤 | 已进入实现 | 发布和运行时按 providerChain `environment/runtimeEnvironment` 过滤 provider，同环境优先，空/default 兜底 |
 | mock provider 策略 | 已进入实现 | `MOCK_ONLY` 只选显式 mock；普通策略跳过 mock；显式引用 mock 会被阻断 |
-| 主动 health check 定时器 | 已进入实现 | 新增 `ProviderHealthWorker`，按 ACTIVE provider 定时复用手动 health-check 逻辑刷新 runtime state；通过 `EX_MARKETING_PROVIDER_HEALTH_WORKER=true` 显式开启 |
+| 主动 health check 定时器 | 已进入实现 | 新增 `ProviderHealthWorker`，按 ACTIVE provider 定时复用手动 health-check 逻辑刷新 runtime state；通过 `EX_MARKETING_PROVIDER_HEALTH_WORKER=true` 显式开启；单轮按 batch/offset 分页扫完，不再固定只扫首批 |
+| health worker 调度租约 | 已进入实现 | 新增 `marketing_worker_lease`，worker 每轮用 `leaseName/owner/TTL` 抢占，并在多批扫描中续租；同名未过期租约会跳过，租约过期后其他实例可恢复执行；续租发现 owner 不匹配会停止本轮 |
+| Provider health 概览 API | 已进入实现 | 新增 `GET /admin/v1/provider-health`，返回 tenant/service/interface/provider 维度的 `status`、`healthStatus`、`circuitStatus`、`lastCheckedAt/By`、限流计数等摘要，供 Studio/运维读取 |
 | ProviderChainExecutor 抽象 | 已进入实现 | `SERVICE_INTERFACE` fact-query 调用链已从 `workflow_executor` 抽到 `ProviderChainExecutor`，统一执行 access -> provider resolve -> schema -> runtime policy -> resource operator -> audit |
 | ResourceOperator 抽象 | 已进入实现 | `ServiceResourceOperator` 覆盖 `SERVICE_INTERFACE` fact-query，并暴露通用 `ExecuteResourceAPI`；Lua resource 调用已走该抽象 |
 | service call audit | 已进入实现 | 新增 `marketing_service_call_audit`、Memory/Postgres repo、Admin 查询 API；成功、权限拒绝、schema 失败、provider runtime/policy 失败都会写 hash 审计 |
@@ -2418,7 +2437,7 @@ AND Provider dependent Resource Binding PASS
 | `scope` | enum | 是 | `WORKSPACE` | `SYSTEM`、`TENANT`、`WORKSPACE`、`FOLDER`、`ACTIVITY`、`NODE` |
 | `workspaceId` | string | 视 scope | `""` | `WORKSPACE/FOLDER/ACTIVITY/NODE` 时使用 |
 | `folderId` | string | 视 scope | `""` | `FOLDER` 时使用 |
-| `includeSubfolders` | boolean | 否 | `false` | folder 授权是否包含子文件夹 |
+| `includeSubfolders` | boolean | 否 | `false` | folder 授权是否包含子文件夹；运行时按 workspace folder `parentId` 链判断父子关系 |
 | `activityId` | string | 视 scope | `""` | `ACTIVITY/NODE` 时使用 |
 | `nodeId` | string | 否 | `""` | 指定单个节点 |
 | `allowedNodeTypes` | string[] | 否 | `[]` | 空数组表示不按 nodeType 限制 |
@@ -2432,7 +2451,7 @@ AND Provider dependent Resource Binding PASS
 | `luaCallable` | boolean | 否 | `false` | 是否允许 Lua/表达式调用 |
 | `requireApproval` | boolean | 否 | `false` | 是否需要正式审批快照 |
 | `environment` | string | 否 | `""` | 空表示所有环境；否则匹配 runtime environment |
-| `rateLimitRef` | string | 否 | `""` | 服务接口级限流策略引用；当前先保存引用，运行时仍按 rate-limit policy 匹配优先级解析 |
+| `rateLimitRef` | string | 否 | `""` | 服务接口级限流策略引用；非空时运行时按 ref 精确解析策略，缺失、禁用、租户不匹配或 scope 不覆盖会阻断发布/运行 |
 | `status` | enum | 是 | `ACTIVE` | `ACTIVE/DISABLED/DRAFT/DELETED` |
 | `deletedAt` | timestamp | 否 | `null` | 软删除时间；非空时不参与 binding 匹配 |
 
@@ -2507,8 +2526,8 @@ CREATE TABLE marketing_service_interface_binding (
 - `deleted_at IS NOT NULL` 或 `status=DELETED` 的 binding 不参与匹配；
 - `environment` 非空时必须匹配请求或 workflow runtime environment；
 - `min_role` 对 `principal_type=ROLE` 生效，按 `VIEWER < EDITOR < ADMIN < OWNER` 比较，未知角色保守拒绝；
-- `include_subfolders` 当前已保存并进入 API/Studio，但尚未接 folder tree 查询能力，所以运行时仍按当前 folder 精确匹配；
-- `rate_limit_ref` 当前已保存并进入 API/Studio，用于表达和 service rate-limit policy 的语义关联；运行时仍按 provider/interface/service/tenant policy 优先级解析，不直接按 ref 查找。
+- `include_subfolders=true` 时，运行时按现有 workspace folder `parent_id` 链判断父 folder 是否覆盖子 folder；binding folder、request folder 或 workspace 缺失、跨 workspace/tenant、folder deleted、循环或链路过深都 fail closed；
+- `rate_limit_ref` 非空时，provider 解析和运行时消费都按该 ref 精确查找 service rate-limit policy；策略缺失、禁用/删除、tenant 不匹配或 scope 不覆盖当前 provider 时返回明确错误，不回退 provider/interface/service/tenant 默认优先级。
 
 建议索引：
 
@@ -2783,7 +2802,7 @@ Run History trace 至少展示：
 
 审计表默认只允许保存 `L0-L2`，`L3-L5` 必须脱敏、hash、截断或完全丢弃。
 
-当前实现状态（2026-06-24）：
+当前实现状态（2026-06-26）：
 
 | 项目 | 状态 | 说明 |
 | --- | --- | --- |
@@ -2794,6 +2813,8 @@ Run History trace 至少展示：
 | 查询 API | 已进入实现 | `GET /admin/v1/service-call-audit-logs` 支持按 tenant/workspace/activity/node/service/interface/provider/resource/status/errorCode 过滤，返回 envelope/cursor/requestId |
 | 保留清理 job | 已进入实现 | 新增 `POST /admin/v1/service-call-audit-logs/purge` 和 Repository purge 方法，定时调度仍由运维 job 接入 |
 | 审计查看 RBAC | 已进入实现 | 查询带 workspaceId 时执行 workspace view 权限检查；tenant/folder 更细粒度权限继续按 Admin RBAC 演进 |
+| Provider decision audit | 已落地 | `marketing_service_provider_decision_audit` 记录 selected/skipped/fallback/rate_limited/unhealthy/circuit_open/schema_failed 等决策，details 只保存摘要 |
+| Migration audit | 已落地 | `marketing_service_migration_audit` 记录 DB/workflow migration analyze/dry-run/apply 和 guard 失败摘要，summary/error 写入前脱敏并限制大小 |
 
 ### 保留周期
 
@@ -3111,9 +3132,9 @@ third-party metrics contain no raw payload or secret
 - `status` 使用 CHECK 约束，避免写入未知状态；
 - JSONB 字段默认空对象或空数组，禁止 `NULL`；
 - 不在数据库保存明文 secret、token、header；
-- 跨 service/interface/provider 的 FK 使用 `(tenant_id, code)` 组合唯一键支撑；
+- 跨 service/interface/provider 的写入有效性由 service 层校验父级是否存在且 `status=ACTIVE`、`deleted_at IS NULL`；
 - Service governance 核心资产表已通过 `019_service_asset_catalog_fields.sql` 增加 `builtin`、`catalog_version`、`source_hash`、`deleted_at` 字段；默认 list 不返回 `status=DELETED` 或 `deleted_at IS NOT NULL` 的记录，除非显式 `includeDeleted=true`。
-- 当前仍保留既有唯一约束，例如 `(tenant_id, code)`、`(tenant_id, service_ref, code)`、`(tenant_id, service_ref, interface_ref, code)`；因此软删除后立即用同一 code/ref 重建仍受唯一约束限制。后续如果需要“软删除后重建同 code”，必须新增部分唯一索引和数据迁移方案。
+- `021_service_asset_soft_delete_unique_indexes.sql` 已把 Service/Interface/Provider/Schema/Binding/RateLimitPolicy 的唯一约束改为 `WHERE deleted_at IS NULL` 的部分唯一索引；软删除后可用同一 code/ref 重建，未删除 active 记录的重复写入仍返回冲突。
 
 推荐状态集合：
 
@@ -3150,7 +3171,7 @@ DDL 必须按依赖顺序创建：
 
 ### DB Migration Admin API
 
-当前 DB migration analyze/apply API 已进入实现，用于替代只能通过 `cmd/db-migration-release` 手工查看的运维缺口。API 只处理数据库 schema migration，不处理旧 workflow provider/resource 字段迁移；旧 workflow 迁移仍使用后文 `workflows/{activityId}/migration/service-interface/*` 设计。
+当前 DB migration analyze/apply API 已进入实现，用于替代只能通过 `cmd/db-migration-release` 手工查看的运维缺口。API 只处理数据库 schema migration；旧 workflow provider/resource 字段迁移由 `workflows/{activityId}/migration/service-interface/*` 处理，只作用于 draft。
 
 已落地接口：
 
@@ -3163,6 +3184,7 @@ POST /admin/v1/db-migrations/apply
 `status` 和 `analyze` 是只读接口：
 
 - 必须带 `X-Actor-Id`；
+- 必须满足平台管理员头 `X-Platform-Admin: true` + `X-Platform-Role: ADMIN|OWNER|PLATFORM_ADMIN`，或 actor 是当前 tenant 下任一 active workspace 的 `OWNER/ADMIN`；
 - 不创建 `schema_migrations` 表；
 - 返回本地 migration 文件、已应用记录、pending migration、required table missing、checksum/filename drift、legacy untracked schema 信息；
 - 如果 handler 没有注入 DB migration manager，返回 `503`。
@@ -3172,19 +3194,24 @@ POST /admin/v1/db-migrations/apply
 - 空 body 或 `{"dryRun":true}` 只返回 analyze 结果，不执行 apply；
 - 真正执行必须同时满足：
   - `X-Actor-Id` 非空；
+  - 平台管理员或租户 workspace `OWNER/ADMIN`；
   - `confirm=true`；
   - `confirmation="APPLY_DB_MIGRATIONS"`；
   - `breakGlass=true` 或 `X-Break-Glass: true`；
+  - break-glass scope 必须是 `db-migration:apply`；
+  - break-glass actor 必须等于 `X-Actor-Id`；
+  - break-glass ticket 非空；
+  - break-glass expiresAt 必须是未来时间且不超过 2 小时；
   - `reason` 非空；
 - 执行前重新 analyze，存在 checksum/filename drift、failed record、legacy untracked schema、latest 状态 required table missing 时拒绝；
-- 执行后再次 analyze，响应包含 before/after，不返回 migration SQL 正文。
+- 执行后再次 analyze，响应包含 before/after，不返回 migration SQL 正文，并写 `DB_MIGRATION_APPLY` 审计。
 
 当前边界：
 
 - API 复用 `dbmigration.Manager`，不通过 shell 调用命令；
 - 生产 `cmd/exmarketing` 在 Postgres repository 模式下注入 manager；memory 模式默认返回未配置；
 - 如果普通 Postgres repository 因 pending migration 无法通过启动 drift check，可用 `EX_MARKETING_REPOSITORY=memory` + `EX_MARKETING_DB_MIGRATION_API=true` 显式启动受保护迁移维护入口；
-- 当前权限边界是 actor + break-glass + 固定确认短语，尚未接入独立租户级平台管理员 RBAC；
+- 当前权限复用 workspace/tenant role 和平台管理员请求头；独立身份提供方签名 token / middleware 是边界；
 - apply 沿用底层 migration 的 advisory lock 和单 migration 事务语义。
 
 ### marketing_service_schema
@@ -3338,7 +3365,7 @@ CREATE INDEX idx_marketing_service_provider_interface
 ```
 
 Provider 的 `resource_refs_json` 不做数据库 FK，因为一个 Provider 可引用多个 Resource，且 Resource 表已经存在。保存、发布和运行时必须由应用层校验 Resource 存在、ACTIVE、scope 和 capability。
-Provider 的 health/circuit/rate limit 运行态由 `marketing_service_provider_runtime_state` 承载；限流策略由独立 `marketing_service_rate_limit_policy` 表承载。mapping 专用列仍属于后续增强；`deleted_at`、`builtin`、`catalog_version`、`source_hash` 已由 `019_service_asset_catalog_fields.sql` 落到 Service、Interface、Provider、Schema、Binding、RateLimitPolicy。
+Provider 的 health/circuit/rate limit 运行态由 `marketing_service_provider_runtime_state` 承载；限流策略由独立 `marketing_service_rate_limit_policy` 表承载。mapping 专用列属于扩展边界；`deleted_at`、`builtin`、`catalog_version`、`source_hash` 已由 `019_service_asset_catalog_fields.sql` 落到 Service、Interface、Provider、Schema、Binding、RateLimitPolicy。
 
 ### catalog/soft-delete 字段
 
@@ -3371,15 +3398,15 @@ marketing_service_rate_limit_policy
 
 内置 catalog 物化规则：
 
-- 保存自定义 provider 或 binding 时，如果父级内置 service/interface 尚未物化，会写入 `builtin=true`、`catalog_version=service-governance-v1`、`source_hash=sha256:<hex>`；
+- 保存自定义 provider 或 binding 时，如果父级内置 service/interface 还没有物化，会写入 `builtin=true`、`catalog_version=service-governance-v1`、`source_hash=sha256:<hex>`；
 - 内置 schema/provider 的虚拟定义同样带 catalog 追踪字段；
 - 如果未来 catalog 来源改为独立 YAML/JSON，`catalog_version/source_hash` 必须来自该源文件的版本和内容 hash，不能散落在业务逻辑中。
 
 唯一约束边界：
 
-- 当前不改已存在唯一约束，不做部分唯一索引；
-- 软删除后同 code/ref 重建仍会触发唯一约束冲突；
-- 需要支持重建时，应先设计数据迁移：把旧唯一约束替换为 `WHERE deleted_at IS NULL AND status <> 'DELETED'` 的部分唯一索引，并处理历史重复数据。
+- Service/Interface/Provider/Schema/Binding/RateLimitPolicy 使用 `WHERE deleted_at IS NULL` 的部分唯一索引约束未删除资产；
+- 软删除记录保留历史 code/ref，新建 active 记录可复用同一 code/ref；
+- partial unique index 不能作为组合 FK 目标，因此父级 service/interface 的 active 校验在 service 写入入口收口；保存 interface/provider/binding/rate-limit policy 时，如果父级 service/interface 已软删除会返回明确错误。
 
 ### marketing_service_provider_runtime_state
 
@@ -3415,7 +3442,7 @@ CREATE TABLE marketing_service_provider_runtime_state (
 );
 ```
 
-当前实现新建 runtime state 时默认 `health_status=HEALTHY`、`circuit_status=CLOSED`，运行时跳过 `UNHEALTHY` 或 `CIRCUIT_OPEN` provider。`UNKNOWN` 作为未探活 warning 是长期增强，不能按当前行为写成已落地发布 warning。
+当前实现新建 runtime state 时默认 `health_status=HEALTHY`、`circuit_status=CLOSED`，运行时跳过 `UNHEALTHY` 或 `CIRCUIT_OPEN` provider。`UNKNOWN` 作为未探活 warning 是保留边界，不能按当前行为写成已落地发布 warning。
 
 索引：
 
@@ -3469,7 +3496,7 @@ CREATE TABLE marketing_service_rate_limit_policy (
 4. tenant 级空 scope 作为默认限流策略；
 5. 没有 ACTIVE 策略时，运行时回退 Provider `config.rateLimitPerWindow/rateLimitWindowSeconds` 和默认值。
 
-当前实现的消费 backend 仍是 Postgres runtime state 单行窗口计数；`backend=REDIS` 是兼容未来 Redis 分布式限流的策略字段，尚未执行 Redis 原子脚本。
+当前实现的消费 backend 支持 `POSTGRES` 和 `REDIS`：`POSTGRES` 使用 provider runtime state 单行事务窗口计数；`REDIS` 使用可注入 Redis limiter 和 Lua 原子脚本消费。Redis key 为 `prefix:tenantId:serviceRef:interfaceRef:providerRef:policyRef:rateLimitScope:subjectHash`，默认 subject 级隔离；只有 policy metadata 显式 `rateLimitScope=GLOBAL` 时才做全局限流。边界：Redis limiter 需要部署层显式注入 Redis client；provider 解析预检阶段不会读取 Redis 当前计数，强一致限流在调用前消费阶段执行；当前已有 engine fake limiter 和 Redis Lua request/adapter 构造测试，真实 Redis server/miniredis/testcontainers 集成测试属于生产接入前边界。
 
 ### marketing_service_interface_binding
 
@@ -3524,7 +3551,7 @@ CREATE INDEX gin_marketing_service_interface_binding_node_types
     ON marketing_service_interface_binding USING GIN(allowed_node_types_json);
 ```
 
-`include_subfolders`、`min_role`、`environment`、`rate_limit_ref`、`deleted_at` 已通过 `018_service_interface_binding_long_term_fields.sql` 进入当前正式 DDL。当前权限判断已使用 `deleted_at`、`environment`、`min_role`；`include_subfolders` 与 `rate_limit_ref` 先完成保存/API/Studio 展示，子文件夹树展开和按 ref 精确解析限流策略仍是后续增强边界。
+`include_subfolders`、`min_role`、`environment`、`rate_limit_ref`、`deleted_at` 已通过 `018_service_interface_binding_long_term_fields.sql` 进入当前正式 DDL。当前权限判断已使用 `deleted_at`、`environment`、`min_role`；`include_subfolders` 已基于 workspace folder `parent_id` 链支持父 folder 覆盖子 folder，并对缺失、跨 workspace/tenant、deleted、循环和过深链路 fail closed；`rate_limit_ref` 已在 provider 解析和运行时消费中按 ref 精确解析限流策略，ref 无效时不回退默认策略。
 
 ### marketing_service_call_audit
 
@@ -3760,9 +3787,9 @@ all tables have tenant_id
 all asset tables have status check constraints
 all JSONB columns have non-null defaults
 service/interface/provider code uniqueness is enforced
-interface -> service FK works
-provider -> interface FK works
-binding -> interface FK works
+interface -> service parent existence/active state is validated by service write path
+provider -> interface parent existence/active state is validated by service write path
+binding -> interface parent existence/active state is validated by service write path
 schema refs are validated by application, not hard FK
 provider resource refs are validated by application, not hard FK
 audit table has no hard FK to mutable assets
@@ -3795,6 +3822,7 @@ POST /admin/v1/services/{serviceCode}/interfaces/{interfaceCode}/providers/{prov
 GET  /admin/v1/services/{serviceCode}/interfaces/{interfaceCode}/providers/{providerCode}/runtime-state
 POST /admin/v1/services/{serviceCode}/interfaces/{interfaceCode}/providers/{providerCode}/runtime-state
 POST /admin/v1/services/{serviceCode}/interfaces/{interfaceCode}/providers/{providerCode}/reset-circuit
+GET  /admin/v1/provider-health
 POST /admin/v1/services/{serviceCode}/interfaces/{interfaceCode}/providers/{providerCode}/status
 POST /admin/v1/builtin/drift
 POST /admin/v1/builtin/reconcile
@@ -3802,7 +3830,7 @@ POST /admin/v1/workflows/{activityId}/break-glass
 POST /admin/v1/resources/{resourceCode}/status
 ```
 
-当前第一阶段已落地 `runtime-state` 查询/写入、`reset-circuit`、手动 `health-check` Admin API 和定时 `ProviderHealthWorker`。独立 `status` 汇总 API 和更完整的审计审批流程仍是后续入口；临时用内部命令时，命令输出和审计字段必须和 API 语义一致。
+当前第一阶段已落地 `runtime-state` 查询/写入、`reset-circuit`、手动 `health-check` Admin API、定时 `ProviderHealthWorker` 和 Provider health 概览 API。更完整的审批流、Provider 变更审计原因字段和 break-glass 处置仍是后续入口；临时用内部命令时，命令输出和审计字段必须和 API 语义一致。
 
 定时探活 worker 配置：
 
@@ -3812,9 +3840,20 @@ EX_MARKETING_PROVIDER_HEALTH_INTERVAL=30s
 EX_MARKETING_PROVIDER_HEALTH_TIMEOUT=5s
 EX_MARKETING_PROVIDER_HEALTH_BATCH_SIZE=200
 EX_MARKETING_PROVIDER_HEALTH_ACTOR=provider-health-worker
+EX_MARKETING_PROVIDER_HEALTH_LEASE_NAME=provider-health-worker
+EX_MARKETING_PROVIDER_HEALTH_LEASE_OWNER=<hostname>
+EX_MARKETING_PROVIDER_HEALTH_LEASE_TTL=60s
 ```
 
-当前实现按 `ACTIVE` service provider 批量探活，单轮最多 500 个 provider，失败时复用手动 health-check 语义写入 `UNHEALTHY` 和 `lastHealthCheckAt/lastHealthCheckBy`。后续如 provider 数量超过单轮上限，需要补 cursor/分页扫描和多实例调度锁，避免重复探活。
+当前实现按 `ACTIVE` service provider 分页探活，单批最大 500，默认 batch size 为 200，直到当轮扫完。每轮启动前写入/抢占 `marketing_worker_lease`：同名租约未过期且 owner 不同则本实例跳过；租约过期或同 owner 续租时可执行；每个完整批次后会校验 owner 并续租，续租失败或 owner 不匹配时停止本轮，避免租约丢失后继续误跑；worker 正常结束会释放租约，进程崩溃时依靠 TTL 过期恢复。失败时复用手动 health-check 语义写入 `UNHEALTHY` 和 `lastHealthCheckAt/lastHealthCheckBy`。当前分页仍是 offset/batch，keyset/cursor 是后续 P2 优化边界。
+
+健康概览入口：
+
+```text
+GET /admin/v1/provider-health?tenantId=site_001&serviceRef=wallet-service&status=UNHEALTHY&limit=100&offset=0
+```
+
+返回 `status` 的优先级为：`CIRCUIT_OPEN` > `RATE_LIMITED` > runtime `healthStatus`。Redis 后端限流由 Redis 运行时判断，概览 API 只展示 runtime state 中已有计数，不主动访问 Redis。
 
 ### Provider Unhealthy 处置
 
@@ -5473,7 +5512,7 @@ AND publish target environment matches provider/resource environment
 | `PRIMARY_WITH_FALLBACK` 至少有一个 fallback 候选 | 否 | `SERVICE_PROVIDER_FALLBACK_NOT_CONFIGURED` |
 | `WEIGHTED` 权重总和有效 | 是 | `SERVICE_PROVIDER_WEIGHT_INVALID` |
 | `MOCK` 未用于正式发布 | 是 | `SERVICE_PROVIDER_MOCK_DENIED` |
-| provider health unknown 只给 warning | 否 | 长期增强：`SERVICE_PROVIDER_HEALTH_UNKNOWN`；当前新建 runtime state 默认 `HEALTHY` |
+| provider health unknown 只给 warning | 否 | 保留边界：`SERVICE_PROVIDER_HEALTH_UNKNOWN`；当前新建 runtime state 默认 `HEALTHY` |
 | provider health unhealthy 正式发布阻断 | 是 | `SERVICE_PROVIDER_UNHEALTHY` |
 | circuit open 正式发布阻断 | 是 | `SERVICE_PROVIDER_CIRCUIT_OPEN` |
 | rate limit 配置可解析 | 是 | `SERVICE_PROVIDER_RATE_LIMIT_INVALID` |
@@ -5606,7 +5645,7 @@ AND publish target environment matches provider/resource environment
 | `SERVICE_PROVIDER_WEIGHT_INVALID` | ERROR | publish | provider | 阻断 |
 | `SERVICE_PROVIDER_MOCK_REQUIRED` | ERROR | publish/runtime | provider | 阻断 |
 | `SERVICE_PROVIDER_MOCK_DENIED` | ERROR | publish/runtime | provider | 阻断 |
-| `SERVICE_PROVIDER_HEALTH_UNKNOWN` | WARNING | publish | provider | 长期增强：当前 provider runtime state 默认 `HEALTHY`，尚未把 `UNKNOWN` 接入发布 warning |
+| `SERVICE_PROVIDER_HEALTH_UNKNOWN` | WARNING | publish | provider | 保留边界：当前 provider runtime state 默认 `HEALTHY`，`UNKNOWN` 未接入发布 warning |
 | `SERVICE_PROVIDER_UNHEALTHY` | ERROR | publish/runtime | provider | 阻断 |
 | `SERVICE_PROVIDER_CIRCUIT_OPEN` | ERROR | publish/runtime | provider | 阻断 |
 | `SERVICE_PROVIDER_RATE_LIMITED` | ERROR | runtime | provider | fallback 或阻断 |
@@ -5786,7 +5825,7 @@ all built-in catalog entries can seed and pass drift check
 | PRIMARY 多主冲突 | 多个 priority=0 且无明确规则 | 发布失败 | `SERVICE_PROVIDER_PRIMARY_REQUIRED` |
 | provider disabled | status=`DISABLED` | 发布/运行失败 | `SERVICE_PROVIDER_NOT_ACTIVE` |
 | environment 不匹配 | prod 发布引用 draft provider | 发布失败 | `SERVICE_PROVIDER_ENVIRONMENT_DENIED` |
-| health unknown | 未 health check | 长期增强：发布 warning；当前默认 `HEALTHY` | `SERVICE_PROVIDER_HEALTH_UNKNOWN` |
+| health unknown | 未 health check | 保留边界：发布 warning；当前默认 `HEALTHY` | `SERVICE_PROVIDER_HEALTH_UNKNOWN` |
 | health unhealthy | healthStatus=`UNHEALTHY` | 正式发布失败 | `SERVICE_PROVIDER_UNHEALTHY` |
 | circuit open | circuitStatus=`OPEN` | 正式发布失败 | `SERVICE_PROVIDER_CIRCUIT_OPEN` |
 | runtime unhealthy skip | primary `UNHEALTHY` 且 fallback healthy | 运行时跳过 primary 并选 fallback | `SERVICE_PROVIDER_UNHEALTHY` |
@@ -5981,19 +6020,19 @@ all built-in catalog entries can seed and pass drift check
 
 ### Studio / 前端验收矩阵
 
-当前实现状态（2026-06-24）：
+当前实现状态（2026-06-26）：
 
 | 场景 | 期望 | 当前状态 |
 | --- | --- | --- |
 | 打开 fact-query | 默认展示 Service Interface 选择入口 | 已进入实现，`providerChain` 默认使用 `SERVICE_INTERFACE` step |
 | 选择 Service | Interface 列表联动刷新 | 已进入实现，节点编辑器和能力页都支持 service/interface 选择 |
-| 选择 Interface | ProviderPolicy、Provider、input schema 联动刷新 | 部分实现，ProviderPolicy 可配置；schema preview / mapping builder 仍需补齐 |
+| 选择 Interface | ProviderPolicy、Provider、input schema 联动刷新 | 已进入实现，ProviderPolicy 可配置，Schema tab 支持 schema preview/example validate，inputMapping builder 可按 required 自动生成缺失映射 |
 | 选择 Resource | operation、namespace、key policy 联动刷新 | 部分实现，Resource step 可选资源和 operation；keyPolicy 解释仍需补齐 |
-| 无权限接口 | 不可选或显示不可选原因 | 已进入产品化增强，Provider tab 已展示 disabled/deleted/env mismatch/mock denied/rate limited/circuit open/unhealthy/no binding/schema missing 等主要不可选原因；跨资产深跳转仍是后续增强 |
+| 无权限接口 | 不可选或显示不可选原因 | 已落地，Provider tab 已展示 disabled/deleted/env mismatch/mock denied/rate limited/circuit open/unhealthy/no binding/schema missing 等主要不可选原因；跨资产一键深跳到具体资产记录是边界 |
 | provider unhealthy | 显示 health warning | 已进入实现，服务能力页展示 provider runtime health/circuit，并提供 reset circuit |
-| schema required 字段 | inputMapping 表单提示必填 | 已进入实现，inputMapping builder 已能按 schema required 自动生成缺失映射；更细粒度的 schema 驱动表单仍是后续增强 |
-| 发布校验错误 | 高亮 nodeId/path/field | 部分实现，检查清单已按 schema/binding/provider policy 归类并沿用 node/path focus |
-| legacy workflow | 展示兼容模式和迁移入口 | 已进入产品化增强，旧 providerChain 可读且服务能力页已有 legacy migration diff 最小面板；analyze/apply 全交互仍可增强 |
+| schema required 字段 | inputMapping 表单提示必填 | 已进入实现，inputMapping builder 已能按 schema required 自动生成缺失映射；更细粒度的 schema 驱动表单是边界 |
+| 发布校验错误 | 高亮 nodeId/path/field | 已进入实现，检查清单已按 schema/binding/provider policy 归类并沿用 node/path focus，发布/校验错误包含资产类型/ref/field 提示；跨资产一键深跳是边界 |
+| legacy workflow | 展示兼容模式和迁移入口 | 已落地，旧 providerChain 可读，legacy workflow migration analyze/dry-run/apply 已页面化；批量 diff 和审计视图是边界 |
 | 新建 workflow | 不出现直接 URL/topic/secret 输入框 | 部分实现，Service Interface 路径已主推；旧 HTTP_PROVIDER 兼容输入仍存在 |
 | Service Schema 管理 | 能查看/创建 input/output/error schema | 已进入实现，能力资产页新增 Schema tab |
 | Service Binding 管理 | 能查看/创建 interface binding | 已进入实现，能力资产页新增 Binding tab |
@@ -6302,6 +6341,18 @@ Admin API 必须服务两个场景：
   ]
 }
 ```
+
+#### Provider Decision Audit API
+
+`GET /admin/v1/provider-decision-audit-logs`
+
+已落地独立 provider 决策审计表 `marketing_service_provider_decision_audit`。它记录候选 provider 为什么被选中或跳过，覆盖 `selected`、`skipped`、`fallback`、`rate_limited`、`unhealthy`、`circuit_open`、`schema_failed`。查询支持 `tenantId`、`workspaceId`、`folderId`、`activityId`、`nodeId`、`serviceRef`、`interfaceRef`、`providerRef`、`decision`、`cursor`、`limit`。details 只保存类型、top-level keys、size/hash 和状态字段摘要，不保存完整 provider payload 或 output 明文值。
+
+#### Migration Audit API
+
+`GET /admin/v1/migration-audit-logs`
+
+已落地统一 migration audit 表 `marketing_service_migration_audit`。DB migration 和 workflow service-interface migration 的 `ANALYZE`、`DRY_RUN`、`APPLY` 以及 guard 失败都会记录 actor、scope、breakGlassTicket、summary、itemsCount、blockersCount、result、error 和 createdAt。查询支持 `tenantId`、`workspaceId`、`folderId`、`activityId`、`migrationType`、`operation`、`actor`、`result`、`cursor`、`limit`。summary/error 写入前脱敏并限制大小。
 
 #### Service API
 
@@ -6748,7 +6799,7 @@ POST /admin/v1/service-rate-limit-policies
 }
 ```
 
-运行时选择 provider 后按 provider -> interface -> service -> tenant 级策略匹配；没有匹配策略时回退 provider config/default。`backend=REDIS` 当前只表示未来 Redis backend 预留，实际消费仍走 Postgres 原子窗口。
+运行时选择 provider 后按 provider -> interface -> service -> tenant 级策略匹配；没有匹配策略时回退 provider config/default。`backend=POSTGRES` 走 repository 原子窗口；`backend=REDIS` 走注入的 Redis limiter 和 Lua 原子脚本，未配置时返回 `SERVICE_RATE_LIMIT_REDIS_NOT_CONFIGURED`。
 
 `PATCH /admin/v1/services/{serviceCode}/interfaces/{interfaceCode}/providers/{providerCode}`
 
@@ -7268,13 +7319,16 @@ environment=prod
 
 `POST /admin/v1/workflows/{activityId}/migration/service-interface/analyze`
 
-请求：
+权限：
+
+- actor 必须对 activity 所在 workspace 具备 `ADMIN/OWNER` 权限；
+- 只读取 activity draft，不修改已发布 workflow version。
+
+请求可以为空；可选字段：
 
 ```json
 {
-  "workflowDraftId": "draft_001",
-  "includeSuggestions": true,
-  "dryRun": true
+  "paths": ["nodes[0].config.providerChain[0]"]
 }
 ```
 
@@ -7293,7 +7347,7 @@ environment=prod
     "items": [
       {
         "nodeId": "facts",
-        "path": "config.providerChain[0]",
+        "path": "nodes[0].config.providerChain[0]",
         "legacyType": "FACT_SERVICE",
         "recommendedTarget": "SERVICE_INTERFACE",
         "serviceRef": "user-profile-service",
@@ -7314,20 +7368,22 @@ environment=prod
 
 ```json
 {
-  "workflowDraftId": "draft_001",
-  "items": [
-    {
-      "nodeId": "facts",
-      "path": "config.providerChain[0]",
-      "targetType": "SERVICE_INTERFACE",
-      "serviceRef": "user-profile-service",
-      "interfaceRef": "query-user-profile",
-      "providerPolicy": "PRIMARY"
-    }
-  ],
-  "createRevision": true
+  "dryRun": false,
+  "confirm": true,
+  "confirmation": "APPLY_WORKFLOW_SERVICE_INTERFACE_MIGRATION",
+  "paths": ["nodes[0].config.providerChain[0]"],
+  "reason": "migrate legacy provider fields"
 }
 ```
+
+行为边界：
+
+- `dryRun=true` 返回迁移后的 definition 预览，不保存 draft；
+- 真实 apply 需要确认短语和 reason；
+- 有 `serviceRef + interfaceRef` 的 legacy fact/provider step 迁移为 `SERVICE_INTERFACE`，保留 `providerCode/providerRef` 为显式 providerRef；
+- 有 `resourceRef` 或 `redisRef` 的 legacy resource/redis step 迁移为 `RESOURCE`；
+- 只有 `endpoint/providerEndpoint/providerCode/grpcTarget/pluginCode` 且缺少治理引用的项返回 blocker，不自动改；
+- apply 只应用无 blocker 的 item，并写 `WORKFLOW_SERVICE_INTERFACE_MIGRATION_APPLY` 审计。
 
 响应：
 
@@ -8051,20 +8107,20 @@ io.open(...)
   - Resources
 ```
 
-当前落地状态（2026-06-24）：
+当前落地状态（2026-06-26）：
 
 | 模块 | 状态 | 说明 |
 | --- | --- | --- |
-| 能力资产中心总览 | 已进入产品化增强 | 新增总览 tab，聚合 Services、Interfaces、Providers、Schemas、Bindings、Rate Limit、Audit、DB Migration 的数量、风险和完整性状态 |
+| 能力资产中心总览 | 已落地 | 新增总览 tab，聚合 Services、Interfaces、Providers、Schemas、Bindings、Rate Limit、Audit、DB Migration 的数量、风险和完整性状态 |
 | Service/Interface/Provider 管理页 | 已进入实现 | 复用现有能力页，支持服务、接口、提供者保存和刷新 |
 | Schema 管理 | 已进入实现 | 新增 Schema tab，可查看和创建 `INPUT/OUTPUT/ERROR` schema，保存走 `/admin/v1/service-schemas` |
-| Binding 管理 | 已进入产品化增强 | 新增 Binding tab，可查看和创建 interface binding，支持 allowed operations/provider policies/provider refs/lua/approval/deny/environment/minRole/rateLimitRef/deletedAt/includeSubfolders，并展示 minRole/environment/rateLimitRef/deletedAt/includeSubfolders 的风险提示 |
-| Provider runtime | 已进入产品化增强 | Provider tab 展示 health/circuit/failure 计数，接入 reset circuit 和 health-check API；Provider 列表展示 disabled/deleted/env mismatch/mock denied/rate limited/circuit open/unhealthy/no binding/schema missing 等不可选原因 |
+| Binding 管理 | 已落地 | 新增 Binding tab，可查看和创建 interface binding，支持 allowed operations/provider policies/provider refs/lua/approval/deny/environment/minRole/rateLimitRef/deletedAt/includeSubfolders，并展示 minRole/environment/rateLimitRef/deletedAt/includeSubfolders 的风险提示 |
+| Provider runtime | 已落地 | Provider tab 展示 health/circuit/failure 计数，接入 reset circuit 和 health-check API；Provider 列表展示 disabled/deleted/env mismatch/mock denied/rate limited/circuit open/unhealthy/no binding/schema missing 等不可选原因 |
 | Service call audit | 已进入实现 | 新增 Audit tab，展示 service/interface/provider/status/error/hash/trace；request/response 仅保存 HMAC-SHA256 hash，不展示明文 payload |
-| Rate-limit policy 可见性 | 已进入产品化增强 | 总览展示 active/total policy 和 provider/interface/service/tenant 维度摘要；编辑表单和批量变更仍由后续增强补齐 |
-| DB Migration 面板 | 已进入产品化增强 | 新增 Migration tab，接入 `/admin/v1/db-migrations/status|analyze|apply`；默认支持 status/analyze/dry-run，真实 apply 必须确认短语、break-glass 和 reason |
+| Rate-limit policy 可见性 | 已落地 | 总览展示 active/total policy 和 provider/interface/service/tenant 维度摘要；Rate-limit policy 创建/编辑已接入，批量 diff 和环境级复制是边界 |
+| DB Migration 面板 | 已落地 | 新增 Migration tab，接入 `/admin/v1/db-migrations/status|analyze|apply`；默认支持 status/analyze/dry-run，真实 apply 必须确认短语、break-glass 和 reason |
 | ProviderChain 治理字段 | 已进入实现 | `SERVICE_INTERFACE` step 支持 `providerPolicy/providerRef/environment/mock`，支持 `WEIGHTED_WITH_FALLBACK`、生产 mock gate 和 weighted trace |
-| 发布错误定位 | 已进入实现 | 检查清单新增服务治理分类，沿用 node/path focus；PropertyPanel 可按 fieldKey 聚焦配置项，后续再做跨资产详情跳转 |
+| 发布错误定位 | 已进入实现 | 检查清单新增服务治理分类，沿用 node/path focus；PropertyPanel 可按 fieldKey 聚焦配置项；跨资产一键深跳到具体 Schema/Binding/Provider/RateLimit 记录是边界 |
 | 静态资源构建 | 已验证 | `npm run typecheck:admin-flow` 和 `npm run build:admin-flow` 通过 |
 
 节点配置面板改造：
@@ -8088,7 +8144,7 @@ MQ broker
 secret
 ```
 
-第 17 项当前长期增强项（2026-06-24，本轮更新后）：
+当前真实后续边界（2026-06-26）：
 
 1. schema example validate 已能逐条校验 examplesJson；后续可在 UI 展示每条 example 的独立 path/result。
 2. inputMapping builder 已能按 required 自动生成缺失映射；后续可接 service input schema 生成更精细表单。
@@ -8096,23 +8152,24 @@ secret
 4. Provider 选择器已展示不可选原因、environment、half-open 状态；weighted bucket 目前主要在 runtime trace/audit 中展示，后续可在选择器里展示 deterministic bucket 和候选排序。
 5. 发布错误已支持 node/path/field focus；跨资产跳转到 Schema/Binding/Provider tab 仍可增强。
 6. schema/binding/audit 列表已支持 audit cursor/requestId 和只读权限说明；后续补更完整筛选器。
-7. DB Migration 面板已接 status/analyze/dry-run/apply guard；legacy workflow service-interface migration diff/apply 仍待独立页面化。
+7. DB Migration 面板已接 status/analyze/dry-run/apply guard；legacy workflow service-interface migration analyze/dry-run/apply 已页面化，批量 diff 和审计视图可继续增强。
 8. Lua `service_call` 已有权限提示；后续补可调用服务自动列表和代码依赖扫描面板。
-9. Rate-limit policy 目前在总览可见，后续补完整创建/编辑、批量 diff 和环境级复制。
-10. 发布错误跨资产定位仍以 path/field 为主，后续补点击错误直接打开对应 Schema/Binding/Provider 记录。
+9. Rate-limit policy 已支持创建/编辑；批量 diff 和环境级复制是边界。
+10. 发布错误跨资产定位仍以 path/field 为主；点击错误直接打开对应 Schema/Binding/Provider/RateLimit 记录是边界。
 
-剩余 8 项推进状态（2026-06-26）：
+本轮 1-9 项推进状态（2026-06-26）：
 
 | 编号 | 项目 | 状态 | 当前边界 |
 | --- | --- | --- | --- |
-| 1/8 | 定时 provider health-check worker | 已进入实现 | 默认关闭，多实例调度锁和 cursor 分页后续增强 |
-| 2/8 | rate-limit 配置表 / Redis 分布式限流边界 | 已进入实现 | 配置表已落地；Redis backend 仍是预留 |
-| 3/8 | Binding 长期字段 | 已进入实现 | `includeSubfolders` 仍待 folder tree 查询能力，`rateLimitRef` 仍待直接按 ref 解析 |
-| 4/8 | 软删除、内置 catalog version/sourceHash | 已进入实现 | 软删除后同 code/ref 重建仍受唯一约束限制 |
-| 5/8 | DB Migration analyze/apply API | 已进入实现 | 已提供 `/db-migrations/status|analyze|apply`；权限是 actor + break-glass + 固定确认短语，租户级平台管理员 RBAC 后续增强 |
-| 6/8 | Studio 完整产品级交互 | 已进入产品化增强 | 已补能力资产中心总览、Provider 不可选原因、Binding 风险提示、DB Migration status/analyze/dry-run/apply guard；legacy workflow migration diff/apply、完整 rate-limit 编辑和跨资产错误跳转后续增强 |
-| 7/8 | `CACHE_ASIDE` provider policy | 已进入实现 | resolver 识别 cache provider 并返回 cache -> primary；executor 支持 cache hit/miss/error fallback/fail；cache write-back 后续增强 |
-| 8/8 | 文档历史状态清理 | 已进入实现 | refactor plan 已增加当前状态总览，并把早期状态改为“历史记录（已过期，仅供追溯）”；后续只保留真实长期增强项 |
+| 1/9 | 定时 provider health-check worker | 已落地 | 默认关闭；已支持 `marketing_worker_lease` 多实例调度租约、每批续租、batch/offset 分页扫描和 `/admin/v1/provider-health` 概览 API；keyset/cursor 分页仍为 P2 优化 |
+| 2/9 | rate-limit 配置表 / Redis 分布式限流边界 | 已落地 | 配置表已落地；Redis backend 已接入可注入 Redis limiter，部署层 client 注入和解析阶段 Redis 读预检仍是边界 |
+| 3/9 | Binding 长期字段 | 已落地 | `includeSubfolders` 已按现有 workspace folder `parentId` 链支持父 folder 覆盖子 folder；`rateLimitRef` 已在 provider 解析和运行时消费中按 ref 精确解析。边界：folder 记录缺失或 parent 链异常时不扩大授权；无 binding ref 的调用仍沿用 provider/interface/service/tenant policy 优先级 |
+| 4/9 | 软删除、内置 catalog version/sourceHash | 已落地 | Service/Interface/Provider/Schema/Binding/RateLimitPolicy 已使用 `deleted_at IS NULL` partial unique index；软删除后同 code/ref 可重建，未删除重复仍冲突；父级 service/interface 软删除时写入 provider/binding/policy 会被拒绝 |
+| 5/9 | Migration API 权限和旧 workflow 迁移增强 | 已落地 | DB migration 已要求平台管理员头或租户 workspace `OWNER/ADMIN`，真实 apply 需要 break-glass scope/actor/ttl/ticket + 确认短语 + reason；workflow legacy service-interface migration 已提供 analyze/apply/dry-run，直接 endpoint/grpcTarget/pluginCode 缺治理引用时只返回 blocker；真实身份 middleware 是边界 |
+| 6/9 | Studio 完整产品级交互 | 已落地 | 已补能力资产中心总览、Provider 不可选原因、Binding 风险提示、DB Migration status/analyze/dry-run/apply guard、Rate-limit policy 创建/编辑、legacy workflow migration analyze/dry-run/apply 页面化、发布/校验错误资产类型/ref/field 提示；跨资产错误一键打开具体记录、批量 diff 和环境级复制是边界 |
+| 7/9 | `CACHE_ASIDE` provider policy | 已落地 | resolver 识别 cache provider 并返回 cache -> primary；executor 支持 cache hit/miss/error fallback/fail；miss 后 primary 成功且通过 output schema 会写回 cache/受控 resource；write-back 默认 warning，strict/writeBackRequired 阻断；异步重试和指标面板是边界 |
+| 8/9 | Provider decision audit / migration audit | 已落地 | 已有独立 provider decision audit 和 migration audit；payload/details 摘要化，不保存明文 request/response/output。边界：非 workflow resolver 上下文和更细 audit 可视化 |
+| 9/9 | 文档当前状态精简清理 | 已落地 | 主设计、refactor plan、API 和 Resource 文档已同步当前状态；后续只保留真实长期边界 |
 
 本轮 36 个缺口推进状态：
 
@@ -8128,7 +8185,7 @@ secret
 | 8 | 已进入实现 | audit provider trace 已记录 `providerRef`、`requestedProviderRef` 和 `providerRefOverride`，并补测试 |
 | 9 | 已进入实现 | Provider health-check Admin API 已落地 |
 | 10 | 已进入实现 | runtime state 支持 `DEGRADED`，失败未达熔断阈值时自动降级 |
-| 11 | 已进入实现 | 新增 `marketing_service_rate_limit_policy` 和 Admin API，运行时优先读取配置表；Postgres rate limit 使用事务 `FOR UPDATE` 单行原子消费；Redis 分布式限流仍作为后续横向扩展 |
+| 11 | 已进入实现 | 新增 `marketing_service_rate_limit_policy` 和 Admin API，运行时优先读取配置表；Postgres rate limit 使用事务 `FOR UPDATE` 单行原子消费；Redis backend 使用可注入 limiter + Lua 原子脚本消费 |
 | 12 | 已进入实现 | 发布阶段通过 provider resolver 执行 health/circuit/rate-limit gate |
 | 13 | 已进入实现 | half-open 支持 `halfOpenProbeLimit`、`halfOpenSuccessThreshold`、失败回退 OPEN，状态字段和测试已补 |
 | 14 | 已进入实现 | weighted selection trace 写入 provider trace |

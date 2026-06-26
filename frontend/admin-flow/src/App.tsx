@@ -67,6 +67,9 @@ import type {
   ServiceRateLimitPolicySummary,
   ServiceSchemaSummary,
   StudioFolderPatch,
+  WorkflowServiceInterfaceMigrationAnalysis,
+  WorkflowServiceInterfaceMigrationAnalyzeResponse,
+  WorkflowServiceInterfaceMigrationApplyResponse,
   WorkspaceActivityGrantSummary,
   WorkspaceAuditLogSummary,
   WorkspaceBatchResult,
@@ -2189,22 +2192,94 @@ function runHistoryErrorMessage(error: unknown, fallback: string): string {
   return `${fallback}：${(error as Error).message}`;
 }
 
-function workflowValidationFailureResult(message: string, code = 'WORKFLOW_VALIDATION_FAILED'): WorkflowValidationResult {
+function workflowValidationFailureResult(message: string, code = 'WORKFLOW_VALIDATION_FAILED', issue: Partial<WorkflowValidationIssue> = {}): WorkflowValidationResult {
   return {
     valid: false,
-    items: [{
+    items: [enrichWorkflowValidationIssue({
       severity: 'BLOCK',
       code,
       message,
       path: 'workflow.validation',
-    }],
+      ...issue,
+    })],
     summary: { blockCount: 1, warningCount: 0 },
   };
 }
 
+function workflowValidationIssueAssetHint(item: WorkflowValidationIssue): { assetType: string; assetRef: string; field: string } {
+  const details = isRecord(item.details) ? item.details : {};
+  const detailString = (key: string) => (typeof details[key] === 'string' ? String(details[key]).trim() : '');
+  const code = item.code.toUpperCase();
+  const path = (item.path ?? '').toLowerCase();
+  const message = item.message;
+  const firstRef = (...values: string[]) => values.find((value) => value.trim())?.trim() ?? '';
+  let assetType = item.assetType || '';
+  if (!assetType) {
+    if (code.includes('RATE_LIMIT') || path.includes('ratelimit')) assetType = 'rate-limit';
+    else if (code.includes('BINDING') || path.includes('binding')) assetType = 'binding';
+    else if (code.includes('SCHEMA') || path.includes('schema')) assetType = 'schema';
+    else if (code.includes('PROVIDER') || path.includes('provider')) assetType = 'provider';
+    else if (code.includes('SERVICE_INTERFACE') || path.includes('interfaceref')) assetType = 'interface';
+    else if (code.includes('SERVICE_') || path.includes('serviceref')) assetType = 'service';
+    else if (code.includes('MIGRATION') || code.includes('LEGACY')) assetType = 'workflow migration';
+  }
+  const serviceRef = detailString('serviceRef');
+  const interfaceRef = detailString('interfaceRef');
+  const providerRef = detailString('providerRef');
+  const schemaRef = detailString('schemaRef');
+  const rateLimitRef = firstRef(detailString('rateLimitRef'), detailString('policyRef'));
+  const bindingId = detailString('bindingId');
+  const assetRef = firstRef(
+    item.assetRef ?? '',
+    assetType === 'rate-limit' ? rateLimitRef : '',
+    assetType === 'binding' ? bindingId : '',
+    assetType === 'schema' ? schemaRef : '',
+    assetType === 'provider' ? [serviceRef, interfaceRef, providerRef].filter(Boolean).join('/') : '',
+    assetType === 'interface' ? [serviceRef, interfaceRef].filter(Boolean).join('/') : '',
+    assetType === 'service' ? serviceRef : '',
+    detailString('ref'),
+    detailString('code'),
+  );
+  const field = firstRef(item.field ?? '', detailString('field'), item.path ?? '');
+  return { assetType, assetRef, field };
+}
+
+function enrichWorkflowValidationIssue(item: WorkflowValidationIssue): WorkflowValidationIssue {
+  const hint = workflowValidationIssueAssetHint(item);
+  if (!hint.assetType && !hint.assetRef && !hint.field) return item;
+  return {
+    ...item,
+    assetType: item.assetType || hint.assetType,
+    assetRef: item.assetRef || hint.assetRef,
+    field: item.field || hint.field,
+  };
+}
+
+function apiErrorIssueDetails(error: APIError): Record<string, unknown> {
+  const body = isRecord(error.body) ? error.body : {};
+  const data = isRecord(body.data) ? body.data : {};
+  const details = isRecord(body.details) ? body.details : {};
+  return { ...body, ...data, ...details };
+}
+
+function workflowValidationFailureResultFromError(error: unknown, fallbackMessage: string, fallbackCode: string): WorkflowValidationResult {
+  if (!isAPIError(error)) return workflowValidationFailureResult(fallbackMessage, fallbackCode);
+  const details = apiErrorIssueDetails(error);
+  const code = typeof details.code === 'string' ? details.code : fallbackCode;
+  const path = typeof details.path === 'string' ? details.path : 'workflow.publish';
+  const message = error.message || fallbackMessage;
+  const issue: Partial<WorkflowValidationIssue> = { path, details };
+  if (typeof details.assetType === 'string') issue.assetType = details.assetType;
+  if (typeof details.assetRef === 'string') issue.assetRef = details.assetRef;
+  if (typeof details.field === 'string') issue.field = details.field;
+  if (typeof details.nodeId === 'string') issue.nodeId = details.nodeId;
+  if (typeof details.edgeId === 'string') issue.edgeId = details.edgeId;
+  return workflowValidationFailureResult(message, code, issue);
+}
+
 function normalizeWorkflowValidationResult(result: WorkflowValidationResult | null | undefined): WorkflowValidationResult | null {
   if (!result || typeof result !== 'object') return null;
-  const items = Array.isArray(result.items) ? result.items : [];
+  const items = Array.isArray(result.items) ? result.items.map(enrichWorkflowValidationIssue) : [];
   const blockCount = Number.isFinite(result.summary?.blockCount) ? result.summary.blockCount : items.filter((item) => item.severity === 'BLOCK').length;
   const warningCount = Number.isFinite(result.summary?.warningCount) ? result.summary.warningCount : items.filter((item) => item.severity === 'WARNING').length;
   return {
@@ -2422,6 +2497,8 @@ function StudioActivityStart({
   const [serviceRateLimitPolicies, setServiceRateLimitPolicies] = useState<ServiceRateLimitPolicySummary[]>([]);
   const [dbMigrationAnalysis, setDBMigrationAnalysis] = useState<DBMigrationAnalysis | undefined>();
   const [dbMigrationMessage, setDBMigrationMessage] = useState('');
+  const [workflowMigrationAnalysis, setWorkflowMigrationAnalysis] = useState<WorkflowServiceInterfaceMigrationAnalysis | undefined>();
+  const [workflowMigrationMessage, setWorkflowMigrationMessage] = useState('');
   const [servicesLoading, setServicesLoading] = useState(false);
   const [selectedServiceCode, setSelectedServiceCode] = useState('');
   const [selectedInterfaceCode, setSelectedInterfaceCode] = useState('');
@@ -2634,6 +2711,7 @@ function StudioActivityStart({
   const selectedResource = resources.find((resource) => resource.code === selectedResourceCode) ?? resources[0];
   const selectedService = selectedServiceCode ? services.find((service) => service.code === selectedServiceCode) : undefined;
   const selectedInterface = selectedInterfaceCode ? serviceInterfaces.find((item) => item.code === selectedInterfaceCode) : undefined;
+  const selectedWorkflowMigrationActivityId = selectedDetail?.type === 'Workflow' ? selectedDetail.id : '';
   const dismissOpsToast = useCallback((id: number) => {
     setOpsToasts((items) => items.filter((item) => item.id !== id));
   }, []);
@@ -3191,11 +3269,27 @@ function StudioActivityStart({
     setDBMigrationMessage(body.analysis.drift ? 'DB migration 存在 drift，需要先处理' : `DB migration analyze 完成，pending ${body.analysis.pending?.length ?? 0} 项`);
     return body.analysis;
   }, []);
-  const applyDBMigrations = useCallback(async (input: { dryRun: boolean; confirm: boolean; confirmation: string; breakGlass: boolean; reason: string }) => {
+  const applyDBMigrations = useCallback(async (input: {
+    dryRun: boolean;
+    confirm: boolean;
+    confirmation: string;
+    breakGlass: boolean;
+    breakGlassScope?: string;
+    breakGlassActor?: string;
+    breakGlassExpiresAt?: string;
+    breakGlassTicket?: string;
+    reason: string;
+  }) => {
+    const bodyInput = input.dryRun ? input : {
+      ...input,
+      breakGlassScope: input.breakGlassScope || 'db-migration:apply',
+      breakGlassActor: input.breakGlassActor || studioActorId(),
+      breakGlassExpiresAt: input.breakGlassExpiresAt || new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+    };
     const body = await fetchJSON<DBMigrationApplyResponse>('/admin/v1/db-migrations/apply', {
       method: 'POST',
       headers: input.breakGlass ? { 'X-Break-Glass': 'true' } : undefined,
-      body: JSON.stringify(input),
+      body: JSON.stringify(bodyInput),
     });
     const nextAnalysis = body.after ?? body.analysis ?? body.before;
     if (nextAnalysis) setDBMigrationAnalysis(nextAnalysis);
@@ -3356,6 +3450,44 @@ function StudioActivityStart({
     });
     setServiceMessage(`Binding 已保存：${binding.serviceRef}/${binding.interfaceRef}`);
     await refreshServiceInterfaceBindings(binding.serviceRef, binding.interfaceRef);
+  };
+  const saveServiceRateLimitPolicy = async (policy: Partial<ServiceRateLimitPolicySummary> & { code: string }) => {
+    if (!policy.code.trim()) throw new Error('Policy Code 必填');
+    if (!policy.name?.trim()) throw new Error('名称必填');
+    if (!Number.isFinite(policy.limit) || Number(policy.limit) < 0) throw new Error('Limit 必须是非负数字');
+    if (!Number.isFinite(policy.windowSeconds) || Number(policy.windowSeconds) <= 0) throw new Error('Window Seconds 必须是正数');
+    const tenantId = policy.tenantId || selectedWorkspace?.tenantId || 'site_001';
+    await fetchJSON<ServiceRateLimitPolicySummary>(`/admin/v1/service-rate-limit-policies?tenantId=${encodeURIComponent(tenantId)}`, {
+      method: 'POST',
+      body: JSON.stringify({ ...policy, tenantId }),
+    });
+    setServiceMessage(`限流策略已保存：${policy.code}`);
+    await Promise.all([
+      refreshServiceRateLimitPolicies(),
+      refreshServiceInterfaceBindings(policy.serviceRef || selectedServiceCode, policy.interfaceRef || selectedInterfaceCode),
+      policy.serviceRef && policy.interfaceRef ? refreshServiceProviders(policy.serviceRef, policy.interfaceRef) : Promise.resolve(),
+    ]);
+  };
+  const analyzeWorkflowServiceInterfaceMigration = async (targetActivityId = selectedWorkflowMigrationActivityId) => {
+    if (!targetActivityId) throw new Error('请选择 workflow draft');
+    const body = await fetchJSON<WorkflowServiceInterfaceMigrationAnalyzeResponse>(`/admin/v1/workflows/${encodeURIComponent(targetActivityId)}/migration/service-interface/analyze`, { method: 'POST' });
+    setWorkflowMigrationAnalysis(body.data);
+    setWorkflowMigrationMessage(`Workflow migration analyze 完成：legacy ${body.data.summary.legacySteps} 项，blockers ${body.data.summary.blockers} 项`);
+    return body.data;
+  };
+  const applyWorkflowServiceInterfaceMigration = async (targetActivityId: string, input: { dryRun: boolean; confirm: boolean; confirmation: string; paths: string[]; reason: string }) => {
+    if (!targetActivityId) throw new Error('请选择 workflow draft');
+    const body = await fetchJSON<WorkflowServiceInterfaceMigrationApplyResponse>(`/admin/v1/workflows/${encodeURIComponent(targetActivityId)}/migration/service-interface/apply`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+    const nextAnalysis = body.after ?? body.data ?? body.before;
+    if (nextAnalysis) setWorkflowMigrationAnalysis(nextAnalysis);
+    if (!input.dryRun) {
+      await analyzeWorkflowServiceInterfaceMigration(targetActivityId).catch(() => undefined);
+    }
+    setWorkflowMigrationMessage(input.dryRun ? `Workflow migration dry-run 完成：计划 ${body.appliedItems?.length ?? 0} 项` : `Workflow migration apply 完成：已迁移 ${body.appliedItems?.length ?? 0} 项，draft 已刷新`);
+    return body;
   };
   const resetServiceProviderCircuit = async (serviceCode: string, interfaceCode: string, providerCode: string) => {
     if (!providerCode.trim()) throw new Error('Provider Code 必填');
@@ -3937,6 +4069,13 @@ function StudioActivityStart({
                   }
                 })();
               }}
+              onCreateWorkflow={() => {
+                if (!canEditWorkspace) {
+                  setOpsMessage(`${permissionCapabilities.reason}，不能新建 workflow。`);
+                  return;
+                }
+                openCreateDialog(search || '新 workflow', { workspaceId: selectedWorkspace?.id, folderId: selectedFolder?.id });
+              }}
               onToggleFavorite={toggleFavorite}
               onToggleArchived={toggleArchived}
               onItemAction={openDetailActionFor}
@@ -4253,6 +4392,9 @@ function StudioActivityStart({
             ) : homeUtilityDialog === 'services' ? (
               <ServiceCapabilityManagement
                 tenantId={selectedWorkspace?.tenantId || 'site_001'}
+                actorId={currentActorId}
+                activityId={selectedWorkflowMigrationActivityId}
+                workflowMigrationTargets={contentWorkflows.map((workflow) => ({ id: workflow.id, label: `${workflow.activityName} · ${workflow.activityCode}` }))}
                 workspaceId={selectedWorkspace?.id}
                 folderId={selectedFolder?.id}
                 resources={resources}
@@ -4266,6 +4408,8 @@ function StudioActivityStart({
                 rateLimitPolicies={serviceRateLimitPolicies}
                 migrationAnalysis={dbMigrationAnalysis}
                 migrationMessage={dbMigrationMessage}
+                workflowMigrationAnalysis={workflowMigrationAnalysis}
+                workflowMigrationMessage={workflowMigrationMessage}
                 selectedServiceCode={selectedService?.code || selectedServiceCode}
                 selectedInterfaceCode={selectedInterface?.code || selectedInterfaceCode}
                 selectedService={selectedService}
@@ -4280,6 +4424,7 @@ function StudioActivityStart({
                 onSaveProvider={saveServiceProvider}
                 onSaveSchema={saveServiceSchema}
                 onSaveBinding={saveServiceInterfaceBinding}
+                onSaveRateLimitPolicy={saveServiceRateLimitPolicy}
                 onResetProviderCircuit={resetServiceProviderCircuit}
                 onCheckProviderHealth={checkServiceProviderHealth}
                 onValidateSchema={validateServiceSchema}
@@ -4293,6 +4438,8 @@ function StudioActivityStart({
                 onRefreshMigrationStatus={refreshDBMigrationStatus}
                 onAnalyzeMigrations={analyzeDBMigrations}
                 onApplyMigrations={applyDBMigrations}
+                onAnalyzeWorkflowMigration={analyzeWorkflowServiceInterfaceMigration}
+                onApplyWorkflowMigration={applyWorkflowServiceInterfaceMigration}
               />
             ) : homeUtilityDialog === 'members' ? (
               <div className="studio-member-manager">
@@ -5910,7 +6057,7 @@ export function App() {
       const message = isAPIError(error) && error.status === 403
         ? '无权执行发布检查。请确认当前账号拥有该 workspace / workflow 的编辑或发布权限。'
         : `检查接口失败：${(error as Error).message}`;
-      const failed = workflowValidationFailureResult(message, isAPIError(error) ? `WORKFLOW_VALIDATION_HTTP_${error.status}` : 'WORKFLOW_VALIDATION_REQUEST_FAILED');
+      const failed = workflowValidationFailureResultFromError(error, message, isAPIError(error) ? `WORKFLOW_VALIDATION_HTTP_${error.status}` : 'WORKFLOW_VALIDATION_REQUEST_FAILED');
       setWorkflowValidation(failed);
       setWorkflowStatus(`检查失败：${message}`);
       return failed;
@@ -5955,6 +6102,9 @@ export function App() {
       setPublishError('');
     } catch (error) {
       const message = `发布失败：${(error as Error).message}`;
+      const failed = workflowValidationFailureResultFromError(error, message, isAPIError(error) ? `WORKFLOW_PUBLISH_HTTP_${error.status}` : 'WORKFLOW_PUBLISH_REQUEST_FAILED');
+      setWorkflowValidation(failed);
+      setShowChecklist(true);
       setWorkflowStatus(message);
       setPublishState('failed');
       setPublishError(message);
@@ -5966,6 +6116,7 @@ export function App() {
       const mod = event.metaKey || event.ctrlKey;
       if (event.key === 'Escape') {
         closeFloatingUi();
+        clearCanvasSelection();
         setShowChecklist(false);
         setShowTemplatePanel(false);
         setDebugPanel((state) => ({ ...state, open: false }));
@@ -5989,7 +6140,7 @@ export function App() {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [closeFloatingUi, publishWorkflow, saveDraft, validateCurrentDraft]);
+  }, [clearCanvasSelection, closeFloatingUi, publishWorkflow, saveDraft, validateCurrentDraft]);
 
   const rollbackWorkflowVersion = useCallback(async (versionId: string, note = '') => {
     if (!activityId) return;

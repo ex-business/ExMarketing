@@ -10,6 +10,75 @@ import (
 	"time"
 )
 
+func TestMemoryWorkerLeaseAcquireConflictExpiryAndRelease(t *testing.T) {
+	repo := NewMemoryRepository()
+	ctx := context.Background()
+	now := time.Date(2026, 6, 26, 12, 0, 0, 0, time.UTC)
+	first, acquired, err := repo.AcquireWorkerLease(ctx, WorkerLeaseAcquireCommand{
+		Name:  "provider-health-worker",
+		Owner: "worker-a",
+		TTL:   time.Minute,
+		Now:   now,
+	})
+	if err != nil || !acquired {
+		t.Fatalf("expected first lease acquire, lease=%+v acquired=%v err=%v", first, acquired, err)
+	}
+	second, acquired, err := repo.AcquireWorkerLease(ctx, WorkerLeaseAcquireCommand{
+		Name:  "provider-health-worker",
+		Owner: "worker-b",
+		TTL:   time.Minute,
+		Now:   now.Add(10 * time.Second),
+	})
+	if err != nil {
+		t.Fatalf("held lease acquire failed: %v", err)
+	}
+	if acquired || second.Status != WorkerLeaseHeld || second.Owner != "worker-a" {
+		t.Fatalf("expected held lease by worker-a, got lease=%+v acquired=%v", second, acquired)
+	}
+	renewed, ok, err := repo.RenewWorkerLease(ctx, WorkerLeaseAcquireCommand{
+		Name:  "provider-health-worker",
+		Owner: "worker-a",
+		TTL:   2 * time.Minute,
+		Now:   now.Add(20 * time.Second),
+	})
+	if err != nil || !ok || !renewed.LeaseUntil.Equal(now.Add(20*time.Second).Add(2*time.Minute)) {
+		t.Fatalf("expected owner renew, lease=%+v ok=%v err=%v", renewed, ok, err)
+	}
+	held, ok, err := repo.RenewWorkerLease(ctx, WorkerLeaseAcquireCommand{
+		Name:  "provider-health-worker",
+		Owner: "worker-b",
+		TTL:   time.Minute,
+		Now:   now.Add(30 * time.Second),
+	})
+	if err != nil {
+		t.Fatalf("renew from non-owner failed: %v", err)
+	}
+	if ok || held.Status != WorkerLeaseHeld || held.Owner != "worker-a" {
+		t.Fatalf("expected non-owner renew to be rejected, lease=%+v ok=%v", held, ok)
+	}
+	expired, acquired, err := repo.AcquireWorkerLease(ctx, WorkerLeaseAcquireCommand{
+		Name:  "provider-health-worker",
+		Owner: "worker-b",
+		TTL:   time.Minute,
+		Now:   now.Add(3 * time.Minute),
+	})
+	if err != nil || !acquired || expired.Owner != "worker-b" {
+		t.Fatalf("expected expired lease takeover, lease=%+v acquired=%v err=%v", expired, acquired, err)
+	}
+	if err := repo.ReleaseWorkerLease(ctx, "provider-health-worker", "worker-b", now.Add(3*time.Minute+time.Second)); err != nil {
+		t.Fatalf("release lease: %v", err)
+	}
+	reacquired, acquired, err := repo.AcquireWorkerLease(ctx, WorkerLeaseAcquireCommand{
+		Name:  "provider-health-worker",
+		Owner: "worker-a",
+		TTL:   time.Minute,
+		Now:   now.Add(3*time.Minute + 2*time.Second),
+	})
+	if err != nil || !acquired || reacquired.Owner != "worker-a" {
+		t.Fatalf("expected release to allow reacquire, lease=%+v acquired=%v err=%v", reacquired, acquired, err)
+	}
+}
+
 func TestMemoryAtomicGrantRollsBackWhenSecondRewardStockExceeded(t *testing.T) {
 	repo := NewMemoryRepository()
 	now := time.Now().UTC()
@@ -198,6 +267,68 @@ func TestMemoryRepositoryStoresServiceRateLimitPolicies(t *testing.T) {
 	}
 }
 
+func TestMemoryRepositoryAuditListsOrderByCreatedAtAndIDDesc(t *testing.T) {
+	ctx := context.Background()
+	repo := NewMemoryRepository()
+	now := time.Date(2026, 6, 26, 12, 0, 0, 0, time.UTC)
+	if err := repo.CreateProviderDecisionAuditLog(ctx, ProviderDecisionAuditLog{
+		ID:                   "decision-a",
+		TenantID:             "site_001",
+		ServiceRef:           "svc",
+		InterfaceRef:         "iface",
+		CandidateProviderRef: "provider-a",
+		Decision:             ProviderDecisionSelected,
+		CreatedAt:            now,
+	}); err != nil {
+		t.Fatalf("create provider decision audit a: %v", err)
+	}
+	if err := repo.CreateProviderDecisionAuditLog(ctx, ProviderDecisionAuditLog{
+		ID:                   "decision-b",
+		TenantID:             "site_001",
+		ServiceRef:           "svc",
+		InterfaceRef:         "iface",
+		CandidateProviderRef: "provider-b",
+		Decision:             ProviderDecisionSelected,
+		CreatedAt:            now,
+	}); err != nil {
+		t.Fatalf("create provider decision audit b: %v", err)
+	}
+	decisions, err := repo.ListProviderDecisionAuditLogs(ctx, ProviderDecisionAuditQuery{TenantID: "site_001", Limit: 10})
+	if err != nil {
+		t.Fatalf("list provider decision audits: %v", err)
+	}
+	if len(decisions) != 2 || decisions[0].ID != "decision-b" || decisions[1].ID != "decision-a" {
+		t.Fatalf("expected provider decision audits ordered by createdAt desc, id desc, got %+v", decisions)
+	}
+	if err := repo.CreateMigrationAuditLog(ctx, MigrationAuditLog{
+		ID:            "migration-a",
+		TenantID:      "site_001",
+		MigrationType: "DB",
+		Operation:     "ANALYZE",
+		Result:        MigrationAuditSuccess,
+		CreatedAt:     now,
+	}); err != nil {
+		t.Fatalf("create migration audit a: %v", err)
+	}
+	if err := repo.CreateMigrationAuditLog(ctx, MigrationAuditLog{
+		ID:            "migration-b",
+		TenantID:      "site_001",
+		MigrationType: "DB",
+		Operation:     "APPLY",
+		Result:        MigrationAuditSuccess,
+		CreatedAt:     now,
+	}); err != nil {
+		t.Fatalf("create migration audit b: %v", err)
+	}
+	migrations, err := repo.ListMigrationAuditLogs(ctx, MigrationAuditQuery{TenantID: "site_001", Limit: 10})
+	if err != nil {
+		t.Fatalf("list migration audits: %v", err)
+	}
+	if len(migrations) != 2 || migrations[0].ID != "migration-b" || migrations[1].ID != "migration-a" {
+		t.Fatalf("expected migration audits ordered by createdAt desc, id desc, got %+v", migrations)
+	}
+}
+
 func TestMemoryRepositoryServiceAssetsExcludeDeletedByDefault(t *testing.T) {
 	ctx := context.Background()
 	repo := NewMemoryRepository()
@@ -370,6 +501,302 @@ func TestMemoryRepositoryServiceAssetsExcludeDeletedByDefault(t *testing.T) {
 	defaultPolicies, err := repo.ListServiceRateLimitPolicies(ctx, ServiceRateLimitPolicyQuery{TenantID: "site_001"})
 	if err != nil || len(defaultPolicies) != 0 {
 		t.Fatalf("expected deleted rate limit hidden by default, items=%+v err=%v", defaultPolicies, err)
+	}
+}
+
+func TestMemoryRepositoryServiceAssetSoftDeleteAllowsRecreateSameRefs(t *testing.T) {
+	ctx := context.Background()
+	repo := NewMemoryRepository()
+	deletedAt := time.Date(2026, 6, 26, 12, 0, 0, 0, time.UTC)
+
+	service, err := repo.SaveServiceDefinition(ctx, ServiceDefinition{
+		ID:          "svc_soft_unique_old",
+		TenantID:    "site_001",
+		Code:        "soft-unique-service",
+		Name:        "Soft unique service",
+		ServiceType: ServiceTypeExternal,
+		Scope:       ServiceAssetScopeTenant,
+		Status:      ServiceAssetActive,
+	})
+	if err != nil {
+		t.Fatalf("save service: %v", err)
+	}
+	serviceUpdate, err := repo.SaveServiceDefinition(ctx, ServiceDefinition{
+		ID:          "svc_soft_unique_dup",
+		TenantID:    service.TenantID,
+		Code:        service.Code,
+		Name:        "Active service update",
+		ServiceType: ServiceTypeExternal,
+		Scope:       ServiceAssetScopeTenant,
+		Status:      ServiceAssetActive,
+	})
+	if err != nil {
+		t.Fatalf("active service natural-key update: %v", err)
+	}
+	if serviceUpdate.ID != service.ID || serviceUpdate.Name != "Active service update" {
+		t.Fatalf("expected active service update to preserve id, got %+v", serviceUpdate)
+	}
+	service = serviceUpdate
+	service.Status = ServiceAssetDeleted
+	service.DeletedAt = &deletedAt
+	if _, err := repo.SaveServiceDefinition(ctx, service); err != nil {
+		t.Fatalf("soft delete service: %v", err)
+	}
+	recreatedService, err := repo.SaveServiceDefinition(ctx, ServiceDefinition{
+		ID:          "svc_soft_unique_new",
+		TenantID:    service.TenantID,
+		Code:        service.Code,
+		Name:        "Soft unique service rebuilt",
+		ServiceType: ServiceTypeExternal,
+		Scope:       ServiceAssetScopeTenant,
+		Status:      ServiceAssetActive,
+	})
+	if err != nil {
+		t.Fatalf("recreate service with same code: %v", err)
+	}
+	if recreatedService.ID == service.ID {
+		t.Fatalf("expected new service id after recreate, got %+v", recreatedService)
+	}
+
+	serviceInterface, err := repo.SaveServiceInterface(ctx, ServiceInterface{
+		ID:         "svcif_soft_unique_old",
+		TenantID:   service.TenantID,
+		ServiceRef: service.Code,
+		Code:       "soft-unique-interface",
+		Name:       "Soft unique interface",
+		Operation:  ServiceOperationCall,
+		Status:     ServiceAssetActive,
+	})
+	if err != nil {
+		t.Fatalf("save interface: %v", err)
+	}
+	serviceInterfaceUpdate, err := repo.SaveServiceInterface(ctx, ServiceInterface{
+		ID:         "svcif_soft_unique_dup",
+		TenantID:   serviceInterface.TenantID,
+		ServiceRef: serviceInterface.ServiceRef,
+		Code:       serviceInterface.Code,
+		Name:       "Active interface update",
+		Operation:  ServiceOperationCall,
+		Status:     ServiceAssetActive,
+	})
+	if err != nil {
+		t.Fatalf("active interface natural-key update: %v", err)
+	}
+	if serviceInterfaceUpdate.ID != serviceInterface.ID || serviceInterfaceUpdate.Name != "Active interface update" {
+		t.Fatalf("expected active interface update to preserve id, got %+v", serviceInterfaceUpdate)
+	}
+	serviceInterface = serviceInterfaceUpdate
+	serviceInterface.Status = ServiceAssetDeleted
+	serviceInterface.DeletedAt = &deletedAt
+	if _, err := repo.SaveServiceInterface(ctx, serviceInterface); err != nil {
+		t.Fatalf("soft delete interface: %v", err)
+	}
+	if _, err := repo.SaveServiceInterface(ctx, ServiceInterface{
+		ID:         "svcif_soft_unique_new",
+		TenantID:   serviceInterface.TenantID,
+		ServiceRef: serviceInterface.ServiceRef,
+		Code:       serviceInterface.Code,
+		Name:       "Soft unique interface rebuilt",
+		Operation:  ServiceOperationCall,
+		Status:     ServiceAssetActive,
+	}); err != nil {
+		t.Fatalf("recreate interface with same code: %v", err)
+	}
+
+	provider, err := repo.SaveServiceProvider(ctx, ServiceProvider{
+		ID:           "svcprov_soft_unique_old",
+		TenantID:     service.TenantID,
+		ServiceRef:   service.Code,
+		InterfaceRef: serviceInterface.Code,
+		Code:         "soft-unique-provider",
+		Name:         "Soft unique provider",
+		Protocol:     ServiceProviderResource,
+		Status:       ServiceAssetActive,
+	})
+	if err != nil {
+		t.Fatalf("save provider: %v", err)
+	}
+	providerUpdate, err := repo.SaveServiceProvider(ctx, ServiceProvider{
+		ID:           "svcprov_soft_unique_dup",
+		TenantID:     provider.TenantID,
+		ServiceRef:   provider.ServiceRef,
+		InterfaceRef: provider.InterfaceRef,
+		Code:         provider.Code,
+		Name:         "Active provider update",
+		Protocol:     ServiceProviderResource,
+		Status:       ServiceAssetActive,
+	})
+	if err != nil {
+		t.Fatalf("active provider natural-key update: %v", err)
+	}
+	if providerUpdate.ID != provider.ID || providerUpdate.Name != "Active provider update" {
+		t.Fatalf("expected active provider update to preserve id, got %+v", providerUpdate)
+	}
+	provider = providerUpdate
+	provider.Status = ServiceAssetDeleted
+	provider.DeletedAt = &deletedAt
+	if _, err := repo.SaveServiceProvider(ctx, provider); err != nil {
+		t.Fatalf("soft delete provider: %v", err)
+	}
+	if _, err := repo.SaveServiceProvider(ctx, ServiceProvider{
+		ID:           "svcprov_soft_unique_new",
+		TenantID:     provider.TenantID,
+		ServiceRef:   provider.ServiceRef,
+		InterfaceRef: provider.InterfaceRef,
+		Code:         provider.Code,
+		Name:         "Soft unique provider rebuilt",
+		Protocol:     ServiceProviderResource,
+		Status:       ServiceAssetActive,
+	}); err != nil {
+		t.Fatalf("recreate provider with same code: %v", err)
+	}
+
+	schema, err := repo.SaveServiceSchema(ctx, ServiceSchema{
+		ID:         "schema_soft_unique_old",
+		TenantID:   service.TenantID,
+		SchemaRef:  "soft-unique-schema",
+		SchemaType: ServiceSchemaOutput,
+		Scope:      ServiceAssetScopeTenant,
+		Version:    1,
+		Status:     ServiceAssetActive,
+		SchemaJSON: json.RawMessage(`{"type":"object"}`),
+	})
+	if err != nil {
+		t.Fatalf("save schema: %v", err)
+	}
+	schemaUpdate, err := repo.SaveServiceSchema(ctx, ServiceSchema{
+		ID:         "schema_soft_unique_dup",
+		TenantID:   schema.TenantID,
+		SchemaRef:  schema.SchemaRef,
+		SchemaType: schema.SchemaType,
+		Scope:      ServiceAssetScopeTenant,
+		Version:    schema.Version,
+		Status:     ServiceAssetActive,
+		SchemaJSON: json.RawMessage(`{"type":"object","properties":{"updated":{"type":"boolean"}}}`),
+	})
+	if err != nil {
+		t.Fatalf("active schema natural-key update: %v", err)
+	}
+	if schemaUpdate.ID != schema.ID {
+		t.Fatalf("expected active schema update to preserve id, got %+v", schemaUpdate)
+	}
+	schema = schemaUpdate
+	schema.Status = ServiceAssetDeleted
+	schema.DeletedAt = &deletedAt
+	if _, err := repo.SaveServiceSchema(ctx, schema); err != nil {
+		t.Fatalf("soft delete schema: %v", err)
+	}
+	if _, err := repo.SaveServiceSchema(ctx, ServiceSchema{
+		ID:         "schema_soft_unique_new",
+		TenantID:   schema.TenantID,
+		SchemaRef:  schema.SchemaRef,
+		SchemaType: schema.SchemaType,
+		Scope:      ServiceAssetScopeTenant,
+		Version:    schema.Version,
+		Status:     ServiceAssetActive,
+		SchemaJSON: json.RawMessage(`{"type":"object"}`),
+	}); err != nil {
+		t.Fatalf("recreate schema with same ref/version: %v", err)
+	}
+
+	binding, err := repo.SaveServiceInterfaceBinding(ctx, ServiceInterfaceBinding{
+		ID:            "svcbind_soft_unique_old",
+		TenantID:      service.TenantID,
+		ServiceRef:    service.Code,
+		InterfaceRef:  serviceInterface.Code,
+		Scope:         ServiceAssetScopeWorkspace,
+		WorkspaceID:   "workspace-soft-unique",
+		PrincipalType: ServicePrincipalRole,
+		PrincipalID:   string(WorkspaceRoleViewer),
+		Status:        ServiceAssetActive,
+	})
+	if err != nil {
+		t.Fatalf("save binding: %v", err)
+	}
+	bindingUpdate, err := repo.SaveServiceInterfaceBinding(ctx, ServiceInterfaceBinding{
+		ID:            "svcbind_soft_unique_dup",
+		TenantID:      binding.TenantID,
+		ServiceRef:    binding.ServiceRef,
+		InterfaceRef:  binding.InterfaceRef,
+		Scope:         binding.Scope,
+		WorkspaceID:   binding.WorkspaceID,
+		PrincipalType: binding.PrincipalType,
+		PrincipalID:   binding.PrincipalID,
+		MinRole:       WorkspaceRoleAdmin,
+		Status:        ServiceAssetActive,
+	})
+	if err != nil {
+		t.Fatalf("active binding natural-key update: %v", err)
+	}
+	if bindingUpdate.ID != binding.ID || bindingUpdate.MinRole != WorkspaceRoleAdmin {
+		t.Fatalf("expected active binding update to preserve id, got %+v", bindingUpdate)
+	}
+	binding = bindingUpdate
+	binding.Status = ServiceAssetDeleted
+	binding.DeletedAt = &deletedAt
+	if _, err := repo.SaveServiceInterfaceBinding(ctx, binding); err != nil {
+		t.Fatalf("soft delete binding: %v", err)
+	}
+	if _, err := repo.SaveServiceInterfaceBinding(ctx, ServiceInterfaceBinding{
+		ID:            "svcbind_soft_unique_new",
+		TenantID:      binding.TenantID,
+		ServiceRef:    binding.ServiceRef,
+		InterfaceRef:  binding.InterfaceRef,
+		Scope:         binding.Scope,
+		WorkspaceID:   binding.WorkspaceID,
+		PrincipalType: binding.PrincipalType,
+		PrincipalID:   binding.PrincipalID,
+		Status:        ServiceAssetActive,
+	}); err != nil {
+		t.Fatalf("recreate binding with same scope: %v", err)
+	}
+
+	policy, err := repo.SaveServiceRateLimitPolicy(ctx, ServiceRateLimitPolicy{
+		ID:            "svcratelimit_soft_unique_old",
+		TenantID:      service.TenantID,
+		Code:          "soft-unique-rate-limit",
+		Name:          "Soft unique rate limit",
+		Limit:         1,
+		WindowSeconds: 60,
+		Backend:       ServiceRateLimitBackendPostgres,
+		Status:        ServiceAssetActive,
+	})
+	if err != nil {
+		t.Fatalf("save rate limit policy: %v", err)
+	}
+	policyUpdate, err := repo.SaveServiceRateLimitPolicy(ctx, ServiceRateLimitPolicy{
+		ID:            "svcratelimit_soft_unique_dup",
+		TenantID:      policy.TenantID,
+		Code:          policy.Code,
+		Name:          "Active rate limit update",
+		Limit:         2,
+		WindowSeconds: 60,
+		Backend:       ServiceRateLimitBackendPostgres,
+		Status:        ServiceAssetActive,
+	})
+	if err != nil {
+		t.Fatalf("active rate limit natural-key update: %v", err)
+	}
+	if policyUpdate.ID != policy.ID || policyUpdate.Limit != 2 {
+		t.Fatalf("expected active rate limit update to preserve id, got %+v", policyUpdate)
+	}
+	policy = policyUpdate
+	policy.Status = ServiceAssetDeleted
+	policy.DeletedAt = &deletedAt
+	if _, err := repo.SaveServiceRateLimitPolicy(ctx, policy); err != nil {
+		t.Fatalf("soft delete rate limit policy: %v", err)
+	}
+	if _, err := repo.SaveServiceRateLimitPolicy(ctx, ServiceRateLimitPolicy{
+		ID:            "svcratelimit_soft_unique_new",
+		TenantID:      policy.TenantID,
+		Code:          policy.Code,
+		Name:          "Soft unique rate limit rebuilt",
+		Limit:         1,
+		WindowSeconds: 60,
+		Backend:       ServiceRateLimitBackendPostgres,
+		Status:        ServiceAssetActive,
+	}); err != nil {
+		t.Fatalf("recreate rate limit policy with same code: %v", err)
 	}
 }
 

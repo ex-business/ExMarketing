@@ -156,6 +156,106 @@ func TestPostgresCreateInboxDetectsDuplicateAndConflict(t *testing.T) {
 	}
 }
 
+func TestPostgresServiceAssetNaturalKeyUpsertWithoutID(t *testing.T) {
+	databaseURL := os.Getenv("EX_MARKETING_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("EX_MARKETING_DATABASE_URL is not set")
+	}
+	ctx := context.Background()
+	repo, err := NewRepository(ctx, databaseURL)
+	if err != nil {
+		t.Fatalf("connect postgres: %v", err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+
+	prefix := "pg_service_upsert"
+	tenantID := "site_001"
+	cleanupPostgresServiceAssetTest(t, repo, prefix)
+	t.Cleanup(func() { cleanupPostgresServiceAssetTest(t, repo, prefix) })
+
+	service, err := repo.SaveServiceDefinition(ctx, marketing.ServiceDefinition{TenantID: tenantID, Code: prefix + "_svc", Name: "first"})
+	if err != nil {
+		t.Fatalf("save service: %v", err)
+	}
+	updatedService, err := repo.SaveServiceDefinition(ctx, marketing.ServiceDefinition{TenantID: tenantID, Code: service.Code, Name: "updated"})
+	if err != nil {
+		t.Fatalf("upsert service without id: %v", err)
+	}
+	if updatedService.ID != service.ID || updatedService.Name != "updated" {
+		t.Fatalf("expected natural-key service update, got id=%s name=%s", updatedService.ID, updatedService.Name)
+	}
+
+	serviceInterface, err := repo.SaveServiceInterface(ctx, marketing.ServiceInterface{TenantID: tenantID, ServiceRef: service.Code, Code: prefix + "_if", Name: "first"})
+	if err != nil {
+		t.Fatalf("save interface: %v", err)
+	}
+	updatedInterface, err := repo.SaveServiceInterface(ctx, marketing.ServiceInterface{TenantID: tenantID, ServiceRef: service.Code, Code: serviceInterface.Code, Name: "updated"})
+	if err != nil {
+		t.Fatalf("upsert interface without id: %v", err)
+	}
+	if updatedInterface.ID != serviceInterface.ID || updatedInterface.Name != "updated" {
+		t.Fatalf("expected natural-key interface update, got id=%s name=%s", updatedInterface.ID, updatedInterface.Name)
+	}
+
+	provider, err := repo.SaveServiceProvider(ctx, marketing.ServiceProvider{TenantID: tenantID, ServiceRef: service.Code, InterfaceRef: serviceInterface.Code, Code: prefix + "_provider", Name: "first"})
+	if err != nil {
+		t.Fatalf("save provider: %v", err)
+	}
+	updatedProvider, err := repo.SaveServiceProvider(ctx, marketing.ServiceProvider{TenantID: tenantID, ServiceRef: service.Code, InterfaceRef: serviceInterface.Code, Code: provider.Code, Name: "updated"})
+	if err != nil {
+		t.Fatalf("upsert provider without id: %v", err)
+	}
+	if updatedProvider.ID != provider.ID || updatedProvider.Name != "updated" {
+		t.Fatalf("expected natural-key provider update, got id=%s name=%s", updatedProvider.ID, updatedProvider.Name)
+	}
+
+	schema, err := repo.SaveServiceSchema(ctx, marketing.ServiceSchema{TenantID: tenantID, SchemaRef: prefix + "_schema", SchemaType: marketing.ServiceSchemaInput, Version: 1, SchemaJSON: json.RawMessage(`{"type":"object"}`)})
+	if err != nil {
+		t.Fatalf("save schema: %v", err)
+	}
+	updatedSchema, err := repo.SaveServiceSchema(ctx, marketing.ServiceSchema{TenantID: tenantID, SchemaRef: schema.SchemaRef, SchemaType: marketing.ServiceSchemaInput, Version: 1, SchemaJSON: json.RawMessage(`{"type":"object","properties":{"ok":{"type":"boolean"}}}`)})
+	if err != nil {
+		t.Fatalf("upsert schema without id: %v", err)
+	}
+	if updatedSchema.ID != schema.ID {
+		t.Fatalf("expected natural-key schema update, got id=%s", updatedSchema.ID)
+	}
+
+	binding, err := repo.SaveServiceInterfaceBinding(ctx, marketing.ServiceInterfaceBinding{
+		TenantID: tenantID, ServiceRef: service.Code, InterfaceRef: serviceInterface.Code,
+		Scope: marketing.ServiceAssetScopeWorkspace, WorkspaceID: prefix + "_workspace",
+		PrincipalType: marketing.ServicePrincipalRole, PrincipalID: "ADMIN",
+		AllowedOperations: []marketing.ServiceInterfaceOperation{marketing.ServiceOperationCall},
+	})
+	if err != nil {
+		t.Fatalf("save binding: %v", err)
+	}
+	updatedBinding, err := repo.SaveServiceInterfaceBinding(ctx, marketing.ServiceInterfaceBinding{
+		TenantID: tenantID, ServiceRef: service.Code, InterfaceRef: serviceInterface.Code,
+		Scope: marketing.ServiceAssetScopeWorkspace, WorkspaceID: prefix + "_workspace",
+		PrincipalType: marketing.ServicePrincipalRole, PrincipalID: "ADMIN",
+		AllowedOperations: []marketing.ServiceInterfaceOperation{marketing.ServiceOperationCall, marketing.ServiceOperationPublish},
+	})
+	if err != nil {
+		t.Fatalf("upsert binding without id: %v", err)
+	}
+	if updatedBinding.ID != binding.ID || len(updatedBinding.AllowedOperations) != 2 {
+		t.Fatalf("expected natural-key binding update, got id=%s operations=%v", updatedBinding.ID, updatedBinding.AllowedOperations)
+	}
+
+	policy, err := repo.SaveServiceRateLimitPolicy(ctx, marketing.ServiceRateLimitPolicy{TenantID: tenantID, Code: prefix + "_rl", Name: "first", Limit: 1, WindowSeconds: 60})
+	if err != nil {
+		t.Fatalf("save rate limit policy: %v", err)
+	}
+	updatedPolicy, err := repo.SaveServiceRateLimitPolicy(ctx, marketing.ServiceRateLimitPolicy{TenantID: tenantID, Code: policy.Code, Name: "updated", Limit: 2, WindowSeconds: 60})
+	if err != nil {
+		t.Fatalf("upsert rate limit policy without id: %v", err)
+	}
+	if updatedPolicy.ID != policy.ID || updatedPolicy.Limit != 2 {
+		t.Fatalf("expected natural-key rate limit update, got id=%s limit=%d", updatedPolicy.ID, updatedPolicy.Limit)
+	}
+}
+
 func TestPostgresWorkspaceCompositeConstraintsRejectCrossWorkspaceReferences(t *testing.T) {
 	ctx, repo := openPostgresIntegrationRepository(t)
 	prefix := "pg_workspace_fk"
@@ -2450,6 +2550,23 @@ func insertPostgresFailedManualExportHistory(ctx context.Context, repo *Reposito
 		) VALUES ($1, $2, $3, $4, $5, 1, $6, 'READY', $7, $7)
 	`, prefix+"_failed_detail", exportID, grant.TenantID, grant.ID, grant.BillNo, grant.GrantStatus, now)
 	return err
+}
+
+func cleanupPostgresServiceAssetTest(t *testing.T, repo *Repository, prefix string) {
+	t.Helper()
+	ctx := context.Background()
+	for _, stmt := range []string{
+		`DELETE FROM marketing_service_rate_limit_policy WHERE code LIKE $1`,
+		`DELETE FROM marketing_service_interface_binding WHERE service_ref LIKE $1 OR id LIKE $1`,
+		`DELETE FROM marketing_service_provider WHERE service_ref LIKE $1 OR id LIKE $1`,
+		`DELETE FROM marketing_service_interface WHERE service_ref LIKE $1 OR id LIKE $1`,
+		`DELETE FROM marketing_service_schema WHERE schema_ref LIKE $1 OR id LIKE $1`,
+		`DELETE FROM marketing_service WHERE code LIKE $1 OR id LIKE $1`,
+	} {
+		if _, err := repo.db.ExecContext(ctx, stmt, prefix+"%"); err != nil {
+			t.Fatalf("cleanup service asset test: %v", err)
+		}
+	}
 }
 
 func testPostgresOutbox(id string, now time.Time) marketing.OutboxMessage {

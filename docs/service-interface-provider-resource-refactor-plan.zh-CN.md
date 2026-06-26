@@ -33,13 +33,13 @@ Workflow Node
 
 | 模块 | 当前已落地 | 后续增强边界 |
 | --- | --- | --- |
-| DB migration | `012` 到 `019` 已覆盖 service/interface/provider、schema registry、binding、provider runtime state、service call audit、rate-limit policy、binding 长期字段、soft-delete/catalog fields | Redis backend、migration audit 独立表、软删除后同 code/ref 重建的唯一约束演进 |
-| Model | `internal/marketing/service_asset_model.go` 已覆盖 Service/Interface/Provider、Schema、Binding、ProviderRuntimeState、RateLimitPolicy、ServiceCallAudit、soft-delete/catalog 字段 | 兼容迁移模型和更细粒度 release/migration audit 可继续扩展 |
-| Engine service | 已有 schema 校验、binding checker、provider resolver、runtime health/circuit/rate gate、weighted/environment/mock/cache-aside、ProviderChainExecutor、ResourceOperator、audit writer | ProviderResolver 可继续拆独立文件；Redis 分布式限流、cache write-back、全节点 ResourceOperator 迁移仍是增强 |
-| Admin API | 已有 service asset、schema validate/compatibility-check、binding/check、runtime-state/reset-circuit/health-check、rate-limit policy、audit query/purge、db-migrations status/analyze/apply | 统一 envelope 可继续收口旧 API；平台管理员 RBAC 和 workflow legacy migration apply 可继续增强 |
+| DB migration | `012` 到 `022` 已覆盖 service/interface/provider、schema registry、binding、provider runtime state、service call audit、provider decision audit、rate-limit policy、migration audit、binding 长期字段、soft-delete/catalog fields、soft-delete partial unique index；Redis backend 通过 rate-limit policy backend 字段进入运行时 | 真实 Redis server 集成测试/生产 Redis client 注入 |
+| Model | `internal/marketing/service_asset_model.go` 和 `provider_migration_audit_model.go` 已覆盖 Service/Interface/Provider、Schema、Binding、ProviderRuntimeState、RateLimitPolicy、ServiceCallAudit、ProviderDecisionAudit、MigrationAudit、soft-delete/catalog 字段 | 兼容迁移模型和更细粒度 release audit 可继续扩展 |
+| Engine service | 已有 schema 校验、binding checker、provider resolver、runtime health/circuit/rate gate、weighted/environment/mock/cache-aside、CACHE_ASIDE write-back、ProviderChainExecutor、ResourceOperator、service call audit、provider decision audit、migration audit writer；Redis backend 已接入 limiter/Lua adapter，使用 subject scope key，未配置 limiter 时返回明确错误 | ProviderResolver 可继续拆独立文件；真实 Redis server 集成测试/生产注入、更多 cache 策略和全节点 ResourceOperator 迁移仍是增强 |
+| Admin API | 已有 service asset、schema validate/compatibility-check、binding/check、runtime-state/reset-circuit/health-check、rate-limit policy、service call audit query/purge、provider decision audit query、migration audit query、db-migrations status/analyze/apply、workflow legacy service-interface migration analyze/apply | 统一 envelope 可继续收口旧 API；workflow migration 更细选择器可继续增强 |
 | Resource | 资源管理继续作为底层受控能力；Service Provider 可依赖 Resource，Lua resource 调用和 SERVICE_INTERFACE fact-query 已走 ResourceOperator | 普通 RESOURCE/HTTP/MQ 节点的全量 operator 化、Resource 权限细粒度审计仍可增强 |
 | Executor | `ProviderChainExecutor` 已统一 SERVICE_INTERFACE 调用链，Lua `service_call` 走 schema/binding/audit，`CACHE_ASIDE` 已落地 | `ServiceInterfaceInvoker` 可作为进一步拆分命名；更多旧节点逐步迁移到统一 executor |
-| Studio | 能力资产中心总览、Service/Interface/Provider/Schema/Binding/Audit/Migration tabs、Provider 不可选原因、Binding 风险提示、Migration dry-run/apply guard 已落地 | 完整 rate-limit 编辑、legacy workflow migration diff/apply、跨资产错误跳转和更细选择器仍是产品化增强 |
+| Studio | 能力资产中心总览、Service/Interface/Provider/Schema/Binding/RateLimit/Audit/Migration tabs、Provider 不可选原因、Binding 风险提示、DB Migration guard、Rate-limit policy 创建/编辑、legacy workflow migration analyze/dry-run/apply 页面化、发布/校验错误资产类型/ref/field 提示已落地 | 跨资产错误一键打开具体 Schema/Binding/Provider/RateLimit 记录、批量 diff、环境级复制和更细选择器仍是增强 |
 
 ### 已完成核心能力
 
@@ -48,22 +48,20 @@ Workflow Node
 3. Provider 治理：`PRIMARY`、`PRIMARY_WITH_FALLBACK`、`WEIGHTED`、`WEIGHTED_WITH_FALLBACK`、`ENVIRONMENT_MATCH`、`MOCK_ONLY`、`CACHE_ASIDE`。
 4. Runtime Governance：provider health/circuit/rate-limit、half-open、主动 health-check API、定时 health worker、rate-limit policy 表。
 5. Execution：ProviderChainExecutor、ResourceOperator 最小闭环、Lua `service_call/resource_*` 受控入口。
-6. Audit：service call audit、HMAC hash、provider/schema/permission trace、query cursor/requestId、purge API、写失败 metrics。
-7. Migration API：DB migration status/analyze/apply 已有 dry-run、break-glass、确认短语和 reason 保护。
-8. Studio：能力资产中心、providerChain 策略配置、schema/binding/audit/runtime/migration 管理入口已可用。
+6. Audit：service call audit、provider decision audit、migration audit、HMAC hash、provider/schema/permission trace、query cursor/requestId、purge API、写失败 metrics。
+7. Migration API：DB migration status/analyze/apply 已有管理员权限、dry-run、break-glass scope/actor/ttl/ticket、确认短语和 reason 保护；workflow legacy migration analyze/apply 已支持 draft 结构化 diff、dry-run、确认 apply 和 blocker；analyze/dry-run/apply/guard 失败均写 migration audit 摘要。
+8. Studio：能力资产中心、providerChain 策略配置、schema/binding/audit/runtime/migration 管理入口、rate-limit 编辑和旧 workflow migration draft apply 面板已可用。
 
 ### 后续增强项
 
 这些项不再算本轮核心闭环缺口，但后续产品化或生产强化时应继续推进：
 
-1. Redis 分布式限流 backend 和 Lua/原子脚本。
-2. provider health worker 多实例调度锁、cursor 分页和汇总 status API。
-3. `includeSubfolders` 接 folder tree 查询，`rateLimitRef` 直接按 ref 解析。
-4. 软删除后同 code/ref 重建的唯一约束演进。
-5. 独立 migration audit 表、workflow legacy migration diff/apply 页面化。
-6. 完整 rate-limit policy 创建/编辑 UI、跨资产错误跳转和更细粒度不可选原因。
-7. `CACHE_ASIDE` cache write-back、更多 cache 策略和命中率指标。
-8. 旧节点全量迁移到 ResourceOperator / ProviderChainExecutor。
+1. Redis 部署层 client 注入和解析阶段 Redis live 计数预检。
+2. provider health worker cursor/keyset 分页和更细 worker 指标；当前已支持 batch/offset 分页、每批租约续租和 owner 校验。
+3. workflow legacy migration 批量 diff/审计视图。
+4. 跨资产错误一键深跳转到具体资产记录、rate-limit policy 批量 diff 和环境级复制。
+5. `CACHE_ASIDE` 更多 cache 策略、命中率指标和 write-back 可观测性面板。
+6. 旧节点全量迁移到 ResourceOperator / ProviderChainExecutor。
 
 ## 改造清单和当前状态
 
@@ -76,11 +74,11 @@ Workflow Node
 | 优先级 | 改造项 | 文件/模块 | 完成标准 |
 | --- | --- | --- | --- |
 | P0 | service schema registry | `db/migration/013_service_schema_registry.sql`、`internal/marketing/service_asset_model.go`、repository | 已落地：可保存 input/output/error schema，支持版本、状态、兼容检查 |
-| P0 | service interface binding | `db/migration/014_service_interface_bindings.sql`、`018_service_interface_binding_long_term_fields.sql`、repository | 已落地：可按 workspace/folder/activity/node/nodeType 校验 Interface 调用权限 |
+| P0 | service interface binding | `db/migration/014_service_interface_bindings.sql`、`018_service_interface_binding_long_term_fields.sql`、repository | 已落地：可按 workspace/folder/activity/node/nodeType 校验 Interface 调用权限；`includeSubfolders` 运行时按 workspace folder parent 链覆盖子 folder |
 | P0 | provider runtime state | `db/migration/015_service_provider_runtime_state.sql`、repository | 已落地：可保存 health/circuit/failure count/last check/rate-limit window |
 | P0 | service call audit | `db/migration/016_service_call_audit.sql`、repository | 已落地：service/resource 调用有脱敏审计和 trace，audit append-only |
-| P1 | rate limit policy 表 | `db/migration/017_service_rate_limit_policy.sql` | 已落地：ProviderResolver 可按 provider/interface/service/tenant 优先级判断限流 |
-| P1 | migration audit | `marketing_service_migration_audit` | 后续增强：DB migration API 已有 analyze/apply，旧 workflow migration diff 审计可继续拆独立表 |
+| P1 | rate limit policy 表 | `db/migration/017_service_rate_limit_policy.sql` | 已落地：ProviderResolver 可按 provider/interface/service/tenant 优先级判断限流；binding `rateLimitRef` 非空时按 ref 精确解析，不回退默认策略 |
+| P1 | provider decision audit / migration audit | `db/migration/022_provider_decision_migration_audit.sql`、repository | 已落地：独立记录 provider selected/skipped/fallback/rate-limit/unhealthy/circuit/schema_failed 决策；DB/workflow migration analyze/dry-run/apply/guard 失败写统一 migration audit |
 | P1 | JSONB 索引和 check 约束 | service/provider/schema/binding/audit 表 | 已按当前 migration 覆盖核心索引和 check；更细 drift/status 可继续增强 |
 | P1 | 内置资产 seed 化 | seed command 或 YAML/JSON catalog | 后续增强：当前内置 catalog version/sourceHash 已落地，完整 seed/init 流程可继续推进 |
 
@@ -95,16 +93,16 @@ Repository 必须同时支持 PostgreSQL 和 MemoryRepository，测试不能只�
 | P0 | `ServiceSchema` | `internal/marketing/service_asset_model.go` | 已落地：有 schemaRef/version/type/status/schemaJson/examplesJson/catalog fields |
 | P0 | `ServiceInterfaceBinding` | `internal/marketing/service_asset_model.go` | 已落地：有 scope/principal/nodeType/operation/providerPolicy/luaCallable/minRole/environment/deletedAt |
 | P0 | `ServiceProviderRuntimeState` | `internal/marketing/service_asset_model.go` | 已落地：有 healthStatus/circuitStatus/failureCount/lastHealthCheckAt/rateLimit window |
-| P0 | Provider decision/trace | `internal/engine/provider_chain_executor.go`、`ServiceCallAudit.ProviderTrace` | 已落地：记录 selectedProvider/attempts/fallback/cache-aside reason |
+| P0 | Provider decision/trace | `internal/engine/provider_chain_executor.go`、`marketing_service_provider_decision_audit`、`ServiceCallAudit.ProviderTrace` | 已落地：独立记录 selected/skipped/fallback/rate-limit/unhealthy/circuit/schema_failed 决策，service call audit 继续保留调用 trace |
 | P0 | `ProviderChainStep` 共享模型 | `internal/marketing/workflow_model.go` | 已落地：节点配置不再每个 handler 自己解析一套字段 |
 | P1 | `ServiceCallAudit` | `internal/marketing/service_asset_model.go` | 已落地：审计字段固定、默认脱敏、HMAC hash、trace JSON |
-| P1 | `MigrationPlan/MigrationItem` | `internal/dbmigration` / 后续 workflow migration model | DB migration analyze/apply 已结构化；旧 workflow migration diff model 后续增强 |
+| P1 | `MigrationPlan/MigrationItem` | `internal/dbmigration` / workflow migration model | DB migration analyze/apply 已结构化；旧 workflow migration analyze/apply 已返回结构化 diff；更细选择器、批量 diff 视图和审计可视化可继续增强 |
 
 模型命名必须和文档一致：`Service` 表达能力归属，`Interface` 表达契约，`Provider` 表达实现，`Resource` 表达底层能力。不要再把 Provider Resource 当成新业务入口。
 
 ### C. Admin API
 
-Service asset 管理 API、schema validate/compatibility-check、binding/check、provider runtime、rate-limit policy、audit 和 DB migration API 已进入实现。下表中 workflow 旧字段 migration API、旧 API envelope 全量统一属于后续收口。
+Service asset 管理 API、schema validate/compatibility-check、binding/check、provider runtime、rate-limit policy、audit、DB migration API 和 workflow 旧字段 migration API 已进入实现。后续主要收口旧 API envelope 全量统一、页面化交互和真实身份/RBAC middleware 边界。
 
 | 优先级 | 改造项 | 文件/模块 | 完成标准 |
 | --- | --- | --- | --- |
@@ -113,8 +111,8 @@ Service asset 管理 API、schema validate/compatibility-check、binding/check�
 | P0 | Binding API | `internal/httpapi/service_asset_admin.go` | 已落地：binding CRUD 和 bindings/check 可用 |
 | P0 | Provider test/API | `internal/httpapi/service_asset_admin.go` | 已落地：test、health-check、runtime-state、reset-circuit 可用 |
 | P1 | Health/circuit API | `internal/httpapi/service_asset_admin.go` | 已落地：health-check 和 circuit reset 有权限边界和运行审计 |
-| P1 | DB Migration API | `internal/httpapi/migration_admin.go` | 已落地：status/analyze/apply，真实 apply 需要 actor + break-glass + 确认短语 + reason |
-| P1 | Workflow legacy migration API | `internal/httpapi/workflow_admin.go` 或独立 handler | 后续增强：旧 workflow provider/resource 字段 analyze/apply 到 draft |
+| P1 | DB Migration API | `internal/httpapi/migration_admin.go` | 已落地：status/analyze/apply，访问需要平台管理员头或租户 workspace admin/owner；真实 apply 还需要 break-glass scope/actor/ttl/ticket + 确认短语 + reason |
+| P1 | Workflow legacy migration API | `internal/httpapi/workflow_migration_admin.go` | 已落地：旧 workflow provider/resource/resourceRef/endpoint/providerCode/redisRef/grpcTarget/pluginCode analyze/apply 到 draft；直接 endpoint/grpcTarget/pluginCode 无治理引用时只返回 blocker |
 | P1 | Resource API 对齐 | `internal/httpapi/resource_admin.go` | 后续增强：resource test/check envelope 和 service API 全量一致 |
 
 所有 API 错误必须返回稳定错误码，不允许只返回自然语言字符串。
@@ -134,7 +132,7 @@ Provider 治理核心已落地。`拆出 ProviderResolver` 当前是代码组织
 | P1 | 支持 circuit | ProviderResolver + runtime state | 已落地：OPEN 跳过，HALF_OPEN 限量探测，reset 有审计 |
 | P1 | 支持 rate limit | ProviderResolver + runtime state | 已落地：超限返回 `SERVICE_PROVIDER_RATE_LIMITED` |
 | P1 | 支持 mock | ProviderResolver | 已落地：mock 只允许 preview/test，prod 发布阻断 |
-| P1 | 支持 cache-aside | ProviderResolver + ProviderChainExecutor | 已落地：cache hit/miss/error fallback/fail |
+| P1 | 支持 cache-aside | ProviderResolver + ProviderChainExecutor | 已落地：cache hit/miss/error fallback/fail，miss 后 primary 成功且 output schema 通过后执行受控 write-back；默认 warning，strict/writeBackRequired 阻断 |
 
 ProviderResolver 输出必须进入运行 trace，不能只返回 provider 对象。
 
@@ -316,9 +314,9 @@ npm run build
 
 | 日期 | 范围 | 当前状态 | 后续增强 |
 | --- | --- | --- | --- |
-| 2026-06-26 | 核心治理闭环 | Schema registry、binding、provider runtime state、rate-limit policy、service call audit、DB migration API、ProviderChainExecutor、ResourceOperator 最小闭环、Studio 能力资产中心均已进入实现 | Redis 限流 backend、cache write-back、旧 workflow migration diff/apply 页面化、更多节点全量 operator 化 |
-| 2026-06-26 | Provider policy | `PRIMARY`、`PRIMARY_WITH_FALLBACK`、`WEIGHTED`、`WEIGHTED_WITH_FALLBACK`、`ENVIRONMENT_MATCH`、`MOCK_ONLY`、`CACHE_ASIDE` 均已可校验和运行 | 更细 provider 选择可观测性、cache 写回和多 cache 策略 |
-| 2026-06-26 | 运维治理 | 手动 health-check、定时 health worker、circuit reset、half-open、rate-limit policy、audit purge、migration analyze/apply 已落地 | 多实例 worker 调度锁、cursor 扫描、平台管理员 RBAC |
+| 2026-06-26 | 核心治理闭环 | Schema registry、binding、provider runtime state、rate-limit policy、service call audit、DB migration API、workflow legacy migration API、ProviderChainExecutor、ResourceOperator 最小闭环、Studio 能力资产中心均已进入实现 | 真实 Redis server 集成测试/生产 Redis client 注入、workflow migration 批量 diff/审计视图、更多节点全量 operator 化 |
+| 2026-06-26 | Provider policy | `PRIMARY`、`PRIMARY_WITH_FALLBACK`、`WEIGHTED`、`WEIGHTED_WITH_FALLBACK`、`ENVIRONMENT_MATCH`、`MOCK_ONLY`、`CACHE_ASIDE` 均已可校验和运行；CACHE_ASIDE 已支持 miss 后 write-back | 更细 provider 选择可观测性、write-back 面板和多 cache 策略 |
+| 2026-06-26 | 运维治理 | 手动 health-check、定时 health worker、`marketing_worker_lease` 多实例调度锁、每批租约续租/owner 校验、batch/offset 分页、Provider health 概览 API、circuit reset、half-open、rate-limit policy、audit purge、migration analyze/apply 已落地 | worker cursor/keyset 分页、真实身份 middleware / 签名 token |
 
 当前关键代码入口：
 
@@ -351,14 +349,14 @@ npm run build
   -> WEIGHTED 使用 deterministic hash 稳定选择
   -> WEIGHTED_WITH_FALLBACK 在首选 provider 失败后继续尝试候选
   -> ENVIRONMENT_MATCH 使用 request/runtime environment 过滤和排序 provider
-  -> CACHE_ASIDE 先读 cache provider，miss/error 按策略 fallback primary provider
+  -> CACHE_ASIDE 先读 cache provider，miss/error 按策略 fallback primary provider；primary 输出通过 outputSchemaRef 后写回 cache/受控 resource
 
 新 targetType=RESOURCE
   -> 必须 resourceRef
   -> 禁止 endpoint/redisRef/grpcTarget/broker/dbDsn/secret/rawSql
 ```
 
-历史记录（已过期，仅供追溯）：2026-06-24 第一批只完成 providerPolicy 策略入口，当时 schema registry、binding、provider runtime state、health/circuit/rate-limit、migration API、Studio 资产中心尚未落地。上述缺口已经在 2026-06-26 的核心治理闭环中推进到实现状态。
+历史记录（已过期，仅供追溯）：2026-06-24 第一批只完成 providerPolicy 策略入口，当时 schema registry、binding、provider runtime state、health/circuit/rate-limit、migration API、Studio 资产中心仍处于设计期。上述缺口已经在 2026-06-26 的核心治理闭环中推进到实现状态。
 
 ## P0 文档和命名收敛
 
@@ -397,6 +395,9 @@ rg "节点首选入口.*PROVIDER|新配置优先.*PROVIDER|HTTP Provider Resourc
 017_service_rate_limit_policy.sql
 018_service_interface_binding_long_term_fields.sql
 019_service_asset_catalog_fields.sql
+020_worker_lease.sql
+021_service_asset_soft_delete_unique_indexes.sql
+022_provider_decision_migration_audit.sql
 ```
 
 ### 表结构改造
@@ -408,8 +409,8 @@ rg "节点首选入口.*PROVIDER|新配置优先.*PROVIDER|HTTP Provider Resourc
 | `marketing_service_provider_runtime_state` | 保存 provider health、circuit、last check、失败计数、rate-limit window |
 | `marketing_service_rate_limit_policy` | 保存 tenant/service/interface/provider 维度限流配置 |
 | `marketing_service_call_audit` | 保存 service interface 调用审计摘要 |
-| `marketing_service_provider_audit` | 后续增强：如需要独立 provider 决策审计，可从 service call audit trace 中拆表 |
-| `marketing_service_migration_audit` | 后续增强：旧字段迁移 diff、执行人、结果可独立沉淀 |
+| `marketing_service_provider_decision_audit` | 保存 provider 候选 selected/skipped/fallback/rate-limit/unhealthy/circuit/schema_failed 决策摘要 |
+| `marketing_service_migration_audit` | 保存 DB/workflow migration analyze/dry-run/apply、执行人、break-glass、结果和 blocker/item 摘要 |
 
 `marketing_service_provider` 需要补字段或通过 state 表承载：
 
@@ -485,8 +486,8 @@ Service asset、schema、binding、provider runtime、rate-limit、audit 和 DB 
 | `GET /admin/v1/db-migrations/status` | 查询 DB migration 状态 |
 | `POST /admin/v1/db-migrations/analyze` | 分析 DB migration drift/pending |
 | `POST /admin/v1/db-migrations/apply` | dry-run 或 break-glass apply DB migration |
-| `POST /admin/v1/workflows/{activityId}/migration/service-interface/analyze` | 后续增强：分析旧 workflow 字段迁移 |
-| `POST /admin/v1/workflows/{activityId}/migration/service-interface/apply` | 后续增强：应用旧 workflow 迁移到 draft |
+| `POST /admin/v1/workflows/{activityId}/migration/service-interface/analyze` | 分析旧 workflow 字段迁移，返回 items/summary/blockers |
+| `POST /admin/v1/workflows/{activityId}/migration/service-interface/apply` | dry-run 或确认后把可安全迁移项应用到 draft，blocker 不自动改 |
 
 ### 通用响应
 
@@ -540,7 +541,7 @@ go test ./internal/httpapi ./internal/engine
 
 ## P3 Provider 治理闭环
 
-Provider resolver 已支持 `PRIMARY`、`PRIMARY_WITH_FALLBACK`、`WEIGHTED`、`WEIGHTED_WITH_FALLBACK`、`ENVIRONMENT_MATCH`、`MOCK_ONLY`、`CACHE_ASIDE`，并接入 status/deleted、environment、mock、health、circuit、rate-limit、binding、schema 和 audit 链路。后续增强重点是拆分独立 resolver 文件、增加更细可观测性和分布式限流 backend。
+Provider resolver 已支持 `PRIMARY`、`PRIMARY_WITH_FALLBACK`、`WEIGHTED`、`WEIGHTED_WITH_FALLBACK`、`ENVIRONMENT_MATCH`、`MOCK_ONLY`、`CACHE_ASIDE`，并接入 status/deleted、environment、mock、health、circuit、rate-limit、binding、schema 和 audit 链路。CACHE_ASIDE 已支持 cache hit 直接返回、miss/error fallback primary，以及 primary 成功并通过 output schema 后的受控 write-back；write-back 失败默认只进入 trace/audit warning，`strict/writeBackRequired` 可阻断。Redis backend 已通过可注入 limiter 和 Lua adapter 接入运行时消费，key 维度包含 tenant/service/interface/provider/policy/scope/subject hash，未配置 limiter 时返回明确错误。后续增强重点是拆分独立 resolver 文件、增加更细可观测性、补真实 Redis server 集成测试和生产 Redis client 注入。
 
 ### ProviderResolver 行为
 
@@ -581,7 +582,7 @@ warnings
 | `WEIGHTED_WITH_FALLBACK` | 先按 weight 选择首选 provider，首选失败后按候选 fallback |
 | `ENVIRONMENT_MATCH` | 只选择当前 environment 可用 provider |
 | `MOCK_ONLY` | 只在 preview/test 环境允许 |
-| `CACHE_ASIDE` | 先尝试 cache provider，cache miss/error 按策略 fallback primary |
+| `CACHE_ASIDE` | 先尝试 cache provider，cache miss/error 按策略 fallback primary；primary 输出 schema 通过后 write-back cache/受控 resource |
 
 治理检查顺序：
 

@@ -30,11 +30,19 @@ func TestSaveServiceProviderMaterializesBuiltInParents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("save provider under built-in interface: %v", err)
 	}
-	if _, err := repo.GetServiceDefinition(ctx, "site_001", "user-profile-service"); err != nil {
+	materializedService, err := repo.GetServiceDefinition(ctx, "site_001", "user-profile-service")
+	if err != nil {
 		t.Fatalf("expected built-in service materialized: %v", err)
 	}
-	if _, err := repo.GetServiceInterface(ctx, "site_001", "user-profile-service", "query-user-profile"); err != nil {
+	if !materializedService.Builtin || materializedService.CatalogVersion == "" || materializedService.SourceHash == "" {
+		t.Fatalf("expected built-in service catalog trace fields, got %+v", materializedService)
+	}
+	materializedInterface, err := repo.GetServiceInterface(ctx, "site_001", "user-profile-service", "query-user-profile")
+	if err != nil {
 		t.Fatalf("expected built-in interface materialized: %v", err)
+	}
+	if !materializedInterface.Builtin || materializedInterface.CatalogVersion == "" || materializedInterface.SourceHash == "" {
+		t.Fatalf("expected built-in interface catalog trace fields, got %+v", materializedInterface)
 	}
 }
 
@@ -464,6 +472,44 @@ func TestPublishWorkflowBlocksUnauthorizedExplicitProviderRef(t *testing.T) {
 	}
 }
 
+func TestPublishWorkflowBlocksSoftDeletedServiceInterface(t *testing.T) {
+	ctx := context.Background()
+	repo := marketing.NewMemoryRepository()
+	service := NewService(repo)
+	activity := mustCreateServiceBindingActivity(t, ctx, repo, "act_soft_deleted_interface")
+	mustSaveWalletServiceAssets(t, ctx, service, json.RawMessage(`{"targetResourceRef":"wallet-store"}`))
+	if _, err := service.SaveServiceInterfaceBinding(ctx, marketing.ServiceInterfaceBinding{
+		TenantID:                activity.TenantID,
+		ServiceRef:              "wallet-service",
+		InterfaceRef:            "query-wallet-balance",
+		Scope:                   marketing.ServiceAssetScopeActivity,
+		ActivityID:              activity.ID,
+		PrincipalType:           marketing.ServicePrincipalRole,
+		PrincipalID:             "*",
+		AllowedNodeTypes:        []string{"fact-query"},
+		AllowedOperations:       []marketing.ServiceInterfaceOperation{marketing.ServiceOperationCall},
+		AllowedProviderPolicies: []string{"PRIMARY"},
+		Status:                  marketing.ServiceAssetActive,
+	}); err != nil {
+		t.Fatalf("save binding: %v", err)
+	}
+	deletedAt := time.Date(2026, 6, 26, 10, 0, 0, 0, time.UTC)
+	serviceInterface, err := service.GetServiceInterface(ctx, activity.TenantID, "wallet-service", "query-wallet-balance")
+	if err != nil {
+		t.Fatalf("get interface: %v", err)
+	}
+	serviceInterface.DeletedAt = &deletedAt
+	if _, err := service.SaveServiceInterface(ctx, serviceInterface); err != nil {
+		t.Fatalf("soft delete interface: %v", err)
+	}
+	mustSaveServiceBindingWorkflowDraft(t, ctx, service, activity, `{"targetType":"SERVICE_INTERFACE","serviceRef":"wallet-service","interfaceRef":"query-wallet-balance","onMiss":"BLOCK"}`)
+
+	_, err = service.PublishWorkflowVersion(ctx, activity.ID, marketing.PublishWorkflowCommand{Operator: "tester"})
+	if err == nil || !strings.Contains(err.Error(), "SERVICE_INTERFACE_DISABLED") {
+		t.Fatalf("expected soft-deleted interface publish block, got %v", err)
+	}
+}
+
 func TestRuntimeBlocksServiceInterfaceWithoutBinding(t *testing.T) {
 	ctx := context.Background()
 	service := NewService(marketing.NewMemoryRepository())
@@ -524,6 +570,164 @@ func TestServiceInterfaceAccessAllowsMatchingBinding(t *testing.T) {
 	}
 	if !decision.Allowed || len(decision.MatchedBindingIDs) != 1 {
 		t.Fatalf("expected matching binding allowed, got %+v", decision)
+	}
+}
+
+func TestServiceInterfaceAccessRejectsSoftDeletedInterface(t *testing.T) {
+	ctx := context.Background()
+	service := NewService(marketing.NewMemoryRepository())
+	mustSaveServiceAssetFixture(t, ctx, service)
+	if _, err := service.SaveServiceInterfaceBinding(ctx, marketing.ServiceInterfaceBinding{
+		TenantID:                "site_001",
+		ServiceRef:              "wallet-service",
+		InterfaceRef:            "query-wallet-balance",
+		Scope:                   marketing.ServiceAssetScopeWorkspace,
+		WorkspaceID:             "workspace-1",
+		PrincipalType:           marketing.ServicePrincipalRole,
+		PrincipalID:             "*",
+		AllowedNodeTypes:        []string{"fact-query"},
+		AllowedOperations:       []marketing.ServiceInterfaceOperation{marketing.ServiceOperationCall},
+		AllowedProviderPolicies: []string{"PRIMARY"},
+		Status:                  marketing.ServiceAssetActive,
+	}); err != nil {
+		t.Fatalf("save binding: %v", err)
+	}
+	deletedAt := time.Date(2026, 6, 26, 10, 30, 0, 0, time.UTC)
+	serviceInterface, err := service.GetServiceInterface(ctx, "site_001", "wallet-service", "query-wallet-balance")
+	if err != nil {
+		t.Fatalf("get interface: %v", err)
+	}
+	serviceInterface.DeletedAt = &deletedAt
+	if _, err := service.SaveServiceInterface(ctx, serviceInterface); err != nil {
+		t.Fatalf("soft delete interface: %v", err)
+	}
+
+	decision, err := service.checkServiceInterfaceAccess(ctx, serviceInterfaceAccessRequest{
+		TenantID:       "site_001",
+		WorkspaceID:    "workspace-1",
+		NodeType:       "fact-query",
+		ServiceRef:     "wallet-service",
+		InterfaceRef:   "query-wallet-balance",
+		Operation:      marketing.ServiceOperationCall,
+		ProviderPolicy: "PRIMARY",
+	})
+	if err != nil {
+		t.Fatalf("check access: %v", err)
+	}
+	if decision.Allowed || decision.Code != "SERVICE_INTERFACE_DISABLED" {
+		t.Fatalf("expected soft-deleted interface denied, got %+v", decision)
+	}
+}
+
+func TestServiceInterfaceBindingLongTermFields(t *testing.T) {
+	ctx := context.Background()
+	service := NewService(marketing.NewMemoryRepository())
+	deletedAt := time.Date(2026, 6, 26, 9, 0, 0, 0, time.UTC)
+	if _, err := service.SaveServiceInterfaceBinding(ctx, marketing.ServiceInterfaceBinding{
+		TenantID:                "site_001",
+		ServiceRef:              "user-profile-service",
+		InterfaceRef:            "query-user-profile",
+		Scope:                   marketing.ServiceAssetScopeWorkspace,
+		WorkspaceID:             "workspace-1",
+		PrincipalType:           marketing.ServicePrincipalRole,
+		PrincipalID:             "VIEWER",
+		MinRole:                 marketing.WorkspaceRoleEditor,
+		Environment:             "prod",
+		RateLimitRef:            "rl-profile-query",
+		IncludeSubfolders:       true,
+		AllowedNodeTypes:        []string{"fact-query"},
+		AllowedOperations:       []marketing.ServiceInterfaceOperation{marketing.ServiceOperationCall},
+		AllowedProviderPolicies: []string{"PRIMARY"},
+		Status:                  marketing.ServiceAssetActive,
+	}); err != nil {
+		t.Fatalf("save binding: %v", err)
+	}
+	items, err := service.ListServiceInterfaceBindings(ctx, marketing.ServiceInterfaceBindingQuery{
+		TenantID:     "site_001",
+		ServiceRef:   "user-profile-service",
+		InterfaceRef: "query-user-profile",
+		Environment:  "prod",
+	})
+	if err != nil {
+		t.Fatalf("list bindings: %v", err)
+	}
+	if len(items) != 1 || items[0].MinRole != marketing.WorkspaceRoleEditor || items[0].RateLimitRef != "rl-profile-query" || !items[0].IncludeSubfolders {
+		t.Fatalf("expected long-term fields round-tripped, got %+v", items)
+	}
+
+	viewerCtx := marketing.WithAuditSource(ctx, map[string]any{"roles": []string{"VIEWER"}})
+	decision, err := service.checkServiceInterfaceAccess(viewerCtx, serviceInterfaceAccessRequest{
+		TenantID:       "site_001",
+		WorkspaceID:    "workspace-1",
+		NodeType:       "fact-query",
+		ServiceRef:     "user-profile-service",
+		InterfaceRef:   "query-user-profile",
+		Operation:      marketing.ServiceOperationCall,
+		ProviderPolicy: "PRIMARY",
+		Environment:    "prod",
+	})
+	if err != nil {
+		t.Fatalf("check viewer access: %v", err)
+	}
+	if decision.Allowed || decision.Code != "SERVICE_INTERFACE_ROLE_DENIED" {
+		t.Fatalf("expected viewer below minRole denied, got %+v", decision)
+	}
+
+	adminCtx := marketing.WithAuditSource(ctx, map[string]any{"roles": []string{"ADMIN"}})
+	decision, err = service.checkServiceInterfaceAccess(adminCtx, serviceInterfaceAccessRequest{
+		TenantID:       "site_001",
+		WorkspaceID:    "workspace-1",
+		NodeType:       "fact-query",
+		ServiceRef:     "user-profile-service",
+		InterfaceRef:   "query-user-profile",
+		Operation:      marketing.ServiceOperationCall,
+		ProviderPolicy: "PRIMARY",
+		Environment:    "dev",
+	})
+	if err != nil {
+		t.Fatalf("check environment access: %v", err)
+	}
+	if decision.Allowed || decision.Code != "SERVICE_INTERFACE_ENVIRONMENT_DENIED" {
+		t.Fatalf("expected environment mismatch denied, got %+v", decision)
+	}
+
+	decision, err = service.checkServiceInterfaceAccess(adminCtx, serviceInterfaceAccessRequest{
+		TenantID:       "site_001",
+		WorkspaceID:    "workspace-1",
+		NodeType:       "fact-query",
+		ServiceRef:     "user-profile-service",
+		InterfaceRef:   "query-user-profile",
+		Operation:      marketing.ServiceOperationCall,
+		ProviderPolicy: "PRIMARY",
+		Environment:    "prod",
+	})
+	if err != nil {
+		t.Fatalf("check admin access: %v", err)
+	}
+	if !decision.Allowed {
+		t.Fatalf("expected admin role to satisfy minRole, got %+v", decision)
+	}
+
+	deleted := items[0]
+	deleted.DeletedAt = &deletedAt
+	if _, err := service.SaveServiceInterfaceBinding(ctx, deleted); err != nil {
+		t.Fatalf("save deleted binding: %v", err)
+	}
+	decision, err = service.checkServiceInterfaceAccess(adminCtx, serviceInterfaceAccessRequest{
+		TenantID:       "site_001",
+		WorkspaceID:    "workspace-1",
+		NodeType:       "fact-query",
+		ServiceRef:     "user-profile-service",
+		InterfaceRef:   "query-user-profile",
+		Operation:      marketing.ServiceOperationCall,
+		ProviderPolicy: "PRIMARY",
+		Environment:    "prod",
+	})
+	if err != nil {
+		t.Fatalf("check deleted binding access: %v", err)
+	}
+	if decision.Allowed || decision.Code != "SERVICE_INTERFACE_BINDING_REQUIRED" {
+		t.Fatalf("expected soft-deleted binding ignored, got %+v", decision)
 	}
 }
 
@@ -636,6 +840,34 @@ func TestResolveServiceProviderRejectsUnsupportedPolicy(t *testing.T) {
 	_, _, err := service.ResolveServiceProvider(ctx, "site_001", "user-profile-service", "query-user-profile", "", "RANDOM")
 	if err == nil || !strings.Contains(err.Error(), "SERVICE_PROVIDER_POLICY_UNSUPPORTED") {
 		t.Fatalf("expected unsupported policy error, got %v", err)
+	}
+}
+
+func TestResolveServiceProviderRejectsSoftDeletedInterfaceAndExplicitProvider(t *testing.T) {
+	ctx := context.Background()
+	service := NewService(marketing.NewMemoryRepository())
+	mustSaveServiceAssetFixture(t, ctx, service)
+	provider := mustSaveWalletProvider(t, ctx, service, "wallet-soft-delete", 0, 100, nil)
+
+	deletedAt := time.Date(2026, 6, 26, 11, 0, 0, 0, time.UTC)
+	provider.DeletedAt = &deletedAt
+	if _, err := service.SaveServiceProvider(ctx, provider); err != nil {
+		t.Fatalf("soft delete provider: %v", err)
+	}
+	if _, _, err := service.ResolveServiceProvider(ctx, "site_001", "wallet-service", "query-wallet-balance", "wallet-soft-delete", "PRIMARY"); err == nil || !strings.Contains(err.Error(), "SERVICE_PROVIDER_DISABLED") {
+		t.Fatalf("expected soft-deleted explicit provider rejected, got %v", err)
+	}
+
+	serviceInterface, err := service.GetServiceInterface(ctx, "site_001", "wallet-service", "query-wallet-balance")
+	if err != nil {
+		t.Fatalf("get interface: %v", err)
+	}
+	serviceInterface.DeletedAt = &deletedAt
+	if _, err := service.SaveServiceInterface(ctx, serviceInterface); err != nil {
+		t.Fatalf("soft delete interface: %v", err)
+	}
+	if _, _, err := service.ResolveServiceProvider(ctx, "site_001", "wallet-service", "query-wallet-balance", "", "PRIMARY"); err == nil || !strings.Contains(err.Error(), "SERVICE_INTERFACE_DISABLED") {
+		t.Fatalf("expected soft-deleted interface rejected, got %v", err)
 	}
 }
 
@@ -875,6 +1107,62 @@ func TestResolveServiceProviderMockPolicy(t *testing.T) {
 	}
 }
 
+func TestResolveServiceProviderCacheAsidePolicy(t *testing.T) {
+	ctx := context.Background()
+	service := NewService(marketing.NewMemoryRepository())
+	mustSaveServiceAssetFixture(t, ctx, service)
+	mustSaveWalletProvider(t, ctx, service, "wallet-primary", 0, 10, nil)
+	mustSaveWalletProvider(t, ctx, service, "wallet-cache-role", 20, 10, json.RawMessage(`{"role":"CACHE"}`))
+	cacheEnv := mustSaveWalletProvider(t, ctx, service, "wallet-cache-env", 10, 10, nil)
+	cacheEnv.Environment = "cache"
+	if _, err := service.SaveServiceProvider(ctx, cacheEnv); err != nil {
+		t.Fatalf("save cache env provider: %v", err)
+	}
+
+	_, providers, err := service.resolveServiceProviders(ctx, serviceProviderResolveRequest{
+		TenantID:       "site_001",
+		ServiceRef:     "wallet-service",
+		InterfaceRef:   "query-wallet-balance",
+		ProviderPolicy: "CACHE_ASIDE",
+	})
+	if err != nil {
+		t.Fatalf("resolve cache aside: %v", err)
+	}
+	got := []string{}
+	for _, provider := range providers {
+		got = append(got, provider.Code)
+	}
+	want := []string{"wallet-cache-env", "wallet-cache-role", "wallet-primary"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("cache-aside order mismatch: got %v want %v", got, want)
+	}
+
+	cacheEnv.Status = marketing.ServiceAssetDisabled
+	if _, err := service.SaveServiceProvider(ctx, cacheEnv); err != nil {
+		t.Fatalf("disable cache env provider: %v", err)
+	}
+	cacheRole, err := service.GetServiceProvider(ctx, "site_001", "wallet-service", "query-wallet-balance", "wallet-cache-role")
+	if err != nil {
+		t.Fatalf("get cache role provider: %v", err)
+	}
+	cacheRole.Status = marketing.ServiceAssetDisabled
+	if _, err := service.SaveServiceProvider(ctx, cacheRole); err != nil {
+		t.Fatalf("disable cache role provider: %v", err)
+	}
+	_, primaryOnly, err := service.resolveServiceProviders(ctx, serviceProviderResolveRequest{
+		TenantID:       "site_001",
+		ServiceRef:     "wallet-service",
+		InterfaceRef:   "query-wallet-balance",
+		ProviderPolicy: "CACHE_ASIDE",
+	})
+	if err != nil {
+		t.Fatalf("resolve cache aside primary only: %v", err)
+	}
+	if len(primaryOnly) != 1 || primaryOnly[0].Code != "wallet-primary" {
+		t.Fatalf("expected primary fallback without cache provider, got %+v", primaryOnly)
+	}
+}
+
 func TestResolveServiceProviderFallbackOrderStable(t *testing.T) {
 	ctx := context.Background()
 	service := NewService(marketing.NewMemoryRepository())
@@ -959,6 +1247,25 @@ func TestResolveServiceProviderBlocksOpenCircuitAndResetAllowsCall(t *testing.T)
 	}
 }
 
+func TestProviderRuntimeOperationsRejectSoftDeletedProvider(t *testing.T) {
+	ctx := context.Background()
+	service := NewService(marketing.NewMemoryRepository())
+	mustSaveServiceAssetFixture(t, ctx, service)
+	provider := mustSaveWalletProvider(t, ctx, service, "wallet-runtime-deleted", 0, 100, nil)
+	deletedAt := time.Date(2026, 6, 26, 11, 30, 0, 0, time.UTC)
+	provider.DeletedAt = &deletedAt
+	if _, err := service.SaveServiceProvider(ctx, provider); err != nil {
+		t.Fatalf("soft delete provider: %v", err)
+	}
+
+	if _, err := service.ResetServiceProviderCircuit(ctx, "site_001", "wallet-service", "query-wallet-balance", "wallet-runtime-deleted"); err == nil || !strings.Contains(err.Error(), "SERVICE_PROVIDER_DISABLED") {
+		t.Fatalf("expected reset circuit to reject soft-deleted provider, got %v", err)
+	}
+	if _, err := service.CheckServiceProviderHealth(ctx, "site_001", "wallet-service", "query-wallet-balance", "wallet-runtime-deleted", "tester"); err == nil || !strings.Contains(err.Error(), "SERVICE_PROVIDER_DISABLED") {
+		t.Fatalf("expected health check to reject soft-deleted provider, got %v", err)
+	}
+}
+
 func TestServiceProviderRateLimitBlocksProvider(t *testing.T) {
 	ctx := context.Background()
 	service := NewService(marketing.NewMemoryRepository())
@@ -970,6 +1277,48 @@ func TestServiceProviderRateLimitBlocksProvider(t *testing.T) {
 	}
 	if _, _, err := service.ResolveServiceProvider(ctx, "site_001", "wallet-service", "query-wallet-balance", "wallet-primary", "PRIMARY"); err == nil || !strings.Contains(err.Error(), "SERVICE_PROVIDER_RATE_LIMITED") {
 		t.Fatalf("expected rate limit error, got %v", err)
+	}
+}
+
+func TestServiceProviderRateLimitPolicyOverridesProviderConfig(t *testing.T) {
+	ctx := context.Background()
+	service := NewService(marketing.NewMemoryRepository())
+	mustSaveServiceAssetFixture(t, ctx, service)
+	provider := mustSaveWalletProvider(t, ctx, service, "wallet-primary", 0, 100, []byte(`{"rateLimitPerWindow":100,"rateLimitWindowSeconds":60}`))
+	if _, err := service.SaveServiceRateLimitPolicy(ctx, marketing.ServiceRateLimitPolicy{
+		TenantID:      "site_001",
+		Code:          "wallet-primary-limit",
+		Name:          "Wallet primary limit",
+		ServiceRef:    "wallet-service",
+		InterfaceRef:  "query-wallet-balance",
+		ProviderRef:   "wallet-primary",
+		Limit:         1,
+		WindowSeconds: 60,
+		Backend:       marketing.ServiceRateLimitBackendPostgres,
+		Status:        marketing.ServiceAssetActive,
+	}); err != nil {
+		t.Fatalf("save rate limit policy: %v", err)
+	}
+
+	if _, err := service.consumeServiceProviderRuntime(ctx, provider); err != nil {
+		t.Fatalf("first consume should pass: %v", err)
+	}
+	if _, _, err := service.ResolveServiceProvider(ctx, "site_001", "wallet-service", "query-wallet-balance", "wallet-primary", "PRIMARY"); err == nil || !strings.Contains(err.Error(), "SERVICE_PROVIDER_RATE_LIMITED") {
+		t.Fatalf("expected policy rate limit error, got %v", err)
+	}
+}
+
+func TestServiceProviderRateLimitFallsBackToProviderConfigWithoutPolicy(t *testing.T) {
+	ctx := context.Background()
+	service := NewService(marketing.NewMemoryRepository())
+	mustSaveServiceAssetFixture(t, ctx, service)
+	provider := mustSaveWalletProvider(t, ctx, service, "wallet-primary", 0, 100, []byte(`{"rateLimitPerWindow":1,"rateLimitWindowSeconds":60}`))
+
+	if _, err := service.consumeServiceProviderRuntime(ctx, provider); err != nil {
+		t.Fatalf("first consume should pass: %v", err)
+	}
+	if _, _, err := service.ResolveServiceProvider(ctx, "site_001", "wallet-service", "query-wallet-balance", "wallet-primary", "PRIMARY"); err == nil || !strings.Contains(err.Error(), "SERVICE_PROVIDER_RATE_LIMITED") {
+		t.Fatalf("expected provider config rate limit error, got %v", err)
 	}
 }
 

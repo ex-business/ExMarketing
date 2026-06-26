@@ -21,6 +21,7 @@ type serviceInterfaceAccessRequest struct {
 	Operation       marketing.ServiceInterfaceOperation
 	ProviderPolicy  string
 	ProviderRef     string
+	Environment     string
 	ActorID         string
 	ActorRoles      []string
 	ActorGroups     []string
@@ -49,6 +50,7 @@ type ServiceInterfaceAccessCheck struct {
 	Operation      marketing.ServiceInterfaceOperation `json:"operation,omitempty"`
 	ProviderPolicy string                              `json:"providerPolicy,omitempty"`
 	ProviderRef    string                              `json:"providerRef,omitempty"`
+	Environment    string                              `json:"environment,omitempty"`
 	LuaCall        bool                                `json:"luaCall,omitempty"`
 }
 
@@ -72,6 +74,7 @@ func (s *Service) CheckServiceInterfaceAccess(ctx context.Context, check Service
 		Operation:      check.Operation,
 		ProviderPolicy: check.ProviderPolicy,
 		ProviderRef:    check.ProviderRef,
+		Environment:    check.Environment,
 		LuaCall:        check.LuaCall,
 	})
 	if err != nil {
@@ -93,6 +96,7 @@ func (s *Service) checkServiceInterfaceAccess(ctx context.Context, req serviceIn
 	req.NodeID = strings.TrimSpace(req.NodeID)
 	req.ProviderRef = strings.TrimSpace(req.ProviderRef)
 	req.ProviderPolicy = strings.ToUpper(strings.TrimSpace(req.ProviderPolicy))
+	req.Environment = strings.TrimSpace(req.Environment)
 	if req.ProviderPolicy == "" {
 		req.ProviderPolicy = "PRIMARY"
 	}
@@ -110,7 +114,7 @@ func (s *Service) checkServiceInterfaceAccess(ctx context.Context, req serviceIn
 		}
 		return serviceInterfaceAccessDecision{}, err
 	}
-	if serviceInterface.Status != marketing.ServiceAssetActive {
+	if !serviceAssetStatusActive(serviceInterface.Status, serviceInterface.DeletedAt) {
 		return denyServiceInterfaceAccess("SERVICE_INTERFACE_DISABLED", fmt.Sprintf("service interface %s/%s is not ACTIVE", req.ServiceRef, req.InterfaceRef))
 	}
 	if serviceInterface.Operation != "" && serviceInterface.Operation != req.Operation {
@@ -134,7 +138,11 @@ func (s *Service) checkServiceInterfaceAccess(ctx context.Context, req serviceIn
 	}
 	denied := serviceInterfaceAccessDecision{}
 	for _, binding := range bindings {
-		if binding.Status != marketing.ServiceAssetActive {
+		if !serviceAssetStatusActive(binding.Status, binding.DeletedAt) {
+			continue
+		}
+		if !serviceInterfaceBindingEnvironmentMatches(binding, req) {
+			denied = serviceInterfaceAccessDenied("SERVICE_INTERFACE_ENVIRONMENT_DENIED", fmt.Sprintf("binding environment %s does not match runtime environment %s", binding.Environment, req.Environment))
 			continue
 		}
 		if !serviceInterfaceBindingScopeMatches(binding, req) {
@@ -219,6 +227,9 @@ func serviceInterfaceBindingScopeMatches(binding marketing.ServiceInterfaceBindi
 		if binding.WorkspaceID != "" && binding.WorkspaceID != req.WorkspaceID {
 			return false
 		}
+		if binding.IncludeSubfolders {
+			return binding.FolderID == "" || binding.FolderID == req.FolderID
+		}
 		return binding.FolderID == "" || binding.FolderID == req.FolderID
 	case marketing.ServiceAssetScopeActivity:
 		if binding.WorkspaceID != "" && binding.WorkspaceID != req.WorkspaceID {
@@ -244,14 +255,36 @@ func serviceInterfaceBindingScopeMatches(binding marketing.ServiceInterfaceBindi
 	}
 }
 
+func serviceInterfaceBindingEnvironmentMatches(binding marketing.ServiceInterfaceBinding, req serviceInterfaceAccessRequest) bool {
+	bindingEnv := normalizeServiceProviderEnvironment(binding.Environment)
+	if bindingEnv == "" || serviceProviderDefaultEnvironment(bindingEnv) {
+		return true
+	}
+	requestEnv := normalizeServiceProviderEnvironment(req.Environment)
+	return requestEnv != "" && bindingEnv == requestEnv
+}
+
 func serviceInterfaceBindingPrincipalMatches(binding marketing.ServiceInterfaceBinding, req serviceInterfaceAccessRequest) bool {
 	principalID := strings.TrimSpace(binding.PrincipalID)
 	if principalID == "*" {
+		if binding.PrincipalType == marketing.ServicePrincipalRole && binding.MinRole != "" {
+			return serviceInterfaceActorHasMinRole(req.ActorRoles, binding.MinRole)
+		}
 		return true
 	}
 	switch binding.PrincipalType {
 	case marketing.ServicePrincipalRole:
-		return workflowStringInList(principalID, req.ActorRoles)
+		requiredRole := marketing.WorkspaceRole(strings.ToUpper(principalID))
+		if serviceInterfaceRoleRank(requiredRole) < 0 && binding.MinRole == "" {
+			return workflowStringInList(principalID, req.ActorRoles)
+		}
+		if binding.MinRole != "" && serviceInterfaceRoleRank(binding.MinRole) > serviceInterfaceRoleRank(requiredRole) {
+			requiredRole = binding.MinRole
+		}
+		if serviceInterfaceRoleRank(requiredRole) < 0 {
+			return false
+		}
+		return serviceInterfaceActorHasMinRole(req.ActorRoles, requiredRole)
 	case marketing.ServicePrincipalUser:
 		return principalID != "" && principalID == req.ActorID
 	case marketing.ServicePrincipalGroup:
@@ -268,6 +301,34 @@ func serviceInterfaceBindingPrincipalMatches(binding marketing.ServiceInterfaceB
 		return principalID == "" || principalID == req.NodeID
 	default:
 		return false
+	}
+}
+
+func serviceInterfaceActorHasMinRole(actorRoles []string, minRole marketing.WorkspaceRole) bool {
+	requiredRank := serviceInterfaceRoleRank(minRole)
+	if requiredRank < 0 {
+		return false
+	}
+	for _, actorRole := range actorRoles {
+		if serviceInterfaceRoleRank(marketing.WorkspaceRole(strings.ToUpper(strings.TrimSpace(actorRole)))) >= requiredRank {
+			return true
+		}
+	}
+	return false
+}
+
+func serviceInterfaceRoleRank(role marketing.WorkspaceRole) int {
+	switch marketing.WorkspaceRole(strings.ToUpper(strings.TrimSpace(string(role)))) {
+	case marketing.WorkspaceRoleViewer:
+		return 1
+	case marketing.WorkspaceRoleEditor:
+		return 2
+	case marketing.WorkspaceRoleAdmin:
+		return 3
+	case marketing.WorkspaceRoleOwner:
+		return 4
+	default:
+		return -1
 	}
 }
 
@@ -331,6 +392,7 @@ func serviceInterfaceAccessTrace(decision serviceInterfaceAccessDecision, req se
 		"interfaceRef":       req.InterfaceRef,
 		"providerPolicy":     req.ProviderPolicy,
 		"providerRef":        req.ProviderRef,
+		"environment":        req.Environment,
 		"allowed":            decision.Allowed,
 		"matchedBindingIds":  decision.MatchedBindingIDs,
 		"requiresApproval":   false,
@@ -349,6 +411,9 @@ func serviceInterfaceAccessTrace(decision serviceInterfaceAccessDecision, req se
 		trace["bindingScope"] = decision.Binding.Scope
 		trace["bindingPrincipal"] = decision.Binding.PrincipalType
 		trace["bindingPrincipalId"] = decision.Binding.PrincipalID
+		trace["bindingEnvironment"] = decision.Binding.Environment
+		trace["bindingMinRole"] = decision.Binding.MinRole
+		trace["bindingRateLimitRef"] = decision.Binding.RateLimitRef
 	}
 	if decision.Code != "" {
 		trace["errorCode"] = decision.Code

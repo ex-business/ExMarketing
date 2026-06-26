@@ -49,6 +49,44 @@ type Plan struct {
 	Pending []Migration
 }
 
+type Analysis struct {
+	SchemaMigrationsExists bool                     `json:"schemaMigrationsExists"`
+	Latest                 bool                     `json:"latest"`
+	SafeToApply            bool                     `json:"safeToApply"`
+	Drift                  bool                     `json:"drift"`
+	LocalMigrations        []MigrationSummary       `json:"localMigrations"`
+	Applied                []MigrationRecordSummary `json:"applied"`
+	Pending                []MigrationSummary       `json:"pending"`
+	RequiredTables         []RequiredTableSummary   `json:"requiredTables"`
+	MissingRequiredTables  []string                 `json:"missingRequiredTables"`
+	LegacyUntrackedTables  []string                 `json:"legacyUntrackedTables,omitempty"`
+	Errors                 []string                 `json:"errors,omitempty"`
+}
+
+type MigrationSummary struct {
+	Version  int    `json:"version"`
+	Name     string `json:"name"`
+	FileName string `json:"fileName"`
+	Checksum string `json:"checksum"`
+}
+
+type MigrationRecordSummary struct {
+	Version      int        `json:"version"`
+	Name         string     `json:"name"`
+	FileName     string     `json:"fileName"`
+	Checksum     string     `json:"checksum"`
+	Status       string     `json:"status"`
+	StartedAt    time.Time  `json:"startedAt"`
+	FinishedAt   *time.Time `json:"finishedAt,omitempty"`
+	ErrorMessage string     `json:"errorMessage,omitempty"`
+}
+
+type RequiredTableSummary struct {
+	Name    string `json:"name"`
+	Exists  bool   `json:"exists"`
+	Missing bool   `json:"missing"`
+}
+
 type Manager struct {
 	DB             *sql.DB
 	MigrationDir   string
@@ -143,6 +181,59 @@ func (m Manager) Precheck(ctx context.Context) (Plan, error) {
 	return Plan{Applied: records, Pending: pending}, nil
 }
 
+func (m Manager) Analyze(ctx context.Context) (Analysis, error) {
+	migrations, err := LoadMigrations(m.dir())
+	if err != nil {
+		return Analysis{}, err
+	}
+	analysis := Analysis{
+		LocalMigrations: migrationSummaries(migrations),
+	}
+
+	exists, err := m.schemaMigrationsExists(ctx)
+	if err != nil {
+		return Analysis{}, err
+	}
+	analysis.SchemaMigrationsExists = exists
+
+	var records []Record
+	if exists {
+		records, err = m.records(ctx)
+		if err != nil {
+			return Analysis{}, err
+		}
+		analysis.Applied = recordSummaries(records)
+		if err := validateRecords(records, migrations); err != nil {
+			analysis.Errors = append(analysis.Errors, err.Error())
+		}
+	} else {
+		existing, err := m.existingRequiredTables(ctx)
+		if err != nil {
+			return Analysis{}, err
+		}
+		if len(existing) > 0 {
+			analysis.LegacyUntrackedTables = existing
+			analysis.Errors = append(analysis.Errors, fmt.Sprintf("legacy schema detected without schema_migrations records: %s; create a reviewed baseline before applying migrations", strings.Join(existing, ", ")))
+		}
+	}
+
+	pending := pendingMigrations(records, migrations)
+	analysis.Pending = migrationSummaries(pending)
+	required, missing, err := m.requiredTableSummaries(ctx)
+	if err != nil {
+		return Analysis{}, err
+	}
+	analysis.RequiredTables = required
+	analysis.MissingRequiredTables = missing
+	if len(missing) > 0 && len(pending) == 0 {
+		analysis.Errors = append(analysis.Errors, fmt.Sprintf("required tables missing: %s", strings.Join(missing, ", ")))
+	}
+	analysis.Latest = len(analysis.Pending) == 0 && len(missing) == 0 && len(analysis.Errors) == 0
+	analysis.Drift = len(analysis.Errors) > 0
+	analysis.SafeToApply = !analysis.Drift
+	return analysis, nil
+}
+
 func (m Manager) Apply(ctx context.Context) (Plan, error) {
 	plan, err := m.Precheck(ctx)
 	if err != nil {
@@ -221,6 +312,7 @@ func RequiredTables() []string {
 		"marketing_service_schema",
 		"marketing_service_interface_binding",
 		"marketing_service_provider_runtime_state",
+		"marketing_service_rate_limit_policy",
 		"marketing_service_call_audit",
 		"marketing_activity_state",
 		"marketing_storage_state",
@@ -251,6 +343,20 @@ func (m Manager) ensureVersionTable(ctx context.Context) error {
 			ON schema_migrations (status, version);
 	`)
 	return err
+}
+
+func (m Manager) schemaMigrationsExists(ctx context.Context) (bool, error) {
+	var exists bool
+	err := m.DB.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM information_schema.tables
+			WHERE table_schema = 'public'
+			  AND table_type = 'BASE TABLE'
+			  AND table_name = 'schema_migrations'
+		)
+	`).Scan(&exists)
+	return exists, err
 }
 
 func (m Manager) blockLegacyUntrackedSchema(ctx context.Context) error {
@@ -413,6 +519,31 @@ func (m Manager) checkRequiredTables(ctx context.Context) error {
 	return nil
 }
 
+func (m Manager) requiredTableSummaries(ctx context.Context) ([]RequiredTableSummary, []string, error) {
+	existing, err := m.existingRequiredTables(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	found := map[string]bool{}
+	for _, table := range existing {
+		found[table] = true
+	}
+	var summaries []RequiredTableSummary
+	var missing []string
+	for _, table := range m.requiredTables() {
+		exists := found[table]
+		summaries = append(summaries, RequiredTableSummary{
+			Name:    table,
+			Exists:  exists,
+			Missing: !exists,
+		})
+		if !exists {
+			missing = append(missing, table)
+		}
+	}
+	return summaries, missing, nil
+}
+
 func (m Manager) existingRequiredTables(ctx context.Context) ([]string, error) {
 	required := m.requiredTables()
 	args := make([]any, 0, len(required))
@@ -465,4 +596,42 @@ func sanitizeError(value string) string {
 		}
 	}
 	return value
+}
+
+func migrationSummaries(migrations []Migration) []MigrationSummary {
+	summaries := make([]MigrationSummary, 0, len(migrations))
+	for _, migration := range migrations {
+		summaries = append(summaries, MigrationSummary{
+			Version:  migration.Version,
+			Name:     migration.Name,
+			FileName: migration.FileName,
+			Checksum: migration.Checksum,
+		})
+	}
+	return summaries
+}
+
+func recordSummaries(records []Record) []MigrationRecordSummary {
+	summaries := make([]MigrationRecordSummary, 0, len(records))
+	for _, record := range records {
+		var finishedAt *time.Time
+		if record.FinishedAt.Valid {
+			value := record.FinishedAt.Time
+			finishedAt = &value
+		}
+		summary := MigrationRecordSummary{
+			Version:    record.Version,
+			Name:       record.Name,
+			FileName:   record.FileName,
+			Checksum:   record.Checksum,
+			Status:     record.Status,
+			StartedAt:  record.StartedAt,
+			FinishedAt: finishedAt,
+		}
+		if record.ErrorMessage.Valid {
+			summary.ErrorMessage = record.ErrorMessage.String
+		}
+		summaries = append(summaries, summary)
+	}
+	return summaries
 }

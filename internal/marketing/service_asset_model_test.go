@@ -51,6 +51,10 @@ func TestServiceInterfaceBindingValidate(t *testing.T) {
 		AllowedNodeTypes:        []string{"fact-query"},
 		AllowedOperations:       []ServiceInterfaceOperation{ServiceOperationCall},
 		AllowedProviderPolicies: []string{"PRIMARY", "PRIMARY_WITH_FALLBACK"},
+		IncludeSubfolders:       true,
+		MinRole:                 WorkspaceRoleEditor,
+		Environment:             "prod",
+		RateLimitRef:            "rl-profile-query",
 		Status:                  ServiceAssetActive,
 		Metadata:                json.RawMessage(`{"reason":"test"}`),
 	}
@@ -68,5 +72,42 @@ func TestServiceInterfaceBindingValidate(t *testing.T) {
 	invalid.AllowedOperations = []ServiceInterfaceOperation{"DELETE"}
 	if err := invalid.Validate(); err == nil {
 		t.Fatalf("expected invalid operation to fail")
+	}
+
+	invalid = valid
+	invalid.MinRole = WorkspaceRoleGuest
+	if err := invalid.Validate(); err == nil {
+		t.Fatalf("expected unsupported minRole to fail")
+	}
+}
+
+func TestServiceRateLimitPolicyValidate(t *testing.T) {
+	valid := ServiceRateLimitPolicy{
+		TenantID:      "site_001",
+		Code:          "wallet-query-limit",
+		Name:          "Wallet query limit",
+		ServiceRef:    "wallet-service",
+		InterfaceRef:  "query-wallet-balance",
+		ProviderRef:   "wallet-primary",
+		Limit:         10,
+		WindowSeconds: 60,
+		Backend:       ServiceRateLimitBackendPostgres,
+		Status:        ServiceAssetActive,
+		Metadata:      json.RawMessage(`{}`),
+	}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid rate limit policy rejected: %v", err)
+	}
+
+	invalidWindow := valid
+	invalidWindow.WindowSeconds = 0
+	if err := invalidWindow.Validate(); err == nil {
+		t.Fatal("expected invalid windowSeconds to fail")
+	}
+
+	invalidBackend := valid
+	invalidBackend.Backend = "MEMORY"
+	if err := invalidBackend.Validate(); err == nil {
+		t.Fatal("expected invalid backend to fail")
 	}
 }

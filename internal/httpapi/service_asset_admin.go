@@ -11,13 +11,15 @@ import (
 )
 
 func (h *Handler) listServiceDefinitions(w http.ResponseWriter, r *http.Request) {
+	includeDeleted := boolQuery(r, "includeDeleted")
 	services, err := h.engine.ListServiceDefinitions(r.Context(), marketing.ServiceDefinitionQuery{
-		TenantID:    tenantFromRequest(r),
-		WorkspaceID: strings.TrimSpace(r.URL.Query().Get("workspaceId")),
-		FolderID:    strings.TrimSpace(r.URL.Query().Get("folderId")),
-		Status:      marketing.ServiceAssetStatus(strings.ToUpper(firstNonEmpty(strings.TrimSpace(r.URL.Query().Get("status")), string(marketing.ServiceAssetActive)))),
-		Code:        strings.TrimSpace(r.URL.Query().Get("code")),
-		Limit:       intQuery(r, "limit"),
+		TenantID:       tenantFromRequest(r),
+		WorkspaceID:    strings.TrimSpace(r.URL.Query().Get("workspaceId")),
+		FolderID:       strings.TrimSpace(r.URL.Query().Get("folderId")),
+		Status:         serviceAssetStatusQuery(r, includeDeleted),
+		Code:           strings.TrimSpace(r.URL.Query().Get("code")),
+		IncludeDeleted: includeDeleted,
+		Limit:          intQuery(r, "limit"),
 	})
 	if err != nil {
 		workspaceError(w, err)
@@ -54,12 +56,14 @@ func (h *Handler) saveServiceDefinition(w http.ResponseWriter, r *http.Request) 
 }
 
 func (h *Handler) listServiceInterfaces(w http.ResponseWriter, r *http.Request) {
+	includeDeleted := boolQuery(r, "includeDeleted")
 	items, err := h.engine.ListServiceInterfaces(r.Context(), marketing.ServiceInterfaceQuery{
-		TenantID:   tenantFromRequest(r),
-		ServiceRef: strings.TrimSpace(r.PathValue("serviceCode")),
-		Status:     marketing.ServiceAssetStatus(strings.ToUpper(firstNonEmpty(strings.TrimSpace(r.URL.Query().Get("status")), string(marketing.ServiceAssetActive)))),
-		Code:       strings.TrimSpace(r.URL.Query().Get("code")),
-		Limit:      intQuery(r, "limit"),
+		TenantID:       tenantFromRequest(r),
+		ServiceRef:     strings.TrimSpace(r.PathValue("serviceCode")),
+		Status:         serviceAssetStatusQuery(r, includeDeleted),
+		Code:           strings.TrimSpace(r.URL.Query().Get("code")),
+		IncludeDeleted: includeDeleted,
+		Limit:          intQuery(r, "limit"),
 	})
 	if err != nil {
 		workspaceError(w, err)
@@ -97,14 +101,16 @@ func (h *Handler) saveServiceInterface(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) listServiceProviders(w http.ResponseWriter, r *http.Request) {
+	includeDeleted := boolQuery(r, "includeDeleted")
 	items, err := h.engine.ListServiceProviders(r.Context(), marketing.ServiceProviderQuery{
-		TenantID:     tenantFromRequest(r),
-		ServiceRef:   strings.TrimSpace(r.PathValue("serviceCode")),
-		InterfaceRef: strings.TrimSpace(r.PathValue("interfaceCode")),
-		Protocol:     marketing.ServiceProviderProtocol(strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("protocol")))),
-		Status:       marketing.ServiceAssetStatus(strings.ToUpper(firstNonEmpty(strings.TrimSpace(r.URL.Query().Get("status")), string(marketing.ServiceAssetActive)))),
-		Code:         strings.TrimSpace(r.URL.Query().Get("code")),
-		Limit:        intQuery(r, "limit"),
+		TenantID:       tenantFromRequest(r),
+		ServiceRef:     strings.TrimSpace(r.PathValue("serviceCode")),
+		InterfaceRef:   strings.TrimSpace(r.PathValue("interfaceCode")),
+		Protocol:       marketing.ServiceProviderProtocol(strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("protocol")))),
+		Status:         serviceAssetStatusQuery(r, includeDeleted),
+		Code:           strings.TrimSpace(r.URL.Query().Get("code")),
+		IncludeDeleted: includeDeleted,
+		Limit:          intQuery(r, "limit"),
 	})
 	if err != nil {
 		workspaceError(w, err)
@@ -211,6 +217,49 @@ func (h *Handler) checkServiceProviderHealth(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, http.StatusOK, saved)
 }
 
+func (h *Handler) listServiceRateLimitPolicies(w http.ResponseWriter, r *http.Request) {
+	includeDeleted := boolQuery(r, "includeDeleted")
+	items, err := h.engine.ListServiceRateLimitPolicies(r.Context(), marketing.ServiceRateLimitPolicyQuery{
+		TenantID:       tenantFromRequest(r),
+		Code:           strings.TrimSpace(r.URL.Query().Get("code")),
+		ServiceRef:     strings.TrimSpace(r.URL.Query().Get("serviceRef")),
+		InterfaceRef:   strings.TrimSpace(r.URL.Query().Get("interfaceRef")),
+		ProviderRef:    strings.TrimSpace(r.URL.Query().Get("providerRef")),
+		Status:         serviceAssetStatusQuery(r, includeDeleted),
+		IncludeDeleted: includeDeleted,
+		Limit:          intQuery(r, "limit"),
+	})
+	if err != nil {
+		workspaceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (h *Handler) saveServiceRateLimitPolicy(w http.ResponseWriter, r *http.Request) {
+	defer r.Body.Close()
+	var policy marketing.ServiceRateLimitPolicy
+	if err := json.NewDecoder(r.Body).Decode(&policy); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid service rate limit policy payload")
+		return
+	}
+	if policy.TenantID == "" {
+		policy.TenantID = tenantFromRequest(r)
+	}
+	if actor := actorFromRequest(r); actor != "" {
+		if policy.CreatedBy == "" {
+			policy.CreatedBy = actor
+		}
+		policy.UpdatedBy = actor
+	}
+	saved, err := h.engine.SaveServiceRateLimitPolicy(r.Context(), policy)
+	if err != nil {
+		workspaceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, saved)
+}
+
 func (h *Handler) testServiceInterface(w http.ResponseWriter, r *http.Request) {
 	_, provider, err := h.engine.ResolveServiceProvider(
 		r.Context(),
@@ -249,14 +298,16 @@ func (h *Handler) testServiceInterface(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) listServiceSchemas(w http.ResponseWriter, r *http.Request) {
+	includeDeleted := boolQuery(r, "includeDeleted")
 	items, err := h.engine.ListServiceSchemas(r.Context(), marketing.ServiceSchemaQuery{
-		TenantID:    tenantFromRequest(r),
-		WorkspaceID: strings.TrimSpace(r.URL.Query().Get("workspaceId")),
-		FolderID:    strings.TrimSpace(r.URL.Query().Get("folderId")),
-		SchemaRef:   strings.TrimSpace(r.URL.Query().Get("schemaRef")),
-		SchemaType:  marketing.ServiceSchemaType(strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("schemaType")))),
-		Status:      marketing.ServiceAssetStatus(strings.ToUpper(firstNonEmpty(strings.TrimSpace(r.URL.Query().Get("status")), string(marketing.ServiceAssetActive)))),
-		Limit:       intQuery(r, "limit"),
+		TenantID:       tenantFromRequest(r),
+		WorkspaceID:    strings.TrimSpace(r.URL.Query().Get("workspaceId")),
+		FolderID:       strings.TrimSpace(r.URL.Query().Get("folderId")),
+		SchemaRef:      strings.TrimSpace(r.URL.Query().Get("schemaRef")),
+		SchemaType:     marketing.ServiceSchemaType(strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("schemaType")))),
+		Status:         serviceAssetStatusQuery(r, includeDeleted),
+		IncludeDeleted: includeDeleted,
+		Limit:          intQuery(r, "limit"),
 	})
 	if err != nil {
 		workspaceError(w, err)
@@ -316,18 +367,20 @@ func (h *Handler) checkServiceSchemaCompatibility(w http.ResponseWriter, r *http
 }
 
 func (h *Handler) listServiceInterfaceBindings(w http.ResponseWriter, r *http.Request) {
+	includeDeleted := boolQuery(r, "includeDeleted")
 	items, err := h.engine.ListServiceInterfaceBindings(r.Context(), marketing.ServiceInterfaceBindingQuery{
-		TenantID:     tenantFromRequest(r),
-		ServiceRef:   strings.TrimSpace(r.URL.Query().Get("serviceRef")),
-		InterfaceRef: strings.TrimSpace(r.URL.Query().Get("interfaceRef")),
-		Scope:        marketing.ServiceAssetScope(strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("scope")))),
-		WorkspaceID:  strings.TrimSpace(r.URL.Query().Get("workspaceId")),
-		FolderID:     strings.TrimSpace(r.URL.Query().Get("folderId")),
-		ActivityID:   strings.TrimSpace(r.URL.Query().Get("activityId")),
-		NodeID:       strings.TrimSpace(r.URL.Query().Get("nodeId")),
-		NodeType:     strings.TrimSpace(r.URL.Query().Get("nodeType")),
-		Status:       marketing.ServiceAssetStatus(strings.ToUpper(firstNonEmpty(strings.TrimSpace(r.URL.Query().Get("status")), string(marketing.ServiceAssetActive)))),
-		Limit:        intQuery(r, "limit"),
+		TenantID:       tenantFromRequest(r),
+		ServiceRef:     strings.TrimSpace(r.URL.Query().Get("serviceRef")),
+		InterfaceRef:   strings.TrimSpace(r.URL.Query().Get("interfaceRef")),
+		Scope:          marketing.ServiceAssetScope(strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("scope")))),
+		WorkspaceID:    strings.TrimSpace(r.URL.Query().Get("workspaceId")),
+		FolderID:       strings.TrimSpace(r.URL.Query().Get("folderId")),
+		ActivityID:     strings.TrimSpace(r.URL.Query().Get("activityId")),
+		NodeID:         strings.TrimSpace(r.URL.Query().Get("nodeId")),
+		NodeType:       strings.TrimSpace(r.URL.Query().Get("nodeType")),
+		Status:         serviceAssetStatusQuery(r, includeDeleted),
+		IncludeDeleted: includeDeleted,
+		Limit:          intQuery(r, "limit"),
 	})
 	if err != nil {
 		workspaceError(w, err)
@@ -498,4 +551,15 @@ func serviceCallAuditNextCursor(items []marketing.ServiceCallAuditLog) string {
 		return ""
 	}
 	return last.CreatedAt.UTC().Format(time.RFC3339Nano) + "|" + last.ID
+}
+
+func serviceAssetStatusQuery(r *http.Request, includeDeleted bool) marketing.ServiceAssetStatus {
+	status := strings.TrimSpace(r.URL.Query().Get("status"))
+	if status != "" {
+		return marketing.ServiceAssetStatus(strings.ToUpper(status))
+	}
+	if includeDeleted {
+		return ""
+	}
+	return marketing.ServiceAssetActive
 }

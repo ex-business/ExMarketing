@@ -929,8 +929,9 @@ func (r *Repository) SaveServiceDefinition(ctx context.Context, service marketin
 		INSERT INTO marketing_service (
 			id, tenant_id, workspace_id, folder_id, code, name, description,
 			service_type, scope, status, owner, tags_json, metadata_json,
+			builtin, catalog_version, source_hash, deleted_at,
 			created_by, updated_by, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
 		ON CONFLICT (tenant_id, code) DO UPDATE SET
 			workspace_id = EXCLUDED.workspace_id,
 			folder_id = EXCLUDED.folder_id,
@@ -942,13 +943,19 @@ func (r *Repository) SaveServiceDefinition(ctx context.Context, service marketin
 			owner = EXCLUDED.owner,
 			tags_json = EXCLUDED.tags_json,
 			metadata_json = EXCLUDED.metadata_json,
+			builtin = EXCLUDED.builtin,
+			catalog_version = EXCLUDED.catalog_version,
+			source_hash = EXCLUDED.source_hash,
+			deleted_at = EXCLUDED.deleted_at,
 			updated_by = EXCLUDED.updated_by,
 			updated_at = EXCLUDED.updated_at
 		RETURNING id, tenant_id, workspace_id, folder_id, code, name, description,
 		          service_type, scope, status, owner, tags_json, metadata_json,
+		          builtin, catalog_version, source_hash, deleted_at,
 		          created_by, updated_by, created_at, updated_at
 	`, service.ID, service.TenantID, service.WorkspaceID, service.FolderID, service.Code, service.Name, service.Description,
 		service.ServiceType, service.Scope, service.Status, service.Owner, json.RawMessage(tags), service.Metadata,
+		service.Builtin, service.CatalogVersion, service.SourceHash, service.DeletedAt,
 		service.CreatedBy, service.UpdatedBy, service.CreatedAt, service.UpdatedAt)
 	saved, err := scanServiceDefinition(row)
 	if err != nil {
@@ -961,6 +968,7 @@ func (r *Repository) GetServiceDefinition(ctx context.Context, tenantID string, 
 	row := r.db.QueryRowContext(ctx, `
 		SELECT id, tenant_id, workspace_id, folder_id, code, name, description,
 		       service_type, scope, status, owner, tags_json, metadata_json,
+		       builtin, catalog_version, source_hash, deleted_at,
 		       created_by, updated_by, created_at, updated_at
 		FROM marketing_service
 		WHERE tenant_id = $1 AND code = $2
@@ -983,6 +991,7 @@ func (r *Repository) ListServiceDefinitions(ctx context.Context, query marketing
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, tenant_id, workspace_id, folder_id, code, name, description,
 		       service_type, scope, status, owner, tags_json, metadata_json,
+		       builtin, catalog_version, source_hash, deleted_at,
 		       created_by, updated_by, created_at, updated_at
 		FROM marketing_service
 		WHERE ($1 = '' OR tenant_id = $1)
@@ -990,9 +999,10 @@ func (r *Repository) ListServiceDefinitions(ctx context.Context, query marketing
 		  AND ($3 = '' OR folder_id = $3)
 		  AND ($4 = '' OR status = $4)
 		  AND ($5 = '' OR code = $5)
+		  AND ($6 OR (status <> 'DELETED' AND deleted_at IS NULL))
 		ORDER BY updated_at DESC, code ASC
-		LIMIT $6
-	`, query.TenantID, query.WorkspaceID, query.FolderID, query.Status, query.Code, limit)
+		LIMIT $7
+	`, query.TenantID, query.WorkspaceID, query.FolderID, query.Status, query.Code, query.IncludeDeleted, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -1035,8 +1045,9 @@ func (r *Repository) SaveServiceInterface(ctx context.Context, serviceInterface 
 			id, tenant_id, service_ref, code, name, description, operation,
 			input_schema_ref, output_schema_ref, error_schema_ref, idempotency_key_template,
 			timeout_ms, retry_policy, lua_callable, status, metadata_json,
+			builtin, catalog_version, source_hash, deleted_at,
 			created_by, updated_by, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
 		ON CONFLICT (tenant_id, service_ref, code) DO UPDATE SET
 			name = EXCLUDED.name,
 			description = EXCLUDED.description,
@@ -1050,16 +1061,22 @@ func (r *Repository) SaveServiceInterface(ctx context.Context, serviceInterface 
 			lua_callable = EXCLUDED.lua_callable,
 			status = EXCLUDED.status,
 			metadata_json = EXCLUDED.metadata_json,
+			builtin = EXCLUDED.builtin,
+			catalog_version = EXCLUDED.catalog_version,
+			source_hash = EXCLUDED.source_hash,
+			deleted_at = EXCLUDED.deleted_at,
 			updated_by = EXCLUDED.updated_by,
 			updated_at = EXCLUDED.updated_at
 		RETURNING id, tenant_id, service_ref, code, name, description, operation,
 		          input_schema_ref, output_schema_ref, error_schema_ref, idempotency_key_template,
 		          timeout_ms, retry_policy, lua_callable, status, metadata_json,
+		          builtin, catalog_version, source_hash, deleted_at,
 		          created_by, updated_by, created_at, updated_at
 	`, serviceInterface.ID, serviceInterface.TenantID, serviceInterface.ServiceRef, serviceInterface.Code, serviceInterface.Name, serviceInterface.Description,
 		serviceInterface.Operation, serviceInterface.InputSchemaRef, serviceInterface.OutputSchemaRef, serviceInterface.ErrorSchemaRef,
 		serviceInterface.IdempotencyKeyTemplate, serviceInterface.TimeoutMS, serviceInterface.RetryPolicy, serviceInterface.LuaCallable,
-		serviceInterface.Status, serviceInterface.Metadata, serviceInterface.CreatedBy, serviceInterface.UpdatedBy,
+		serviceInterface.Status, serviceInterface.Metadata, serviceInterface.Builtin, serviceInterface.CatalogVersion,
+		serviceInterface.SourceHash, serviceInterface.DeletedAt, serviceInterface.CreatedBy, serviceInterface.UpdatedBy,
 		serviceInterface.CreatedAt, serviceInterface.UpdatedAt)
 	saved, err := scanServiceInterface(row)
 	if err != nil {
@@ -1073,6 +1090,7 @@ func (r *Repository) GetServiceInterface(ctx context.Context, tenantID string, s
 		SELECT id, tenant_id, service_ref, code, name, description, operation,
 		       input_schema_ref, output_schema_ref, error_schema_ref, idempotency_key_template,
 		       timeout_ms, retry_policy, lua_callable, status, metadata_json,
+		       builtin, catalog_version, source_hash, deleted_at,
 		       created_by, updated_by, created_at, updated_at
 		FROM marketing_service_interface
 		WHERE tenant_id = $1 AND service_ref = $2 AND code = $3
@@ -1096,15 +1114,17 @@ func (r *Repository) ListServiceInterfaces(ctx context.Context, query marketing.
 		SELECT id, tenant_id, service_ref, code, name, description, operation,
 		       input_schema_ref, output_schema_ref, error_schema_ref, idempotency_key_template,
 		       timeout_ms, retry_policy, lua_callable, status, metadata_json,
+		       builtin, catalog_version, source_hash, deleted_at,
 		       created_by, updated_by, created_at, updated_at
 		FROM marketing_service_interface
 		WHERE ($1 = '' OR tenant_id = $1)
 		  AND ($2 = '' OR service_ref = $2)
 		  AND ($3 = '' OR status = $3)
 		  AND ($4 = '' OR code = $4)
+		  AND ($5 OR (status <> 'DELETED' AND deleted_at IS NULL))
 		ORDER BY updated_at DESC, code ASC
-		LIMIT $5
-	`, query.TenantID, query.ServiceRef, query.Status, query.Code, limit)
+		LIMIT $6
+	`, query.TenantID, query.ServiceRef, query.Status, query.Code, query.IncludeDeleted, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -1151,8 +1171,9 @@ func (r *Repository) SaveServiceProvider(ctx context.Context, provider marketing
 			id, tenant_id, service_ref, interface_ref, code, name, description,
 			protocol, endpoint, topic, method, path, auth_ref, resource_refs_json,
 			config_json, weight, priority, environment, status,
+			builtin, catalog_version, source_hash, deleted_at,
 			created_by, updated_by, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)
 		ON CONFLICT (tenant_id, service_ref, interface_ref, code) DO UPDATE SET
 			name = EXCLUDED.name,
 			description = EXCLUDED.description,
@@ -1168,15 +1189,21 @@ func (r *Repository) SaveServiceProvider(ctx context.Context, provider marketing
 			priority = EXCLUDED.priority,
 			environment = EXCLUDED.environment,
 			status = EXCLUDED.status,
+			builtin = EXCLUDED.builtin,
+			catalog_version = EXCLUDED.catalog_version,
+			source_hash = EXCLUDED.source_hash,
+			deleted_at = EXCLUDED.deleted_at,
 			updated_by = EXCLUDED.updated_by,
 			updated_at = EXCLUDED.updated_at
 		RETURNING id, tenant_id, service_ref, interface_ref, code, name, description,
 		          protocol, endpoint, topic, method, path, auth_ref, resource_refs_json,
 		          config_json, weight, priority, environment, status,
+		          builtin, catalog_version, source_hash, deleted_at,
 		          created_by, updated_by, created_at, updated_at
 	`, provider.ID, provider.TenantID, provider.ServiceRef, provider.InterfaceRef, provider.Code, provider.Name, provider.Description,
 		provider.Protocol, provider.Endpoint, provider.Topic, provider.Method, provider.Path, provider.AuthRef, json.RawMessage(resourceRefs),
 		provider.Config, provider.Weight, provider.Priority, provider.Environment, provider.Status,
+		provider.Builtin, provider.CatalogVersion, provider.SourceHash, provider.DeletedAt,
 		provider.CreatedBy, provider.UpdatedBy, provider.CreatedAt, provider.UpdatedAt)
 	saved, err := scanServiceProvider(row)
 	if err != nil {
@@ -1190,6 +1217,7 @@ func (r *Repository) GetServiceProvider(ctx context.Context, tenantID string, se
 		SELECT id, tenant_id, service_ref, interface_ref, code, name, description,
 		       protocol, endpoint, topic, method, path, auth_ref, resource_refs_json,
 		       config_json, weight, priority, environment, status,
+		       builtin, catalog_version, source_hash, deleted_at,
 		       created_by, updated_by, created_at, updated_at
 		FROM marketing_service_provider
 		WHERE tenant_id = $1 AND service_ref = $2 AND interface_ref = $3 AND code = $4
@@ -1213,6 +1241,7 @@ func (r *Repository) ListServiceProviders(ctx context.Context, query marketing.S
 		SELECT id, tenant_id, service_ref, interface_ref, code, name, description,
 		       protocol, endpoint, topic, method, path, auth_ref, resource_refs_json,
 		       config_json, weight, priority, environment, status,
+		       builtin, catalog_version, source_hash, deleted_at,
 		       created_by, updated_by, created_at, updated_at
 		FROM marketing_service_provider
 		WHERE ($1 = '' OR tenant_id = $1)
@@ -1221,9 +1250,10 @@ func (r *Repository) ListServiceProviders(ctx context.Context, query marketing.S
 		  AND ($4 = '' OR protocol = $4)
 		  AND ($5 = '' OR status = $5)
 		  AND ($6 = '' OR code = $6)
+		  AND ($7 OR (status <> 'DELETED' AND deleted_at IS NULL))
 		ORDER BY priority ASC, updated_at DESC, code ASC
-		LIMIT $7
-	`, query.TenantID, query.ServiceRef, query.InterfaceRef, query.Protocol, query.Status, query.Code, limit)
+		LIMIT $8
+	`, query.TenantID, query.ServiceRef, query.InterfaceRef, query.Protocol, query.Status, query.Code, query.IncludeDeleted, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -1268,8 +1298,9 @@ func (r *Repository) SaveServiceSchema(ctx context.Context, schema marketing.Ser
 		INSERT INTO marketing_service_schema (
 			id, tenant_id, workspace_id, folder_id, schema_ref, schema_type, scope,
 			version, status, schema_json, examples_json, description,
+			builtin, catalog_version, source_hash, deleted_at,
 			created_by, updated_by, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
 		ON CONFLICT (tenant_id, schema_ref, version) DO UPDATE SET
 			workspace_id = EXCLUDED.workspace_id,
 			folder_id = EXCLUDED.folder_id,
@@ -1279,13 +1310,19 @@ func (r *Repository) SaveServiceSchema(ctx context.Context, schema marketing.Ser
 			schema_json = EXCLUDED.schema_json,
 			examples_json = EXCLUDED.examples_json,
 			description = EXCLUDED.description,
+			builtin = EXCLUDED.builtin,
+			catalog_version = EXCLUDED.catalog_version,
+			source_hash = EXCLUDED.source_hash,
+			deleted_at = EXCLUDED.deleted_at,
 			updated_by = EXCLUDED.updated_by,
 			updated_at = EXCLUDED.updated_at
 		RETURNING id, tenant_id, workspace_id, folder_id, schema_ref, schema_type, scope,
 		          version, status, schema_json, examples_json, description,
+		          builtin, catalog_version, source_hash, deleted_at,
 		          created_by, updated_by, created_at, updated_at
 	`, schema.ID, schema.TenantID, schema.WorkspaceID, schema.FolderID, schema.SchemaRef, schema.SchemaType,
 		schema.Scope, schema.Version, schema.Status, schema.SchemaJSON, schema.ExamplesJSON, schema.Description,
+		schema.Builtin, schema.CatalogVersion, schema.SourceHash, schema.DeletedAt,
 		schema.CreatedBy, schema.UpdatedBy, schema.CreatedAt, schema.UpdatedAt)
 	saved, err := scanServiceSchema(row)
 	if err != nil {
@@ -1302,6 +1339,7 @@ func (r *Repository) ListServiceSchemas(ctx context.Context, query marketing.Ser
 	rows, err := r.db.QueryContext(ctx, `
 		SELECT id, tenant_id, workspace_id, folder_id, schema_ref, schema_type, scope,
 		       version, status, schema_json, examples_json, description,
+		       builtin, catalog_version, source_hash, deleted_at,
 		       created_by, updated_by, created_at, updated_at
 		FROM marketing_service_schema
 		WHERE ($1 = '' OR tenant_id = $1)
@@ -1310,9 +1348,10 @@ func (r *Repository) ListServiceSchemas(ctx context.Context, query marketing.Ser
 		  AND ($4 = '' OR schema_ref = $4)
 		  AND ($5 = '' OR schema_type = $5)
 		  AND ($6 = '' OR status = $6)
+		  AND ($7 OR (status <> 'DELETED' AND deleted_at IS NULL))
 		ORDER BY updated_at DESC, schema_ref ASC, version DESC
-		LIMIT $7
-	`, query.TenantID, query.WorkspaceID, query.FolderID, query.SchemaRef, query.SchemaType, query.Status, limit)
+		LIMIT $8
+	`, query.TenantID, query.WorkspaceID, query.FolderID, query.SchemaRef, query.SchemaType, query.Status, query.IncludeDeleted, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -1371,33 +1410,47 @@ func (r *Repository) SaveServiceInterfaceBinding(ctx context.Context, binding ma
 			id, tenant_id, service_ref, interface_ref, scope, workspace_id, folder_id,
 			activity_id, node_id, principal_type, principal_id, allowed_node_types_json,
 			allowed_operations_json, allowed_provider_policies_json, allow_explicit_provider_ref,
-			allowed_provider_refs_json, lua_callable, require_approval, deny, status, metadata_json,
+			allowed_provider_refs_json, include_subfolders, min_role, environment, rate_limit_ref,
+			lua_callable, require_approval, deny, status, deleted_at, metadata_json,
+			builtin, catalog_version, source_hash,
 			created_by, updated_by, created_at, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33)
 		ON CONFLICT (tenant_id, service_ref, interface_ref, scope, workspace_id, folder_id, activity_id, node_id, principal_type, principal_id) DO UPDATE SET
 			allowed_node_types_json = EXCLUDED.allowed_node_types_json,
 			allowed_operations_json = EXCLUDED.allowed_operations_json,
 			allowed_provider_policies_json = EXCLUDED.allowed_provider_policies_json,
 			allow_explicit_provider_ref = EXCLUDED.allow_explicit_provider_ref,
 			allowed_provider_refs_json = EXCLUDED.allowed_provider_refs_json,
+			include_subfolders = EXCLUDED.include_subfolders,
+			min_role = EXCLUDED.min_role,
+			environment = EXCLUDED.environment,
+			rate_limit_ref = EXCLUDED.rate_limit_ref,
 			lua_callable = EXCLUDED.lua_callable,
 			require_approval = EXCLUDED.require_approval,
 			deny = EXCLUDED.deny,
 			status = EXCLUDED.status,
+			deleted_at = EXCLUDED.deleted_at,
 			metadata_json = EXCLUDED.metadata_json,
+			builtin = EXCLUDED.builtin,
+			catalog_version = EXCLUDED.catalog_version,
+			source_hash = EXCLUDED.source_hash,
 			updated_by = EXCLUDED.updated_by,
 			updated_at = EXCLUDED.updated_at
 		RETURNING id, tenant_id, service_ref, interface_ref, scope, workspace_id, folder_id,
 		          activity_id, node_id, principal_type, principal_id, allowed_node_types_json,
 		          allowed_operations_json, allowed_provider_policies_json, allow_explicit_provider_ref,
-		          allowed_provider_refs_json, lua_callable, require_approval, deny, status, metadata_json,
+		          allowed_provider_refs_json, include_subfolders, min_role, environment, rate_limit_ref,
+		          lua_callable, require_approval, deny, status, deleted_at, metadata_json,
+		          builtin, catalog_version, source_hash,
 		          created_by, updated_by, created_at, updated_at
 	`, binding.ID, binding.TenantID, binding.ServiceRef, binding.InterfaceRef, binding.Scope, binding.WorkspaceID,
 		binding.FolderID, binding.ActivityID, binding.NodeID, binding.PrincipalType, binding.PrincipalID,
 		json.RawMessage(allowedNodeTypes), json.RawMessage(allowedOperations), json.RawMessage(allowedProviderPolicies),
-		binding.AllowExplicitProviderRef, json.RawMessage(allowedProviderRefs), binding.LuaCallable,
-		binding.RequireApproval, binding.Deny, binding.Status, binding.Metadata, binding.CreatedBy,
-		binding.UpdatedBy, binding.CreatedAt, binding.UpdatedAt)
+		binding.AllowExplicitProviderRef, json.RawMessage(allowedProviderRefs), binding.IncludeSubfolders,
+		binding.MinRole, binding.Environment, binding.RateLimitRef, binding.LuaCallable,
+		binding.RequireApproval, binding.Deny, binding.Status, binding.DeletedAt, binding.Metadata,
+		binding.Builtin, binding.CatalogVersion, binding.SourceHash,
+		binding.CreatedBy, binding.UpdatedBy, binding.CreatedAt, binding.UpdatedAt)
 	saved, err := scanServiceInterfaceBinding(row)
 	if err != nil {
 		return marketing.ServiceInterfaceBinding{}, mapPostgresResourceError(err)
@@ -1414,7 +1467,9 @@ func (r *Repository) ListServiceInterfaceBindings(ctx context.Context, query mar
 		SELECT id, tenant_id, service_ref, interface_ref, scope, workspace_id, folder_id,
 		       activity_id, node_id, principal_type, principal_id, allowed_node_types_json,
 		       allowed_operations_json, allowed_provider_policies_json, allow_explicit_provider_ref,
-		       allowed_provider_refs_json, lua_callable, require_approval, deny, status, metadata_json,
+		       allowed_provider_refs_json, include_subfolders, min_role, environment, rate_limit_ref,
+		       lua_callable, require_approval, deny, status, deleted_at, metadata_json,
+		       builtin, catalog_version, source_hash,
 		       created_by, updated_by, created_at, updated_at
 		FROM marketing_service_interface_binding
 		WHERE ($1 = '' OR tenant_id = $1)
@@ -1427,10 +1482,12 @@ func (r *Repository) ListServiceInterfaceBindings(ctx context.Context, query mar
 		  AND ($8 = '' OR node_id = $8)
 		  AND ($9 = '' OR status = $9)
 		  AND ($10 = '' OR allowed_node_types_json = '[]'::jsonb OR allowed_node_types_json ? $10)
+		  AND ($11 = '' OR environment = '' OR lower(environment) = lower($11))
+		  AND ($12 OR (status <> 'DELETED' AND deleted_at IS NULL))
 		ORDER BY updated_at DESC, service_ref ASC, interface_ref ASC
-		LIMIT $11
+		LIMIT $13
 	`, query.TenantID, query.ServiceRef, query.InterfaceRef, query.Scope, query.WorkspaceID, query.FolderID,
-		query.ActivityID, query.NodeID, query.Status, query.NodeType, limit)
+		query.ActivityID, query.NodeID, query.Status, query.NodeType, query.Environment, query.IncludeDeleted, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -1652,6 +1709,106 @@ func (r *Repository) ConsumeServiceProviderRateLimit(ctx context.Context, cmd ma
 		return marketing.ServiceProviderRuntimeState{}, false, err
 	}
 	return saved, true, nil
+}
+
+func (r *Repository) SaveServiceRateLimitPolicy(ctx context.Context, policy marketing.ServiceRateLimitPolicy) (marketing.ServiceRateLimitPolicy, error) {
+	if policy.ID == "" {
+		policy.ID = marketing.NewID("svcratelimit")
+	}
+	if policy.Name == "" {
+		policy.Name = policy.Code
+	}
+	if policy.Backend == "" {
+		policy.Backend = marketing.ServiceRateLimitBackendPostgres
+	}
+	if policy.Status == "" {
+		policy.Status = marketing.ServiceAssetActive
+	}
+	if len(policy.Metadata) == 0 {
+		policy.Metadata = json.RawMessage(`{}`)
+	}
+	if policy.CreatedAt.IsZero() {
+		policy.CreatedAt = time.Now().UTC()
+	}
+	if policy.UpdatedAt.IsZero() {
+		policy.UpdatedAt = policy.CreatedAt
+	}
+	if err := policy.Validate(); err != nil {
+		return marketing.ServiceRateLimitPolicy{}, err
+	}
+	row := r.db.QueryRowContext(ctx, `
+		INSERT INTO marketing_service_rate_limit_policy (
+			id, tenant_id, code, name, description, service_ref, interface_ref, provider_ref,
+			limit_count, window_seconds, backend, status, metadata_json,
+			builtin, catalog_version, source_hash, deleted_at,
+			created_by, updated_by, created_at, updated_at
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
+		ON CONFLICT (tenant_id, code) DO UPDATE SET
+			name = EXCLUDED.name,
+			description = EXCLUDED.description,
+			service_ref = EXCLUDED.service_ref,
+			interface_ref = EXCLUDED.interface_ref,
+			provider_ref = EXCLUDED.provider_ref,
+			limit_count = EXCLUDED.limit_count,
+			window_seconds = EXCLUDED.window_seconds,
+			backend = EXCLUDED.backend,
+			status = EXCLUDED.status,
+			metadata_json = EXCLUDED.metadata_json,
+			builtin = EXCLUDED.builtin,
+			catalog_version = EXCLUDED.catalog_version,
+			source_hash = EXCLUDED.source_hash,
+			deleted_at = EXCLUDED.deleted_at,
+			updated_by = EXCLUDED.updated_by,
+			updated_at = EXCLUDED.updated_at
+		RETURNING id, tenant_id, code, name, description, service_ref, interface_ref, provider_ref,
+		          limit_count, window_seconds, backend, status, metadata_json,
+		          builtin, catalog_version, source_hash, deleted_at,
+		          created_by, updated_by, created_at, updated_at
+	`, policy.ID, policy.TenantID, policy.Code, policy.Name, policy.Description, policy.ServiceRef, policy.InterfaceRef, policy.ProviderRef,
+		policy.Limit, policy.WindowSeconds, policy.Backend, policy.Status, policy.Metadata,
+		policy.Builtin, policy.CatalogVersion, policy.SourceHash, policy.DeletedAt,
+		policy.CreatedBy, policy.UpdatedBy, policy.CreatedAt, policy.UpdatedAt)
+	saved, err := scanServiceRateLimitPolicy(row)
+	if err != nil {
+		return marketing.ServiceRateLimitPolicy{}, mapPostgresResourceError(err)
+	}
+	return saved, nil
+}
+
+func (r *Repository) ListServiceRateLimitPolicies(ctx context.Context, query marketing.ServiceRateLimitPolicyQuery) ([]marketing.ServiceRateLimitPolicy, error) {
+	limit := query.Limit
+	if limit <= 0 || limit > 500 {
+		limit = 500
+	}
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT id, tenant_id, code, name, description, service_ref, interface_ref, provider_ref,
+		       limit_count, window_seconds, backend, status, metadata_json,
+		       builtin, catalog_version, source_hash, deleted_at,
+		       created_by, updated_by, created_at, updated_at
+		FROM marketing_service_rate_limit_policy
+		WHERE ($1 = '' OR tenant_id = $1)
+		  AND ($2 = '' OR code = $2)
+		  AND ($3 = '' OR service_ref = $3)
+		  AND ($4 = '' OR interface_ref = $4)
+		  AND ($5 = '' OR provider_ref = $5)
+		  AND ($6 = '' OR status = $6)
+		  AND ($7 OR (status <> 'DELETED' AND deleted_at IS NULL))
+		ORDER BY updated_at DESC, code ASC
+		LIMIT $8
+	`, query.TenantID, query.Code, query.ServiceRef, query.InterfaceRef, query.ProviderRef, query.Status, query.IncludeDeleted, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []marketing.ServiceRateLimitPolicy{}
+	for rows.Next() {
+		policy, err := scanServiceRateLimitPolicy(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, policy)
+	}
+	return out, rows.Err()
 }
 
 func (r *Repository) CreateServiceCallAuditLog(ctx context.Context, log marketing.ServiceCallAuditLog) error {
@@ -3925,11 +4082,17 @@ func scanStorageState(scanner outboxScanner) (marketing.StorageState, error) {
 func scanServiceDefinition(scanner outboxScanner) (marketing.ServiceDefinition, error) {
 	var service marketing.ServiceDefinition
 	var tags json.RawMessage
+	var deletedAt sql.NullTime
 	if err := scanner.Scan(&service.ID, &service.TenantID, &service.WorkspaceID, &service.FolderID,
 		&service.Code, &service.Name, &service.Description, &service.ServiceType, &service.Scope,
-		&service.Status, &service.Owner, &tags, &service.Metadata, &service.CreatedBy, &service.UpdatedBy,
+		&service.Status, &service.Owner, &tags, &service.Metadata,
+		&service.Builtin, &service.CatalogVersion, &service.SourceHash, &deletedAt,
+		&service.CreatedBy, &service.UpdatedBy,
 		&service.CreatedAt, &service.UpdatedAt); err != nil {
 		return marketing.ServiceDefinition{}, err
+	}
+	if deletedAt.Valid {
+		service.DeletedAt = &deletedAt.Time
 	}
 	if len(tags) > 0 {
 		_ = json.Unmarshal(tags, &service.Tags)
@@ -3945,14 +4108,19 @@ func scanServiceDefinition(scanner outboxScanner) (marketing.ServiceDefinition, 
 
 func scanServiceInterface(scanner outboxScanner) (marketing.ServiceInterface, error) {
 	var serviceInterface marketing.ServiceInterface
+	var deletedAt sql.NullTime
 	if err := scanner.Scan(&serviceInterface.ID, &serviceInterface.TenantID, &serviceInterface.ServiceRef,
 		&serviceInterface.Code, &serviceInterface.Name, &serviceInterface.Description, &serviceInterface.Operation,
 		&serviceInterface.InputSchemaRef, &serviceInterface.OutputSchemaRef, &serviceInterface.ErrorSchemaRef,
 		&serviceInterface.IdempotencyKeyTemplate, &serviceInterface.TimeoutMS, &serviceInterface.RetryPolicy,
 		&serviceInterface.LuaCallable, &serviceInterface.Status, &serviceInterface.Metadata,
+		&serviceInterface.Builtin, &serviceInterface.CatalogVersion, &serviceInterface.SourceHash, &deletedAt,
 		&serviceInterface.CreatedBy, &serviceInterface.UpdatedBy, &serviceInterface.CreatedAt,
 		&serviceInterface.UpdatedAt); err != nil {
 		return marketing.ServiceInterface{}, err
+	}
+	if deletedAt.Valid {
+		serviceInterface.DeletedAt = &deletedAt.Time
 	}
 	if len(serviceInterface.Metadata) == 0 {
 		serviceInterface.Metadata = json.RawMessage(`{}`)
@@ -3963,12 +4131,17 @@ func scanServiceInterface(scanner outboxScanner) (marketing.ServiceInterface, er
 func scanServiceProvider(scanner outboxScanner) (marketing.ServiceProvider, error) {
 	var provider marketing.ServiceProvider
 	var resourceRefs json.RawMessage
+	var deletedAt sql.NullTime
 	if err := scanner.Scan(&provider.ID, &provider.TenantID, &provider.ServiceRef, &provider.InterfaceRef,
 		&provider.Code, &provider.Name, &provider.Description, &provider.Protocol, &provider.Endpoint,
 		&provider.Topic, &provider.Method, &provider.Path, &provider.AuthRef, &resourceRefs,
 		&provider.Config, &provider.Weight, &provider.Priority, &provider.Environment, &provider.Status,
+		&provider.Builtin, &provider.CatalogVersion, &provider.SourceHash, &deletedAt,
 		&provider.CreatedBy, &provider.UpdatedBy, &provider.CreatedAt, &provider.UpdatedAt); err != nil {
 		return marketing.ServiceProvider{}, err
+	}
+	if deletedAt.Valid {
+		provider.DeletedAt = &deletedAt.Time
 	}
 	if len(resourceRefs) > 0 {
 		_ = json.Unmarshal(resourceRefs, &provider.ResourceRefs)
@@ -3984,11 +4157,16 @@ func scanServiceProvider(scanner outboxScanner) (marketing.ServiceProvider, erro
 
 func scanServiceSchema(scanner outboxScanner) (marketing.ServiceSchema, error) {
 	var schema marketing.ServiceSchema
+	var deletedAt sql.NullTime
 	if err := scanner.Scan(&schema.ID, &schema.TenantID, &schema.WorkspaceID, &schema.FolderID,
 		&schema.SchemaRef, &schema.SchemaType, &schema.Scope, &schema.Version, &schema.Status,
-		&schema.SchemaJSON, &schema.ExamplesJSON, &schema.Description, &schema.CreatedBy,
+		&schema.SchemaJSON, &schema.ExamplesJSON, &schema.Description,
+		&schema.Builtin, &schema.CatalogVersion, &schema.SourceHash, &deletedAt, &schema.CreatedBy,
 		&schema.UpdatedBy, &schema.CreatedAt, &schema.UpdatedAt); err != nil {
 		return marketing.ServiceSchema{}, err
+	}
+	if deletedAt.Valid {
+		schema.DeletedAt = &deletedAt.Time
 	}
 	if len(schema.ExamplesJSON) == 0 {
 		schema.ExamplesJSON = json.RawMessage(`[]`)
@@ -4002,13 +4180,19 @@ func scanServiceInterfaceBinding(scanner outboxScanner) (marketing.ServiceInterf
 	var allowedOperations json.RawMessage
 	var allowedProviderPolicies json.RawMessage
 	var allowedProviderRefs json.RawMessage
+	var deletedAt sql.NullTime
 	if err := scanner.Scan(&binding.ID, &binding.TenantID, &binding.ServiceRef, &binding.InterfaceRef,
 		&binding.Scope, &binding.WorkspaceID, &binding.FolderID, &binding.ActivityID, &binding.NodeID,
 		&binding.PrincipalType, &binding.PrincipalID, &allowedNodeTypes, &allowedOperations,
 		&allowedProviderPolicies, &binding.AllowExplicitProviderRef, &allowedProviderRefs,
-		&binding.LuaCallable, &binding.RequireApproval, &binding.Deny, &binding.Status, &binding.Metadata,
+		&binding.IncludeSubfolders, &binding.MinRole, &binding.Environment, &binding.RateLimitRef,
+		&binding.LuaCallable, &binding.RequireApproval, &binding.Deny, &binding.Status, &deletedAt, &binding.Metadata,
+		&binding.Builtin, &binding.CatalogVersion, &binding.SourceHash,
 		&binding.CreatedBy, &binding.UpdatedBy, &binding.CreatedAt, &binding.UpdatedAt); err != nil {
 		return marketing.ServiceInterfaceBinding{}, err
+	}
+	if deletedAt.Valid {
+		binding.DeletedAt = &deletedAt.Time
 	}
 	if len(allowedNodeTypes) > 0 {
 		_ = json.Unmarshal(allowedNodeTypes, &binding.AllowedNodeTypes)
@@ -4078,6 +4262,24 @@ func scanServiceProviderRuntimeState(scanner outboxScanner) (marketing.ServicePr
 		state.Metadata = json.RawMessage(`{}`)
 	}
 	return state, nil
+}
+
+func scanServiceRateLimitPolicy(scanner outboxScanner) (marketing.ServiceRateLimitPolicy, error) {
+	var policy marketing.ServiceRateLimitPolicy
+	var deletedAt sql.NullTime
+	if err := scanner.Scan(
+		&policy.ID, &policy.TenantID, &policy.Code, &policy.Name, &policy.Description,
+		&policy.ServiceRef, &policy.InterfaceRef, &policy.ProviderRef, &policy.Limit,
+		&policy.WindowSeconds, &policy.Backend, &policy.Status, &policy.Metadata,
+		&policy.Builtin, &policy.CatalogVersion, &policy.SourceHash, &deletedAt,
+		&policy.CreatedBy, &policy.UpdatedBy, &policy.CreatedAt, &policy.UpdatedAt,
+	); err != nil {
+		return marketing.ServiceRateLimitPolicy{}, err
+	}
+	if deletedAt.Valid {
+		policy.DeletedAt = &deletedAt.Time
+	}
+	return policy, nil
 }
 
 func scanServiceCallAuditLog(scanner outboxScanner) (marketing.ServiceCallAuditLog, error) {

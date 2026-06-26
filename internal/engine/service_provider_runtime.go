@@ -24,6 +24,8 @@ const (
 type serviceProviderRuntimeConfig struct {
 	RateLimitPerWindow       int
 	RateLimitWindow          time.Duration
+	RateLimitPolicyRef       string
+	RateLimitBackend         marketing.ServiceRateLimitBackend
 	CircuitThreshold         int
 	CircuitCooldown          time.Duration
 	HalfOpenProbeLimit       int
@@ -42,10 +44,49 @@ func (s *Service) ListServiceProviderRuntimeStates(ctx context.Context, query ma
 	return s.repository.ListServiceProviderRuntimeStates(ctx, query)
 }
 
+func (s *Service) SaveServiceRateLimitPolicy(ctx context.Context, policy marketing.ServiceRateLimitPolicy) (marketing.ServiceRateLimitPolicy, error) {
+	policy = s.normalizeServiceRateLimitPolicy(policy)
+	if err := policy.Validate(); err != nil {
+		return marketing.ServiceRateLimitPolicy{}, err
+	}
+	return s.repository.SaveServiceRateLimitPolicy(ctx, policy)
+}
+
+func (s *Service) ListServiceRateLimitPolicies(ctx context.Context, query marketing.ServiceRateLimitPolicyQuery) ([]marketing.ServiceRateLimitPolicy, error) {
+	return s.repository.ListServiceRateLimitPolicies(ctx, query)
+}
+
+func (s *Service) normalizeServiceRateLimitPolicy(policy marketing.ServiceRateLimitPolicy) marketing.ServiceRateLimitPolicy {
+	now := s.now()
+	if policy.ID == "" {
+		policy.ID = marketing.NewID("svcratelimit")
+	}
+	if policy.Name == "" {
+		policy.Name = policy.Code
+	}
+	if policy.Backend == "" {
+		policy.Backend = marketing.ServiceRateLimitBackendPostgres
+	}
+	if policy.Status == "" {
+		policy.Status = marketing.ServiceAssetActive
+	}
+	if len(policy.Metadata) == 0 {
+		policy.Metadata = json.RawMessage(`{}`)
+	}
+	if policy.CreatedAt.IsZero() {
+		policy.CreatedAt = now
+	}
+	policy.UpdatedAt = now
+	return policy
+}
+
 func (s *Service) ResetServiceProviderCircuit(ctx context.Context, tenantID string, serviceRef string, interfaceRef string, providerRef string) (marketing.ServiceProviderRuntimeState, error) {
 	provider, err := s.GetServiceProvider(ctx, tenantID, serviceRef, interfaceRef, providerRef)
 	if err != nil {
 		return marketing.ServiceProviderRuntimeState{}, err
+	}
+	if !serviceAssetStatusActive(provider.Status, provider.DeletedAt) {
+		return marketing.ServiceProviderRuntimeState{}, errors.New("SERVICE_PROVIDER_DISABLED")
 	}
 	state, err := s.serviceProviderRuntimeState(ctx, provider)
 	if err != nil {
@@ -68,6 +109,9 @@ func (s *Service) CheckServiceProviderHealth(ctx context.Context, tenantID strin
 	provider, err := s.GetServiceProvider(ctx, tenantID, serviceRef, interfaceRef, providerRef)
 	if err != nil {
 		return marketing.ServiceProviderRuntimeState{}, err
+	}
+	if !serviceAssetStatusActive(provider.Status, provider.DeletedAt) {
+		return marketing.ServiceProviderRuntimeState{}, errors.New("SERVICE_PROVIDER_DISABLED")
 	}
 	state, err := s.serviceProviderRuntimeState(ctx, provider)
 	if err != nil {
@@ -165,7 +209,10 @@ func (s *Service) serviceProviderRuntimeAvailable(ctx context.Context, provider 
 	if err != nil {
 		return false, "", "", err
 	}
-	cfg := serviceProviderGovernanceConfig(provider)
+	cfg, err := s.serviceProviderGovernanceConfig(ctx, provider)
+	if err != nil {
+		return false, "", "", err
+	}
 	now := s.now()
 	halfOpenEligible := false
 	if state.CircuitStatus == marketing.ServiceProviderCircuitOpen {
@@ -191,7 +238,10 @@ func (s *Service) consumeServiceProviderRuntime(ctx context.Context, provider ma
 	if err != nil {
 		return marketing.ServiceProviderRuntimeState{}, err
 	}
-	cfg := serviceProviderGovernanceConfig(provider)
+	cfg, err := s.serviceProviderGovernanceConfig(ctx, provider)
+	if err != nil {
+		return marketing.ServiceProviderRuntimeState{}, err
+	}
 	now := s.now()
 	if state.CircuitStatus == marketing.ServiceProviderCircuitOpen {
 		if state.CircuitOpenedAt == nil || now.Sub(*state.CircuitOpenedAt) < cfg.CircuitCooldown {
@@ -243,7 +293,10 @@ func (s *Service) recordServiceProviderSuccess(ctx context.Context, provider mar
 	state.ConsecutiveFailures = 0
 	state.HealthStatus = marketing.ServiceProviderHealthHealthy
 	state.HealthMessage = ""
-	cfg := serviceProviderGovernanceConfig(provider)
+	cfg, err := s.serviceProviderGovernanceConfig(ctx, provider)
+	if err != nil {
+		return err
+	}
 	if state.CircuitStatus == marketing.ServiceProviderCircuitHalfOpen {
 		state.HalfOpenSuccessCount++
 		state.HalfOpenSuccessThreshold = cfg.HalfOpenSuccessThreshold
@@ -268,7 +321,10 @@ func (s *Service) recordServiceProviderFailure(ctx context.Context, provider mar
 	if err != nil {
 		return err
 	}
-	cfg := serviceProviderGovernanceConfig(provider)
+	cfg, err := s.serviceProviderGovernanceConfig(ctx, provider)
+	if err != nil {
+		return err
+	}
 	now := s.now()
 	state.FailureCount++
 	state.ConsecutiveFailures++
@@ -325,29 +381,37 @@ func serviceProviderRateLimitExceeded(state marketing.ServiceProviderRuntimeStat
 	return state.RateLimitCount >= cfg.RateLimitPerWindow
 }
 
-func serviceProviderGovernanceConfig(provider marketing.ServiceProvider) serviceProviderRuntimeConfig {
+func (s *Service) serviceProviderGovernanceConfig(ctx context.Context, provider marketing.ServiceProvider) (serviceProviderRuntimeConfig, error) {
 	cfg := serviceProviderRuntimeConfig{
 		RateLimitPerWindow:       defaultProviderRateLimitPerWindow,
 		RateLimitWindow:          defaultProviderRateLimitWindow,
+		RateLimitBackend:         marketing.ServiceRateLimitBackendPostgres,
 		CircuitThreshold:         defaultProviderCircuitThreshold,
 		CircuitCooldown:          defaultProviderCircuitCooldown,
 		HalfOpenProbeLimit:       defaultProviderHalfOpenProbeLimit,
 		HalfOpenSuccessThreshold: defaultProviderHalfOpenSuccessThreshold,
 	}
 	var raw map[string]any
-	if len(provider.Config) == 0 || json.Unmarshal(provider.Config, &raw) != nil {
-		return cfg
+	if len(provider.Config) > 0 && json.Unmarshal(provider.Config, &raw) == nil {
+		cfg.RateLimitPerWindow = serviceProviderConfigInt(raw, cfg.RateLimitPerWindow, "rateLimitPerWindow", "rateLimitPerMinute", "rateLimit")
+		if seconds := serviceProviderConfigInt(raw, 0, "rateLimitWindowSeconds", "rateWindowSeconds"); seconds > 0 {
+			cfg.RateLimitWindow = time.Duration(seconds) * time.Second
+		}
+		cfg.CircuitThreshold = serviceProviderConfigInt(raw, cfg.CircuitThreshold, "circuitFailureThreshold", "failureThreshold")
+		if seconds := serviceProviderConfigInt(raw, 0, "circuitCooldownSeconds", "circuitResetSeconds", "recoverySeconds"); seconds > 0 {
+			cfg.CircuitCooldown = time.Duration(seconds) * time.Second
+		}
+		cfg.HalfOpenProbeLimit = serviceProviderConfigInt(raw, cfg.HalfOpenProbeLimit, "halfOpenProbeLimit", "probeLimit")
+		cfg.HalfOpenSuccessThreshold = serviceProviderConfigInt(raw, cfg.HalfOpenSuccessThreshold, "halfOpenSuccessThreshold", "probeSuccessThreshold")
 	}
-	cfg.RateLimitPerWindow = serviceProviderConfigInt(raw, cfg.RateLimitPerWindow, "rateLimitPerWindow", "rateLimitPerMinute", "rateLimit")
-	if seconds := serviceProviderConfigInt(raw, 0, "rateLimitWindowSeconds", "rateWindowSeconds"); seconds > 0 {
-		cfg.RateLimitWindow = time.Duration(seconds) * time.Second
+	if policy, ok, err := s.matchServiceRateLimitPolicy(ctx, provider); err != nil {
+		return cfg, err
+	} else if ok {
+		cfg.RateLimitPolicyRef = policy.Code
+		cfg.RateLimitPerWindow = policy.Limit
+		cfg.RateLimitWindow = time.Duration(policy.WindowSeconds) * time.Second
+		cfg.RateLimitBackend = policy.Backend
 	}
-	cfg.CircuitThreshold = serviceProviderConfigInt(raw, cfg.CircuitThreshold, "circuitFailureThreshold", "failureThreshold")
-	if seconds := serviceProviderConfigInt(raw, 0, "circuitCooldownSeconds", "circuitResetSeconds", "recoverySeconds"); seconds > 0 {
-		cfg.CircuitCooldown = time.Duration(seconds) * time.Second
-	}
-	cfg.HalfOpenProbeLimit = serviceProviderConfigInt(raw, cfg.HalfOpenProbeLimit, "halfOpenProbeLimit", "probeLimit")
-	cfg.HalfOpenSuccessThreshold = serviceProviderConfigInt(raw, cfg.HalfOpenSuccessThreshold, "halfOpenSuccessThreshold", "probeSuccessThreshold")
 	if cfg.RateLimitPerWindow < 0 {
 		cfg.RateLimitPerWindow = 0
 	}
@@ -366,7 +430,57 @@ func serviceProviderGovernanceConfig(provider marketing.ServiceProvider) service
 	if cfg.HalfOpenSuccessThreshold <= 0 {
 		cfg.HalfOpenSuccessThreshold = defaultProviderHalfOpenSuccessThreshold
 	}
-	return cfg
+	return cfg, nil
+}
+
+func (s *Service) matchServiceRateLimitPolicy(ctx context.Context, provider marketing.ServiceProvider) (marketing.ServiceRateLimitPolicy, bool, error) {
+	policies, err := s.repository.ListServiceRateLimitPolicies(ctx, marketing.ServiceRateLimitPolicyQuery{
+		TenantID: provider.TenantID,
+		Status:   marketing.ServiceAssetActive,
+		Limit:    500,
+	})
+	if err != nil {
+		return marketing.ServiceRateLimitPolicy{}, false, err
+	}
+	bestScore := -1
+	var best marketing.ServiceRateLimitPolicy
+	for _, policy := range policies {
+		score, ok := serviceRateLimitPolicyMatchScore(policy, provider)
+		if !ok {
+			continue
+		}
+		if score > bestScore || (score == bestScore && strings.Compare(policy.Code, best.Code) < 0) {
+			bestScore = score
+			best = policy
+		}
+	}
+	return best, bestScore >= 0, nil
+}
+
+func serviceRateLimitPolicyMatchScore(policy marketing.ServiceRateLimitPolicy, provider marketing.ServiceProvider) (int, bool) {
+	if policy.TenantID != provider.TenantID {
+		return 0, false
+	}
+	score := 0
+	if policy.ServiceRef != "" {
+		if policy.ServiceRef != provider.ServiceRef {
+			return 0, false
+		}
+		score += 1
+	}
+	if policy.InterfaceRef != "" {
+		if policy.InterfaceRef != provider.InterfaceRef {
+			return 0, false
+		}
+		score += 2
+	}
+	if policy.ProviderRef != "" {
+		if policy.ProviderRef != provider.Code {
+			return 0, false
+		}
+		score += 4
+	}
+	return score, true
 }
 
 func serviceProviderRuntimeStateDefaults() serviceProviderRuntimeConfig {

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
-import { FileJson, History, Link2, Network, PlayCircle, Plus, RefreshCw, RotateCcw, Route, ServerCog } from 'lucide-react';
-import type { ResourceSummary, ServiceCallAuditLogSummary, ServiceDefinitionSummary, ServiceInterfaceBindingCheckResult, ServiceInterfaceBindingSummary, ServiceInterfaceSummary, ServiceProviderRuntimeStateSummary, ServiceProviderSummary, ServiceSchemaSummary } from '../../types';
+import { Activity, DatabaseZap, FileJson, History, Link2, Network, PlayCircle, Plus, RefreshCw, RotateCcw, Route, ServerCog, ShieldAlert } from 'lucide-react';
+import type { DBMigrationAnalysis, DBMigrationApplyResponse, ResourceSummary, ServiceCallAuditLogSummary, ServiceDefinitionSummary, ServiceInterfaceBindingCheckResult, ServiceInterfaceBindingSummary, ServiceInterfaceSummary, ServiceProviderRuntimeStateSummary, ServiceProviderSummary, ServiceRateLimitPolicySummary, ServiceSchemaSummary } from '../../types';
 import { TaBadge, TaButton, TaEmptyState, TaInput, TaSelect, TaTab, TaTabs } from './TailAdminPrimitives';
 
 type ServiceDraft = {
@@ -68,6 +68,11 @@ type BindingDraft = {
   allowedProviderPoliciesText: string;
   allowExplicitProviderRef: boolean;
   allowedProviderRefsText: string;
+  includeSubfolders: boolean;
+  minRole: string;
+  environment: string;
+  rateLimitRef: string;
+  deletedAt: string;
   luaCallable: boolean;
   requireApproval: boolean;
   deny: boolean;
@@ -86,6 +91,9 @@ type Props = {
   bindings: ServiceInterfaceBindingSummary[];
   audits: ServiceCallAuditLogSummary[];
   runtimeStates: Record<string, ServiceProviderRuntimeStateSummary | undefined>;
+  rateLimitPolicies: ServiceRateLimitPolicySummary[];
+  migrationAnalysis?: DBMigrationAnalysis;
+  migrationMessage?: string;
   selectedServiceCode: string;
   selectedInterfaceCode: string;
   selectedService?: ServiceDefinitionSummary;
@@ -110,6 +118,9 @@ type Props = {
   auditRequestId?: string;
   onLoadMoreAudits: () => Promise<void>;
   onTestInterface: (serviceCode: string, interfaceCode: string) => Promise<void>;
+  onRefreshMigrationStatus: () => Promise<DBMigrationAnalysis>;
+  onAnalyzeMigrations: () => Promise<DBMigrationAnalysis>;
+  onApplyMigrations: (input: { dryRun: boolean; confirm: boolean; confirmation: string; breakGlass: boolean; reason: string }) => Promise<DBMigrationApplyResponse>;
 };
 
 const SERVICE_TYPES = ['EXTERNAL', 'INTERNAL', 'SYSTEM'];
@@ -119,7 +130,7 @@ const INTERFACE_OPERATIONS = ['CALL', 'PUBLISH', 'REQUEST_REPLY', 'SUBSCRIBE_TRI
 const PROVIDER_PROTOCOLS = ['RESOURCE', 'HTTP', 'RPC', 'MQ', 'PLUGIN', 'TCP', 'LUA_ADAPTER'];
 const SCHEMA_TYPES = ['INPUT', 'OUTPUT', 'ERROR'];
 const PRINCIPAL_TYPES = ['ROLE', 'USER', 'GROUP', 'SERVICE_ACCOUNT', 'WORKSPACE', 'FOLDER', 'ACTIVITY', 'NODE'];
-const PROVIDER_POLICIES = ['PRIMARY', 'PRIMARY_WITH_FALLBACK', 'WEIGHTED', 'WEIGHTED_WITH_FALLBACK', 'ENVIRONMENT_MATCH', 'MOCK_ONLY'];
+const PROVIDER_POLICIES = ['PRIMARY', 'PRIMARY_WITH_FALLBACK', 'CACHE_ASIDE', 'WEIGHTED', 'WEIGHTED_WITH_FALLBACK', 'ENVIRONMENT_MATCH', 'MOCK_ONLY'];
 
 function FieldInput({ label, value, onChange, placeholder = '' }: { label: string; value: string; onChange: (value: string) => void; placeholder?: string }) {
   return (
@@ -239,6 +250,11 @@ function bindingDraft(binding: ServiceInterfaceBindingSummary | undefined, servi
     allowedProviderPoliciesText: binding?.allowedProviderPolicies?.join('\n') ?? 'PRIMARY\nPRIMARY_WITH_FALLBACK',
     allowExplicitProviderRef: binding?.allowExplicitProviderRef ?? false,
     allowedProviderRefsText: binding?.allowedProviderRefs?.join('\n') ?? '',
+    includeSubfolders: binding?.includeSubfolders ?? false,
+    minRole: binding?.minRole ?? '',
+    environment: binding?.environment ?? '',
+    rateLimitRef: binding?.rateLimitRef ?? '',
+    deletedAt: binding?.deletedAt ?? '',
     luaCallable: binding?.luaCallable ?? false,
     requireApproval: binding?.requireApproval ?? false,
     deny: binding?.deny ?? false,
@@ -253,6 +269,29 @@ function statusTone(status: string): 'success' | 'warning' | 'error' | 'gray' {
   return 'gray';
 }
 
+function isActiveAsset(item?: { status?: string; deletedAt?: string }): boolean {
+  return Boolean(item && item.status === 'ACTIVE' && !item.deletedAt);
+}
+
+function assetRisk(item?: { status?: string; deletedAt?: string }): string {
+  if (!item) return 'missing';
+  if (item.deletedAt) return 'deleted';
+  if (item.status !== 'ACTIVE') return String(item.status || 'disabled').toLowerCase();
+  return '';
+}
+
+function rateLimitPolicyLabel(policy: ServiceRateLimitPolicySummary): string {
+  const target = [policy.serviceRef || '*', policy.interfaceRef || '*', policy.providerRef || '*'].join('/');
+  return `${policy.code} · ${target} · ${policy.limit}/${policy.windowSeconds}s · ${policy.backend}`;
+}
+
+function migrationTone(analysis?: DBMigrationAnalysis): 'success' | 'warning' | 'error' | 'gray' {
+  if (!analysis) return 'gray';
+  if (analysis.drift || analysis.errors?.length) return 'error';
+  if (!analysis.latest || analysis.pending?.length || analysis.missingRequiredTables?.length) return 'warning';
+  return 'success';
+}
+
 export function ServiceCapabilityManagement({
   tenantId,
   workspaceId,
@@ -265,6 +304,9 @@ export function ServiceCapabilityManagement({
   bindings,
   audits,
   runtimeStates,
+  rateLimitPolicies,
+  migrationAnalysis,
+  migrationMessage = '',
   selectedServiceCode,
   selectedInterfaceCode,
   selectedService,
@@ -289,8 +331,11 @@ export function ServiceCapabilityManagement({
   auditRequestId = '',
   onLoadMoreAudits,
   onTestInterface,
+  onRefreshMigrationStatus,
+  onAnalyzeMigrations,
+  onApplyMigrations,
 }: Props) {
-  const [tab, setTab] = useState<'service' | 'interface' | 'provider' | 'schema' | 'binding' | 'audit'>('service');
+  const [tab, setTab] = useState<'overview' | 'service' | 'interface' | 'provider' | 'schema' | 'binding' | 'audit' | 'migration'>('overview');
   const [query, setQuery] = useState('');
   const [serviceForm, setServiceForm] = useState<ServiceDraft>(() => serviceDraft(selectedService, workspaceId, folderId));
   const [interfaceForm, setInterfaceForm] = useState<InterfaceDraft>(() => interfaceDraft(selectedInterface));
@@ -303,6 +348,10 @@ export function ServiceCapabilityManagement({
   const [schemaExampleText, setSchemaExampleText] = useState('{}');
   const [schemaExampleCheck, setSchemaExampleCheck] = useState('');
   const [bindingCheck, setBindingCheck] = useState<ServiceInterfaceBindingCheckResult | undefined>();
+  const [migrationApplyConfirm, setMigrationApplyConfirm] = useState('');
+  const [migrationApplyReason, setMigrationApplyReason] = useState('');
+  const [migrationBreakGlass, setMigrationBreakGlass] = useState(false);
+  const [migrationActionMessage, setMigrationActionMessage] = useState('');
 
   useEffect(() => {
     setServiceForm(serviceDraft(selectedService, workspaceId, folderId));
@@ -551,6 +600,11 @@ export function ServiceCapabilityManagement({
         allowedProviderPolicies: splitList(bindingForm.allowedProviderPoliciesText),
         allowExplicitProviderRef: bindingForm.allowExplicitProviderRef,
         allowedProviderRefs: splitList(bindingForm.allowedProviderRefsText),
+        includeSubfolders: bindingForm.includeSubfolders,
+        minRole: bindingForm.minRole.trim(),
+        environment: bindingForm.environment.trim(),
+        rateLimitRef: bindingForm.rateLimitRef.trim(),
+        deletedAt: bindingForm.deletedAt.trim() || undefined,
         luaCallable: bindingForm.luaCallable,
         requireApproval: bindingForm.requireApproval,
         deny: bindingForm.deny,
@@ -612,6 +666,72 @@ export function ServiceCapabilityManagement({
       return (err as Error).message;
     }
   }, [schemaForm.schemaJsonText]);
+  const activeInterfaces = interfaces.filter(isActiveAsset);
+  const activeProviders = providers.filter(isActiveAsset);
+  const activeSchemas = schemas.filter(isActiveAsset);
+  const activeBindings = bindings.filter(isActiveAsset);
+  const activeRateLimitPolicies = rateLimitPolicies.filter(isActiveAsset);
+  const assetCompleteness = [
+    { label: 'Services', value: services.length, risk: services.some((item) => !isActiveAsset(item)) ? '含禁用/删除项' : '' },
+    { label: 'Interfaces', value: interfaces.length, risk: activeInterfaces.length === 0 ? '缺少 ACTIVE interface' : '' },
+    { label: 'Providers', value: providers.length, risk: activeProviders.length === 0 ? '缺少可用 provider' : '' },
+    { label: 'Schemas', value: schemas.length, risk: activeSchemas.length === 0 ? '缺少 schema registry' : '' },
+    { label: 'Bindings', value: bindings.length, risk: activeBindings.length === 0 ? '缺少调用授权' : '' },
+    { label: 'Rate Limit', value: rateLimitPolicies.length, risk: activeRateLimitPolicies.length === 0 ? '未配置限流策略' : '' },
+    { label: 'Audit', value: audits.length, risk: audits.length === 0 ? '暂无调用审计' : '' },
+    { label: 'Migrations', value: migrationAnalysis?.pending?.length ?? 0, risk: migrationAnalysis?.drift ? '存在 drift' : migrationAnalysis?.latest ? '' : '有 pending' },
+  ];
+  const selectedInputSchema = schemas.find((schema) => schema.schemaRef === interfaceForm.inputSchemaRef && schema.schemaType === 'INPUT');
+  const selectedOutputSchema = schemas.find((schema) => schema.schemaRef === interfaceForm.outputSchemaRef && schema.schemaType === 'OUTPUT');
+  const selectedErrorSchema = schemas.find((schema) => schema.schemaRef === interfaceForm.errorSchemaRef && schema.schemaType === 'ERROR');
+  const selectedInterfaceRisks = [
+    assetRisk(selectedInterface) ? `interface ${assetRisk(selectedInterface)}` : '',
+    interfaceForm.inputSchemaRef && !isActiveAsset(selectedInputSchema) ? `input schema ${assetRisk(selectedInputSchema)}` : '',
+    interfaceForm.outputSchemaRef && !isActiveAsset(selectedOutputSchema) ? `output schema ${assetRisk(selectedOutputSchema)}` : '',
+    interfaceForm.errorSchemaRef && !isActiveAsset(selectedErrorSchema) ? `error schema ${assetRisk(selectedErrorSchema)}` : '',
+    !activeBindings.some((binding) => binding.serviceRef === (bindingForm.serviceRef || selectedServiceCode) && binding.interfaceRef === (bindingForm.interfaceRef || selectedInterfaceCode)) ? 'no binding' : '',
+  ].filter(Boolean);
+  const providerRisks = (provider: ServiceProviderSummary): string[] => {
+    const state = runtimeStates[provider.code];
+    const config = provider.config ?? {};
+    return [
+      assetRisk(provider) ? `provider ${assetRisk(provider)}` : '',
+      provider.environment && bindingForm.environment && provider.environment !== bindingForm.environment ? 'env mismatch' : '',
+      config.mock === true && !bindingForm.allowedProviderPoliciesText.includes('MOCK_ONLY') ? 'mock denied' : '',
+      state?.healthStatus === 'UNHEALTHY' ? 'unhealthy' : '',
+      state?.healthStatus === 'DEGRADED' ? 'degraded' : '',
+      state?.circuitStatus === 'OPEN' ? 'circuit open' : '',
+      state?.metadata?.rateLimited === true ? 'rate limited' : '',
+      selectedInterfaceRisks.length ? selectedInterfaceRisks.join(', ') : '',
+    ].filter(Boolean);
+  };
+  const selectedProviderRisks = providerForm.code
+    ? providerRisks({ ...providerForm, id: '', tenantId, serviceRef: selectedServiceCode, interfaceRef: selectedInterfaceCode, protocol: providerForm.protocol, status: providerForm.status, config: selectedProviderConfig, priority: Number(providerForm.priority) || 0 })
+    : [];
+  const runMigrationDryRun = async () => {
+    try {
+      setMigrationActionMessage('');
+      const result = await onApplyMigrations({ dryRun: true, confirm: false, confirmation: '', breakGlass: false, reason: '' });
+      setMigrationActionMessage(`Dry-run 完成，pending ${result.analysis?.pending?.length ?? 0} 项`);
+    } catch (err) {
+      setMigrationActionMessage((err as Error).message);
+    }
+  };
+  const runMigrationApply = async () => {
+    try {
+      setMigrationActionMessage('');
+      const result = await onApplyMigrations({
+        dryRun: false,
+        confirm: true,
+        confirmation: migrationApplyConfirm,
+        breakGlass: migrationBreakGlass,
+        reason: migrationApplyReason,
+      });
+      setMigrationActionMessage(`Apply 完成，pending ${result.after?.pending?.length ?? 0} 项`);
+    } catch (err) {
+      setMigrationActionMessage((err as Error).message);
+    }
+  };
 
   return (
     <div className="resource-manager">
@@ -650,14 +770,46 @@ export function ServiceCapabilityManagement({
           ) : null}
         </div>
         <TaTabs>
+          <TaTab active={tab === 'overview'} onClick={() => setTab('overview')}><Activity size={15} />总览</TaTab>
           <TaTab active={tab === 'service'} onClick={() => setTab('service')}><Network size={15} />服务</TaTab>
           <TaTab active={tab === 'interface'} onClick={() => setTab('interface')}><Route size={15} />接口</TaTab>
           <TaTab active={tab === 'provider'} onClick={() => setTab('provider')}><ServerCog size={15} />提供者</TaTab>
           <TaTab active={tab === 'schema'} onClick={() => setTab('schema')}><FileJson size={15} />Schema</TaTab>
           <TaTab active={tab === 'binding'} onClick={() => setTab('binding')}><Link2 size={15} />Binding</TaTab>
           <TaTab active={tab === 'audit'} onClick={() => setTab('audit')}><History size={15} />审计</TaTab>
+          <TaTab active={tab === 'migration'} onClick={() => setTab('migration')}><DatabaseZap size={15} />迁移</TaTab>
         </TaTabs>
         {error ? <div className="resource-error">{error}</div> : null}
+
+        {tab === 'overview' ? (
+          <div className="resource-form-grid">
+            <div className="resource-audit-list span-2">
+              <div><b>能力资产完整性</b><span>{selectedServiceCode || '全局'} · {selectedInterfaceCode || '未选接口'}</span></div>
+              {assetCompleteness.map((item) => (
+                <div key={item.label}>
+                  <b>{item.label}</b>
+                  <span>{item.value}{item.risk ? ` · ${item.risk}` : ' · OK'}</span>
+                </div>
+              ))}
+            </div>
+            <div className="resource-audit-list span-2">
+              <div><b>当前接口发布风险</b><span>{selectedInterfaceRisks.length ? `${selectedInterfaceRisks.length} 项需要处理` : 'Schema / Binding 基础检查通过'}</span></div>
+              {selectedInterfaceRisks.length ? selectedInterfaceRisks.map((risk) => <small key={risk}>{risk}</small>) : <small>继续检查 provider runtime、rate-limit 和 migration 状态。</small>}
+              <div><b>DB Migration</b><span>{migrationAnalysis ? `${migrationAnalysis.latest ? 'latest' : 'pending'} · drift ${migrationAnalysis.drift ? 'yes' : 'no'}` : '未加载'}</span></div>
+              {migrationMessage ? <small>{migrationMessage}</small> : null}
+            </div>
+            <div className="resource-audit-list span-2">
+              <div><b>Rate Limit Policies</b><span>{activeRateLimitPolicies.length} active / {rateLimitPolicies.length} total</span></div>
+              {rateLimitPolicies.slice(0, 5).map((policy) => <small key={policy.id || policy.code}>{rateLimitPolicyLabel(policy)}</small>)}
+              {!rateLimitPolicies.length ? <small>未配置独立限流策略，运行时会回退 provider config/default。</small> : null}
+            </div>
+            <div className="resource-form-actions span-2">
+              <TaButton tone="outline" onClick={() => setTab('schema')}>查看 Schema</TaButton>
+              <TaButton tone="outline" onClick={() => setTab('binding')}>查看 Binding</TaButton>
+              <TaButton tone="outline" onClick={() => setTab('migration')}>查看 Migration</TaButton>
+            </div>
+          </div>
+        ) : null}
 
         {tab === 'service' ? (
           <div className="resource-form-grid">
@@ -706,7 +858,12 @@ export function ServiceCapabilityManagement({
             <div className="span-2 resource-inline-list">
               {providers.map((provider) => (
                 <button key={provider.code} onClick={() => setProviderForm(providerDraft(provider, resources))}>
-                  <ServerCog size={15} /><span>{provider.name || provider.code}</span><TaBadge tone={statusTone(provider.status)}>{provider.protocol}</TaBadge>
+                  <ServerCog size={15} />
+                  <span>
+                    {provider.name || provider.code}
+                    {providerRisks(provider).length ? <small>{providerRisks(provider).slice(0, 2).join(' / ')}</small> : <small>{provider.environment || 'default'} · selectable</small>}
+                  </span>
+                  <TaBadge tone={providerRisks(provider).length ? 'error' : statusTone(provider.status)}>{provider.protocol}</TaBadge>
                 </button>
               ))}
               <TaButton tone="ghost" onClick={startProvider}><Plus size={15} />新增提供者</TaButton>
@@ -726,7 +883,7 @@ export function ServiceCapabilityManagement({
             {selectedProviderRuntime ? (
               <div className="resource-audit-list span-2">
                 <div><b>Runtime</b><span>{selectedProviderRuntime.healthStatus} · {selectedProviderRuntime.circuitStatus} · failures {selectedProviderRuntime.consecutiveFailures}</span></div>
-                {selectedProviderUnavailableReason ? <div><b>不可选原因</b><span>{selectedProviderUnavailableReason}</span></div> : <div><b>可选状态</b><span>当前 provider 可参与策略选择</span></div>}
+                {selectedProviderRisks.length ? <div><b>不可选原因</b><span>{selectedProviderRisks.join(' / ')}</span></div> : selectedProviderUnavailableReason ? <div><b>不可选原因</b><span>{selectedProviderUnavailableReason}</span></div> : <div><b>可选状态</b><span>当前 provider 可参与策略选择</span></div>}
                 <div><b>环境 / 权重</b><span>{providerForm.environment || 'default'} · weight {(selectedProviderConfig.weight as number | undefined) ?? 'config'} · priority {providerForm.priority}</span></div>
                 <div><b>Half-open</b><span>probe {selectedProviderRuntime.halfOpenProbeCount ?? 0}/{selectedProviderRuntime.halfOpenProbeLimit ?? 1} · success {selectedProviderRuntime.halfOpenSuccessCount ?? 0}/{selectedProviderRuntime.halfOpenSuccessThreshold ?? 1}</span></div>
                 {selectedProviderRuntime.healthMessage ? <p>{selectedProviderRuntime.healthMessage}</p> : null}
@@ -799,10 +956,23 @@ export function ServiceCapabilityManagement({
             <FieldSelect label="Principal Type" value={bindingForm.principalType} options={PRINCIPAL_TYPES} onChange={(value) => setBindingForm((state) => ({ ...state, principalType: value }))} />
             <FieldInput label="Principal ID" value={bindingForm.principalId} onChange={(value) => setBindingForm((state) => ({ ...state, principalId: value }))} />
             <FieldSelect label="状态" value={bindingForm.status} options={STATUSES} onChange={(value) => setBindingForm((state) => ({ ...state, status: value }))} />
+            <FieldInput label="Min Role" value={bindingForm.minRole} onChange={(value) => setBindingForm((state) => ({ ...state, minRole: value }))} />
+            <FieldInput label="Environment" value={bindingForm.environment} onChange={(value) => setBindingForm((state) => ({ ...state, environment: value }))} />
+            <FieldInput label="Rate Limit Ref" value={bindingForm.rateLimitRef} onChange={(value) => setBindingForm((state) => ({ ...state, rateLimitRef: value }))} />
+            <FieldInput label="Deleted At" value={bindingForm.deletedAt} onChange={(value) => setBindingForm((state) => ({ ...state, deletedAt: value }))} />
+            <div className="resource-audit-list span-2">
+              <div><b>Binding 风险提示</b><span>{bindingForm.deny || bindingForm.deletedAt || bindingForm.status !== 'ACTIVE' ? '当前 binding 不会放行调用' : '当前 binding 可参与匹配'}</span></div>
+              <small>minRole 只对 ROLE principal 按 VIEWER &lt; EDITOR &lt; ADMIN &lt; OWNER 比较；自定义角色保持精确匹配。</small>
+              <small>environment 非空时必须和 providerChain/runtime environment 一致，否则发布或运行时会被拒绝。</small>
+              <small>rateLimitRef 当前用于表达治理关联，运行时仍按 provider/interface/service/tenant policy 优先级解析。</small>
+              <small>includeSubfolders 已保存展示，folder tree 递归匹配仍是后续增强。</small>
+              {bindingForm.deletedAt ? <small>deletedAt 非空会被视为软删除，不参与 binding checker。</small> : null}
+            </div>
             <label className="ta-field span-2"><span>Allowed Node Types</span><textarea value={bindingForm.allowedNodeTypesText} onChange={(event) => setBindingForm((state) => ({ ...state, allowedNodeTypesText: event.target.value }))} /></label>
             <label className="ta-field"><span>Allowed Operations</span><textarea value={bindingForm.allowedOperationsText} onChange={(event) => setBindingForm((state) => ({ ...state, allowedOperationsText: event.target.value }))} /></label>
             <label className="ta-field"><span>Provider Policies</span><textarea value={bindingForm.allowedProviderPoliciesText} onChange={(event) => setBindingForm((state) => ({ ...state, allowedProviderPoliciesText: event.target.value }))} placeholder={PROVIDER_POLICIES.join('\n')} /></label>
             <label className="ta-check"><input type="checkbox" checked={bindingForm.allowExplicitProviderRef} onChange={(event) => setBindingForm((state) => ({ ...state, allowExplicitProviderRef: event.target.checked }))} />允许显式 providerRef</label>
+            <label className="ta-check"><input type="checkbox" checked={bindingForm.includeSubfolders} onChange={(event) => setBindingForm((state) => ({ ...state, includeSubfolders: event.target.checked }))} />包含子 Folder</label>
             <label className="ta-check"><input type="checkbox" checked={bindingForm.luaCallable} onChange={(event) => setBindingForm((state) => ({ ...state, luaCallable: event.target.checked }))} />Lua 可调用</label>
             <label className="ta-check"><input type="checkbox" checked={bindingForm.requireApproval} onChange={(event) => setBindingForm((state) => ({ ...state, requireApproval: event.target.checked }))} />需要审批</label>
             <label className="ta-check"><input type="checkbox" checked={bindingForm.deny} onChange={(event) => setBindingForm((state) => ({ ...state, deny: event.target.checked }))} />Deny</label>
@@ -839,6 +1009,45 @@ export function ServiceCapabilityManagement({
                 <small>审计详情按 tenant/workspace/folder 只读权限过滤，payload 只展示 hash 和 trace。</small>
               </div>
               {auditNextCursor ? <TaButton tone="outline" onClick={() => void onLoadMoreAudits()}>加载更多</TaButton> : null}
+            </div>
+          </div>
+        ) : null}
+
+        {tab === 'migration' ? (
+          <div className="resource-form-grid">
+            <div className="resource-audit-list span-2">
+              <div>
+                <b>DB Migration Status</b>
+                <span>{migrationAnalysis ? `${migrationAnalysis.latest ? 'LATEST' : 'PENDING'} · safe ${migrationAnalysis.safeToApply ? 'yes' : 'no'}` : '未加载'}</span>
+                <TaBadge tone={migrationTone(migrationAnalysis)}>{migrationAnalysis?.drift ? 'DRIFT' : migrationAnalysis?.latest ? 'LATEST' : 'PENDING'}</TaBadge>
+              </div>
+              {migrationMessage ? <small>{migrationMessage}</small> : null}
+              <small>pending {migrationAnalysis?.pending?.length ?? 0} · applied {migrationAnalysis?.applied?.length ?? 0} · required missing {migrationAnalysis?.missingRequiredTables?.length ?? 0}</small>
+              {migrationAnalysis?.errors?.map((item) => <small key={item}>error: {item}</small>)}
+              {migrationAnalysis?.legacyUntrackedTables?.length ? <small>legacy untracked: {migrationAnalysis.legacyUntrackedTables.join(', ')}</small> : null}
+            </div>
+            <div className="resource-audit-list span-2">
+              <div><b>Pending Migrations</b><span>{migrationAnalysis?.pending?.length ?? 0} 项</span></div>
+              {migrationAnalysis?.pending?.slice(0, 8).map((item) => <small key={item.fileName}>{item.version} · {item.fileName} · {item.checksum.slice(0, 12)}</small>)}
+              {!migrationAnalysis?.pending?.length ? <small>暂无 pending migration。</small> : null}
+            </div>
+            <div className="resource-audit-list span-2">
+              <div><b>Required Tables</b><span>{migrationAnalysis?.requiredTables?.filter((item) => item.missing).length ?? 0} missing</span></div>
+              {migrationAnalysis?.requiredTables?.slice(0, 12).map((item) => <small key={item.name}>{item.exists ? 'OK' : 'MISSING'} · {item.name}</small>)}
+            </div>
+            <FieldInput label="确认短语" value={migrationApplyConfirm} onChange={setMigrationApplyConfirm} placeholder="APPLY_DB_MIGRATIONS" />
+            <FieldInput label="变更原因" value={migrationApplyReason} onChange={setMigrationApplyReason} placeholder="ops reviewed migration apply" />
+            <label className="ta-check"><input type="checkbox" checked={migrationBreakGlass} onChange={(event) => setMigrationBreakGlass(event.target.checked)} />Break-glass 确认</label>
+            <div className="resource-audit-list">
+              <div><b>Apply Guard</b><span>真实 apply 必须确认短语、break-glass 和 reason。</span></div>
+              <small>默认先 dry-run；drift 存在时后端会拒绝真实 apply。</small>
+              {migrationActionMessage ? <small>{migrationActionMessage}</small> : null}
+            </div>
+            <div className="resource-form-actions span-2">
+              <TaButton tone="outline" onClick={() => void onRefreshMigrationStatus()}>刷新状态</TaButton>
+              <TaButton tone="outline" onClick={() => void onAnalyzeMigrations()}>Analyze</TaButton>
+              <TaButton tone="outline" onClick={() => void runMigrationDryRun()}>Dry-run Apply</TaButton>
+              <TaButton tone="primary" onClick={() => void runMigrationApply()}><ShieldAlert size={15} />确认 Apply</TaButton>
             </div>
           </div>
         ) : null}

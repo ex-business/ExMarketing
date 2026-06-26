@@ -537,6 +537,10 @@ export type ServiceDefinitionSummary = {
   status: string;
   owner?: string;
   tags?: string[];
+  builtin?: boolean;
+  catalogVersion?: string;
+  sourceHash?: string;
+  deletedAt?: string;
   metadata?: Record<string, unknown>;
   createdBy?: string;
   updatedBy?: string;
@@ -560,6 +564,10 @@ export type ServiceInterfaceSummary = {
   retryPolicy?: string;
   luaCallable?: boolean;
   status: string;
+  builtin?: boolean;
+  catalogVersion?: string;
+  sourceHash?: string;
+  deletedAt?: string;
   metadata?: Record<string, unknown>;
   createdBy?: string;
   updatedBy?: string;
@@ -587,6 +595,10 @@ export type ServiceProviderSummary = {
   priority?: number;
   environment?: string;
   status: string;
+  builtin?: boolean;
+  catalogVersion?: string;
+  sourceHash?: string;
+  deletedAt?: string;
   createdBy?: string;
   updatedBy?: string;
   createdAt?: string;
@@ -606,6 +618,10 @@ export type ServiceSchemaSummary = {
   schemaJson: unknown;
   examplesJson?: unknown;
   description?: string;
+  builtin?: boolean;
+  catalogVersion?: string;
+  sourceHash?: string;
+  deletedAt?: string;
   createdBy?: string;
   updatedBy?: string;
   createdAt?: string;
@@ -629,10 +645,18 @@ export type ServiceInterfaceBindingSummary = {
   allowedProviderPolicies?: string[];
   allowExplicitProviderRef?: boolean;
   allowedProviderRefs?: string[];
+  includeSubfolders?: boolean;
+  minRole?: string;
+  environment?: string;
+  rateLimitRef?: string;
   luaCallable?: boolean;
   requireApproval?: boolean;
   deny?: boolean;
   status: string;
+  builtin?: boolean;
+  catalogVersion?: string;
+  sourceHash?: string;
+  deletedAt?: string;
   metadata?: Record<string, unknown>;
   createdBy?: string;
   updatedBy?: string;
@@ -700,6 +724,80 @@ export type ServiceCallAuditListResponse = {
   nextCursor?: string;
   limit?: number;
   requestId?: string;
+};
+
+export type ServiceRateLimitPolicySummary = {
+  id: string;
+  tenantId: string;
+  code: string;
+  name: string;
+  description?: string;
+  serviceRef?: string;
+  interfaceRef?: string;
+  providerRef?: string;
+  limit: number;
+  windowSeconds: number;
+  backend: string;
+  status: string;
+  builtin?: boolean;
+  catalogVersion?: string;
+  sourceHash?: string;
+  deletedAt?: string;
+  metadata?: Record<string, unknown>;
+  createdBy?: string;
+  updatedBy?: string;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type DBMigrationSummary = {
+  version: number;
+  name: string;
+  fileName: string;
+  checksum: string;
+};
+
+export type DBMigrationRecordSummary = DBMigrationSummary & {
+  status: string;
+  startedAt?: string;
+  finishedAt?: string;
+  errorMessage?: string;
+};
+
+export type DBMigrationRequiredTableSummary = {
+  name: string;
+  exists: boolean;
+  missing: boolean;
+};
+
+export type DBMigrationAnalysis = {
+  schemaMigrationsExists: boolean;
+  latest: boolean;
+  safeToApply: boolean;
+  drift: boolean;
+  localMigrations?: DBMigrationSummary[];
+  applied?: DBMigrationRecordSummary[];
+  pending?: DBMigrationSummary[];
+  requiredTables?: DBMigrationRequiredTableSummary[];
+  missingRequiredTables?: string[];
+  legacyUntrackedTables?: string[];
+  errors?: string[];
+};
+
+export type DBMigrationStatusResponse = {
+  actor?: string;
+  analysis: DBMigrationAnalysis;
+};
+
+export type DBMigrationApplyResponse = {
+  actor?: string;
+  dryRun?: boolean;
+  breakGlass?: boolean;
+  reason?: string;
+  confirmation?: string;
+  analysis?: DBMigrationAnalysis;
+  before?: DBMigrationAnalysis;
+  after?: DBMigrationAnalysis;
 };
 
 export type ServiceInterfaceBindingCheckResult = {

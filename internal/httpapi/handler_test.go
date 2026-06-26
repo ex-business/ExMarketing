@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ex-stack/ExMarketing/internal/dbmigration"
 	"github.com/ex-stack/ExMarketing/internal/engine"
 	"github.com/ex-stack/ExMarketing/internal/marketing"
 	"github.com/ex-stack/ExMarketing/internal/workflow"
@@ -2120,6 +2121,33 @@ func TestServiceAssetAdminAPIs(t *testing.T) {
 	handler.Routes().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"principalId":"ops"`) {
 		t.Fatalf("save binding failed: %d %s", rec.Code, rec.Body.String())
+	}
+
+	rateLimitBody := `{
+		"tenantId":"site_001",
+		"code":"reward-command-limit",
+		"name":"Reward Command Limit",
+		"serviceRef":"reward-grant-service",
+		"interfaceRef":"publish-reward-command",
+		"providerRef":"reward-command-mq-primary",
+		"limit":5,
+		"windowSeconds":60,
+		"backend":"POSTGRES",
+		"status":"ACTIVE"
+	}`
+	req = httptest.NewRequest(http.MethodPost, "/admin/v1/service-rate-limit-policies?tenantId=site_001", strings.NewReader(rateLimitBody))
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	handler.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"code":"reward-command-limit"`) {
+		t.Fatalf("save rate limit policy failed: %d %s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/admin/v1/service-rate-limit-policies?tenantId=site_001&serviceRef=reward-grant-service&interfaceRef=publish-reward-command&providerRef=reward-command-mq-primary", nil)
+	rec = httptest.NewRecorder()
+	handler.Routes().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"reward-command-limit"`) {
+		t.Fatalf("list rate limit policies failed: %d %s", rec.Code, rec.Body.String())
 	}
 
 	checkBody := `{
@@ -4966,5 +4994,106 @@ func TestProcessEventResultRejectedAllowsPartialSuccess(t *testing.T) {
 	}
 	if !processEventResultRejected(allRejected) {
 		t.Fatal("all rejected result should be reported as business rejected")
+	}
+}
+
+type fakeMigrationManager struct {
+	analysis     dbmigration.Analysis
+	analyzeCalls int
+	applyCalls   int
+}
+
+func (f *fakeMigrationManager) Analyze(ctx context.Context) (dbmigration.Analysis, error) {
+	f.analyzeCalls++
+	return f.analysis, nil
+}
+
+func (f *fakeMigrationManager) Apply(ctx context.Context) (dbmigration.Plan, error) {
+	f.applyCalls++
+	f.analysis.Pending = nil
+	f.analysis.Latest = true
+	return dbmigration.Plan{}, nil
+}
+
+func TestDBMigrationAdminStatusAndAnalyzeAreReadOnly(t *testing.T) {
+	handler := newTestHandler()
+	manager := &fakeMigrationManager{analysis: dbmigration.Analysis{
+		SchemaMigrationsExists: true,
+		Pending: []dbmigration.MigrationSummary{
+			{Version: 20, FileName: "020_next.sql", Checksum: strings.Repeat("a", 64)},
+		},
+	}}
+	handler.SetMigrationManager(manager)
+
+	statusReq := httptest.NewRequest(http.MethodGet, "/admin/v1/db-migrations/status", nil)
+	statusReq.Header.Set("X-Actor-Id", "ops")
+	statusRec := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(statusRec, statusReq)
+	if statusRec.Code != http.StatusOK {
+		t.Fatalf("status code = %d body=%s", statusRec.Code, statusRec.Body.String())
+	}
+
+	analyzeReq := httptest.NewRequest(http.MethodPost, "/admin/v1/db-migrations/analyze", nil)
+	analyzeReq.Header.Set("X-Actor-Id", "ops")
+	analyzeRec := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(analyzeRec, analyzeReq)
+	if analyzeRec.Code != http.StatusOK {
+		t.Fatalf("analyze code = %d body=%s", analyzeRec.Code, analyzeRec.Body.String())
+	}
+	if manager.applyCalls != 0 {
+		t.Fatalf("status/analyze must not apply migrations, applyCalls=%d", manager.applyCalls)
+	}
+	if manager.analyzeCalls != 2 {
+		t.Fatalf("expected 2 analyze calls, got %d", manager.analyzeCalls)
+	}
+}
+
+func TestDBMigrationAdminApplyRequiresActorAndConfirmation(t *testing.T) {
+	handler := newTestHandler()
+	manager := &fakeMigrationManager{analysis: dbmigration.Analysis{SchemaMigrationsExists: true}}
+	handler.SetMigrationManager(manager)
+
+	noActor := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(noActor, httptest.NewRequest(http.MethodPost, "/admin/v1/db-migrations/apply", strings.NewReader(`{"confirm":true}`)))
+	if noActor.Code != http.StatusUnauthorized {
+		t.Fatalf("expected missing actor to be unauthorized, got %d: %s", noActor.Code, noActor.Body.String())
+	}
+
+	missingConfirmReq := httptest.NewRequest(http.MethodPost, "/admin/v1/db-migrations/apply", strings.NewReader(`{"reason":"ops change"}`))
+	missingConfirmReq.Header.Set("X-Actor-Id", "ops")
+	missingConfirm := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(missingConfirm, missingConfirmReq)
+	if missingConfirm.Code != http.StatusBadRequest {
+		t.Fatalf("expected missing confirmation to be rejected, got %d: %s", missingConfirm.Code, missingConfirm.Body.String())
+	}
+	if manager.applyCalls != 0 {
+		t.Fatalf("missing confirmation must not apply migrations, applyCalls=%d", manager.applyCalls)
+	}
+
+	dryRunReq := httptest.NewRequest(http.MethodPost, "/admin/v1/db-migrations/apply", nil)
+	dryRunReq.Header.Set("X-Actor-Id", "ops")
+	dryRun := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(dryRun, dryRunReq)
+	if dryRun.Code != http.StatusOK || !strings.Contains(dryRun.Body.String(), `"dryRun":true`) {
+		t.Fatalf("expected empty apply body to dry-run, got %d: %s", dryRun.Code, dryRun.Body.String())
+	}
+	if manager.applyCalls != 0 {
+		t.Fatalf("dry-run must not apply migrations, applyCalls=%d", manager.applyCalls)
+	}
+
+	confirmedReq := httptest.NewRequest(http.MethodPost, "/admin/v1/db-migrations/apply", strings.NewReader(`{
+		"confirm": true,
+		"confirmation": "APPLY_DB_MIGRATIONS",
+		"breakGlass": true,
+		"reason": "release migration"
+	}`))
+	confirmedReq.Header.Set("X-Actor-Id", "ops")
+	confirmed := httptest.NewRecorder()
+	handler.Routes().ServeHTTP(confirmed, confirmedReq)
+	if confirmed.Code != http.StatusOK {
+		t.Fatalf("expected confirmed apply to pass, got %d: %s", confirmed.Code, confirmed.Body.String())
+	}
+	if manager.applyCalls != 1 {
+		t.Fatalf("expected one apply call, got %d", manager.applyCalls)
 	}
 }

@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -10,16 +11,27 @@ import (
 )
 
 type fakeServiceResourceOperator struct {
-	calls  int
-	result workflowNodeResult
+	calls           int
+	result          workflowNodeResult
+	resultsByRef    map[string]workflowNodeResult
+	calledRefs      []string
+	failResourceAPI bool
 }
 
 func (op *fakeServiceResourceOperator) ExecuteFactQuery(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime, config map[string]any) workflowNodeResult {
 	op.calls++
-	if op.result.Output == nil {
-		op.result.Output = map[string]any{}
+	ref := workflowConfigString(config, "resourceRef")
+	op.calledRefs = append(op.calledRefs, ref)
+	result := op.result
+	if op.resultsByRef != nil {
+		if configured, ok := op.resultsByRef[ref]; ok {
+			result = configured
+		}
 	}
-	return op.result
+	if result.Output == nil {
+		result.Output = map[string]any{}
+	}
+	return result
 }
 
 func (op *fakeServiceResourceOperator) ExecuteResourceAPI(ctx context.Context, node marketing.WorkflowNode, runtime workflowRuntime, req workflowResourceAPIRequest) (map[string]any, error) {
@@ -263,4 +275,121 @@ func TestProviderChainExecutorAuditsSchemaFailure(t *testing.T) {
 	if strings.Contains(logs[0].ResponseHash, "secret-token-without-facts") {
 		t.Fatalf("audit response hash leaked plaintext secret: %+v", logs[0])
 	}
+}
+
+func TestProviderChainExecutorCacheAsideHitDoesNotCallPrimary(t *testing.T) {
+	ctx := context.Background()
+	service, runtime := newCacheAsideProviderChainFixture(t, ctx, json.RawMessage(`{"role":"CACHE","missPath":"$.cache.hit","missValues":["false"]}`))
+	operator := &fakeServiceResourceOperator{resultsByRef: map[string]workflowNodeResult{
+		"user-profile-cache":       nodeSuccess(map[string]any{"cache": map[string]any{"hit": true}, "facts": map[string]any{"USER_PROFILE": map[string]any{"level": 9}}}),
+		defaultUserProfileProvider: nodeSuccess(map[string]any{"facts": map[string]any{"USER_PROFILE": map[string]any{"level": 1}}}),
+	}}
+	result := executeCacheAsideProviderChain(ctx, service, runtime, operator)
+	if result.Result.Status == marketing.WorkflowNodeFailed {
+		t.Fatalf("expected cache-aside hit success, got %+v", result.Result)
+	}
+	if operator.calls != 1 || !reflect.DeepEqual(operator.calledRefs, []string{"user-profile-cache"}) {
+		t.Fatalf("expected cache only, calls=%d refs=%v", operator.calls, operator.calledRefs)
+	}
+	if got := result.Facts["USER_PROFILE"].(map[string]any)["level"]; got != 9 {
+		t.Fatalf("expected cache facts, got %+v", result.Facts)
+	}
+}
+
+func TestProviderChainExecutorCacheAsideMissCallsPrimary(t *testing.T) {
+	ctx := context.Background()
+	service, runtime := newCacheAsideProviderChainFixture(t, ctx, json.RawMessage(`{"role":"CACHE","missPath":"$.cache.hit","missValues":["false"]}`))
+	operator := &fakeServiceResourceOperator{resultsByRef: map[string]workflowNodeResult{
+		"user-profile-cache":       nodeSuccess(map[string]any{"cache": map[string]any{"hit": false}}),
+		defaultUserProfileProvider: nodeSuccess(map[string]any{"facts": map[string]any{"USER_PROFILE": map[string]any{"level": 4}}}),
+	}}
+	result := executeCacheAsideProviderChain(ctx, service, runtime, operator)
+	if result.Result.Status == marketing.WorkflowNodeFailed {
+		t.Fatalf("expected cache-aside miss fallback success, got %+v", result.Result)
+	}
+	if !reflect.DeepEqual(operator.calledRefs, []string{"user-profile-cache", defaultUserProfileProvider}) {
+		t.Fatalf("expected cache then primary, got %v", operator.calledRefs)
+	}
+	if got := result.Facts["USER_PROFILE"].(map[string]any)["level"]; got != 4 {
+		t.Fatalf("expected primary facts after miss, got %+v", result.Facts)
+	}
+}
+
+func TestProviderChainExecutorCacheAsideErrorFallback(t *testing.T) {
+	ctx := context.Background()
+	service, runtime := newCacheAsideProviderChainFixture(t, ctx, json.RawMessage(`{"cache":true}`))
+	operator := &fakeServiceResourceOperator{resultsByRef: map[string]workflowNodeResult{
+		"user-profile-cache":       nodeFailed("cache unavailable", map[string]any{"errorCode": "CACHE_DOWN"}),
+		defaultUserProfileProvider: nodeSuccess(map[string]any{"facts": map[string]any{"USER_PROFILE": map[string]any{"level": 5}}}),
+	}}
+	result := executeCacheAsideProviderChain(ctx, service, runtime, operator)
+	if result.Result.Status == marketing.WorkflowNodeFailed {
+		t.Fatalf("expected cache error fallback success, got %+v", result.Result)
+	}
+	if !reflect.DeepEqual(operator.calledRefs, []string{"user-profile-cache", defaultUserProfileProvider}) {
+		t.Fatalf("expected cache then primary, got %v", operator.calledRefs)
+	}
+}
+
+func TestProviderChainExecutorCacheAsideErrorFail(t *testing.T) {
+	ctx := context.Background()
+	service, runtime := newCacheAsideProviderChainFixture(t, ctx, json.RawMessage(`{"cache":true,"cacheErrorPolicy":"FAIL"}`))
+	operator := &fakeServiceResourceOperator{resultsByRef: map[string]workflowNodeResult{
+		"user-profile-cache":       nodeFailed("cache unavailable", map[string]any{"errorCode": "CACHE_DOWN"}),
+		defaultUserProfileProvider: nodeSuccess(map[string]any{"facts": map[string]any{"USER_PROFILE": map[string]any{"level": 5}}}),
+	}}
+	result := executeCacheAsideProviderChain(ctx, service, runtime, operator)
+	if result.Result.Status != marketing.WorkflowNodeFailed {
+		t.Fatalf("expected cache error fail, got %+v", result.Result)
+	}
+	if !reflect.DeepEqual(operator.calledRefs, []string{"user-profile-cache"}) {
+		t.Fatalf("expected cache only after FAIL policy, got %v", operator.calledRefs)
+	}
+}
+
+func newCacheAsideProviderChainFixture(t *testing.T, ctx context.Context, cacheConfig json.RawMessage) (*Service, workflowRuntime) {
+	t.Helper()
+	service := NewService(marketing.NewMemoryRepository())
+	runtime := testWorkflowHandlerRuntime(true)
+	if _, err := service.SaveServiceProvider(ctx, marketing.ServiceProvider{
+		TenantID:     runtime.Activity.TenantID,
+		ServiceRef:   "user-profile-service",
+		InterfaceRef: "query-user-profile",
+		Code:         "user-profile-cache",
+		Name:         "User profile cache",
+		Protocol:     marketing.ServiceProviderResource,
+		ResourceRefs: []string{"user-profile-cache"},
+		Config:       cacheConfig,
+		Priority:     0,
+		Status:       marketing.ServiceAssetActive,
+	}); err != nil {
+		t.Fatalf("save cache provider: %v", err)
+	}
+	if _, err := service.SaveServiceInterfaceBinding(ctx, marketing.ServiceInterfaceBinding{
+		TenantID:                runtime.Activity.TenantID,
+		ServiceRef:              "user-profile-service",
+		InterfaceRef:            "query-user-profile",
+		Scope:                   marketing.ServiceAssetScopeActivity,
+		ActivityID:              runtime.Activity.ID,
+		PrincipalType:           marketing.ServicePrincipalRole,
+		PrincipalID:             "*",
+		AllowedNodeTypes:        []string{"fact-query"},
+		AllowedOperations:       []marketing.ServiceInterfaceOperation{marketing.ServiceOperationCall},
+		AllowedProviderPolicies: []string{"CACHE_ASIDE"},
+		Status:                  marketing.ServiceAssetActive,
+	}); err != nil {
+		t.Fatalf("save binding: %v", err)
+	}
+	return service, runtime
+}
+
+func executeCacheAsideProviderChain(ctx context.Context, service *Service, runtime workflowRuntime, operator *fakeServiceResourceOperator) providerChainServiceFactResult {
+	return NewProviderChainExecutor(service, operator).ExecuteServiceInterfaceFactQuery(ctx, providerChainServiceFactRequest{
+		Node:      marketing.WorkflowNode{ID: "fact", Type: "fact-query"},
+		Runtime:   runtime,
+		Config:    map[string]any{},
+		Step:      workflowFactQueryProviderStep{Source: "SERVICE_INTERFACE", ServiceRef: "user-profile-service", InterfaceRef: "query-user-profile", ProviderPolicy: "CACHE_ASIDE"},
+		Remaining: []string{"USER_PROFILE"},
+		Facts:     map[string]any{},
+	})
 }

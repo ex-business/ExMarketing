@@ -160,6 +160,219 @@ func TestMemoryResourceRepositoryStoresBindingsAndAudit(t *testing.T) {
 	}
 }
 
+func TestMemoryRepositoryStoresServiceRateLimitPolicies(t *testing.T) {
+	ctx := context.Background()
+	repo := NewMemoryRepository()
+	saved, err := repo.SaveServiceRateLimitPolicy(ctx, ServiceRateLimitPolicy{
+		TenantID:      "site_001",
+		Code:          "wallet-query-limit",
+		Name:          "Wallet query limit",
+		ServiceRef:    "wallet-service",
+		InterfaceRef:  "query-wallet-balance",
+		ProviderRef:   "wallet-primary",
+		Limit:         2,
+		WindowSeconds: 30,
+		Backend:       ServiceRateLimitBackendPostgres,
+		Status:        ServiceAssetActive,
+		Metadata:      json.RawMessage(`{"source":"test"}`),
+	})
+	if err != nil {
+		t.Fatalf("save rate limit policy: %v", err)
+	}
+	if saved.ID == "" || saved.CreatedAt.IsZero() || saved.UpdatedAt.IsZero() {
+		t.Fatalf("expected persisted timestamps and id, got %+v", saved)
+	}
+
+	items, err := repo.ListServiceRateLimitPolicies(ctx, ServiceRateLimitPolicyQuery{
+		TenantID:     "site_001",
+		ServiceRef:   "wallet-service",
+		InterfaceRef: "query-wallet-balance",
+		ProviderRef:  "wallet-primary",
+		Status:       ServiceAssetActive,
+	})
+	if err != nil {
+		t.Fatalf("list rate limit policies: %v", err)
+	}
+	if len(items) != 1 || items[0].Code != "wallet-query-limit" || items[0].Limit != 2 {
+		t.Fatalf("unexpected policies: %+v", items)
+	}
+}
+
+func TestMemoryRepositoryServiceAssetsExcludeDeletedByDefault(t *testing.T) {
+	ctx := context.Background()
+	repo := NewMemoryRepository()
+	deletedAt := time.Now().UTC()
+
+	activeService, err := repo.SaveServiceDefinition(ctx, ServiceDefinition{
+		ID:             "svc_active_catalog",
+		TenantID:       "site_001",
+		Code:           "catalog-active",
+		Name:           "Catalog active",
+		ServiceType:    ServiceTypeExternal,
+		Scope:          ServiceAssetScopeTenant,
+		Status:         ServiceAssetActive,
+		Builtin:        true,
+		CatalogVersion: "catalog-v1",
+		SourceHash:     "sha256:active",
+	})
+	if err != nil {
+		t.Fatalf("save active service: %v", err)
+	}
+	deletedService := activeService
+	deletedService.ID = "svc_deleted_catalog"
+	deletedService.Code = "catalog-deleted"
+	deletedService.Status = ServiceAssetDeleted
+	deletedService.DeletedAt = &deletedAt
+	if _, err := repo.SaveServiceDefinition(ctx, deletedService); err != nil {
+		t.Fatalf("save deleted service: %v", err)
+	}
+
+	activeInterface, err := repo.SaveServiceInterface(ctx, ServiceInterface{
+		ID:             "svcif_active_catalog",
+		TenantID:       "site_001",
+		ServiceRef:     activeService.Code,
+		Code:           "call-active",
+		Name:           "Call active",
+		Operation:      ServiceOperationCall,
+		Status:         ServiceAssetActive,
+		Builtin:        true,
+		CatalogVersion: "catalog-v1",
+		SourceHash:     "sha256:interface-active",
+	})
+	if err != nil {
+		t.Fatalf("save active interface: %v", err)
+	}
+	deletedInterface := activeInterface
+	deletedInterface.ID = "svcif_deleted_catalog"
+	deletedInterface.Code = "call-deleted"
+	deletedInterface.Status = ServiceAssetDeleted
+	deletedInterface.DeletedAt = &deletedAt
+	if _, err := repo.SaveServiceInterface(ctx, deletedInterface); err != nil {
+		t.Fatalf("save deleted interface: %v", err)
+	}
+
+	if _, err := repo.SaveServiceProvider(ctx, ServiceProvider{
+		ID:             "svcprov_deleted_catalog",
+		TenantID:       "site_001",
+		ServiceRef:     activeService.Code,
+		InterfaceRef:   activeInterface.Code,
+		Code:           "provider-deleted",
+		Name:           "Provider deleted",
+		Protocol:       ServiceProviderResource,
+		Status:         ServiceAssetDeleted,
+		Builtin:        true,
+		CatalogVersion: "catalog-v1",
+		SourceHash:     "sha256:provider-deleted",
+		DeletedAt:      &deletedAt,
+	}); err != nil {
+		t.Fatalf("save deleted provider: %v", err)
+	}
+	if _, err := repo.SaveServiceProvider(ctx, ServiceProvider{
+		ID:           "svcprov_active_catalog",
+		TenantID:     "site_001",
+		ServiceRef:   activeService.Code,
+		InterfaceRef: activeInterface.Code,
+		Code:         "provider-active",
+		Name:         "Provider active",
+		Protocol:     ServiceProviderResource,
+		Status:       ServiceAssetActive,
+	}); err != nil {
+		t.Fatalf("save active provider: %v", err)
+	}
+
+	if _, err := repo.SaveServiceSchema(ctx, ServiceSchema{
+		ID:             "schema_deleted_catalog",
+		TenantID:       "site_001",
+		SchemaRef:      "deleted-schema",
+		SchemaType:     ServiceSchemaOutput,
+		Scope:          ServiceAssetScopeTenant,
+		Version:        1,
+		Status:         ServiceAssetDeleted,
+		SchemaJSON:     json.RawMessage(`{"type":"object"}`),
+		Builtin:        true,
+		CatalogVersion: "catalog-v1",
+		SourceHash:     "sha256:schema-deleted",
+		DeletedAt:      &deletedAt,
+	}); err != nil {
+		t.Fatalf("save deleted schema: %v", err)
+	}
+
+	if _, err := repo.SaveServiceInterfaceBinding(ctx, ServiceInterfaceBinding{
+		ID:             "svcbind_deleted_catalog",
+		TenantID:       "site_001",
+		ServiceRef:     activeService.Code,
+		InterfaceRef:   activeInterface.Code,
+		Scope:          ServiceAssetScopeWorkspace,
+		PrincipalType:  ServicePrincipalRole,
+		PrincipalID:    string(WorkspaceRoleViewer),
+		Status:         ServiceAssetDeleted,
+		Builtin:        true,
+		CatalogVersion: "catalog-v1",
+		SourceHash:     "sha256:binding-deleted",
+		DeletedAt:      &deletedAt,
+	}); err != nil {
+		t.Fatalf("save deleted binding: %v", err)
+	}
+
+	if _, err := repo.SaveServiceRateLimitPolicy(ctx, ServiceRateLimitPolicy{
+		ID:             "svcratelimit_deleted_catalog",
+		TenantID:       "site_001",
+		Code:           "deleted-rate-limit",
+		Name:           "Deleted rate limit",
+		Limit:          1,
+		WindowSeconds:  60,
+		Backend:        ServiceRateLimitBackendPostgres,
+		Status:         ServiceAssetDeleted,
+		Builtin:        true,
+		CatalogVersion: "catalog-v1",
+		SourceHash:     "sha256:rate-limit-deleted",
+		DeletedAt:      &deletedAt,
+	}); err != nil {
+		t.Fatalf("save deleted rate limit policy: %v", err)
+	}
+
+	services, err := repo.ListServiceDefinitions(ctx, ServiceDefinitionQuery{TenantID: "site_001"})
+	if err != nil || len(services) != 1 || services[0].Code != activeService.Code || !services[0].Builtin || services[0].SourceHash == "" {
+		t.Fatalf("expected only active traced service, items=%+v err=%v", services, err)
+	}
+	allServices, err := repo.ListServiceDefinitions(ctx, ServiceDefinitionQuery{TenantID: "site_001", IncludeDeleted: true})
+	if err != nil || len(allServices) != 2 {
+		t.Fatalf("expected include deleted services, items=%+v err=%v", allServices, err)
+	}
+	providers, err := repo.ListServiceProviders(ctx, ServiceProviderQuery{TenantID: "site_001"})
+	if err != nil || len(providers) != 1 || providers[0].Code != "provider-active" {
+		t.Fatalf("expected only active provider, items=%+v err=%v", providers, err)
+	}
+	allProviders, err := repo.ListServiceProviders(ctx, ServiceProviderQuery{TenantID: "site_001", IncludeDeleted: true})
+	if err != nil || len(allProviders) != 2 {
+		t.Fatalf("expected include deleted providers, items=%+v err=%v", allProviders, err)
+	}
+	schemas, err := repo.ListServiceSchemas(ctx, ServiceSchemaQuery{TenantID: "site_001", IncludeDeleted: true})
+	if err != nil || len(schemas) != 1 || !schemas[0].Builtin || schemas[0].CatalogVersion == "" {
+		t.Fatalf("expected deleted schema visible with includeDeleted, items=%+v err=%v", schemas, err)
+	}
+	defaultSchemas, err := repo.ListServiceSchemas(ctx, ServiceSchemaQuery{TenantID: "site_001"})
+	if err != nil || len(defaultSchemas) != 0 {
+		t.Fatalf("expected deleted schema hidden by default, items=%+v err=%v", defaultSchemas, err)
+	}
+	bindings, err := repo.ListServiceInterfaceBindings(ctx, ServiceInterfaceBindingQuery{TenantID: "site_001", IncludeDeleted: true})
+	if err != nil || len(bindings) != 1 || bindings[0].DeletedAt == nil {
+		t.Fatalf("expected deleted binding visible with includeDeleted, items=%+v err=%v", bindings, err)
+	}
+	defaultBindings, err := repo.ListServiceInterfaceBindings(ctx, ServiceInterfaceBindingQuery{TenantID: "site_001"})
+	if err != nil || len(defaultBindings) != 0 {
+		t.Fatalf("expected deleted binding hidden by default, items=%+v err=%v", defaultBindings, err)
+	}
+	policies, err := repo.ListServiceRateLimitPolicies(ctx, ServiceRateLimitPolicyQuery{TenantID: "site_001", IncludeDeleted: true})
+	if err != nil || len(policies) != 1 || policies[0].DeletedAt == nil {
+		t.Fatalf("expected deleted rate limit visible with includeDeleted, items=%+v err=%v", policies, err)
+	}
+	defaultPolicies, err := repo.ListServiceRateLimitPolicies(ctx, ServiceRateLimitPolicyQuery{TenantID: "site_001"})
+	if err != nil || len(defaultPolicies) != 0 {
+		t.Fatalf("expected deleted rate limit hidden by default, items=%+v err=%v", defaultPolicies, err)
+	}
+}
+
 func TestFactProviderValidateRejectsInvalidMappingContract(t *testing.T) {
 	base := FactProvider{
 		TenantID:        "site_001",

@@ -51,6 +51,7 @@ func (s *Service) validateWorkflowServiceSchemaContracts(ctx context.Context, ac
 				Operation:       step.Operation,
 				ProviderPolicy:  step.ProviderPolicy,
 				ProviderRef:     step.ProviderRef,
+				Environment:     firstWorkflowString(step.Environment, releaseEnvironment),
 				RequireApproval: activityApprovalValid(activity),
 			}
 			decision, err := s.checkServiceInterfaceAccess(ctx, accessReq)
@@ -85,7 +86,7 @@ func (s *Service) validateWorkflowServiceSchemaContracts(ctx context.Context, ac
 				})
 				continue
 			}
-			if serviceInterface.Status != marketing.ServiceAssetActive {
+			if !serviceAssetStatusActive(serviceInterface.Status, serviceInterface.DeletedAt) {
 				validation = appendWorkflowValidationIssue(validation, marketing.WorkflowValidationIssue{
 					Severity: marketing.WorkflowValidationBlock,
 					Code:     "SERVICE_INTERFACE_DISABLED",

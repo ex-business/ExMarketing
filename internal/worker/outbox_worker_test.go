@@ -902,6 +902,12 @@ func (r *workerTestRepo) ListServiceProviderRuntimeStates(context.Context, marke
 func (r *workerTestRepo) ConsumeServiceProviderRateLimit(context.Context, marketing.ServiceProviderRateLimitConsume) (marketing.ServiceProviderRuntimeState, bool, error) {
 	panic("not implemented")
 }
+func (r *workerTestRepo) SaveServiceRateLimitPolicy(context.Context, marketing.ServiceRateLimitPolicy) (marketing.ServiceRateLimitPolicy, error) {
+	panic("not implemented")
+}
+func (r *workerTestRepo) ListServiceRateLimitPolicies(context.Context, marketing.ServiceRateLimitPolicyQuery) ([]marketing.ServiceRateLimitPolicy, error) {
+	panic("not implemented")
+}
 func (r *workerTestRepo) CreateServiceCallAuditLog(context.Context, marketing.ServiceCallAuditLog) error {
 	panic("not implemented")
 }

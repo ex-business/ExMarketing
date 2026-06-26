@@ -73,6 +73,8 @@ type Repository interface {
 	GetServiceProviderRuntimeState(ctx context.Context, tenantID string, serviceRef string, interfaceRef string, providerRef string) (ServiceProviderRuntimeState, error)
 	ListServiceProviderRuntimeStates(ctx context.Context, query ServiceProviderRuntimeStateQuery) ([]ServiceProviderRuntimeState, error)
 	ConsumeServiceProviderRateLimit(ctx context.Context, cmd ServiceProviderRateLimitConsume) (ServiceProviderRuntimeState, bool, error)
+	SaveServiceRateLimitPolicy(ctx context.Context, policy ServiceRateLimitPolicy) (ServiceRateLimitPolicy, error)
+	ListServiceRateLimitPolicies(ctx context.Context, query ServiceRateLimitPolicyQuery) ([]ServiceRateLimitPolicy, error)
 	CreateServiceCallAuditLog(ctx context.Context, log ServiceCallAuditLog) error
 	ListServiceCallAuditLogs(ctx context.Context, query ServiceCallAuditQuery) ([]ServiceCallAuditLog, error)
 	PurgeServiceCallAuditLogs(ctx context.Context, tenantID string, workspaceID string, before time.Time, limit int) (int, error)

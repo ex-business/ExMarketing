@@ -2,15 +2,24 @@ package engine
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"hash/fnv"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/ex-stack/ExMarketing/internal/marketing"
 )
+
+const builtInServiceCatalogVersion = "service-governance-v1"
+
+func serviceAssetStatusActive(status marketing.ServiceAssetStatus, deletedAt *time.Time) bool {
+	return status == marketing.ServiceAssetActive && deletedAt == nil
+}
 
 func (s *Service) SaveServiceDefinition(ctx context.Context, service marketing.ServiceDefinition) (marketing.ServiceDefinition, error) {
 	now := s.now()
@@ -395,7 +404,7 @@ func (s *Service) resolveServiceProviders(ctx context.Context, req serviceProvid
 	if err != nil {
 		return marketing.ServiceInterface{}, nil, err
 	}
-	if serviceInterface.Status != marketing.ServiceAssetActive {
+	if !serviceAssetStatusActive(serviceInterface.Status, serviceInterface.DeletedAt) {
 		return marketing.ServiceInterface{}, nil, errors.New("SERVICE_INTERFACE_DISABLED")
 	}
 	if providerRef != "" {
@@ -403,7 +412,7 @@ func (s *Service) resolveServiceProviders(ctx context.Context, req serviceProvid
 		if err != nil {
 			return marketing.ServiceInterface{}, nil, err
 		}
-		if provider.Status != marketing.ServiceAssetActive {
+		if !serviceAssetStatusActive(provider.Status, provider.DeletedAt) {
 			return marketing.ServiceInterface{}, nil, errors.New("SERVICE_PROVIDER_DISABLED")
 		}
 		if !serviceProviderEnvironmentAllowed(provider, req.Environment) {
@@ -435,7 +444,11 @@ func (s *Service) resolveServiceProviders(ctx context.Context, req serviceProvid
 		return marketing.ServiceInterface{}, nil, err
 	}
 	providers = filterServiceProviderCandidates(providers, policy)
-	providers = filterServiceProviderEnvironmentCandidates(providers, req.Environment)
+	if policy == "CACHE_ASIDE" {
+		providers = filterServiceProviderCacheAsideEnvironmentCandidates(providers, req.Environment)
+	} else {
+		providers = filterServiceProviderEnvironmentCandidates(providers, req.Environment)
+	}
 	providers, err = s.filterServiceProviderRuntimeCandidates(ctx, providers)
 	if err != nil {
 		return marketing.ServiceInterface{}, nil, err
@@ -444,6 +457,18 @@ func (s *Service) resolveServiceProviders(ctx context.Context, req serviceProvid
 		return marketing.ServiceInterface{}, nil, marketing.ErrNotFound
 	}
 	sortServiceProviderCandidates(providers)
+	if policy == "CACHE_ASIDE" {
+		cacheProviders, primaryProviders := splitCacheAsideServiceProviders(providers)
+		out := make([]marketing.ServiceProvider, 0, len(cacheProviders)+1)
+		out = append(out, cacheProviders...)
+		if len(primaryProviders) > 0 {
+			out = append(out, primaryProviders[0])
+		}
+		if len(out) == 0 {
+			return marketing.ServiceInterface{}, nil, marketing.ErrNotFound
+		}
+		return serviceInterface, out, nil
+	}
 	if policy == "WEIGHTED" || policy == "WEIGHTED_WITH_FALLBACK" {
 		selected, err := selectWeightedServiceProvider(providers, serviceProviderSelectionSeed(req, providers))
 		if err != nil {
@@ -483,7 +508,7 @@ func (s *Service) filterServiceProviderRuntimeCandidates(ctx context.Context, pr
 
 func serviceProviderPolicySupported(policy string) bool {
 	switch strings.ToUpper(strings.TrimSpace(policy)) {
-	case "", "PRIMARY", "PRIMARY_WITH_FALLBACK", "WEIGHTED", "WEIGHTED_WITH_FALLBACK", "ENVIRONMENT_MATCH", "MOCK_ONLY":
+	case "", "PRIMARY", "PRIMARY_WITH_FALLBACK", "CACHE_ASIDE", "WEIGHTED", "WEIGHTED_WITH_FALLBACK", "ENVIRONMENT_MATCH", "MOCK_ONLY":
 		return true
 	default:
 		return false
@@ -493,12 +518,16 @@ func serviceProviderPolicySupported(policy string) bool {
 func filterServiceProviderCandidates(providers []marketing.ServiceProvider, policy string) []marketing.ServiceProvider {
 	out := make([]marketing.ServiceProvider, 0, len(providers))
 	for _, provider := range providers {
-		if provider.Status != marketing.ServiceAssetActive {
+		if !serviceAssetStatusActive(provider.Status, provider.DeletedAt) {
 			continue
 		}
 		switch strings.ToUpper(strings.TrimSpace(policy)) {
 		case "MOCK_ONLY":
 			if !serviceProviderMockEnabled(provider) {
+				continue
+			}
+		case "CACHE_ASIDE":
+			if serviceProviderMockEnabled(provider) {
 				continue
 			}
 		case "WEIGHTED", "WEIGHTED_WITH_FALLBACK":
@@ -513,6 +542,19 @@ func filterServiceProviderCandidates(providers []marketing.ServiceProvider, poli
 		out = append(out, provider)
 	}
 	return out
+}
+
+func splitCacheAsideServiceProviders(providers []marketing.ServiceProvider) ([]marketing.ServiceProvider, []marketing.ServiceProvider) {
+	cacheProviders := make([]marketing.ServiceProvider, 0, len(providers))
+	primaryProviders := make([]marketing.ServiceProvider, 0, len(providers))
+	for _, provider := range providers {
+		if serviceProviderCacheEnabled(provider) {
+			cacheProviders = append(cacheProviders, provider)
+			continue
+		}
+		primaryProviders = append(primaryProviders, provider)
+	}
+	return cacheProviders, primaryProviders
 }
 
 func filterServiceProviderEnvironmentCandidates(providers []marketing.ServiceProvider, environment string) []marketing.ServiceProvider {
@@ -536,6 +578,20 @@ func filterServiceProviderEnvironmentCandidates(providers []marketing.ServicePro
 		return exact
 	}
 	return fallback
+}
+
+func filterServiceProviderCacheAsideEnvironmentCandidates(providers []marketing.ServiceProvider, environment string) []marketing.ServiceProvider {
+	cacheProviders := make([]marketing.ServiceProvider, 0, len(providers))
+	primaryProviders := make([]marketing.ServiceProvider, 0, len(providers))
+	for _, provider := range providers {
+		if serviceProviderCacheEnabled(provider) {
+			cacheProviders = append(cacheProviders, provider)
+			continue
+		}
+		primaryProviders = append(primaryProviders, provider)
+	}
+	primaryProviders = filterServiceProviderEnvironmentCandidates(primaryProviders, environment)
+	return append(cacheProviders, primaryProviders...)
 }
 
 func sortServiceProviderCandidates(providers []marketing.ServiceProvider) {
@@ -563,6 +619,20 @@ func serviceProviderMockEnabled(provider marketing.ServiceProvider) bool {
 		return enabled
 	}
 	if enabled, ok := config["mock"].(bool); ok {
+		return enabled
+	}
+	return false
+}
+
+func serviceProviderCacheEnabled(provider marketing.ServiceProvider) bool {
+	if normalizeServiceProviderEnvironment(provider.Environment) == "cache" {
+		return true
+	}
+	config := serviceProviderConfigMap(provider)
+	if role, ok := config["role"].(string); ok && strings.EqualFold(strings.TrimSpace(role), "CACHE") {
+		return true
+	}
+	if enabled, ok := config["cache"].(bool); ok {
 		return enabled
 	}
 	return false
@@ -705,16 +775,19 @@ func builtInServiceDefinitions(tenantID string) []marketing.ServiceDefinition {
 
 func builtInService(tenantID string, code string, name string, owner string, tags []string) marketing.ServiceDefinition {
 	return marketing.ServiceDefinition{
-		ID:          builtInServiceAssetID(tenantID, code),
-		TenantID:    tenantID,
-		Code:        code,
-		Name:        name,
-		ServiceType: marketing.ServiceTypeSystem,
-		Scope:       marketing.ServiceAssetScopeTenant,
-		Status:      marketing.ServiceAssetActive,
-		Owner:       owner,
-		Tags:        tags,
-		Metadata:    json.RawMessage(`{"builtin":true}`),
+		ID:             builtInServiceAssetID(tenantID, code),
+		TenantID:       tenantID,
+		Code:           code,
+		Name:           name,
+		ServiceType:    marketing.ServiceTypeSystem,
+		Scope:          marketing.ServiceAssetScopeTenant,
+		Status:         marketing.ServiceAssetActive,
+		Owner:          owner,
+		Tags:           tags,
+		Builtin:        true,
+		CatalogVersion: builtInServiceCatalogVersion,
+		SourceHash:     builtInServiceSourceHash("service", tenantID, code, name, owner, strings.Join(tags, ",")),
+		Metadata:       json.RawMessage(`{"builtin":true}`),
 	}
 }
 
@@ -749,6 +822,9 @@ func makeBuiltInServiceInterface(tenantID string, serviceRef string, code string
 		RetryPolicy:     "STANDARD",
 		LuaCallable:     true,
 		Status:          marketing.ServiceAssetActive,
+		Builtin:         true,
+		CatalogVersion:  builtInServiceCatalogVersion,
+		SourceHash:      builtInServiceSourceHash("interface", tenantID, serviceRef, code, inputSchema, outputSchema),
 		Metadata:        json.RawMessage(`{"builtin":true}`),
 	}
 }
@@ -775,16 +851,19 @@ func builtInServiceSchemas(tenantID string) []marketing.ServiceSchema {
 
 func builtInServiceSchema(tenantID string, schemaRef string, schemaType marketing.ServiceSchemaType, schemaJSON string) marketing.ServiceSchema {
 	return marketing.ServiceSchema{
-		ID:           builtInServiceAssetID(tenantID, schemaRef),
-		TenantID:     tenantID,
-		SchemaRef:    schemaRef,
-		SchemaType:   schemaType,
-		Scope:        marketing.ServiceAssetScopeTenant,
-		Version:      1,
-		Status:       marketing.ServiceAssetActive,
-		SchemaJSON:   json.RawMessage(schemaJSON),
-		ExamplesJSON: json.RawMessage(`[]`),
-		Description:  "built-in service schema",
+		ID:             builtInServiceAssetID(tenantID, schemaRef),
+		TenantID:       tenantID,
+		SchemaRef:      schemaRef,
+		SchemaType:     schemaType,
+		Scope:          marketing.ServiceAssetScopeTenant,
+		Version:        1,
+		Status:         marketing.ServiceAssetActive,
+		SchemaJSON:     json.RawMessage(schemaJSON),
+		ExamplesJSON:   json.RawMessage(`[]`),
+		Description:    "built-in service schema",
+		Builtin:        true,
+		CatalogVersion: builtInServiceCatalogVersion,
+		SourceHash:     builtInServiceSourceHash("schema", tenantID, schemaRef, string(schemaType), schemaJSON),
 	}
 }
 
@@ -799,18 +878,26 @@ func builtInServiceProviders(tenantID string) []marketing.ServiceProvider {
 func builtInResourceBackedProvider(tenantID string, serviceRef string, interfaceRef string, code string, resourceRef string) marketing.ServiceProvider {
 	config, _ := json.Marshal(map[string]any{"targetResourceRef": resourceRef, "builtin": true})
 	return marketing.ServiceProvider{
-		ID:           builtInServiceAssetID(tenantID, serviceRef, interfaceRef, code),
-		TenantID:     tenantID,
-		ServiceRef:   serviceRef,
-		InterfaceRef: interfaceRef,
-		Code:         code,
-		Name:         code,
-		Protocol:     marketing.ServiceProviderResource,
-		ResourceRefs: []string{resourceRef},
-		Config:       config,
-		Priority:     0,
-		Status:       marketing.ServiceAssetActive,
+		ID:             builtInServiceAssetID(tenantID, serviceRef, interfaceRef, code),
+		TenantID:       tenantID,
+		ServiceRef:     serviceRef,
+		InterfaceRef:   interfaceRef,
+		Code:           code,
+		Name:           code,
+		Protocol:       marketing.ServiceProviderResource,
+		ResourceRefs:   []string{resourceRef},
+		Config:         config,
+		Priority:       0,
+		Status:         marketing.ServiceAssetActive,
+		Builtin:        true,
+		CatalogVersion: builtInServiceCatalogVersion,
+		SourceHash:     builtInServiceSourceHash("provider", tenantID, serviceRef, interfaceRef, code, resourceRef),
 	}
+}
+
+func builtInServiceSourceHash(parts ...string) string {
+	hash := sha256.Sum256([]byte(strings.Join(parts, "|")))
+	return "sha256:" + hex.EncodeToString(hash[:])
 }
 
 func builtInServiceProvider(tenantID string, serviceRef string, interfaceRef string, code string) (marketing.ServiceProvider, bool) {

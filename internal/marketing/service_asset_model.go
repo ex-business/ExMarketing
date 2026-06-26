@@ -17,6 +17,7 @@ type ServicePrincipalType string
 type ServiceProviderHealthStatus string
 type ServiceProviderCircuitStatus string
 type ServiceCallAuditStatus string
+type ServiceRateLimitBackend string
 
 const (
 	ServiceTypeInternal ServiceType = "INTERNAL"
@@ -73,26 +74,33 @@ const (
 	ServiceCallAuditSuccess ServiceCallAuditStatus = "SUCCESS"
 	ServiceCallAuditFailed  ServiceCallAuditStatus = "FAILED"
 	ServiceCallAuditDenied  ServiceCallAuditStatus = "DENIED"
+
+	ServiceRateLimitBackendPostgres ServiceRateLimitBackend = "POSTGRES"
+	ServiceRateLimitBackendRedis    ServiceRateLimitBackend = "REDIS"
 )
 
 type ServiceDefinition struct {
-	ID          string             `json:"id"`
-	TenantID    string             `json:"tenantId"`
-	WorkspaceID string             `json:"workspaceId,omitempty"`
-	FolderID    string             `json:"folderId,omitempty"`
-	Code        string             `json:"code"`
-	Name        string             `json:"name"`
-	Description string             `json:"description,omitempty"`
-	ServiceType ServiceType        `json:"serviceType"`
-	Scope       ServiceAssetScope  `json:"scope"`
-	Status      ServiceAssetStatus `json:"status"`
-	Owner       string             `json:"owner,omitempty"`
-	Tags        []string           `json:"tags,omitempty"`
-	Metadata    json.RawMessage    `json:"metadata,omitempty"`
-	CreatedBy   string             `json:"createdBy,omitempty"`
-	UpdatedBy   string             `json:"updatedBy,omitempty"`
-	CreatedAt   time.Time          `json:"createdAt"`
-	UpdatedAt   time.Time          `json:"updatedAt"`
+	ID             string             `json:"id"`
+	TenantID       string             `json:"tenantId"`
+	WorkspaceID    string             `json:"workspaceId,omitempty"`
+	FolderID       string             `json:"folderId,omitempty"`
+	Code           string             `json:"code"`
+	Name           string             `json:"name"`
+	Description    string             `json:"description,omitempty"`
+	ServiceType    ServiceType        `json:"serviceType"`
+	Scope          ServiceAssetScope  `json:"scope"`
+	Status         ServiceAssetStatus `json:"status"`
+	Owner          string             `json:"owner,omitempty"`
+	Tags           []string           `json:"tags,omitempty"`
+	Builtin        bool               `json:"builtin,omitempty"`
+	CatalogVersion string             `json:"catalogVersion,omitempty"`
+	SourceHash     string             `json:"sourceHash,omitempty"`
+	DeletedAt      *time.Time         `json:"deletedAt,omitempty"`
+	Metadata       json.RawMessage    `json:"metadata,omitempty"`
+	CreatedBy      string             `json:"createdBy,omitempty"`
+	UpdatedBy      string             `json:"updatedBy,omitempty"`
+	CreatedAt      time.Time          `json:"createdAt"`
+	UpdatedAt      time.Time          `json:"updatedAt"`
 }
 
 type ServiceInterface struct {
@@ -111,6 +119,10 @@ type ServiceInterface struct {
 	RetryPolicy            string                    `json:"retryPolicy,omitempty"`
 	LuaCallable            bool                      `json:"luaCallable"`
 	Status                 ServiceAssetStatus        `json:"status"`
+	Builtin                bool                      `json:"builtin,omitempty"`
+	CatalogVersion         string                    `json:"catalogVersion,omitempty"`
+	SourceHash             string                    `json:"sourceHash,omitempty"`
+	DeletedAt              *time.Time                `json:"deletedAt,omitempty"`
 	Metadata               json.RawMessage           `json:"metadata,omitempty"`
 	CreatedBy              string                    `json:"createdBy,omitempty"`
 	UpdatedBy              string                    `json:"updatedBy,omitempty"`
@@ -119,48 +131,56 @@ type ServiceInterface struct {
 }
 
 type ServiceProvider struct {
-	ID           string                  `json:"id"`
-	TenantID     string                  `json:"tenantId"`
-	ServiceRef   string                  `json:"serviceRef"`
-	InterfaceRef string                  `json:"interfaceRef"`
-	Code         string                  `json:"code"`
-	Name         string                  `json:"name"`
-	Description  string                  `json:"description,omitempty"`
-	Protocol     ServiceProviderProtocol `json:"protocol"`
-	Endpoint     string                  `json:"endpoint,omitempty"`
-	Topic        string                  `json:"topic,omitempty"`
-	Method       string                  `json:"method,omitempty"`
-	Path         string                  `json:"path,omitempty"`
-	AuthRef      string                  `json:"authRef,omitempty"`
-	ResourceRefs []string                `json:"resourceRefs,omitempty"`
-	Config       json.RawMessage         `json:"config,omitempty"`
-	Weight       int                     `json:"weight,omitempty"`
-	Priority     int                     `json:"priority,omitempty"`
-	Environment  string                  `json:"environment,omitempty"`
-	Status       ServiceAssetStatus      `json:"status"`
-	CreatedBy    string                  `json:"createdBy,omitempty"`
-	UpdatedBy    string                  `json:"updatedBy,omitempty"`
-	CreatedAt    time.Time               `json:"createdAt"`
-	UpdatedAt    time.Time               `json:"updatedAt"`
+	ID             string                  `json:"id"`
+	TenantID       string                  `json:"tenantId"`
+	ServiceRef     string                  `json:"serviceRef"`
+	InterfaceRef   string                  `json:"interfaceRef"`
+	Code           string                  `json:"code"`
+	Name           string                  `json:"name"`
+	Description    string                  `json:"description,omitempty"`
+	Protocol       ServiceProviderProtocol `json:"protocol"`
+	Endpoint       string                  `json:"endpoint,omitempty"`
+	Topic          string                  `json:"topic,omitempty"`
+	Method         string                  `json:"method,omitempty"`
+	Path           string                  `json:"path,omitempty"`
+	AuthRef        string                  `json:"authRef,omitempty"`
+	ResourceRefs   []string                `json:"resourceRefs,omitempty"`
+	Config         json.RawMessage         `json:"config,omitempty"`
+	Weight         int                     `json:"weight,omitempty"`
+	Priority       int                     `json:"priority,omitempty"`
+	Environment    string                  `json:"environment,omitempty"`
+	Status         ServiceAssetStatus      `json:"status"`
+	Builtin        bool                    `json:"builtin,omitempty"`
+	CatalogVersion string                  `json:"catalogVersion,omitempty"`
+	SourceHash     string                  `json:"sourceHash,omitempty"`
+	DeletedAt      *time.Time              `json:"deletedAt,omitempty"`
+	CreatedBy      string                  `json:"createdBy,omitempty"`
+	UpdatedBy      string                  `json:"updatedBy,omitempty"`
+	CreatedAt      time.Time               `json:"createdAt"`
+	UpdatedAt      time.Time               `json:"updatedAt"`
 }
 
 type ServiceSchema struct {
-	ID           string             `json:"id"`
-	TenantID     string             `json:"tenantId"`
-	WorkspaceID  string             `json:"workspaceId,omitempty"`
-	FolderID     string             `json:"folderId,omitempty"`
-	SchemaRef    string             `json:"schemaRef"`
-	SchemaType   ServiceSchemaType  `json:"schemaType"`
-	Scope        ServiceAssetScope  `json:"scope"`
-	Version      int                `json:"version"`
-	Status       ServiceAssetStatus `json:"status"`
-	SchemaJSON   json.RawMessage    `json:"schemaJson"`
-	ExamplesJSON json.RawMessage    `json:"examplesJson,omitempty"`
-	Description  string             `json:"description,omitempty"`
-	CreatedBy    string             `json:"createdBy,omitempty"`
-	UpdatedBy    string             `json:"updatedBy,omitempty"`
-	CreatedAt    time.Time          `json:"createdAt"`
-	UpdatedAt    time.Time          `json:"updatedAt"`
+	ID             string             `json:"id"`
+	TenantID       string             `json:"tenantId"`
+	WorkspaceID    string             `json:"workspaceId,omitempty"`
+	FolderID       string             `json:"folderId,omitempty"`
+	SchemaRef      string             `json:"schemaRef"`
+	SchemaType     ServiceSchemaType  `json:"schemaType"`
+	Scope          ServiceAssetScope  `json:"scope"`
+	Version        int                `json:"version"`
+	Status         ServiceAssetStatus `json:"status"`
+	SchemaJSON     json.RawMessage    `json:"schemaJson"`
+	ExamplesJSON   json.RawMessage    `json:"examplesJson,omitempty"`
+	Description    string             `json:"description,omitempty"`
+	Builtin        bool               `json:"builtin,omitempty"`
+	CatalogVersion string             `json:"catalogVersion,omitempty"`
+	SourceHash     string             `json:"sourceHash,omitempty"`
+	DeletedAt      *time.Time         `json:"deletedAt,omitempty"`
+	CreatedBy      string             `json:"createdBy,omitempty"`
+	UpdatedBy      string             `json:"updatedBy,omitempty"`
+	CreatedAt      time.Time          `json:"createdAt"`
+	UpdatedAt      time.Time          `json:"updatedAt"`
 }
 
 type ServiceInterfaceBinding struct {
@@ -180,10 +200,18 @@ type ServiceInterfaceBinding struct {
 	AllowedProviderPolicies  []string                    `json:"allowedProviderPolicies,omitempty"`
 	AllowExplicitProviderRef bool                        `json:"allowExplicitProviderRef,omitempty"`
 	AllowedProviderRefs      []string                    `json:"allowedProviderRefs,omitempty"`
+	IncludeSubfolders        bool                        `json:"includeSubfolders,omitempty"`
+	MinRole                  WorkspaceRole               `json:"minRole,omitempty"`
+	Environment              string                      `json:"environment,omitempty"`
+	RateLimitRef             string                      `json:"rateLimitRef,omitempty"`
 	LuaCallable              bool                        `json:"luaCallable,omitempty"`
 	RequireApproval          bool                        `json:"requireApproval,omitempty"`
 	Deny                     bool                        `json:"deny,omitempty"`
 	Status                   ServiceAssetStatus          `json:"status"`
+	Builtin                  bool                        `json:"builtin,omitempty"`
+	CatalogVersion           string                      `json:"catalogVersion,omitempty"`
+	SourceHash               string                      `json:"sourceHash,omitempty"`
+	DeletedAt                *time.Time                  `json:"deletedAt,omitempty"`
 	Metadata                 json.RawMessage             `json:"metadata,omitempty"`
 	CreatedBy                string                      `json:"createdBy,omitempty"`
 	UpdatedBy                string                      `json:"updatedBy,omitempty"`
@@ -218,6 +246,30 @@ type ServiceProviderRuntimeState struct {
 	CreatedAt                time.Time                    `json:"createdAt"`
 }
 
+type ServiceRateLimitPolicy struct {
+	ID             string                  `json:"id"`
+	TenantID       string                  `json:"tenantId"`
+	Code           string                  `json:"code"`
+	Name           string                  `json:"name"`
+	Description    string                  `json:"description,omitempty"`
+	ServiceRef     string                  `json:"serviceRef,omitempty"`
+	InterfaceRef   string                  `json:"interfaceRef,omitempty"`
+	ProviderRef    string                  `json:"providerRef,omitempty"`
+	Limit          int                     `json:"limit"`
+	WindowSeconds  int                     `json:"windowSeconds"`
+	Backend        ServiceRateLimitBackend `json:"backend"`
+	Status         ServiceAssetStatus      `json:"status"`
+	Builtin        bool                    `json:"builtin,omitempty"`
+	CatalogVersion string                  `json:"catalogVersion,omitempty"`
+	SourceHash     string                  `json:"sourceHash,omitempty"`
+	DeletedAt      *time.Time              `json:"deletedAt,omitempty"`
+	Metadata       json.RawMessage         `json:"metadata,omitempty"`
+	CreatedBy      string                  `json:"createdBy,omitempty"`
+	UpdatedBy      string                  `json:"updatedBy,omitempty"`
+	CreatedAt      time.Time               `json:"createdAt"`
+	UpdatedAt      time.Time               `json:"updatedAt"`
+}
+
 type ServiceCallAuditLog struct {
 	ID              string                 `json:"id"`
 	TenantID        string                 `json:"tenantId"`
@@ -247,54 +299,60 @@ type ServiceCallAuditLog struct {
 }
 
 type ServiceDefinitionQuery struct {
-	TenantID    string
-	WorkspaceID string
-	FolderID    string
-	Status      ServiceAssetStatus
-	Code        string
-	Limit       int
+	TenantID       string
+	WorkspaceID    string
+	FolderID       string
+	Status         ServiceAssetStatus
+	Code           string
+	IncludeDeleted bool
+	Limit          int
 }
 
 type ServiceInterfaceQuery struct {
-	TenantID   string
-	ServiceRef string
-	Status     ServiceAssetStatus
-	Code       string
-	Limit      int
+	TenantID       string
+	ServiceRef     string
+	Status         ServiceAssetStatus
+	Code           string
+	IncludeDeleted bool
+	Limit          int
 }
 
 type ServiceProviderQuery struct {
-	TenantID     string
-	ServiceRef   string
-	InterfaceRef string
-	Protocol     ServiceProviderProtocol
-	Status       ServiceAssetStatus
-	Code         string
-	Limit        int
+	TenantID       string
+	ServiceRef     string
+	InterfaceRef   string
+	Protocol       ServiceProviderProtocol
+	Status         ServiceAssetStatus
+	Code           string
+	IncludeDeleted bool
+	Limit          int
 }
 
 type ServiceSchemaQuery struct {
-	TenantID    string
-	WorkspaceID string
-	FolderID    string
-	SchemaRef   string
-	SchemaType  ServiceSchemaType
-	Status      ServiceAssetStatus
-	Limit       int
+	TenantID       string
+	WorkspaceID    string
+	FolderID       string
+	SchemaRef      string
+	SchemaType     ServiceSchemaType
+	Status         ServiceAssetStatus
+	IncludeDeleted bool
+	Limit          int
 }
 
 type ServiceInterfaceBindingQuery struct {
-	TenantID     string
-	ServiceRef   string
-	InterfaceRef string
-	Scope        ServiceAssetScope
-	WorkspaceID  string
-	FolderID     string
-	ActivityID   string
-	NodeID       string
-	NodeType     string
-	Status       ServiceAssetStatus
-	Limit        int
+	TenantID       string
+	ServiceRef     string
+	InterfaceRef   string
+	Scope          ServiceAssetScope
+	WorkspaceID    string
+	FolderID       string
+	ActivityID     string
+	NodeID         string
+	NodeType       string
+	Environment    string
+	Status         ServiceAssetStatus
+	IncludeDeleted bool
+	Limit          int
 }
 
 type ServiceProviderRuntimeStateQuery struct {
@@ -305,6 +363,17 @@ type ServiceProviderRuntimeStateQuery struct {
 	HealthStatus  ServiceProviderHealthStatus
 	CircuitStatus ServiceProviderCircuitStatus
 	Limit         int
+}
+
+type ServiceRateLimitPolicyQuery struct {
+	TenantID       string
+	Code           string
+	ServiceRef     string
+	InterfaceRef   string
+	ProviderRef    string
+	Status         ServiceAssetStatus
+	IncludeDeleted bool
+	Limit          int
 }
 
 type ServiceProviderRateLimitConsume struct {
@@ -470,10 +539,22 @@ func (b ServiceInterfaceBinding) Validate() error {
 	if b.AllowExplicitProviderRef && len(b.AllowedProviderRefs) == 0 {
 		return errors.Join(ErrInvalidResource, errors.New("allowedProviderRefs is required when explicit provider ref is allowed"))
 	}
+	if b.MinRole != "" && !validServiceBindingMinRole(b.MinRole) {
+		return errors.Join(ErrInvalidResource, errors.New("minRole is invalid"))
+	}
 	if len(b.Metadata) > 0 && string(b.Metadata) != "{}" && !jsonObjectValid(b.Metadata) {
 		return errors.Join(ErrInvalidResource, errors.New("metadata must be json object"))
 	}
 	return nil
+}
+
+func validServiceBindingMinRole(role WorkspaceRole) bool {
+	switch role {
+	case WorkspaceRoleViewer, WorkspaceRoleEditor, WorkspaceRoleAdmin, WorkspaceRoleOwner:
+		return true
+	default:
+		return false
+	}
 }
 
 func (s ServiceProviderRuntimeState) Validate() error {
@@ -502,6 +583,40 @@ func (s ServiceProviderRuntimeState) Validate() error {
 		return errors.Join(ErrInvalidResource, errors.New("half-open counters must be non-negative"))
 	}
 	if len(s.Metadata) > 0 && string(s.Metadata) != "{}" && !jsonObjectValid(s.Metadata) {
+		return errors.Join(ErrInvalidResource, errors.New("metadata must be json object"))
+	}
+	return nil
+}
+
+func (p ServiceRateLimitPolicy) Validate() error {
+	if strings.TrimSpace(p.TenantID) == "" {
+		return errors.Join(ErrInvalidResource, errors.New("tenantId is required"))
+	}
+	if strings.TrimSpace(p.Code) == "" {
+		return errors.Join(ErrInvalidResource, errors.New("code is required"))
+	}
+	if strings.TrimSpace(p.Name) == "" {
+		return errors.Join(ErrInvalidResource, errors.New("name is required"))
+	}
+	if p.Limit < 0 {
+		return errors.Join(ErrInvalidResource, errors.New("limit must be non-negative"))
+	}
+	if p.WindowSeconds <= 0 {
+		return errors.Join(ErrInvalidResource, errors.New("windowSeconds must be positive"))
+	}
+	if strings.TrimSpace(p.ProviderRef) != "" && (strings.TrimSpace(p.ServiceRef) == "" || strings.TrimSpace(p.InterfaceRef) == "") {
+		return errors.Join(ErrInvalidResource, errors.New("providerRef requires serviceRef and interfaceRef"))
+	}
+	if strings.TrimSpace(p.InterfaceRef) != "" && strings.TrimSpace(p.ServiceRef) == "" {
+		return errors.Join(ErrInvalidResource, errors.New("interfaceRef requires serviceRef"))
+	}
+	if !validServiceRateLimitBackend(p.Backend) {
+		return errors.Join(ErrInvalidResource, errors.New("backend is invalid"))
+	}
+	if !validServiceAssetStatus(p.Status) {
+		return errors.Join(ErrInvalidResource, errors.New("status is invalid"))
+	}
+	if len(p.Metadata) > 0 && string(p.Metadata) != "{}" && !jsonObjectValid(p.Metadata) {
 		return errors.Join(ErrInvalidResource, errors.New("metadata must be json object"))
 	}
 	return nil
@@ -604,6 +719,15 @@ func validServiceProviderHealthStatus(value ServiceProviderHealthStatus) bool {
 func validServiceProviderCircuitStatus(value ServiceProviderCircuitStatus) bool {
 	switch value {
 	case ServiceProviderCircuitClosed, ServiceProviderCircuitOpen, ServiceProviderCircuitHalfOpen:
+		return true
+	default:
+		return false
+	}
+}
+
+func validServiceRateLimitBackend(value ServiceRateLimitBackend) bool {
+	switch value {
+	case ServiceRateLimitBackendPostgres, ServiceRateLimitBackendRedis:
 		return true
 	default:
 		return false

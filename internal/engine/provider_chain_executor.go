@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -73,6 +74,7 @@ func (e *ProviderChainExecutor) ExecuteServiceInterfaceFactQuery(ctx context.Con
 		Operation:       marketing.ServiceOperationCall,
 		ProviderPolicy:  providerPolicy,
 		ProviderRef:     providerRef,
+		Environment:     environment,
 		LuaCall:         req.LuaCall,
 		RequireApproval: activityApprovalValid(req.Runtime.Activity),
 	}
@@ -105,6 +107,7 @@ func (e *ProviderChainExecutor) ExecuteServiceInterfaceFactQuery(ctx context.Con
 
 	var lastFailed workflowNodeResult
 	for providerIndex, provider := range providers {
+		cacheAsideCacheProvider := strings.EqualFold(strings.TrimSpace(providerPolicy), "CACHE_ASIDE") && serviceProviderCacheEnabled(provider)
 		providerStartedAt := time.Now().UTC()
 		if _, err := e.service.consumeServiceProviderRuntime(ctx, provider); err != nil {
 			traceStep := step
@@ -147,12 +150,41 @@ func (e *ProviderChainExecutor) ExecuteServiceInterfaceFactQuery(ctx context.Con
 			}
 			e.audit(ctx, req, serviceRef, interfaceRef, provider.Code, resourceRef, marketing.ServiceCallAuditFailed, workflowConfigString(resourceResult.Output, "errorCode"), resourceResult.Error, providerStartedAt, requestPayload, resourceResult.Output)
 			lastFailed = resourceResult
+			if cacheAsideCacheProvider {
+				if !serviceProviderCacheErrorFallback(provider) {
+					return providerChainServiceFactResult{Facts: facts, Responses: responses, Traces: traces, Result: resourceResult, Done: true}
+				}
+				if providerIndex < len(providers)-1 {
+					traceOutput := map[string]any{"serviceAccess": accessTrace, "providerOutput": resourceResult.Output, "cacheAside": map[string]any{"result": "ERROR_FALLBACK"}}
+					traces = append(traces, workflowFactQueryProviderStepTrace(resolvedStep, "CACHE_ERROR_FALLBACK", req.Remaining, traceOutput))
+					continue
+				}
+			}
 			if providerIndex == len(providers)-1 {
 				return providerChainServiceFactResult{Facts: facts, Responses: responses, Traces: traces, Result: resourceResult, Done: true}
 			}
 			traceOutput := map[string]any{"serviceAccess": accessTrace, "providerOutput": resourceResult.Output}
 			traces = append(traces, workflowFactQueryProviderStepTrace(resolvedStep, "FAILED_NEXT", req.Remaining, traceOutput))
 			continue
+		}
+		if cacheAsideCacheProvider && serviceProviderCacheMiss(provider, resourceResult.Output) {
+			if err := e.service.recordServiceProviderSuccess(ctx, provider); err != nil {
+				result := workflowFactQueryFailure(req.Node, req.Runtime, req.Config, "", "SERVICE_PROVIDER_RUNTIME_STATE_FAILED", err.Error(), facts, responses)
+				e.audit(ctx, req, serviceRef, interfaceRef, provider.Code, resourceRef, marketing.ServiceCallAuditFailed, "SERVICE_PROVIDER_RUNTIME_STATE_FAILED", err.Error(), providerStartedAt, requestPayload, result.Output)
+				return providerChainServiceFactResult{Facts: facts, Responses: responses, Traces: traces, Result: result, Done: true}
+			}
+			traceOutput := map[string]any{"serviceAccess": accessTrace, "providerOutput": resourceResult.Output, "cacheAside": map[string]any{"result": "MISS"}}
+			traces = append(traces, workflowFactQueryProviderStepTrace(resolvedStep, "CACHE_MISS", req.Remaining, traceOutput))
+			e.audit(ctx, req, serviceRef, interfaceRef, provider.Code, resourceRef, marketing.ServiceCallAuditSuccess, "", "", providerStartedAt, requestPayload, resourceResult.Output)
+			if providerIndex < len(providers)-1 {
+				continue
+			}
+			if workflowFactQueryProviderShouldBlockOnMiss(step) {
+				result := workflowFactQueryFailure(req.Node, req.Runtime, req.Config, "", "FACT_QUERY_PROVIDER_MISS", "cache-aside provider did not resolve requested facts", facts, responses)
+				return providerChainServiceFactResult{Facts: facts, Responses: responses, Traces: traces, Result: result, Done: true}
+			}
+			lastFailed = workflowNodeResult{}
+			break
 		}
 		if err := validator.validateInterfaceOutput(ctx, req.Runtime.Activity.TenantID, serviceInterface, resourceResult.Output); err != nil {
 			result := workflowFactQueryFailure(req.Node, req.Runtime, req.Config, "", "SERVICE_SCHEMA_OUTPUT_INVALID", err.Error(), facts, responses)
@@ -222,6 +254,56 @@ func (e *ProviderChainExecutor) audit(ctx context.Context, req providerChainServ
 			"luaCall": req.LuaCall,
 		},
 	})
+}
+
+func serviceProviderCacheErrorFallback(provider marketing.ServiceProvider) bool {
+	config := serviceProviderConfigMap(provider)
+	policy, _ := config["cacheErrorPolicy"].(string)
+	switch strings.ToUpper(strings.TrimSpace(policy)) {
+	case "", "FALLBACK":
+		return true
+	case "FAIL":
+		return false
+	default:
+		return true
+	}
+}
+
+func serviceProviderCacheMiss(provider marketing.ServiceProvider, output map[string]any) bool {
+	config := serviceProviderConfigMap(provider)
+	if path, _ := config["missPath"].(string); strings.TrimSpace(path) != "" {
+		value, err := extractWorkflowJSONPath(output, path)
+		if err != nil {
+			return true
+		}
+		missValues := workflowConfigStringList(config, "missValues")
+		if len(missValues) == 0 {
+			return workflowValueEmpty(value)
+		}
+		valueString := strings.TrimSpace(fmt.Sprint(value))
+		for _, missValue := range missValues {
+			if strings.EqualFold(valueString, strings.TrimSpace(missValue)) {
+				return true
+			}
+		}
+		return false
+	}
+	return !workflowFactQueryProviderStepHasFacts(output) || workflowValueEmpty(output["facts"])
+}
+
+func workflowValueEmpty(value any) bool {
+	switch typed := value.(type) {
+	case nil:
+		return true
+	case string:
+		return strings.TrimSpace(typed) == ""
+	case []any:
+		return len(typed) == 0
+	case map[string]any:
+		return len(typed) == 0
+	default:
+		return false
+	}
 }
 
 func serviceCallErrorCode(err error, fallback string) string {

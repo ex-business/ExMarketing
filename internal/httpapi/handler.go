@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ex-stack/ExMarketing/internal/dbmigration"
 	"github.com/ex-stack/ExMarketing/internal/engine"
 	"github.com/ex-stack/ExMarketing/internal/marketing"
 	"github.com/ex-stack/ExMarketing/internal/metrics"
@@ -42,11 +43,17 @@ type OpenAPIEventCredential struct {
 
 type Handler struct {
 	engine            *engine.Service
+	migrationManager  migrationManager
 	openAPIEventCfg   OpenAPIEventConfig
 	webhookCfg        WebhookReceiverConfig
 	rewardCallbackCfg RewardCallbackConfig
 	inviteEmailCfg    InviteEmailConfig
 	inviteEmailSender inviteEmailSender
+}
+
+type migrationManager interface {
+	Analyze(ctx context.Context) (dbmigration.Analysis, error)
+	Apply(ctx context.Context) (dbmigration.Plan, error)
 }
 
 type RewardCallbackConfig struct {
@@ -92,6 +99,10 @@ func NewHandlerWithRewardCallbackConfig(engine *engine.Service, cfg OpenAPIEvent
 	}
 	handler.rewardCallbackCfg = rewardCallbackCfg
 	return handler
+}
+
+func (h *Handler) SetMigrationManager(manager migrationManager) {
+	h.migrationManager = manager
 }
 
 func LoadOpenAPIEventConfigFromEnv(logger *slog.Logger) (OpenAPIEventConfig, error) {
@@ -202,6 +213,8 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /admin/v1/services/{serviceCode}/interfaces/{interfaceCode}/providers/{providerCode}/runtime-state", h.saveServiceProviderRuntimeState)
 	mux.HandleFunc("POST /admin/v1/services/{serviceCode}/interfaces/{interfaceCode}/providers/{providerCode}/health-check", h.checkServiceProviderHealth)
 	mux.HandleFunc("POST /admin/v1/services/{serviceCode}/interfaces/{interfaceCode}/providers/{providerCode}/reset-circuit", h.resetServiceProviderCircuit)
+	mux.HandleFunc("GET /admin/v1/service-rate-limit-policies", h.listServiceRateLimitPolicies)
+	mux.HandleFunc("POST /admin/v1/service-rate-limit-policies", h.saveServiceRateLimitPolicy)
 	mux.HandleFunc("POST /admin/v1/services/{serviceCode}/interfaces/{interfaceCode}/test", h.testServiceInterface)
 	mux.HandleFunc("GET /admin/v1/service-schemas", h.listServiceSchemas)
 	mux.HandleFunc("POST /admin/v1/service-schemas", h.saveServiceSchema)
@@ -213,6 +226,9 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /admin/v1/services/{serviceCode}/interfaces/{interfaceCode}/bindings/check", h.checkServiceInterfaceBinding)
 	mux.HandleFunc("GET /admin/v1/service-call-audit-logs", h.listServiceCallAuditLogs)
 	mux.HandleFunc("POST /admin/v1/service-call-audit-logs/purge", h.purgeServiceCallAuditLogs)
+	mux.HandleFunc("GET /admin/v1/db-migrations/status", h.getDBMigrationStatus)
+	mux.HandleFunc("POST /admin/v1/db-migrations/analyze", h.analyzeDBMigrations)
+	mux.HandleFunc("POST /admin/v1/db-migrations/apply", h.applyDBMigrations)
 	mux.HandleFunc("GET /admin/v1/workspaces", h.listWorkspaces)
 	mux.HandleFunc("POST /admin/v1/workspaces", h.createWorkspace)
 	mux.HandleFunc("GET /admin/v1/workspaces/{workspaceId}", h.getWorkspace)

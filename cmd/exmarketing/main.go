@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ex-stack/ExMarketing/internal/dbmigration"
 	"github.com/ex-stack/ExMarketing/internal/engine"
 	"github.com/ex-stack/ExMarketing/internal/httpapi"
 	"github.com/ex-stack/ExMarketing/internal/marketing"
@@ -39,7 +40,10 @@ func main() {
 		os.Exit(1)
 	}
 	handler := httpapi.NewHandlerWithConfigs(service, openAPIEventConfig, webhookConfig)
+	closeMigrationDB := buildMigrationManager(ctx, logger, handler)
+	defer closeMigrationDB()
 	var workerDone <-chan struct{}
+	var healthWorkerDone <-chan struct{}
 	if env("EX_MARKETING_OUTBOX_WORKER", "false") == "true" {
 		outboxWorker := worker.NewOutboxWorker(repository, logger)
 		mqConfig, mqConfigured, err := worker.LoadMQRuntimeConfigFromEnv()
@@ -63,6 +67,17 @@ func main() {
 			outboxWorker.Run(ctx)
 		}()
 		logger.Info("outbox worker enabled")
+	}
+	healthWorkerConfig := worker.LoadProviderHealthWorkerConfigFromEnv()
+	if healthWorkerConfig.Enabled {
+		healthWorker := worker.NewProviderHealthWorker(service, logger, healthWorkerConfig)
+		done := make(chan struct{})
+		healthWorkerDone = done
+		go func() {
+			defer close(done)
+			healthWorker.Run(ctx)
+		}()
+		logger.Info("provider health worker enabled")
 	}
 
 	server := &http.Server{
@@ -104,6 +119,29 @@ func main() {
 	}
 	if workerDone != nil && shutdownRequested {
 		<-workerDone
+	}
+	if healthWorkerDone != nil && shutdownRequested {
+		<-healthWorkerDone
+	}
+}
+
+func buildMigrationManager(ctx context.Context, logger *slog.Logger, handler *httpapi.Handler) func() {
+	if env("EX_MARKETING_REPOSITORY", "postgres") == "memory" && env("EX_MARKETING_DB_MIGRATION_API", "false") != "true" {
+		logger.Warn("db migration admin api disabled for in-memory repository")
+		return func() {}
+	}
+	databaseURL := env("EX_MARKETING_DATABASE_URL", "postgres://exmarketing:exmarketing@localhost:54329/exmarketing?sslmode=disable")
+	db, err := dbmigration.Open(ctx, databaseURL)
+	if err != nil {
+		logger.Error("db migration manager init failed", "error", err)
+		os.Exit(1)
+	}
+	handler.SetMigrationManager(dbmigration.Manager{DB: db})
+	logger.Info("db migration admin api enabled")
+	return func() {
+		if err := db.Close(); err != nil {
+			logger.Warn("db migration manager close failed", "error", err)
+		}
 	}
 }
 

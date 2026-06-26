@@ -38,6 +38,7 @@ type MemoryRepository struct {
 	serviceSchemas           []ServiceSchema
 	serviceInterfaceBindings []ServiceInterfaceBinding
 	serviceProviderStates    []ServiceProviderRuntimeState
+	serviceRateLimitPolicies []ServiceRateLimitPolicy
 	serviceCallAuditLogs     []ServiceCallAuditLog
 	activityStates           []ActivityState
 	storageStates            []StorageState
@@ -597,6 +598,10 @@ func factProviderKey(tenantID string, factCode string) string {
 
 func cloneServiceDefinition(service ServiceDefinition) ServiceDefinition {
 	service.Tags = slices.Clone(service.Tags)
+	if service.DeletedAt != nil {
+		value := *service.DeletedAt
+		service.DeletedAt = &value
+	}
 	if len(service.Metadata) > 0 {
 		service.Metadata = append(json.RawMessage(nil), service.Metadata...)
 	}
@@ -604,6 +609,10 @@ func cloneServiceDefinition(service ServiceDefinition) ServiceDefinition {
 }
 
 func cloneServiceInterface(serviceInterface ServiceInterface) ServiceInterface {
+	if serviceInterface.DeletedAt != nil {
+		value := *serviceInterface.DeletedAt
+		serviceInterface.DeletedAt = &value
+	}
 	if len(serviceInterface.Metadata) > 0 {
 		serviceInterface.Metadata = append(json.RawMessage(nil), serviceInterface.Metadata...)
 	}
@@ -612,6 +621,10 @@ func cloneServiceInterface(serviceInterface ServiceInterface) ServiceInterface {
 
 func cloneServiceProvider(provider ServiceProvider) ServiceProvider {
 	provider.ResourceRefs = slices.Clone(provider.ResourceRefs)
+	if provider.DeletedAt != nil {
+		value := *provider.DeletedAt
+		provider.DeletedAt = &value
+	}
 	if len(provider.Config) > 0 {
 		provider.Config = append(json.RawMessage(nil), provider.Config...)
 	}
@@ -619,6 +632,10 @@ func cloneServiceProvider(provider ServiceProvider) ServiceProvider {
 }
 
 func cloneServiceSchema(schema ServiceSchema) ServiceSchema {
+	if schema.DeletedAt != nil {
+		value := *schema.DeletedAt
+		schema.DeletedAt = &value
+	}
 	if len(schema.SchemaJSON) > 0 {
 		schema.SchemaJSON = append(json.RawMessage(nil), schema.SchemaJSON...)
 	}
@@ -633,6 +650,10 @@ func cloneServiceInterfaceBinding(binding ServiceInterfaceBinding) ServiceInterf
 	binding.AllowedOperations = slices.Clone(binding.AllowedOperations)
 	binding.AllowedProviderPolicies = slices.Clone(binding.AllowedProviderPolicies)
 	binding.AllowedProviderRefs = slices.Clone(binding.AllowedProviderRefs)
+	if binding.DeletedAt != nil {
+		value := *binding.DeletedAt
+		binding.DeletedAt = &value
+	}
 	if len(binding.Metadata) > 0 {
 		binding.Metadata = append(json.RawMessage(nil), binding.Metadata...)
 	}
@@ -662,6 +683,17 @@ func cloneServiceProviderRuntimeState(state ServiceProviderRuntimeState) Service
 	return state
 }
 
+func cloneServiceRateLimitPolicy(policy ServiceRateLimitPolicy) ServiceRateLimitPolicy {
+	if policy.DeletedAt != nil {
+		value := *policy.DeletedAt
+		policy.DeletedAt = &value
+	}
+	if len(policy.Metadata) > 0 {
+		policy.Metadata = append(json.RawMessage(nil), policy.Metadata...)
+	}
+	return policy
+}
+
 func cloneServiceCallAuditLog(log ServiceCallAuditLog) ServiceCallAuditLog {
 	if len(log.ProviderTrace) > 0 {
 		log.ProviderTrace = append(json.RawMessage(nil), log.ProviderTrace...)
@@ -673,6 +705,10 @@ func cloneServiceCallAuditLog(log ServiceCallAuditLog) ServiceCallAuditLog {
 		log.PermissionTrace = append(json.RawMessage(nil), log.PermissionTrace...)
 	}
 	return log
+}
+
+func serviceAssetDeleted(status ServiceAssetStatus, deletedAt *time.Time) bool {
+	return status == ServiceAssetDeleted || deletedAt != nil
 }
 
 func (r *MemoryRepository) SaveServiceDefinition(ctx context.Context, service ServiceDefinition) (ServiceDefinition, error) {
@@ -745,6 +781,9 @@ func (r *MemoryRepository) ListServiceDefinitions(ctx context.Context, query Ser
 	}
 	out := []ServiceDefinition{}
 	for _, service := range r.services {
+		if !query.IncludeDeleted && serviceAssetDeleted(service.Status, service.DeletedAt) {
+			continue
+		}
 		if query.TenantID != "" && service.TenantID != query.TenantID {
 			continue
 		}
@@ -838,6 +877,9 @@ func (r *MemoryRepository) ListServiceInterfaces(ctx context.Context, query Serv
 	}
 	out := []ServiceInterface{}
 	for _, serviceInterface := range r.serviceInterfaces {
+		if !query.IncludeDeleted && serviceAssetDeleted(serviceInterface.Status, serviceInterface.DeletedAt) {
+			continue
+		}
 		if query.TenantID != "" && serviceInterface.TenantID != query.TenantID {
 			continue
 		}
@@ -928,6 +970,9 @@ func (r *MemoryRepository) ListServiceProviders(ctx context.Context, query Servi
 	}
 	out := []ServiceProvider{}
 	for _, provider := range r.serviceProviders {
+		if !query.IncludeDeleted && serviceAssetDeleted(provider.Status, provider.DeletedAt) {
+			continue
+		}
 		if query.TenantID != "" && provider.TenantID != query.TenantID {
 			continue
 		}
@@ -1007,6 +1052,9 @@ func (r *MemoryRepository) ListServiceSchemas(ctx context.Context, query Service
 	}
 	out := []ServiceSchema{}
 	for _, schema := range r.serviceSchemas {
+		if !query.IncludeDeleted && serviceAssetDeleted(schema.Status, schema.DeletedAt) {
+			continue
+		}
 		if query.TenantID != "" && schema.TenantID != query.TenantID {
 			continue
 		}
@@ -1098,6 +1146,9 @@ func (r *MemoryRepository) ListServiceInterfaceBindings(ctx context.Context, que
 	}
 	out := []ServiceInterfaceBinding{}
 	for _, binding := range r.serviceInterfaceBindings {
+		if !query.IncludeDeleted && serviceAssetDeleted(binding.Status, binding.DeletedAt) {
+			continue
+		}
 		if query.TenantID != "" && binding.TenantID != query.TenantID {
 			continue
 		}
@@ -1123,6 +1174,9 @@ func (r *MemoryRepository) ListServiceInterfaceBindings(ctx context.Context, que
 			continue
 		}
 		if query.NodeType != "" && len(binding.AllowedNodeTypes) > 0 && !slices.Contains(binding.AllowedNodeTypes, query.NodeType) {
+			continue
+		}
+		if query.Environment != "" && binding.Environment != "" && !strings.EqualFold(binding.Environment, query.Environment) {
 			continue
 		}
 		if query.Status != "" && binding.Status != query.Status {
@@ -1292,6 +1346,95 @@ func (r *MemoryRepository) ConsumeServiceProviderRateLimit(ctx context.Context, 
 		r.serviceProviderStates = append(r.serviceProviderStates, cloneServiceProviderRuntimeState(state))
 	}
 	return cloneServiceProviderRuntimeState(state), true, nil
+}
+
+func (r *MemoryRepository) SaveServiceRateLimitPolicy(ctx context.Context, policy ServiceRateLimitPolicy) (ServiceRateLimitPolicy, error) {
+	if err := ctx.Err(); err != nil {
+		return ServiceRateLimitPolicy{}, err
+	}
+	if policy.ID == "" {
+		policy.ID = NewID("svcratelimit")
+	}
+	if policy.Backend == "" {
+		policy.Backend = ServiceRateLimitBackendPostgres
+	}
+	if policy.Status == "" {
+		policy.Status = ServiceAssetActive
+	}
+	if len(policy.Metadata) == 0 {
+		policy.Metadata = json.RawMessage(`{}`)
+	}
+	now := time.Now().UTC()
+	if policy.CreatedAt.IsZero() {
+		policy.CreatedAt = now
+	}
+	if policy.UpdatedAt.IsZero() {
+		policy.UpdatedAt = now
+	}
+	if err := policy.Validate(); err != nil {
+		return ServiceRateLimitPolicy{}, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for i := range r.serviceRateLimitPolicies {
+		sameCode := r.serviceRateLimitPolicies[i].TenantID == policy.TenantID && r.serviceRateLimitPolicies[i].Code == policy.Code
+		sameScope := r.serviceRateLimitPolicies[i].TenantID == policy.TenantID &&
+			r.serviceRateLimitPolicies[i].ServiceRef == policy.ServiceRef &&
+			r.serviceRateLimitPolicies[i].InterfaceRef == policy.InterfaceRef &&
+			r.serviceRateLimitPolicies[i].ProviderRef == policy.ProviderRef
+		if (sameCode || sameScope) && r.serviceRateLimitPolicies[i].ID != policy.ID {
+			return ServiceRateLimitPolicy{}, ErrResourceConflict
+		}
+		if r.serviceRateLimitPolicies[i].ID == policy.ID || sameCode || sameScope {
+			policy.ID = r.serviceRateLimitPolicies[i].ID
+			policy.CreatedAt = r.serviceRateLimitPolicies[i].CreatedAt
+			r.serviceRateLimitPolicies[i] = cloneServiceRateLimitPolicy(policy)
+			return cloneServiceRateLimitPolicy(policy), nil
+		}
+	}
+	r.serviceRateLimitPolicies = append(r.serviceRateLimitPolicies, cloneServiceRateLimitPolicy(policy))
+	return cloneServiceRateLimitPolicy(policy), nil
+}
+
+func (r *MemoryRepository) ListServiceRateLimitPolicies(ctx context.Context, query ServiceRateLimitPolicyQuery) ([]ServiceRateLimitPolicy, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	limit := query.Limit
+	if limit <= 0 || limit > 500 {
+		limit = 500
+	}
+	out := []ServiceRateLimitPolicy{}
+	for _, policy := range r.serviceRateLimitPolicies {
+		if !query.IncludeDeleted && serviceAssetDeleted(policy.Status, policy.DeletedAt) {
+			continue
+		}
+		if query.TenantID != "" && policy.TenantID != query.TenantID {
+			continue
+		}
+		if query.Code != "" && policy.Code != query.Code {
+			continue
+		}
+		if query.ServiceRef != "" && policy.ServiceRef != query.ServiceRef {
+			continue
+		}
+		if query.InterfaceRef != "" && policy.InterfaceRef != query.InterfaceRef {
+			continue
+		}
+		if query.ProviderRef != "" && policy.ProviderRef != query.ProviderRef {
+			continue
+		}
+		if query.Status != "" && policy.Status != query.Status {
+			continue
+		}
+		out = append(out, cloneServiceRateLimitPolicy(policy))
+		if len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
 }
 
 func (r *MemoryRepository) CreateServiceCallAuditLog(ctx context.Context, log ServiceCallAuditLog) error {

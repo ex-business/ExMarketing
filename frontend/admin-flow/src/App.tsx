@@ -56,11 +56,15 @@ import type {
   ServiceDefinitionSummary,
   ServiceCallAuditListResponse,
   ServiceCallAuditLogSummary,
+  DBMigrationAnalysis,
+  DBMigrationApplyResponse,
+  DBMigrationStatusResponse,
   ServiceInterfaceBindingCheckResult,
   ServiceInterfaceBindingSummary,
   ServiceInterfaceSummary,
   ServiceProviderRuntimeStateSummary,
   ServiceProviderSummary,
+  ServiceRateLimitPolicySummary,
   ServiceSchemaSummary,
   StudioFolderPatch,
   WorkspaceActivityGrantSummary,
@@ -2415,6 +2419,9 @@ function StudioActivityStart({
   const [serviceCallAuditNextCursor, setServiceCallAuditNextCursor] = useState('');
   const [serviceCallAuditRequestId, setServiceCallAuditRequestId] = useState('');
   const [serviceProviderRuntimeStates, setServiceProviderRuntimeStates] = useState<Record<string, ServiceProviderRuntimeStateSummary | undefined>>({});
+  const [serviceRateLimitPolicies, setServiceRateLimitPolicies] = useState<ServiceRateLimitPolicySummary[]>([]);
+  const [dbMigrationAnalysis, setDBMigrationAnalysis] = useState<DBMigrationAnalysis | undefined>();
+  const [dbMigrationMessage, setDBMigrationMessage] = useState('');
   const [servicesLoading, setServicesLoading] = useState(false);
   const [selectedServiceCode, setSelectedServiceCode] = useState('');
   const [selectedInterfaceCode, setSelectedInterfaceCode] = useState('');
@@ -3159,6 +3166,42 @@ function StudioActivityStart({
     const body = await fetchJSON<{ items: ServiceSchemaSummary[] }>(`/admin/v1/service-schemas?${params.toString()}`);
     setServiceSchemas(body.items ?? []);
   }, [selectedWorkspace?.tenantId]);
+  const refreshServiceRateLimitPolicies = useCallback(async () => {
+    const params = new URLSearchParams();
+    params.set('tenantId', selectedWorkspace?.tenantId || 'site_001');
+    params.set('limit', '500');
+    const body = await fetchJSON<{ items: ServiceRateLimitPolicySummary[] }>(`/admin/v1/service-rate-limit-policies?${params.toString()}`);
+    setServiceRateLimitPolicies(body.items ?? []);
+  }, [selectedWorkspace?.tenantId]);
+  const refreshDBMigrationStatus = useCallback(async () => {
+    try {
+      const body = await fetchJSON<DBMigrationStatusResponse>('/admin/v1/db-migrations/status');
+      setDBMigrationAnalysis(body.analysis);
+      setDBMigrationMessage(body.analysis.latest ? 'DB migration 已是最新' : `DB migration 待处理 ${body.analysis.pending?.length ?? 0} 项`);
+      return body.analysis;
+    } catch (error) {
+      setDBMigrationMessage((error as Error).message);
+      setDBMigrationAnalysis(undefined);
+      throw error;
+    }
+  }, []);
+  const analyzeDBMigrations = useCallback(async () => {
+    const body = await fetchJSON<DBMigrationStatusResponse>('/admin/v1/db-migrations/analyze', { method: 'POST' });
+    setDBMigrationAnalysis(body.analysis);
+    setDBMigrationMessage(body.analysis.drift ? 'DB migration 存在 drift，需要先处理' : `DB migration analyze 完成，pending ${body.analysis.pending?.length ?? 0} 项`);
+    return body.analysis;
+  }, []);
+  const applyDBMigrations = useCallback(async (input: { dryRun: boolean; confirm: boolean; confirmation: string; breakGlass: boolean; reason: string }) => {
+    const body = await fetchJSON<DBMigrationApplyResponse>('/admin/v1/db-migrations/apply', {
+      method: 'POST',
+      headers: input.breakGlass ? { 'X-Break-Glass': 'true' } : undefined,
+      body: JSON.stringify(input),
+    });
+    const nextAnalysis = body.after ?? body.analysis ?? body.before;
+    if (nextAnalysis) setDBMigrationAnalysis(nextAnalysis);
+    setDBMigrationMessage(body.dryRun ? `DB migration dry-run 完成，pending ${body.analysis?.pending?.length ?? 0} 项` : `DB migration apply 完成，pending ${body.after?.pending?.length ?? 0} 项`);
+    return body;
+  }, []);
   const refreshServiceInterfaceBindings = useCallback(async (serviceCode = selectedServiceCode, interfaceCode = selectedInterfaceCode) => {
     const params = new URLSearchParams();
     params.set('tenantId', selectedWorkspace?.tenantId || 'site_001');
@@ -3226,6 +3269,7 @@ function StudioActivityStart({
       setSelectedServiceCode(nextCode);
       await Promise.all([
         refreshServiceSchemas(),
+        refreshServiceRateLimitPolicies(),
         refreshServiceInterfaces(nextCode, ''),
       ]);
       setServiceMessage('服务能力已刷新');
@@ -3234,10 +3278,18 @@ function StudioActivityStart({
     } finally {
       setServicesLoading(false);
     }
-  }, [refreshServiceInterfaces, refreshServiceSchemas, selectedServiceCode, selectedWorkspace?.tenantId]);
+  }, [refreshServiceInterfaces, refreshServiceRateLimitPolicies, refreshServiceSchemas, selectedServiceCode, selectedWorkspace?.tenantId]);
   const openServiceManager = () => {
     setHomeUtilityDialog('services');
-    void Promise.all([refreshResources(), refreshServices(), refreshServiceSchemas(), refreshServiceInterfaceBindings(), refreshServiceCallAudits()]);
+    void Promise.allSettled([
+      refreshResources(),
+      refreshServices(),
+      refreshServiceSchemas(),
+      refreshServiceRateLimitPolicies(),
+      refreshServiceInterfaceBindings(),
+      refreshServiceCallAudits(),
+      refreshDBMigrationStatus(),
+    ]);
   };
   const selectServiceCapability = useCallback((code: string) => {
     setSelectedServiceCode(code);
@@ -3358,6 +3410,7 @@ function StudioActivityStart({
         operation: binding.allowedOperations?.[0] || 'CALL',
         providerPolicy: binding.allowedProviderPolicies?.[0] || 'PRIMARY',
         providerRef: binding.allowedProviderRefs?.[0] || '',
+        environment: binding.environment || '',
         luaCall: Boolean(binding.luaCallable),
       }),
     });
@@ -4210,6 +4263,9 @@ function StudioActivityStart({
                 bindings={serviceInterfaceBindings}
                 audits={serviceCallAudits}
                 runtimeStates={serviceProviderRuntimeStates}
+                rateLimitPolicies={serviceRateLimitPolicies}
+                migrationAnalysis={dbMigrationAnalysis}
+                migrationMessage={dbMigrationMessage}
                 selectedServiceCode={selectedService?.code || selectedServiceCode}
                 selectedInterfaceCode={selectedInterface?.code || selectedInterfaceCode}
                 selectedService={selectedService}
@@ -4234,6 +4290,9 @@ function StudioActivityStart({
                 auditRequestId={serviceCallAuditRequestId}
                 onLoadMoreAudits={loadMoreServiceCallAudits}
                 onTestInterface={testServiceInterface}
+                onRefreshMigrationStatus={refreshDBMigrationStatus}
+                onAnalyzeMigrations={analyzeDBMigrations}
+                onApplyMigrations={applyDBMigrations}
               />
             ) : homeUtilityDialog === 'members' ? (
               <div className="studio-member-manager">

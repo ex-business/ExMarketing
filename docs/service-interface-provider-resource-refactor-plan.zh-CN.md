@@ -63,6 +63,34 @@ Workflow Node
 5. `CACHE_ASIDE` 更多 cache 策略、命中率指标和 write-back 可观测性面板。
 6. 旧节点全量迁移到 ResourceOperator / ProviderChainExecutor。
 
+### 长期治理平台路线图
+
+本轮已经完成可运行治理闭环。后续如果按长期治理平台标准继续建设，应按下面 8 类能力推进；这些能力不是当前核心闭环缺口，但后续写代码、排期和验收都应以本表为准。
+
+| 类别 | 后续实现范围 | 验收口径 |
+| --- | --- | --- |
+| 产品化 Studio | 服务资产中心全局检索；Service/Interface/Provider/Resource 关系图；Provider 选择器展示不可选原因、健康、权限、限流；Binding 编辑器支持批量授权、继承预览、冲突提示；Migration UI 支持批量 diff、dry-run、apply 确认和回滚提示；Audit UI 可按 activity/node/provider/requestId 串联调用链 | 运营不需要理解 URL/Topic/Redis key；发布错误能一键定位到 Schema、Binding、Provider 或 RateLimit 记录 |
+| OpenAPI / SDK | 新增正式 `openapi.yaml` 或同等规范；生成前端/外部系统 SDK 类型；维护 Postman/Apifox collection；定义 API versioning、deprecation 和 breaking change 规则 | Admin API 文档、后端 handler、前端类型和外部 collection 四处一致；新增 API 必须有请求/响应 schema 和错误码 |
+| 可观测性 | provider 调用成功率、P95/P99、错误率、fallback 次数；rate-limit 拒绝数、剩余额度、热点 provider；circuit 状态变化；health worker 探活耗时/失败原因/最后成功时间；workflow 执行 trace 串起 node -> interface -> provider -> resource | 任意一次失败调用可以通过 requestId/traceId 定位到权限、schema、provider、resource 或下游错误 |
+| 生产运维 Runbook | provider unhealthy 处置；circuit reset；rate limit 误杀放开；binding 配错排查；migration apply 失败恢复；内置 catalog seed drift 修复；break-glass 审批、过期、撤销和审计 | 值班人员不改代码也能按 runbook 完成常见故障恢复，所有 break-glass 有审计记录 |
+| 权限与安全 | 接入真实身份/RBAC middleware；Service Interface 调用运行时强校验；Provider/Resource 防绕行；secret 不落明文、不进入 audit payload；HTTP Resource SSRF 防护；MQ topic 白名单和误投递保护；Audit 查看权限和脱敏 | 非授权 workspace/folder/actor 无法调用接口或查看审计；安全测试覆盖 secret、SSRF、越权、Lua 沙箱和 audit 泄露 |
+| 生产级限流 | Redis client 生产注入和 HA 配置；分布式限流压测；策略热更新；provider/interface/workspace 多维限流；默认限流模板；限流命中后的 fallback 策略 | 多实例部署下限流一致；Redis 故障策略明确；限流命中、fallback 和拒绝都有指标和 audit |
+| 迁移治理 | 旧 Provider/Resource 字段完整迁移报告；批量 analyze/apply；迁移前后行为 diff；回滚策略；旧字段禁用时间表；发布挡板发现旧 URL/resourceRef 时阻断或要求显式豁免 | 新模板不再产生旧字段；旧 workflow 可运行但发布新版本必须迁移、确认或 break-glass |
+| SLO / 默认值 | provider timeout、workflow node 总超时、fallback 最大次数、health-check 频率、circuit breaker 阈值、rate-limit 默认 QPS、audit 保留周期、payload 采样比例 | 所有默认值有文档、有配置入口、有指标验证；超过 SLO 能自动降级、fallback、熔断或告警 |
+
+推荐后续实施顺序：
+
+```text
+1. OpenAPI / SDK 规范先落地，固定 API 契约
+2. 可观测性指标和 trace 串联，支撑排障
+3. 生产运维 Runbook 和 break-glass 流程，支撑上线
+4. 真实身份/RBAC 和安全测试，收紧权限边界
+5. 生产级 Redis 限流和压测，支撑多实例
+6. Studio 产品化体验，降低运营配置成本
+7. 迁移治理和旧字段发布挡板，逐步收敛旧模型
+8. SLO 默认值和告警策略，形成长期运行基线
+```
+
 ## 改造清单和当前状态
 
 本节保留原改造拆解，状态已按当前实现更新。任何新增节点、资源、Provider 或 Studio 表单，仍要先判断属于哪个改造项，避免继续扩散旧模型。

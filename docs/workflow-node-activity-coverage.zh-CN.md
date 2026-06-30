@@ -198,3 +198,161 @@ EVENT_INPUT -> CORE -> ADVANCED(可选) -> OPS(审计/恢复)
 
 - 出站 `MQ` 资源能力已经可用于通知、发奖指令或业务消息发布意图。
 - 入站 `mq-event`、定时 `schedule-event`、状态监听 `state-event` 仍属于 trigger runtime 能力；当前节点 adapter 已可配置和验证，但生产 worker 运行态还需要继续补齐。
+
+## ACT 21 类活动完整覆盖评估
+
+本节按 `act-analysis/01-返水.md` 到 `act-analysis/21-每月充值.md` 逐项评估。结论分三层：
+
+```text
+基础主链路是否满足：事件、幂等、规则、事实、quota、奖励、发奖、审计
+生产完整度是否满足：调度、状态、并发、审核、对账、回滚、后台页面
+扩展方式：通过模板、Service Interface、ActivityPlugin、StateStore、Scheduler、Ranking 或 Gift Fulfillment 补齐
+```
+
+总体结论：
+
+1. **基础主链路满足**：21 类活动都可以落到 ExMarketing 的标准事件、规则、事实查询、quota/budget、reward、grant-order、outbox 和 audit 主链路上。
+2. **普通资金类活动基本满足**：首存、续存、返水、生日、升级、VIP 周/月、每月充值、签到、游戏活动等主要差在模板、事实服务、审批、周期 quota 和对账。
+3. **复杂玩法类活动部分满足**：红包雨、主题抽奖、足球射门、幸运翻卡、嘉年华、赛事竞猜、任务体系、邀请/王者回归等需要正式 ActivityPlugin、状态存储、排行榜、调度和专用 Studio 页面。
+4. **不是节点越多越好**：复杂玩法不应继续扩散成专用节点或专用 controller；应把通用发奖链路留在 Workflow Engine，把玩法状态放到插件运行时。
+
+### 逐活动覆盖矩阵
+
+| # | 活动 | 基础主链路 | 生产完整度 | 当前缺口 | 推荐扩展方式 |
+| --- | --- | --- | --- | --- | --- |
+| 01 | 返水 | 满足 | 基本满足 | 每日批结算、游戏黑名单、批量人工审核、返水明细报表、结算失败重跑 | `schedule-event` 生成结算事件；`fact-query` 查询有效投注和黑名单；返水模板；批量审核/对账 Studio |
+| 02 | 邀请好友 | 满足 | 部分满足 | 邀请链路、短链、邀请关系归因、邀请人/被邀人双主体、三子活动统一管理、自邀请风控 | `INVITE_CAMPAIGN` 插件或 Service；双主体 fact；邀请关系 StateStore；互斥/风控模板 |
+| 03 | 首存 | 满足 | 基本满足 | RMB/USDT 两套事实口径、首存互斥、钱包类型、手动取消/审核体验 | 首存模板；deposit fact Service；exclusiveGroup；grant target policy；审核面板 |
+| 04 | 续存 | 满足 | 基本满足 | Cycle 周期、月边界、同场馆限制、与首存/月充值互斥、消费端复查 | 续存模板；period scopeKey；Service Interface 查询历史充值；互斥规则和 release gate |
+| 05 | 新手任务 | 满足 | 基本满足 | 6 子任务任务包 UI、随机礼包概率校验、风控审核、任务状态聚合、任务重试 | `TASK_CENTER` 插件；任务模板；approval-gate；任务进度 StateStore |
+| 06 | VIP 周红利 | 满足 | 基本满足 | 周期领取窗口、周/月互斥开关、中心/场馆钱包切换、XXL-Job 扫发和主动领取双通道 | 周红利模板；Scheduler；period USER_LIMIT；wallet target policy；互斥配置 |
+| 07 | VIP 月红利 | 满足 | 技术可满足，但不建议复活旧逻辑 | 旧系统硬编码过期、半月边界、周/月互斥漂移、僵尸配置 | 作为新月红利模板重建；不要迁移旧硬编码；明确半月 period |
+| 08 | 生日红利 | 满足 | 基本满足 | 生日 fact、年度防重、闰年策略、站内信模板、每日扫描调度 | Birthday 模板；Scheduler；profile fact Service；yearly USER_LIMIT；notification outbox |
+| 09 | 升级红利 | 满足 | 基本满足 | 4 触发入口、3 钱包类型、自动晋级计算、跨级补差策略、Kafka topic 差异 | Upgrade 模板；VIP_LEVEL_UPGRADED 标准事件；wallet target policy；升级 fact Service |
+| 10 | 红包雨 | 满足 | 部分满足 | 秒级场次、WebSocket 推送、抢包并发、Redis 原子消费、空包、场次清理、运营停止 | 正式 `RED_ENVELOPE` 插件；Plugin StateStore；Counter/Lock Resource；Realtime Push Provider；Scheduler |
+| 11 | 主题抽奖 | 满足 | 部分满足 | 多玩法、多奖池、必中名单、抽奖次数消费、奖池库存提交、实物奖、前端玩法 UI | 扩展 `LOTTERY` 插件；DrawPool StateStore；PhysicalGift reward；必中名单审计 |
+| 12 | 足球射门 | 满足 | 部分满足 | 立方分布算法、VIP/custom 优先级、奖池 INCR 回滚、射门动画和玩法记录 | `LOTTERY` 子策略或 `FOOTBALL_SHOT` 插件；可审计随机；Counter Resource |
+| 13 | 幸运翻卡 | 满足 | 部分满足 | 卡池 SPOP、翻卡记录、两步手动开奖、号码唯一性、排行榜二重礼、实物/礼金混合 | `LUCKY_CARD` 插件；CardPool StateStore；Plugin Operation 设置号码/执行开奖；Ranking Service；PhysicalGift |
+| 14 | 嘉年华 | 满足 | 部分满足，复杂度最高 | 投票对象管理、票数计算、实时 ZSET 榜、多轮晋级、粉丝榜、Excel 导入、晋级清榜 | `CARNIVAL_VOTE` 插件；Ranking Service；Vote Counter；Plugin Operation 晋级；Excel/import Studio |
+| 15 | 签到有礼 | 满足 | 基本满足 | 补签策略、连续/累计/满签语义、周期日历、人工审核、签到状态 UI | Sign-in 模板；Sign StateStore；period quota；approval-gate；日历 Studio |
+| 16 | 活动任务体系 | 满足 | 部分满足 | 分组/标签/任务配置、活跃度、排行榜、周期重置、任务快照、任务中心 UI | `TASK_CENTER` 插件；Task StateStore；Ranking Service；Scheduler 结算 |
+| 17 | 王者回归 | 满足 | 部分满足 | 4 子活动互斥/叠加、老用户资格、未投注天数、邀请码安全、主题页统一 | Kings Return 模板包；exclusiveGroup；invite Service；profile/turnover facts；主题页 config |
+| 18 | 赛事竞猜 | 满足 | 部分满足 | 竞猜选项、结果录入、中奖用户集合、固定奖池瓜分、手动派奖、合规审计 | `PREDICTION_POOL` 插件；PoolSplit reward；Plugin Operation 录入赛果/结算；Ranking/StateStore |
+| 19 | 游戏活动 | 满足 | 基本满足 | 场馆钱包限制、游戏场馆事实、风险审核、连续签到/累计达标语义 | Game Activity 模板；venue fact Service；risk-score；approval-gate |
+| 20 | 投注/首存豪礼 | 满足 | 部分满足 | 实物奖、收货地址加密、物流状态、发货审核、库存回滚、隐私审计 | `PHYSICAL_GIFT` reward 子系统；Gift Fulfillment；PII 加密；库存 quota；物流 Studio |
+| 21 | 每月充值 | 满足 | 基本满足 | 首日参加、每日充值达标记录、满签奖、互斥并发保护、自动/手动审核 | Monthly Recharge 模板；daily deposit fact；period StateStore；exclusiveGroup；approval-gate |
+
+### 不满足的不是基础链路，而是生产玩法闭环
+
+下表把“不完整满足”的能力按平台扩展点归类。后续实现时优先补平台能力，再落单个活动模板。
+
+| 缺口类型 | 影响活动 | 需要扩展 |
+| --- | --- | --- |
+| 玩法状态 | 红包雨、抽奖、足球射门、幸运翻卡、嘉年华、赛事竞猜、任务体系、签到 | `marketing_plugin_state`、`marketing_plugin_state_event`、插件 StateStore API |
+| 实时计数/并发 | 红包雨、嘉年华投票、足球射门、主题抽奖、签到、邀请申请 | Redis-backed Counter/Lock Resource，PG 权威事件补偿 |
+| 排行榜 | 嘉年华、活动任务体系、幸运翻卡二重礼、粉丝榜、竞猜结果集合 | Ranking Service：ZSET + snapshot + settle + archive |
+| 定时和结算 | 返水、生日、VIP 周/月、红包场次、排行榜结算、满签、竞猜结算 | Scheduler Worker：claim、retry、幂等 event inbox、运行记录 |
+| 手动操作 | 幸运翻卡开奖、嘉年华晋级、赛事竞猜录入结果、批量审核、实物发货 | Plugin Operation Framework：analyze、preview、approve、execute、rollback、audit |
+| C 端动作 API | 抢红包、抽奖、翻卡、投票、竞猜、签到、领取任务奖励 | Plugin Runtime OpenAPI：state、actions、records、rankings |
+| 实物奖 | 投注/首存豪礼、主题抽奖、幸运翻卡 | Physical Gift Fulfillment：地址加密、库存、审核、发货、物流、隐私审计 |
+| 复杂运营后台 | 任务中心、嘉年华、翻卡、竞猜、红包雨、邀请好友 | Studio 插件页面：配置、导入、预览、运行态、结算、审计 |
+
+## 完全满足 21 类活动的扩展路线
+
+### 阶段 1：补生产底座
+
+先补平台能力，避免每个活动各自实现锁、状态、调度和审计。
+
+| 能力 | 产物 |
+| --- | --- |
+| Plugin State Store | 状态表、状态事件表、CAS、幂等写、状态审计 |
+| Scheduler Worker | job 注册、claim、retry、生成标准事件、运行记录、补偿重跑 |
+| Ranking Service | rank incr/top/memberRank/snapshot/settle/archive |
+| Plugin Operation Framework | 手动操作预览、审批、执行、回滚、审计 |
+| Plugin Runtime API | C 端 state/action/records/rankings 统一入口 |
+
+### 阶段 2：补普通资金活动模板
+
+优先把基础可满足活动做成生产模板：
+
+```text
+首存、续存、返水、生日红利、升级红利、VIP 周红利、每月充值、签到有礼
+```
+
+每个模板必须带：
+
+```text
+标准事件契约
+Fact Service 依赖
+quota 默认值
+reward 默认值
+审批要求
+对账要求
+release checklist
+```
+
+### 阶段 3：补任务和邀请类活动
+
+```text
+邀请好友、新手任务、活动任务体系、王者回归、游戏活动
+```
+
+重点能力：
+
+```text
+双主体关系
+邀请归因
+任务进度
+任务组/标签/任务
+活跃度
+任务排行榜
+互斥规则
+```
+
+### 阶段 4：补互动玩法插件
+
+```text
+RED_ENVELOPE
+LOTTERY
+FOOTBALL_SHOT
+LUCKY_CARD
+CARNIVAL_VOTE
+PREDICTION_POOL
+```
+
+每个插件必须提供：
+
+```text
+config schema
+state schema
+action schema
+runtime context
+state-change intents
+settlement operation
+audit explain
+Studio 页面
+```
+
+### 阶段 5：补实物奖和模板市场
+
+```text
+PHYSICAL_GIFT reward
+Gift Fulfillment
+地址加密和脱敏
+物流状态
+库存回滚
+活动模板市场
+C 端页面协议
+运营数据看板
+```
+
+## 设计原则
+
+后续扩展必须遵守：
+
+1. Workflow Engine 只负责通用主链路：事件、规则、奖励、quota、grant-order、outbox、审计。
+2. ActivityPlugin 只负责玩法上下文、玩法状态、候选奖励和结算意图，不直接发钱、不直接写 outbox。
+3. Plugin StateStore 保存过程状态，但不能替代 participation、grant_order、quota、outbox。
+4. Redis 只能做实时加速和原子计数，PostgreSQL 必须有权威状态或可重放事件。
+5. 手动开奖、晋级、结算、审核和发货必须有 preview、审批、执行、审计和可恢复路径。
+6. 复杂活动优先沉淀成模板和插件页面，不要把旧 ACT 的专用 controller/table/service 逐个搬进 ExMarketing。

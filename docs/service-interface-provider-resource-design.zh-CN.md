@@ -6133,6 +6133,131 @@ event-in -> inbox -> normalize -> match -> fact-query -> activity-state -> quali
 
 本节只定义后续代码改造要求，不代表一次性全部实现。改造目标是先把能力资产模型稳定下来，再逐步替换节点里的底层连接配置。
 
+### 长期治理平台标准
+
+当前实现已经覆盖 Service / Interface / Provider / Resource 的核心运行闭环。后续如果继续按长期治理平台演进，需要把下面 8 类能力作为正式设计边界；新增代码、API、Studio 页面或运维流程时，应明确落在哪一类，并补齐对应验收。
+
+#### 1. 产品化 Studio
+
+长期 Studio 不只是配置表单，而应该是能力资产治理入口：
+
+| 能力 | 设计要求 |
+| --- | --- |
+| 服务资产中心 | 支持 Service、Interface、Provider、Resource、Schema、Binding、RateLimit、Audit 的统一检索、分组、风险状态和关系图 |
+| Provider 选择器 | 展示不可选原因、health/circuit 状态、environment、mock gate、rate-limit 状态、binding 权限和 fallback 候选 |
+| Binding 编辑器 | 支持 workspace/folder 批量授权、includeSubfolders 继承预览、冲突提示、最小角色和 provider allowlist 可视化 |
+| Migration UI | 支持旧 workflow 批量 diff、dry-run、apply 确认、回滚提示、blocker 解释和 audit 链接 |
+| Audit UI | 可按 activityId、nodeId、requestId、service/interface/provider/resource 追踪一次调用链路 |
+
+验收标准：运营配置节点时不需要手填 URL、Topic、Redis key、DB 表名或 secret；发布错误可以直接定位到 Schema、Binding、Provider 或 RateLimit 记录。
+
+#### 2. OpenAPI / SDK
+
+当前 `docs/api.md` 是 Admin API 的人工契约。长期应补正式 API 资产：
+
+| 能力 | 设计要求 |
+| --- | --- |
+| OpenAPI spec | 维护 `openapi.yaml` 或等价规范，覆盖 Admin Service Governance API、Resource API、Migration API 和 Audit API |
+| SDK 类型 | 从 OpenAPI 或统一 schema 生成前端/外部系统 SDK 类型，避免手写类型漂移 |
+| API collection | 维护 Postman/Apifox collection，包含鉴权 header、break-glass 示例、错误响应示例 |
+| Versioning | 明确 `v1` 兼容期、deprecated 字段、breaking change 流程和迁移公告 |
+
+验收标准：新增或变更 API 时，handler、文档、OpenAPI、前端类型和测试必须同步；每个 API 有请求/响应 schema、错误码和权限说明。
+
+#### 3. 可观测性
+
+治理平台必须能回答“为什么这次调用选了这个 Provider、为什么失败、为什么 fallback”。
+
+| 指标/Trace | 设计要求 |
+| --- | --- |
+| Provider 调用指标 | tenant/service/interface/provider/status 维度统计成功率、错误率、P95/P99、fallback 次数 |
+| Rate-limit 指标 | policy/backend/scope 维度统计 consume、reject、remaining、Redis/Postgres backend 错误 |
+| Circuit 指标 | open/half-open/closed 状态变化、连续失败次数、probe 成功/失败 |
+| Health worker 指标 | worker owner、lease 状态、batch size、扫描数量、探活耗时、失败原因、last success |
+| Trace 串联 | workflow execution -> node -> service interface -> provider decision -> resource client -> downstream response |
+
+验收标准：任意一次失败调用可通过 requestId 或 traceId 定位到权限、schema、provider、resource、限流、熔断或下游错误。
+
+#### 4. 生产运维 Runbook
+
+长期运行必须有可执行运维手册，而不是只靠开发排查：
+
+| 场景 | Runbook 要求 |
+| --- | --- |
+| Provider unhealthy | 查看 health 概览、手动 health-check、确认下游、恢复 provider、观察 fallback |
+| Circuit open | 查看失败窗口、确认是否 reset、执行 reset-circuit、观察 half-open probe |
+| Rate limit 误杀 | 定位 policy、确认 scope/subject、临时调高或禁用、记录审批和恢复时间 |
+| Binding 配错 | 使用 binding check、确认 workspace/folder/actor/minRole、修复 allowlist |
+| Migration apply 失败 | 查看 migration audit、确认 dry-run diff、恢复 draft 或重新 apply |
+| Seed drift | 对比内置 catalog version/sourceHash，执行 seed/init 修复，并记录 drift audit |
+| Break-glass | 明确审批人、scope、ticket、expiresAt、撤销方式和审计查询 |
+
+验收标准：值班人员不改代码也能按 runbook 完成常见故障恢复；所有 break-glass 都有过期时间和审计记录。
+
+#### 5. 权限与安全
+
+当前设计已有权限、secret、SSRF、Lua 沙箱和审计脱敏原则。长期必须把这些原则落实到统一安全边界：
+
+| 风险 | 防护要求 |
+| --- | --- |
+| 越权调用 | 接入真实身份/RBAC middleware，Service Interface 调用运行时强校验 workspace/folder/activity/node/actor |
+| providerRef 绕行 | ProviderRef override 只能在 binding allowlist 内生效，audit 记录 requestedProviderRef 和 selectedProviderRef |
+| Resource 绕行 | 普通节点不得直接配置受控底层 URL/Topic/Store；Resource 调用必须走权限和审计 |
+| 明文 secret | Secret 只保存引用，不进入 schema、provider config 明文、audit payload 或前端响应 |
+| HTTP SSRF | HTTP Client Resource 只能访问 allowlist host/scheme/IP range，禁止 metadata/local/private 网段绕行 |
+| MQ 误投递 | Topic/subject 白名单、environment 隔离、dry-run 和 publish audit |
+| Lua 逃逸 | Lua 只能调用白名单函数，禁止文件/网络/系统调用，执行超时和内存限制必须生效 |
+| 审计泄露 | Audit 查看权限、hash/HMAC、payload 采样、脱敏和保留周期必须统一 |
+
+验收标准：安全测试覆盖 secret、SSRF、越权、providerRef 绕行、MQ 误投递、Lua 沙箱和 audit 泄露。
+
+#### 6. 生产级限流
+
+当前已有 rate-limit policy 和 Redis backend 运行入口。长期生产化需要补齐多实例和运维能力：
+
+| 能力 | 设计要求 |
+| --- | --- |
+| Redis client 注入 | 支持生产 Redis/Cluster/Sentinel 配置、连接池、超时、降级策略 |
+| 分布式一致性 | 多实例并发压测下，窗口计数和剩余额度一致 |
+| 热更新 | policy 保存后可被运行时及时感知，明确缓存 TTL 和失效策略 |
+| 多维限流 | tenant、workspace、service、interface、provider、actor、subject 等维度组合 |
+| 默认模板 | 为常见 provider 类型提供默认 QPS、burst、窗口和 fallback 策略 |
+| 命中策略 | 限流后支持 reject、fallback、degrade 或 enqueue，并写 provider decision audit |
+
+验收标准：多实例部署下限流一致；Redis 故障策略明确；限流命中、fallback 和拒绝都有指标和 audit。
+
+#### 7. 迁移治理
+
+旧 Provider/Resource/endpoint 字段会长期存在，必须用治理机制逐步收敛：
+
+| 能力 | 设计要求 |
+| --- | --- |
+| 迁移报告 | 按 activity/workflow/node 统计旧字段、置信度、blocker、建议目标 service/interface/provider |
+| 批量 analyze/apply | 支持按 workspace/folder/activity 批量 dry-run、选择性 apply、确认短语和审计 |
+| 行为 diff | 对比迁移前后 provider/resource、schema、权限、fallback、mock、rate-limit 行为差异 |
+| 回滚策略 | apply 后保留 before/after diff，可恢复 draft 或重新生成旧配置兼容结构 |
+| 旧字段禁用表 | 定义新建禁止、发布 warning、发布 block、删除兼容的时间表 |
+| 发布挡板 | 发现旧 URL/resourceRef/providerCode 时阻断发布或要求 break-glass |
+
+验收标准：新模板不再产生旧字段；旧 workflow 可运行，但发布新版本必须迁移、确认或 break-glass。
+
+#### 8. SLO / 默认值
+
+长期平台需要有统一默认值，避免每个 provider 或节点自由发挥。
+
+| 默认值 | 建议起点 |
+| --- | --- |
+| Provider timeout | 2s，慢接口单独申请到 5s |
+| Workflow node 总超时 | 10s，包含 schema、binding、provider、resource 调用 |
+| Fallback 最大次数 | 2 次，超过直接失败并写 audit |
+| Health-check 频率 | HEALTHY 60s，DEGRADED 30s，UNHEALTHY 15s 后退避 |
+| Circuit breaker | 连续 5 次失败或 1 分钟错误率超过 50% 打开，30s 后 half-open |
+| Rate-limit 默认值 | provider 级 100 QPS / tenant 级 500 QPS，按业务服务覆盖 |
+| Audit 保留周期 | 元数据 180 天，debug sampled payload 最长 7 天 |
+| Payload 采样比例 | prod 默认 0%，排障窗口最多 1%，必须有 ticket 和过期时间 |
+
+验收标准：所有默认值有文档、有配置入口、有指标验证；超过 SLO 能自动降级、fallback、熔断或告警。
+
 ### P0 文档和术语收敛
 
 先统一产品、后端、前端和文档里的命名。

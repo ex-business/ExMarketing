@@ -2,6 +2,8 @@ import type { CampaignPageSchema, FreeDesignElement } from './types';
 import { blocksToFreeElements, freeCanvasHeight, freeElementStyle } from './layout';
 import { campaignPageApi } from './campaignPageStore';
 import { renderFreeElementText } from './renderUtils';
+import './styles/tokens.css';
+import './styles/runtime.css';
 
 export function CampaignRuntimePage() {
   const page = campaignPageApi.loadRuntimePage(typeof window === 'undefined' ? '/campaign/summer-rebate' : window.location.pathname);

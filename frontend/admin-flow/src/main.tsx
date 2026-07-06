@@ -1,11 +1,14 @@
 import { createRoot } from 'react-dom/client';
+import { lazy, Suspense } from 'react';
 import '@xyflow/react/dist/style.css';
-import { App } from './App';
-import { CampaignEditorPage, CampaignRuntimePage } from './CampaignEditorPage';
-import { CheckinPreviewPage } from './CheckinPreviewPage';
-import { SevenDayCheckinPage } from './SevenDayCheckinPage';
 import { applyDocumentTheme, initialExmTheme } from './theme';
 import './styles.css';
+
+const App = lazy(() => import('./App').then((module) => ({ default: module.App })));
+const CampaignEditorPage = lazy(() => import('./CampaignEditorPage').then((module) => ({ default: module.CampaignEditorPage })));
+const CampaignRuntimePage = lazy(() => import('./campaign-editor/RuntimeView').then((module) => ({ default: module.CampaignRuntimePage })));
+const CheckinPreviewPage = lazy(() => import('./CheckinPreviewPage').then((module) => ({ default: module.CheckinPreviewPage })));
+const SevenDayCheckinPage = lazy(() => import('./SevenDayCheckinPage').then((module) => ({ default: module.SevenDayCheckinPage })));
 
 const root = document.getElementById('root');
 if (!root) {
@@ -16,8 +19,7 @@ applyDocumentTheme(initialExmTheme());
 
 const pathname = window.location.pathname;
 
-createRoot(root).render(
-  pathname.startsWith('/admin-flow/campaign-editor') || new URLSearchParams(window.location.search).has('pageDesign')
+const routeElement = pathname.startsWith('/admin-flow/campaign-editor') || new URLSearchParams(window.location.search).has('pageDesign')
     ? <CampaignEditorPage />
     : pathname.startsWith('/campaign/') || pathname.startsWith('/admin-flow/campaign/')
     ? <CampaignRuntimePage />
@@ -25,5 +27,10 @@ createRoot(root).render(
     ? <SevenDayCheckinPage />
     : pathname.startsWith('/admin-flow/checkin')
       ? <CheckinPreviewPage />
-      : <App />,
+      : <App />;
+
+createRoot(root).render(
+  <Suspense fallback={null}>
+    {routeElement}
+  </Suspense>,
 );

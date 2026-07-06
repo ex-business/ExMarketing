@@ -1,0 +1,141 @@
+.campaign-inspector {
+  border-left: 1px solid var(--theme-border);
+  border-right: 0;
+  overflow: auto;
+}
+
+.campaign-inspector header {
+  min-height: 72px;
+  border-bottom: 1px solid var(--theme-border);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 20px 20px;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 20px;
+}
+
+.campaign-inspector header div {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+
+.campaign-inspector header span {
+  border-radius: 6px;
+  background: var(--theme-success-soft);
+  color: var(--theme-success);
+  padding: 4px 7px;
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.campaign-inspector header > button {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--theme-border);
+  border-radius: 7px;
+  background: var(--theme-control);
+  color: var(--theme-text-body);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  padding: 0;
+}
+
+.campaign-inspector header > button:hover {
+  border-color: var(--theme-accent);
+  color: var(--theme-accent);
+}
+
+.campaign-inspector nav {
+  height: 52px;
+  border-bottom: 1px solid var(--theme-border);
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  padding: 0 20px;
+}
+
+.campaign-inspector nav button {
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--theme-text-body);
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 850;
+}
+
+.campaign-inspector nav button.active {
+  border-color: var(--theme-accent);
+  color: var(--theme-accent);
+}
+
+.campaign-inspector-body {
+  padding: 20px;
+  display: grid;
+  gap: 16px;
+}
+
+.campaign-inspector-body label {
+  display: grid;
+  gap: 8px;
+  color: var(--theme-text-body);
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.campaign-inspector-body input,
+.campaign-inspector-body select,
+.campaign-inspector-body textarea {
+  height: 38px;
+  border: 1px solid var(--theme-border);
+  border-radius: 8px;
+  background: var(--theme-control);
+  color: var(--theme-text-body);
+  padding: 0 12px;
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.campaign-inspector-body textarea {
+  min-height: 86px;
+  resize: vertical;
+  padding: 10px 12px;
+  line-height: 1.45;
+}
+
+.campaign-button-preview {
+  height: 46px;
+  border-radius: 8px;
+  background: var(--theme-accent);
+  color: var(--theme-on-accent);
+  display: grid;
+  place-items: center;
+  font-size: 16px;
+  font-weight: 950;
+}
+
+.campaign-inspector-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.campaign-inspector-actions button {
+  height: 36px;
+  border: 1px solid var(--theme-border);
+  border-radius: 8px;
+  background: var(--theme-control);
+  color: var(--theme-text-body);
+  cursor: pointer;
+  font-weight: 850;
+}
+
+.campaign-inspector-body p {
+  margin: 0;
+  color: var(--theme-text-muted);
+  font-size: 12px;
+  line-height: 1.55;
+  font-weight: 700;
+}

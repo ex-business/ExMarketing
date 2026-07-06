@@ -1,0 +1,115 @@
+.campaign-runtime-page {
+  min-height: 100vh;
+  display: grid;
+  justify-content: center;
+  background: var(--campaign-mobile-bg);
+  color: var(--campaign-mobile-text);
+  font-family: var(--campaign-editor-font);
+}
+
+.campaign-runtime-canvas,
+.campaign-module-preview-canvas {
+  min-height: 100vh;
+  position: relative;
+  overflow: hidden;
+  background: var(--campaign-mobile-bg);
+}
+
+.campaign-runtime-element {
+  position: absolute;
+  appearance: none;
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: 0;
+  min-inline-size: 0;
+  min-block-size: 0;
+  contain: layout paint size;
+  display: grid;
+  align-content: center;
+  justify-items: start;
+  gap: 4px;
+  border: 1px solid var(--campaign-block-border);
+  background: var(--campaign-block-bg);
+  color: var(--campaign-mobile-text);
+  box-shadow: var(--campaign-block-shadow);
+  padding: 10px 12px;
+  overflow: hidden;
+  text-align: left;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 850;
+  line-height: 1.25;
+}
+
+.campaign-runtime-element.selected {
+  border: 2px solid var(--theme-accent);
+  box-shadow: var(--theme-shadow-panel);
+}
+
+.campaign-runtime-element.nested {
+  position: relative;
+  left: auto;
+  top: auto;
+  z-index: auto;
+  flex: 0 0 auto;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.campaign-runtime-element.text {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  color: var(--campaign-mobile-text);
+  font-size: 22px;
+  font-weight: 950;
+}
+
+.campaign-runtime-element.button {
+  justify-items: center;
+  border-color: var(--theme-accent);
+  background: var(--theme-accent);
+  color: var(--theme-on-accent);
+  cursor: pointer;
+  font-size: 16px;
+  font-weight: 950;
+}
+
+.campaign-runtime-element.button.secondary {
+  border-color: var(--theme-border);
+  background: var(--theme-control);
+  color: var(--theme-text-body);
+}
+
+.campaign-runtime-element.card {
+  background: var(--campaign-block-bg);
+  color: var(--campaign-body-text);
+}
+
+.campaign-runtime-element.image {
+  justify-items: center;
+  border-style: dashed;
+  background: var(--campaign-reward-soft);
+  color: var(--campaign-reward-text);
+}
+
+.campaign-runtime-element.layout {
+  overflow-x: hidden;
+  overflow-y: auto;
+  border: 1px dashed var(--theme-accent);
+  background: var(--theme-accent-soft);
+  color: var(--theme-text-body);
+  box-shadow: none;
+}
+
+.campaign-runtime-element.layout.horizontal-layout,
+.campaign-runtime-element.layout.vertical-layout,
+.campaign-runtime-element.layout.horizontal-center,
+.campaign-runtime-element.layout.vertical-center {
+  text-align: center;
+}
+
+.campaign-runtime-element.selected:not(.zero-size) {
+  border: 2px solid var(--theme-accent);
+  box-shadow: var(--theme-shadow-panel);
+}

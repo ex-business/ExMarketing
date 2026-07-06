@@ -1,0 +1,18 @@
+@media (max-width: 1180px) {
+  .campaign-editor {
+    overflow: auto;
+  }
+
+  .campaign-editor-header {
+    min-width: 980px;
+  }
+
+  .campaign-editor-body {
+    min-width: 980px;
+    grid-template-columns: 72px 300px minmax(430px, 1fr) 330px;
+  }
+
+  .campaign-secondary-workspace {
+    grid-template-columns: 220px 330px minmax(380px, 1fr);
+  }
+}

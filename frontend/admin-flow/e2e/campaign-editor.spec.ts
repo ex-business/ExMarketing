@@ -6,8 +6,10 @@ test.describe('Campaign Editor page design', () => {
     await page.evaluate(() => {
       localStorage.removeItem('exmarketing.campaignEditor.page.v1');
       localStorage.removeItem('exmarketing.campaignEditor.publishedPage.v1');
+      localStorage.removeItem('exmarketing.campaignEditor.publishedPages.v1');
       localStorage.removeItem('exmarketing.campaignEditor.versions.v1');
       localStorage.removeItem('exmarketing.campaignEditor.pages.v1');
+      localStorage.removeItem('exmarketing.campaignEditor.resources.v1');
     });
     await page.reload({ waitUntil: 'networkidle' });
   });
@@ -66,12 +68,17 @@ test.describe('Campaign Editor page design', () => {
     await expect(page.getByTestId('resource-table').getByRole('row').filter({ hasText: 'Activity View Model API' })).toBeVisible();
     await expect(page.getByTestId('resource-detail-panel')).toContainText('接口地址');
     await expect(page.getByTestId('resource-detail-panel')).toContainText('实时拉取预览');
+    await expect(page.getByTestId('resource-detail-panel')).toContainText(/拉取成功|Mock 回退/);
     await page.getByTestId('resource-detail-panel').getByRole('button', { name: '编辑' }).click();
     await expect(page.getByTestId('resource-detail-panel')).toContainText('编辑资源');
     await page.getByTestId('resource-detail-panel').getByLabel('名称 *').fill('Activity View Model API 已编辑');
     await page.getByTestId('resource-detail-panel').getByRole('button', { name: '保存' }).click();
     await expect(page.getByTestId('resource-table').getByRole('row').filter({ hasText: 'Activity View Model API 已编辑' })).toBeVisible();
     await nav.getByRole('button', { name: '设置', exact: true }).click();
+    await nav.getByRole('button', { name: '资源', exact: true }).click();
+    await page.getByTestId('resource-type-tree').getByRole('button', { name: /^数据源/ }).click();
+    await expect(page.getByTestId('resource-table').getByRole('row').filter({ hasText: 'Activity View Model API 已编辑' })).toBeVisible();
+    await page.reload({ waitUntil: 'networkidle' });
     await nav.getByRole('button', { name: '资源', exact: true }).click();
     await page.getByTestId('resource-type-tree').getByRole('button', { name: /^数据源/ }).click();
     await expect(page.getByTestId('resource-table').getByRole('row').filter({ hasText: 'Activity View Model API 已编辑' })).toBeVisible();
@@ -137,6 +144,49 @@ test.describe('Campaign Editor page design', () => {
     await page.goto('/admin-flow/campaign/summer-rebate', { waitUntil: 'networkidle' });
     await expect(page.locator('.campaign-runtime-canvas')).toContainText('马上领取');
     await expect(page.locator('.campaign-runtime-canvas')).not.toContainText('草稿按钮');
+
+    await page.goto('/admin-flow/campaign-editor', { waitUntil: 'networkidle' });
+    await page.getByLabel('Campaign editor navigation').getByRole('button', { name: '设置', exact: true }).click();
+    await page.locator('.campaign-secondary-form label').filter({ hasText: '页面路径' }).locator('input').fill('/campaign/custom-rebate');
+    await page.getByLabel('Campaign editor navigation').getByRole('button', { name: '页面', exact: true }).click();
+    await page.getByRole('button', { name: '模块预览' }).click();
+    await page.locator('.campaign-outline-row', { hasText: 'ClaimButton' }).click();
+    await page.locator('.campaign-inspector-body input').first().fill('自定义路径按钮');
+    await page.getByRole('button', { name: /发布/ }).click();
+    await page.goto('/admin-flow/campaign/custom-rebate', { waitUntil: 'networkidle' });
+    await expect(page.locator('.campaign-runtime-canvas')).toContainText('自定义路径按钮');
+
+    await page.goto('/admin-flow/campaign-editor', { waitUntil: 'networkidle' });
+    await page.getByLabel('Campaign editor navigation').getByRole('button', { name: '设置', exact: true }).click();
+    await page.locator('.campaign-version-list button').last().click();
+    await expect(page.getByRole('heading', { name: '页面树' })).toBeVisible();
+    await page.getByRole('button', { name: '模块预览' }).click();
+    await expect(page.locator('.campaign-runtime-element.button')).toContainText('马上领取');
+    await expect(page.locator('.campaign-runtime-element.button')).not.toContainText('自定义路径按钮');
+  });
+
+  test('does not render a stale legacy publish snapshot for another runtime path', async ({ page }) => {
+    await page.evaluate(() => {
+      localStorage.setItem('exmarketing.campaignEditor.publishedPage.v1', JSON.stringify({
+        id: 'legacy_page',
+        activityId: 'legacy_activity',
+        name: '旧发布页面',
+        path: '/campaign/summer-rebate',
+        designMode: 'free',
+        device: { defaultWidth: 393, supportedWidths: [375, 393, 414] },
+        theme: { primaryToken: '--theme-accent', cardRadius: 8, contentGap: 12, fontFamily: 'System UI' },
+        blocks: [],
+        freeElements: [{ id: 'legacy_button', kind: 'button', text: '旧发布按钮', x: 18, y: 20, w: 345, h: 52, z: 1 }],
+        status: 'PUBLISHED',
+        version: 'legacy',
+        updatedAt: new Date().toISOString(),
+      }));
+    });
+
+    await page.goto('/admin-flow/campaign/unpublished-rebate', { waitUntil: 'networkidle' });
+    await expect(page.locator('.campaign-runtime-canvas')).toHaveCount(1);
+    await expect(page.locator('.campaign-runtime-canvas')).not.toContainText('旧发布按钮');
+    await expect(page.locator('.campaign-runtime-element')).toHaveCount(0);
   });
 
   test('keeps click preview from scrolling when content fits the phone screen', async ({ page }) => {
@@ -152,6 +202,29 @@ test.describe('Campaign Editor page design', () => {
     }));
     expect(screenMetrics.scrollHeight - screenMetrics.clientHeight).toBeLessThanOrEqual(1);
     expect(screenMetrics.scrollWidth - screenMetrics.clientWidth).toBeLessThanOrEqual(1);
+  });
+
+  test('keeps the editor usable in a mobile viewport', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.reload({ waitUntil: 'networkidle' });
+    await expect(page.locator('.campaign-editor-header')).toBeVisible();
+    await expect(page.getByLabel('Campaign editor navigation')).toBeVisible();
+    await expect(page.locator('.campaign-free-canvas')).toBeVisible();
+    const editorMetrics = await page.locator('.campaign-editor').evaluate((editor) => ({
+      clientWidth: editor.clientWidth,
+      scrollWidth: editor.scrollWidth,
+      scrollLeftBefore: editor.scrollLeft,
+    }));
+    expect(editorMetrics.clientWidth).toBeLessThanOrEqual(390);
+    expect(editorMetrics.scrollWidth).toBeGreaterThan(editorMetrics.clientWidth);
+    const scrolled = await page.locator('.campaign-editor').evaluate((editor) => {
+      editor.scrollLeft = 360;
+      return editor.scrollLeft;
+    });
+    expect(scrolled).toBeGreaterThan(editorMetrics.scrollLeftBefore);
+    await page.getByLabel('Campaign editor navigation').getByRole('button', { name: '资源', exact: true }).click();
+    await expect(page.getByTestId('resource-type-tree')).toBeVisible();
+    await expect(page.getByTestId('resource-table')).toBeVisible();
   });
 
   test('keeps page authoring as two clear modes', async ({ page }) => {

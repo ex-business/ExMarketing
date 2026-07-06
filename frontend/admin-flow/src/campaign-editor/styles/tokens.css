@@ -1,0 +1,158 @@
+:root {
+  --campaign-editor-font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+  --campaign-brand-gradient: linear-gradient(135deg, #0078ff, var(--theme-accent) 52%, #4ab4ff);
+  --campaign-avatar-bg: #ffe4c7;
+  --campaign-avatar-text: #9a3412;
+  --campaign-mobile-bg: #fffaf0;
+  --campaign-mobile-text: #16345f;
+  --campaign-mobile-shadow: 0 18px 44px rgba(15, 44, 130, .12);
+  --campaign-block-bg: rgba(255, 255, 255, .9);
+  --campaign-block-border: #fde7bd;
+  --campaign-block-shadow: 0 10px 24px rgba(146, 64, 14, .06);
+  --campaign-hero-bg: radial-gradient(circle at 85% 42%, rgba(255, 163, 26, .8), transparent 18%), linear-gradient(135deg, #dcfce7, #fff7cf 48%, #fef3c7);
+  --campaign-hero-text: #166534;
+  --campaign-hero-muted: #15803d;
+  --campaign-hero-pill-bg: rgba(22, 101, 52, .72);
+  --campaign-reward-text: #f97316;
+  --campaign-reward-soft: #ffedd5;
+  --campaign-body-text: #344c7a;
+  --campaign-countdown-bg: #087f45;
+  --campaign-countdown-label: #1f3b61;
+  --campaign-progress-text: #415a89;
+  --campaign-progress-track: #e5e7eb;
+  --campaign-progress-fill: #058542;
+  --campaign-danger-border: rgba(239, 68, 68, .28);
+}
+
+[data-exm-theme="dark"] {
+  --campaign-mobile-bg: #152044;
+  --campaign-mobile-text: var(--theme-text-body);
+  --campaign-mobile-shadow: 0 18px 44px rgba(0, 0, 0, .26);
+  --campaign-block-bg: rgba(255, 255, 255, .92);
+}
+
+.campaign-editor {
+  height: 100vh;
+  overflow: hidden;
+  background: var(--theme-page);
+  color: var(--theme-text);
+  font-family: var(--campaign-editor-font);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+.campaign-editor button,
+.campaign-editor select,
+.campaign-editor input {
+  font: inherit;
+}
+
+.campaign-editor-header {
+  height: 64px;
+  border-bottom: 1px solid var(--theme-border);
+  background: var(--theme-surface);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 0 18px;
+}
+
+.campaign-brand {
+  width: 198px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+
+.campaign-brand-mark {
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  background: var(--campaign-brand-gradient);
+  color: var(--theme-on-accent);
+  display: grid;
+  place-items: center;
+  font-size: 18px;
+  font-weight: 950;
+}
+
+.campaign-brand b,
+.campaign-brand small {
+  display: block;
+  line-height: 1.1;
+}
+
+.campaign-brand b {
+  font-size: 18px;
+  font-weight: 900;
+}
+
+.campaign-brand small {
+  margin-top: 3px;
+  color: var(--theme-text-body);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.campaign-editor-header button,
+.campaign-editor-header select {
+  height: 40px;
+  border: 1px solid var(--theme-border);
+  border-radius: 8px;
+  background: var(--theme-control);
+  color: var(--theme-text-body);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 13px;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.campaign-editor-header select {
+  min-width: 104px;
+}
+
+.campaign-editor-header .primary {
+  border-color: var(--theme-accent);
+  background: var(--theme-accent);
+  color: var(--theme-on-accent);
+}
+
+.campaign-editor-header .icon {
+  width: 40px;
+  justify-content: center;
+  padding: 0;
+}
+
+.campaign-select {
+  min-width: 224px;
+  justify-content: space-between;
+}
+
+.campaign-save-state {
+  color: var(--theme-text-body);
+  font-size: 13px;
+  font-weight: 750;
+  white-space: nowrap;
+}
+
+.campaign-save-state::first-letter {
+  color: var(--theme-success);
+}
+
+.campaign-header-spacer {
+  flex: 1;
+}
+
+.campaign-user span {
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  background: var(--campaign-avatar-bg);
+  color: var(--campaign-avatar-text);
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+}

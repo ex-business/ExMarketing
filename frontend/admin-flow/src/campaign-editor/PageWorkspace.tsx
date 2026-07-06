@@ -28,6 +28,8 @@ export function CampaignModulePreview({
     const blockId = blockIdForFreeElementId(id);
     if (blockId) onSelect(blockId);
   };
+  const previewBlockIds = elements.map((element) => blockIdForFreeElementId(element.id)).filter(Boolean);
+  const activeBlockId = previewBlockIds.includes(selectedId) ? selectedId : previewBlockIds[0] ?? selectedId;
   const canvasHeight = freeCanvasHeight(elements);
   return (
     <section className="campaign-free-workspace">
@@ -47,7 +49,7 @@ export function CampaignModulePreview({
           return (
             <div
               key={element.id}
-              className={`campaign-runtime-element ${element.kind} ${element.layout ?? ''} ${childElements.length ? 'has-children' : ''} ${element.w === 0 || element.h === 0 ? 'zero-size' : ''} ${element.variant ?? 'primary'} ${selectedId === blockId ? 'selected' : ''}`}
+              className={`campaign-runtime-element ${element.kind} ${element.layout ?? ''} ${childElements.length ? 'has-children' : ''} ${element.w === 0 || element.h === 0 ? 'zero-size' : ''} ${element.variant ?? 'primary'} ${activeBlockId === blockId ? 'selected' : ''}`}
               role="button"
               data-action={element.action ?? ''}
               style={freeElementStyle(element)}
@@ -58,7 +60,7 @@ export function CampaignModulePreview({
                 return (
                   <span
                     key={child.id}
-                    className={`campaign-runtime-element nested ${child.kind} ${child.w === 0 || child.h === 0 ? 'zero-size' : ''} ${child.variant ?? 'primary'} ${selectedId === childBlockId ? 'selected' : ''}`}
+                    className={`campaign-runtime-element nested ${child.kind} ${child.w === 0 || child.h === 0 ? 'zero-size' : ''} ${child.variant ?? 'primary'} ${activeBlockId === childBlockId ? 'selected' : ''}`}
                     style={freeElementStyle(child, true)}
                     onClick={(event) => {
                       event.stopPropagation();
@@ -73,7 +75,6 @@ export function CampaignModulePreview({
           );
         })}
       </div>
-      <div className="campaign-mobile-check">模块预览：使用页面设计同一坐标、盒子和层级。</div>
     </section>
   );
 }

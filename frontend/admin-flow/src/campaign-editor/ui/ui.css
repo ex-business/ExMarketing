@@ -1,0 +1,208 @@
+.exm-sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.exm-button {
+  min-width: 0;
+  border: 1px solid var(--ui-border-control);
+  border-radius: var(--ui-radius-md);
+  background: var(--ui-bg-control);
+  color: var(--ui-text-body);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--ui-space-2);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background .14s ease, border-color .14s ease, color .14s ease, box-shadow .14s ease;
+  font-size: var(--ui-font-sm);
+  font-weight: var(--ui-weight-medium);
+}
+
+.exm-button:hover {
+  border-color: var(--ui-border-control-hover);
+  background: var(--ui-bg-control-hover);
+  color: var(--ui-text);
+}
+
+.exm-button:focus-visible {
+  outline: 0;
+  box-shadow: 0 0 0 3px var(--ui-focus-ring);
+}
+
+.exm-button:disabled {
+  cursor: not-allowed;
+  opacity: .56;
+}
+
+.exm-button-sm {
+  min-height: 30px;
+  padding: 0 var(--ui-space-3);
+}
+
+.exm-button-md {
+  min-height: 36px;
+  padding: 0 var(--ui-space-4);
+}
+
+.exm-button-primary {
+  border-color: var(--ui-primary);
+  background: var(--ui-primary);
+  color: var(--ui-on-primary);
+}
+
+.exm-button-primary:hover {
+  border-color: var(--ui-primary-hover);
+  background: var(--ui-primary-hover);
+  color: var(--ui-on-primary);
+}
+
+.exm-button-ghost {
+  border-color: transparent;
+  background: transparent;
+}
+
+.exm-button-danger {
+  border-color: var(--ui-danger-border);
+  background: var(--ui-danger-soft);
+  color: var(--ui-danger);
+}
+
+.exm-button-icon-only {
+  width: 34px;
+  padding: 0;
+}
+
+.exm-button-sm.exm-button-icon-only {
+  width: 30px;
+}
+
+.exm-button-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.exm-field {
+  min-width: 0;
+  display: grid;
+  gap: var(--ui-space-2);
+  color: var(--ui-text-body);
+}
+
+.exm-field-label {
+  color: var(--ui-text-body);
+  font-size: var(--ui-font-sm);
+  font-weight: var(--ui-weight-semibold);
+}
+
+.exm-field-label b {
+  margin-left: 3px;
+  color: var(--ui-danger);
+}
+
+.exm-field input,
+.exm-field select,
+.exm-field textarea,
+.exm-input {
+  width: 100%;
+  min-width: 0;
+  min-height: 36px;
+  border: 1px solid var(--ui-border-control);
+  border-radius: var(--ui-radius-md);
+  background: var(--ui-bg-control);
+  color: var(--ui-text);
+  padding: 0 var(--ui-space-3);
+  outline: 0;
+  font-size: var(--ui-font-sm);
+  font-weight: var(--ui-weight-regular);
+}
+
+.exm-field textarea {
+  min-height: 92px;
+  padding-top: 10px;
+  resize: vertical;
+  line-height: 1.45;
+}
+
+.exm-field input:focus,
+.exm-field select:focus,
+.exm-field textarea:focus,
+.exm-input:focus {
+  border-color: var(--ui-primary);
+  box-shadow: 0 0 0 3px var(--ui-focus-ring);
+}
+
+.exm-field small {
+  color: var(--ui-text-muted);
+  font-size: var(--ui-font-xs);
+}
+
+.exm-tabs {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--ui-space-1);
+}
+
+.exm-tabs button {
+  height: 36px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--ui-text-body);
+  padding: 0 var(--ui-space-3);
+  cursor: pointer;
+  font-size: var(--ui-font-sm);
+  font-weight: var(--ui-weight-semibold);
+}
+
+.exm-tabs button.active {
+  border-bottom-color: var(--ui-primary);
+  color: var(--ui-primary);
+}
+
+.exm-panel {
+  min-width: 0;
+  min-height: 0;
+  background: var(--ui-bg-panel);
+  display: grid;
+  grid-template-rows: 58px minmax(0, 1fr) auto;
+}
+
+.exm-panel-head {
+  border-bottom: 1px solid var(--ui-border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--ui-space-3);
+  padding: 0 var(--ui-space-5);
+}
+
+.exm-panel-head h2 {
+  margin: 0;
+  color: var(--ui-text);
+  font-size: var(--ui-font-lg);
+  font-weight: var(--ui-weight-semibold);
+}
+
+.exm-panel-body {
+  min-height: 0;
+  overflow: auto;
+  padding: var(--ui-space-5);
+}
+
+.exm-panel-footer {
+  border-top: 1px solid var(--ui-border-subtle);
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--ui-space-3);
+  padding: var(--ui-space-4) var(--ui-space-5);
+}

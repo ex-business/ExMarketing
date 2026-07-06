@@ -13,6 +13,7 @@
 }
 
 .campaign-left-nav {
+  background: var(--theme-page-elevated);
   padding: 16px 8px;
   display: flex;
   flex-direction: column;
@@ -36,6 +37,7 @@
 .campaign-left-nav button.active {
   background: var(--theme-accent-soft);
   color: var(--theme-accent);
+  box-shadow: inset 0 0 0 1px var(--theme-accent-border);
 }
 
 .campaign-outline {
@@ -100,7 +102,7 @@
 .campaign-outline-row.active {
   border-color: var(--theme-accent);
   background: var(--theme-accent-soft);
-  box-shadow: inset 3px 0 0 var(--theme-accent), 0 0 0 2px var(--theme-focus-ring);
+  box-shadow: inset 3px 0 0 var(--theme-accent);
   color: var(--theme-accent);
 }
 
@@ -278,7 +280,7 @@
   min-height: 34px;
   border: 1px solid var(--theme-border);
   border-radius: 7px;
-  background: var(--theme-control);
+  background: var(--theme-surface-raised);
   color: var(--theme-text-body);
   display: inline-flex;
   align-items: center;
@@ -293,14 +295,14 @@
 .campaign-block-palette button:hover {
   border-color: var(--theme-accent);
   color: var(--theme-accent);
-  background: var(--theme-accent-soft);
+  background: var(--theme-surface-hover);
 }
 
 .campaign-canvas-workspace {
   min-width: 0;
   overflow: auto;
   scrollbar-gutter: stable both-edges;
-  background: var(--theme-page);
+  background: linear-gradient(180deg, var(--theme-page), #eef4ff);
   padding: 16px 0 24px;
   display: flex;
   flex-direction: column;
@@ -311,8 +313,9 @@
   max-width: calc(100% - 32px);
   min-height: 44px;
   border: 1px solid var(--theme-border);
-  border-radius: 8px;
+  border-radius: 10px;
   background: var(--theme-surface);
+  box-shadow: 0 8px 20px rgba(31, 80, 155, .07);
   display: flex;
   align-items: center;
   gap: 2px;
@@ -325,7 +328,7 @@
   flex: 0 0 auto;
   height: 32px;
   border: 0;
-  border-right: 1px solid var(--theme-border);
+  border-right: 0;
   background: transparent;
   color: var(--theme-text-body);
   display: inline-flex;
@@ -343,9 +346,10 @@
 }
 
 .campaign-toolbar button.active {
-  border-radius: 6px;
-  background: var(--theme-accent-soft);
+  border-radius: 8px;
+  background: #edf4ff;
   color: var(--theme-accent);
+  box-shadow: inset 0 0 0 1px var(--theme-accent-border);
 }
 
 .campaign-canvas-ruler {

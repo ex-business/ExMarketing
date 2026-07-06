@@ -1,4 +1,5 @@
 @import './campaign-editor/styles/tokens.css';
+@import './campaign-editor/ui/ui.css';
 @import './campaign-editor/styles/page.css';
 @import './campaign-editor/styles/inspector.css';
 @import './campaign-editor/styles/resource.css';

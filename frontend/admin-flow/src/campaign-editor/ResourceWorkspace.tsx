@@ -2,6 +2,7 @@ import { useEffect, useState, type Dispatch, type SetStateAction } from 'react';
 import { ChevronDown, ListChecks, Plus } from 'lucide-react';
 import type { ResourceRecord, ResourceStatus, ResourceTab, UploadQueueItem } from './types';
 import { resourceStorageApi } from './resourceStore';
+import { Button, Field, Panel, ResourceTable } from './ui';
 
 const resourceTabs: ResourceTab[] = ['数据', '数据源', '动作', '样式', '图片'];
 
@@ -284,7 +285,7 @@ export function CampaignResourceWorkspace({
         <select aria-label="状态" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
           {['全部', '启用', '停用', '待保存', '尺寸提醒'].map((status) => <option key={status}>{status}</option>)}
         </select>
-        <button className="campaign-resource-add" type="button" onClick={startAdd}><Plus size={16} />添加</button>
+        <Button variant="primary" icon={<Plus size={16} />} onClick={startAdd}>添加</Button>
       </header>
 
       <div className="campaign-resource-layout">
@@ -313,53 +314,27 @@ export function CampaignResourceWorkspace({
         </aside>
 
         <section className="campaign-resource-table-wrap" data-testid="resource-table">
-          <table className="campaign-resource-table">
-            <thead>
-              <tr>
-                <th>{activeTab === '图片' ? '名称' : activeTab === '数据源' ? '数据源 / 标识符' : '名称 / 标识符'}</th>
-                <th>{activeTab === '图片' ? '用途' : '类型'}</th>
-                <th>{activeTab === '数据源' ? '接口地址' : '来源'}</th>
-                {activeTab === '图片' ? <th>尺寸</th> : activeTab === '数据源' ? <th>刷新策略</th> : <th>引用</th>}
-                {activeTab === '图片' ? <th>大小</th> : <th>状态</th>}
-                <th>更新时间</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody>
-              {addMode && addMode !== '图片' ? (
-                <tr className="adding">
-                  <td><b>{addMode === '数据' ? '新增数据字段' : addMode === '数据源' ? '新增数据源' : addMode === '动作' ? '新增动作事件' : '新增样式 Token'}</b></td>
-                  <td><select value={draftType} onChange={(event) => setDraftType(event.target.value)}><option>文本</option><option>数值</option><option>REST API</option><option>GraphQL</option><option>WebSocket</option><option>Workflow Event</option><option>颜色</option><option>圆角</option></select></td>
-                  <td>{addMode === '数据源' ? draftValue : <select value={draftSource} onChange={(event) => setDraftSource(event.target.value)}><option>Activity View Model</option><option>页面自定义</option><option>系统内置</option><option>实时接口</option></select>}</td>
-                  <td>{addMode === '数据源' ? '页面加载 + 30s 轮询' : <button type="button">选择组件</button>}</td>
-                  <td><span className="campaign-resource-status enabled">启用</span></td>
-                  <td>--</td>
-                  <td><button type="button" onClick={addRecord}>保存</button><button type="button" onClick={() => setAddMode(null)}>取消</button></td>
-                </tr>
-              ) : null}
-              {filteredRecords.map((record) => (
-                <tr key={record.id} className={selectedId === record.id ? 'selected' : ''} onClick={() => {
-                  setSelectedId(record.id);
-                  setAddMode(null);
-                  setEditingRecord(null);
-                }}>
-                  <td>
-                    <span className="campaign-resource-name">
-                      {record.tab === '图片' ? <i>{record.thumbnail ?? '🖼️'}</i> : record.tab === '数据源' ? <i>API</i> : record.tab === '样式' ? <i style={{ background: record.value ?? 'var(--theme-accent)' }} /> : null}
-                      <span><strong>{record.name}</strong><small>{record.identifier}</small></span>
-                    </span>
-                  </td>
-                  <td>{record.type}</td>
-                  <td>{record.tab === '数据源' ? record.endpoint : record.source}</td>
-                  <td>{record.tab === '图片' ? record.size : record.tab === '数据源' ? record.refresh : record.usage}</td>
-                  <td>{record.tab === '图片' ? record.fileSize : <span className={`campaign-resource-status ${resourceStatusClass(record.status)}`}>{record.status}</span>}</td>
-                  <td>{record.updatedAt}</td>
-                  <td><button type="button" aria-label={`更多 ${record.name}`} onClick={(event) => event.stopPropagation()}>...</button></td>
-                </tr>
-              ))}
-              {filteredRecords.length === 0 && !addMode ? <tr><td colSpan={7} className="campaign-resource-empty">没有匹配资源</td></tr> : null}
-            </tbody>
-          </table>
+          <ResourceTable
+            activeTab={activeTab}
+            records={filteredRecords}
+            selectedId={selectedId}
+            statusClass={resourceStatusClass}
+            draftRow={addMode && addMode !== '图片' ? {
+              mode: addMode,
+              draftType,
+              draftSource,
+              draftValue,
+              onDraftType: setDraftType,
+              onDraftSource: setDraftSource,
+              onSave: addRecord,
+              onCancel: () => setAddMode(null),
+            } : undefined}
+            onSelect={(record) => {
+              setSelectedId(record.id);
+              setAddMode(null);
+              setEditingRecord(null);
+            }}
+          />
           <footer className="campaign-resource-pagination"><span>共 {filteredRecords.length} 条</span><button type="button">‹</button><b>1</b><button type="button">›</button><select aria-label="每页条数"><option>10 条/页</option><option>20 条/页</option></select></footer>
         </section>
 
@@ -431,9 +406,7 @@ function ResourceDetailPanel({
   }, [record]);
 
   return (
-    <>
-      <header className="campaign-resource-panel-head"><h2>资源详情</h2><button type="button" aria-label="关闭详情">×</button></header>
-      <div className="campaign-resource-detail-body">
+    <Panel title="资源详情" bodyClassName="campaign-resource-detail-body">
         <h3>{record.name}</h3>
         <p>{record.description}</p>
         <dl>
@@ -455,12 +428,11 @@ function ResourceDetailPanel({
         ) : null}
         <div className="campaign-resource-usage"><strong>使用方式</strong><p>{record.tab === '数据源' ? '数据源负责从接口或实时通道拉取原始数据，再映射为页面可绑定字段。' : record.tab === '图片' ? '拖入图片或头图组件后绑定素材资源。' : record.tab === '样式' ? '组件样式从主题 token 读取。' : record.tab === '动作' ? '点击事件只能绑定白名单 workflow event。' : '字段通过 Activity View Model 表达式绑定到页面组件。'}</p></div>
         <div className="campaign-resource-panel-actions">
-          <button type="button" onClick={onEdit}>编辑</button>
-          <button type="button" onClick={onDuplicate}>复制</button>
-          <button className="danger" type="button" onClick={onDelete}>删除</button>
+          <Button onClick={onEdit}>编辑</Button>
+          <Button onClick={onDuplicate}>复制</Button>
+          <Button variant="danger" onClick={onDelete}>删除</Button>
         </div>
-      </div>
-    </>
+    </Panel>
   );
 }
 
@@ -476,29 +448,30 @@ function ResourceEditPanel({
   onSave: () => void;
 }) {
   return (
-    <>
-      <header className="campaign-resource-panel-head"><h2>编辑资源</h2><button type="button" aria-label="关闭编辑" onClick={onCancel}>×</button></header>
-      <div className="campaign-resource-form">
-        <label><span>名称 *</span><input value={record.name} onChange={(event) => onChange({ name: event.target.value })} /></label>
-        <label><span>标识符 *</span><input value={record.identifier} onChange={(event) => onChange({ identifier: event.target.value })} /></label>
-        <label><span>类型 *</span><select value={record.type} onChange={(event) => onChange({ type: event.target.value })}><option>文本</option><option>数值</option><option>时间</option><option>REST API</option><option>GraphQL</option><option>WebSocket</option><option>Mock JSON</option><option>Workflow Event</option><option>Page Event</option><option>颜色</option><option>圆角</option><option>头图</option><option>活动配图</option><option>图标</option><option>背景图</option></select></label>
-        <label><span>来源 *</span><select value={record.source} onChange={(event) => onChange({ source: event.target.value })}><option>Activity View Model</option><option>页面自定义</option><option>系统内置</option><option>实时接口</option><option>第三方接口</option><option>页面上传</option><option>素材库</option></select></label>
-        <label><span>状态 *</span><select value={record.status} onChange={(event) => onChange({ status: event.target.value as ResourceStatus })}><option>启用</option><option>停用</option><option>待保存</option><option>尺寸提醒</option><option>大小错误</option></select></label>
-        {record.tab === '数据源' ? <label><span>接口地址 *</span><input value={record.endpoint ?? ''} onChange={(event) => onChange({ endpoint: event.target.value })} /></label> : null}
-        {record.tab === '数据源' ? <label><span>请求方式 *</span><select value={record.method ?? 'GET'} onChange={(event) => onChange({ method: event.target.value })}><option>GET</option><option>POST</option><option>SUBSCRIBE</option><option>LOCAL</option></select></label> : null}
-        {record.tab === '数据源' ? <label><span>刷新策略 *</span><select value={record.refresh ?? '页面加载 + 30s 轮询'} onChange={(event) => onChange({ refresh: event.target.value })}><option>页面加载 + 30s 轮询</option><option>页面加载</option><option>手动刷新</option><option>WebSocket 实时</option></select></label> : null}
-        {record.tab === '样式' ? <label><span>Token 值 *</span><input value={record.value ?? ''} onChange={(event) => onChange({ value: event.target.value })} /></label> : null}
-        {record.tab === '图片' ? <label><span>尺寸</span><input value={record.size ?? ''} onChange={(event) => onChange({ size: event.target.value })} /></label> : null}
-        {record.tab === '图片' ? <label><span>大小</span><input value={record.fileSize ?? ''} onChange={(event) => onChange({ fileSize: event.target.value })} /></label> : null}
-        <label><span>引用 / 使用</span><input value={record.usage} onChange={(event) => onChange({ usage: event.target.value })} /></label>
-        <label><span>说明</span><textarea value={record.description} onChange={(event) => onChange({ description: event.target.value })} /></label>
+    <Panel
+      title="编辑资源"
+      onClose={onCancel}
+      bodyClassName="campaign-resource-form"
+      footer={<><Button onClick={onCancel}>取消</Button><Button variant="primary" onClick={onSave}>保存</Button></>}
+    >
+        <Field label="名称" required><input value={record.name} onChange={(event) => onChange({ name: event.target.value })} /></Field>
+        <Field label="标识符" required><input value={record.identifier} onChange={(event) => onChange({ identifier: event.target.value })} /></Field>
+        <Field label="类型" required><select value={record.type} onChange={(event) => onChange({ type: event.target.value })}><option>文本</option><option>数值</option><option>时间</option><option>REST API</option><option>GraphQL</option><option>WebSocket</option><option>Mock JSON</option><option>Workflow Event</option><option>Page Event</option><option>颜色</option><option>圆角</option><option>头图</option><option>活动配图</option><option>图标</option><option>背景图</option></select></Field>
+        <Field label="来源" required><select value={record.source} onChange={(event) => onChange({ source: event.target.value })}><option>Activity View Model</option><option>页面自定义</option><option>系统内置</option><option>实时接口</option><option>第三方接口</option><option>页面上传</option><option>素材库</option></select></Field>
+        <Field label="状态" required><select value={record.status} onChange={(event) => onChange({ status: event.target.value as ResourceStatus })}><option>启用</option><option>停用</option><option>待保存</option><option>尺寸提醒</option><option>大小错误</option></select></Field>
+        {record.tab === '数据源' ? <Field label="接口地址" required><input value={record.endpoint ?? ''} onChange={(event) => onChange({ endpoint: event.target.value })} /></Field> : null}
+        {record.tab === '数据源' ? <Field label="请求方式" required><select value={record.method ?? 'GET'} onChange={(event) => onChange({ method: event.target.value })}><option>GET</option><option>POST</option><option>SUBSCRIBE</option><option>LOCAL</option></select></Field> : null}
+        {record.tab === '数据源' ? <Field label="刷新策略" required><select value={record.refresh ?? '页面加载 + 30s 轮询'} onChange={(event) => onChange({ refresh: event.target.value })}><option>页面加载 + 30s 轮询</option><option>页面加载</option><option>手动刷新</option><option>WebSocket 实时</option></select></Field> : null}
+        {record.tab === '样式' ? <Field label="Token 值" required><input value={record.value ?? ''} onChange={(event) => onChange({ value: event.target.value })} /></Field> : null}
+        {record.tab === '图片' ? <Field label="尺寸"><input value={record.size ?? ''} onChange={(event) => onChange({ size: event.target.value })} /></Field> : null}
+        {record.tab === '图片' ? <Field label="大小"><input value={record.fileSize ?? ''} onChange={(event) => onChange({ fileSize: event.target.value })} /></Field> : null}
+        <Field label="引用 / 使用"><input value={record.usage} onChange={(event) => onChange({ usage: event.target.value })} /></Field>
+        <Field label="说明"><textarea value={record.description} onChange={(event) => onChange({ description: event.target.value })} /></Field>
         <div className="campaign-expression-preview">
           <span>保存后会更新当前资源行</span>
           <code>{record.identifier}</code>
         </div>
-      </div>
-      <footer className="campaign-resource-panel-footer"><button type="button" onClick={onCancel}>取消</button><button className="primary" type="button" onClick={onSave}>保存</button></footer>
-    </>
+    </Panel>
   );
 }
 
@@ -540,9 +513,12 @@ function ResourceAddPanel({
   const totalSize = uploadQueue.reduce((sum, item) => sum + Number(item.sizeLabel.replace(/[^0-9]/g, '') || 0), 0);
   if (mode === '图片') {
     return (
-      <>
-        <header className="campaign-resource-panel-head"><h2>批量上传图片</h2><button type="button" aria-label="关闭新增" onClick={onCancel}>×</button></header>
-        <div className="campaign-resource-form">
+      <Panel
+        title="批量上传图片"
+        onClose={onCancel}
+        bodyClassName="campaign-resource-form"
+        footer={<><Button onClick={onCancel}>取消</Button><Button variant="primary" disabled={uploadQueue.length === 0 || invalidUploads > 0} onClick={onSave}>全部保存</Button></>}
+      >
           <p>支持 PNG / JPG / WEBP / SVG，单张不超过 5MB</p>
           <label className="campaign-upload-zone">
             <input type="file" multiple accept="image/png,image/jpeg,image/webp,image/svg+xml" onChange={(event) => onUploadFiles(event.target.files)} />
@@ -558,41 +534,39 @@ function ResourceAddPanel({
                 <span>{item.recommendedSize}</span>
                 <span className="campaign-upload-state">
                   <span className={`campaign-resource-status ${resourceStatusClass(item.status)}`}>{item.status}</span>
-                  <button type="button" onClick={() => onRemoveUpload(item.id)}>删除</button>
+                  <Button size="sm" variant="danger" onClick={() => onRemoveUpload(item.id)}>删除</Button>
                 </span>
               </div>
             ))}
           </div>
           <div className="campaign-upload-summary"><span>已选择 {uploadQueue.length} 张</span><span>总大小 {totalSize} KB</span><span>{warningUploads + invalidUploads} 张需处理</span></div>
-        </div>
-        <footer className="campaign-resource-panel-footer"><button type="button" onClick={onCancel}>取消</button><button className="primary" type="button" disabled={uploadQueue.length === 0 || invalidUploads > 0} onClick={onSave}>全部保存</button></footer>
-      </>
+      </Panel>
     );
   }
   return (
-    <>
-      <header className="campaign-resource-panel-head"><h2>{mode === '数据' ? '新增数据字段' : mode === '数据源' ? '新增数据源' : mode === '动作' ? '新增动作事件' : '新增样式 Token'}</h2><button type="button" aria-label="关闭新增" onClick={onCancel}>×</button></header>
-      <div className="campaign-resource-form">
-        <label><span>{mode === '数据' ? '字段名称' : mode === '数据源' ? '数据源名称' : mode === '动作' ? '动作名称' : '样式名称'} *</span><input value={draftName} onChange={(event) => onDraftName(event.target.value)} /></label>
-        {mode === '样式' ? <label><span>Token 名称 *</span><input value="--campaign-button-primary" readOnly /></label> : null}
-        <label><span>{mode === '数据' ? '字段类型' : mode === '数据源' ? '数据源类型' : mode === '动作' ? '动作类型' : '样式类型'} *</span><select value={draftType} onChange={(event) => onDraftType(event.target.value)}><option>文本</option><option>数值</option><option>时间</option><option>REST API</option><option>GraphQL</option><option>WebSocket</option><option>Mock JSON</option><option>Workflow Event</option><option>Page Event</option><option>颜色</option><option>圆角</option></select></label>
-        {mode === '数据源' ? <label><span>接口地址 *</span><input value={draftValue} onChange={(event) => onDraftValue(event.target.value)} placeholder="/api/activities/:activityId/view-model" /></label> : null}
-        {mode === '数据源' ? <label><span>请求方式 *</span><select><option>GET</option><option>POST</option><option>SUBSCRIBE</option><option>LOCAL</option></select></label> : null}
-        <label><span>{mode === '数据' ? '数据来源' : mode === '数据源' ? '来源类型' : '来源'} *</span><select value={draftSource} onChange={(event) => onDraftSource(event.target.value)}><option>Activity View Model</option><option>页面自定义</option><option>系统内置</option><option>实时接口</option><option>第三方接口</option></select></label>
-        {mode === '数据源' ? <label><span>刷新策略 *</span><select><option>页面加载 + 30s 轮询</option><option>页面加载</option><option>手动刷新</option><option>WebSocket 实时</option></select></label> : null}
-        {mode === '数据源' ? <label><span>字段映射</span><select><option>映射到 Activity View Model</option><option>映射到页面数据字段</option><option>仅用于预览</option></select></label> : null}
-        {mode === '动作' ? <label><span>触发组件 *</span><select><option>按钮 / 图片 / 卡片 / 页面曝光</option></select></label> : null}
-        {mode === '动作' ? <label><span>Payload Schema *</span><textarea value={'{\n  "activityId": "{{ activity.id }}",\n  "rewardId": "{{ reward.id }}"\n}'} readOnly /></label> : null}
-        {mode === '样式' ? <label><span>默认值 *</span><input value={draftValue} onChange={(event) => onDraftValue(event.target.value)} /></label> : mode !== '数据源' ? <label><span>默认值</span><input value={draftValue} onChange={(event) => onDraftValue(event.target.value)} placeholder="请输入默认值（可选）" /></label> : null}
-        <label><span>{mode === '样式' ? '适用组件' : mode === '数据源' ? '绑定字段' : '绑定组件'}</span><select><option>头图 / 标题 / 分享卡片</option><option>按钮 / 卡片 / 标题</option><option>activity.title / reward.amount</option></select></label>
-        <label><span>说明</span><textarea placeholder="请输入说明（可选）" /></label>
+    <Panel
+      title={mode === '数据' ? '新增数据字段' : mode === '数据源' ? '新增数据源' : mode === '动作' ? '新增动作事件' : '新增样式 Token'}
+      onClose={onCancel}
+      bodyClassName="campaign-resource-form"
+      footer={<><Button onClick={onCancel}>取消</Button><Button variant="primary" onClick={onSave}>保存</Button></>}
+    >
+        <Field label={mode === '数据' ? '字段名称' : mode === '数据源' ? '数据源名称' : mode === '动作' ? '动作名称' : '样式名称'} required><input value={draftName} onChange={(event) => onDraftName(event.target.value)} /></Field>
+        {mode === '样式' ? <Field label="Token 名称" required><input value="--campaign-button-primary" readOnly /></Field> : null}
+        <Field label={mode === '数据' ? '字段类型' : mode === '数据源' ? '数据源类型' : mode === '动作' ? '动作类型' : '样式类型'} required><select value={draftType} onChange={(event) => onDraftType(event.target.value)}><option>文本</option><option>数值</option><option>时间</option><option>REST API</option><option>GraphQL</option><option>WebSocket</option><option>Mock JSON</option><option>Workflow Event</option><option>Page Event</option><option>颜色</option><option>圆角</option></select></Field>
+        {mode === '数据源' ? <Field label="接口地址" required><input value={draftValue} onChange={(event) => onDraftValue(event.target.value)} placeholder="/api/activities/:activityId/view-model" /></Field> : null}
+        {mode === '数据源' ? <Field label="请求方式" required><select><option>GET</option><option>POST</option><option>SUBSCRIBE</option><option>LOCAL</option></select></Field> : null}
+        <Field label={mode === '数据' ? '数据来源' : mode === '数据源' ? '来源类型' : '来源'} required><select value={draftSource} onChange={(event) => onDraftSource(event.target.value)}><option>Activity View Model</option><option>页面自定义</option><option>系统内置</option><option>实时接口</option><option>第三方接口</option></select></Field>
+        {mode === '数据源' ? <Field label="刷新策略" required><select><option>页面加载 + 30s 轮询</option><option>页面加载</option><option>手动刷新</option><option>WebSocket 实时</option></select></Field> : null}
+        {mode === '数据源' ? <Field label="字段映射"><select><option>映射到 Activity View Model</option><option>映射到页面数据字段</option><option>仅用于预览</option></select></Field> : null}
+        {mode === '动作' ? <Field label="触发组件" required><select><option>按钮 / 图片 / 卡片 / 页面曝光</option></select></Field> : null}
+        {mode === '动作' ? <Field label="Payload Schema" required><textarea value={'{\n  "activityId": "{{ activity.id }}",\n  "rewardId": "{{ reward.id }}"\n}'} readOnly /></Field> : null}
+        {mode === '样式' ? <Field label="默认值" required><input value={draftValue} onChange={(event) => onDraftValue(event.target.value)} /></Field> : mode !== '数据源' ? <Field label="默认值"><input value={draftValue} onChange={(event) => onDraftValue(event.target.value)} placeholder="请输入默认值（可选）" /></Field> : null}
+        <Field label={mode === '样式' ? '适用组件' : mode === '数据源' ? '绑定字段' : '绑定组件'}><select><option>头图 / 标题 / 分享卡片</option><option>按钮 / 卡片 / 标题</option><option>activity.title / reward.amount</option></select></Field>
+        <Field label="说明"><textarea placeholder="请输入说明（可选）" /></Field>
         {mode === '数据' ? <div className="campaign-expression-preview"><span>表达式预览</span><code>{`{{ ${draftName || 'activity.title'} }}`}</code></div> : null}
         {mode === '数据源' ? <div className="campaign-source-preview"><span>实时拉取预览</span><code>{`GET ${draftValue || '/api/activities/:activityId/view-model'}\n200 OK · 86 ms\n{ "activity": { "title": "夏日充值返利活动" } }`}</code></div> : null}
         {mode === '动作' ? <div className="campaign-expression-preview"><span>验证 Payload</span><b>验证通过</b></div> : null}
         {mode === '样式' ? <div className="campaign-style-preview"><span>样式预览</span><button style={{ background: draftValue || 'var(--theme-accent)' }} type="button">立即领取</button><code>--campaign-button-primary</code></div> : null}
-      </div>
-      <footer className="campaign-resource-panel-footer"><button type="button" onClick={onCancel}>取消</button><button className="primary" type="button" onClick={onSave}>保存</button></footer>
-    </>
+    </Panel>
   );
 }
-

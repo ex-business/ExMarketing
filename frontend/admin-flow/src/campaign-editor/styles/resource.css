@@ -92,27 +92,10 @@
   font-weight: 850;
 }
 
-.campaign-resource-add {
-  height: 36px;
-  border: 0;
-  border-radius: 8px;
-  background: var(--theme-accent);
-  color: var(--theme-on-accent);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 0 16px;
-  cursor: pointer;
-  font-size: 13px;
-  font-weight: 900;
-  white-space: nowrap;
-}
-
 .campaign-resource-layout {
   min-height: 0;
   display: grid;
-  grid-template-columns: 228px minmax(560px, 1fr) 380px;
+  grid-template-columns: 220px minmax(420px, 1fr) 320px;
 }
 
 .campaign-resource-tree,
@@ -223,7 +206,7 @@
 
 .campaign-resource-table {
   width: 100%;
-  min-width: 780px;
+  min-width: 680px;
   align-self: start;
   border-collapse: collapse;
   color: var(--theme-text-body);
@@ -266,7 +249,6 @@
   outline-offset: -4px;
 }
 
-.campaign-resource-table button,
 .campaign-resource-table select {
   min-height: 32px;
   border: 1px solid var(--theme-border);
@@ -277,6 +259,12 @@
   cursor: pointer;
   font-size: 12px;
   font-weight: 850;
+}
+
+.campaign-resource-row-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .campaign-resource-name {
@@ -399,39 +387,17 @@
 .campaign-resource-panel {
   border-left: 1px solid var(--theme-border);
   background: var(--theme-surface);
-  display: grid;
-  grid-template-rows: 58px minmax(0, 1fr) auto;
+  overflow: hidden;
 }
 
-.campaign-resource-panel-head {
-  border-bottom: 1px solid var(--theme-border);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 0 22px;
-}
-
-.campaign-resource-panel-head h2 {
-  margin: 0;
-  color: var(--theme-text);
-  font-size: 18px;
-  font-weight: 950;
-}
-
-.campaign-resource-panel-head button {
-  border: 0;
-  background: transparent;
-  color: var(--theme-text-muted);
-  cursor: pointer;
-  font-size: 22px;
+.campaign-resource-panel > .exm-panel {
+  height: 100%;
 }
 
 .campaign-resource-detail-body,
 .campaign-resource-form {
   min-height: 0;
   overflow: auto;
-  padding: 22px;
 }
 
 .campaign-resource-detail-body h3 {
@@ -496,60 +462,10 @@
   margin-top: 20px;
 }
 
-.campaign-resource-panel-actions button,
-.campaign-resource-panel-footer button {
-  min-height: 36px;
-  border: 1px solid var(--theme-border);
-  border-radius: 8px;
-  background: var(--theme-control);
-  color: var(--theme-text-body);
-  padding: 0 14px;
-  cursor: pointer;
-  font-weight: 850;
-}
-
-.campaign-resource-panel-actions button.danger {
-  border-color: var(--campaign-danger-border);
-  color: var(--theme-danger);
-}
-
 .campaign-resource-form {
   display: grid;
   align-content: start;
   gap: 14px;
-}
-
-.campaign-resource-form label {
-  display: grid;
-  gap: 7px;
-}
-
-.campaign-resource-form label span {
-  color: var(--theme-text);
-  font-size: 13px;
-  font-weight: 900;
-}
-
-.campaign-resource-form input,
-.campaign-resource-form select,
-.campaign-resource-form textarea {
-  width: 100%;
-  min-width: 0;
-  min-height: 38px;
-  border: 1px solid var(--theme-border);
-  border-radius: 8px;
-  background: var(--theme-control);
-  color: var(--theme-text);
-  padding: 0 12px;
-  font: inherit;
-  font-size: 13px;
-  font-weight: 800;
-}
-
-.campaign-resource-form textarea {
-  min-height: 90px;
-  padding: 10px 12px;
-  resize: vertical;
 }
 
 .campaign-expression-preview,

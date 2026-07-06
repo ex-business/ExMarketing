@@ -60,6 +60,7 @@ import { CampaignRuntimeView } from './campaign-editor/RuntimeView';
 import { CampaignModulePreview } from './campaign-editor/PageWorkspace';
 import { FreeElementInspector, InspectorContent } from './campaign-editor/Inspector';
 import { FreeDesignCanvas } from './campaign-editor/FreeCanvas';
+import { Tabs } from './campaign-editor/ui';
 export { CampaignRuntimePage } from './campaign-editor/RuntimeView';
 
 const navItems = [
@@ -518,7 +519,20 @@ export function CampaignEditorPage() {
 
   const setEditorMode = (mode: 'controlled' | 'free') => {
     setPageEditorMode(mode);
-    if (mode === 'controlled') updatePage((current) => ({ ...current, designMode: 'controlled', status: 'DRAFT' }));
+    if (mode === 'controlled') {
+      const previewBlockIds = freeElements
+        .map((element) => blockIdForFreeElementId(element.id))
+        .filter((id) => id && blocks.some((block) => block.id === id));
+      const selectedFreeBlockId = blockIdForFreeElementId(selectedFreeId);
+      const nextSelectedId =
+        (selectedFreeBlockId && previewBlockIds.includes(selectedFreeBlockId) ? selectedFreeBlockId : '') ||
+        (previewBlockIds.includes(selectedId) ? selectedId : '') ||
+        previewBlockIds[0] ||
+        blocks[0]?.id ||
+        '';
+      setSelectedId(nextSelectedId);
+      updatePage((current) => ({ ...current, designMode: 'controlled', status: 'DRAFT' }));
+    }
     if (mode === 'free') {
       const nextFreeElements = pageSchema.freeElements?.length
         ? pageSchema.freeElements
@@ -778,8 +792,12 @@ export function CampaignEditorPage() {
 
             <section className="campaign-canvas-workspace">
               <div className="campaign-toolbar">
-                <button className={pageEditorMode === 'free' ? 'active' : ''} type="button" onClick={() => setEditorMode('free')}>页面设计</button>
-                <button className={pageEditorMode === 'controlled' ? 'active' : ''} type="button" onClick={() => setEditorMode('controlled')}>模块预览</button>
+                <Tabs
+                  value={pageEditorMode === 'free' ? '页面设计' : '模块预览'}
+                  items={['页面设计', '模块预览']}
+                  onChange={(mode) => setEditorMode(mode === '页面设计' ? 'free' : 'controlled')}
+                  ariaLabel="页面编辑模式"
+                />
               </div>
               {pageEditorMode === 'free' ? (
                 <FreeDesignCanvas

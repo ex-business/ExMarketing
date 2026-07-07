@@ -1,5 +1,5 @@
 import type { CampaignBlockKind, CampaignPageSchema, CampaignPageSummary, CampaignPageVersion, CampaignValidationIssue, LayoutKind } from './types';
-import { initialBlocks, initialFreeElements } from './layout';
+import { initialBlocks, initialFreeElements, syncFreeElementsWithBlocks } from './layout';
 import { withEditorPage } from './editorSchema';
 import { normalizePage } from './editorEngine';
 
@@ -33,7 +33,15 @@ export function writeJSON(key: string, value: unknown) {
 }
 
 export function normalizeCampaignPage(page: CampaignPageInput): CampaignPageSchema {
-  const pageWithEditor = withEditorPage(page);
+  const pageWithSyncedElements = {
+    ...page,
+    freeElements: syncFreeElementsWithBlocks(
+      page.blocks,
+      page.device.defaultWidth,
+      page.freeElements ?? initialFreeElements,
+    ),
+  };
+  const pageWithEditor = withEditorPage(pageWithSyncedElements);
   return {
     ...pageWithEditor,
     editor: normalizePage(pageWithEditor.editor),
@@ -113,7 +121,6 @@ export const campaignPageApi = {
       ...fallback,
       ...stored,
       designMode: stored.designMode ?? 'controlled',
-      freeElements: stored.freeElements ?? initialFreeElements,
     });
   },
   loadPublishedPage: (path?: string) => {

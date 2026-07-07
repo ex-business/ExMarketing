@@ -2,13 +2,23 @@
 
 本文档定义 ExMarketing Campaign Editor 的产品形态、信息架构、核心数据结构和实施步骤。目标是把 ExMarketing 现有活动流程能力扩展为可运营配置的移动端活动页编辑器。
 
+> 2026-07-08 更新：当前交互和架构方向以 [Campaign Editor 交互设计 v2](campaign-editor-interaction-design-v2.zh-CN.md) 为准。本文早期章节中关于 Puck、内容块编辑器和“页面 / 数据源 / 动作 / 样式 / 设置 / 模板库 / 页面库”七入口的信息，作为历史方案保留，不再作为下一版实现依据。
+
 ## 结论
 
-Campaign Editor 不做 Figma / Penpot 式自由设计工具，也不做通用 HTML 页面生成器。第一版定位为：
+Campaign Editor 不做 Figma / Penpot 式专业设计工具，也不做通用 HTML 页面生成器。当前定位调整为：
 
-> 移动端优先的营销活动内容块编辑器 + 动态数据绑定 + 工作流动作绑定。
+> 面向运营的移动端营销活动页构建器：结构优先、容器优先、动态数据绑定、工作流动作绑定、发布快照隔离。
 
-页面编辑体验接近富文本内容块编辑器：运营按内容块组织活动页，系统负责约束移动端布局、绑定活动数据、触发 workflow event、发布活动页。
+页面编辑体验应接近 Webflow / Retool 这类构建器的简化版：左侧管理结构和添加组件，中间画布编辑，右侧 Inspector 编辑选中对象属性。系统负责约束移动端布局、绑定活动数据、触发 workflow event、发布活动页。
+
+下一版关键取舍：
+
+- 默认进入搭建模式，不默认进入自由拖拽。
+- 页面布局以 Section / Container / HorizontalLayout / VerticalLayout 为主。
+- 自由定位作为高级模式，仅用于头图叠层、角标、特殊运营视觉。
+- 页面设计、预览模式、运行时必须共用同一个 Canvas Renderer。
+- 保存源以 Editor Schema 为准，legacy `blocks/freeElements` 仅作为兼容过渡。
 
 ## 目标
 
@@ -16,75 +26,89 @@ Campaign Editor 不做 Figma / Penpot 式自由设计工具，也不做通用 HT
 - 页面默认面向移动端，编辑态使用 375 / 393 / 414px 宽度长页面画布，不套手机外框。
 - 预览态再使用 iPhone / Android 外框验证真实终端效果。
 - 页面内容由受控业务内容块组成，避免任意 HTML / JS 注入。
+- 页面结构由统一 Editor Schema 表达：Page、Node、ContainerNode、ComponentNode、ResourceBinding、ActionBinding、StyleToken。
+- 布局优先使用容器和文档流，不要求运营直接管理每个元素的 `x/y`。
 - 内容块可以绑定 Activity View Model 字段。
 - 按钮类内容块可以触发 ExMarketing workflow event。
 - 发布产物可版本化、可回滚、可审计。
 
 ## 非目标
 
-- 不实现自由画布、图层、钢笔、复杂约束布局等专业设计工具能力。
+- 不把自由画布作为默认编辑方式。
+- 不实现钢笔、矢量编辑、复杂约束布局等专业设计工具能力。
 - 不支持运营输入任意 JavaScript。
 - 第一版不做 PC 独立设计器。PC 打开可居中展示移动端页面，后续再扩展 PC 模板。
 - 第一版不做复杂 A/B 测试、灰度流量、多人协作评论。
 - 第一版不直接从 Penpot / Figma 一键转生产页面。
 
-## 技术选型：Puck
+## 技术选型：自研 Editor Kernel
 
-页面设计器技术框架采用 Puck。Puck 只负责编辑器层的可视化内容块编排、字段配置和拖拽体验，不直接作为生产页面的业务运行时。
+页面设计器采用 ExMarketing 自研 Editor Kernel，不再以 Puck 作为主编辑器方案。核心由四层组成：
+
+```text
+Editor Schema
+Editor Engine
+Component Registry
+Canvas Renderer
+```
 
 职责边界：
 
 ```text
-Puck：
-- 内容块拖拽、排序、选择
-- 内容块字段编辑
-- 编辑态预览
-- 输出结构化页面数据
+Editor Schema：
+- Page / Node / ContainerNode / ComponentNode
+- ResourceBinding / ActionBinding / StyleToken
+- 草稿、发布快照和运行时的统一结构
 
-ExMarketing：
-- Activity View Model 数据源
-- workflow event 动作绑定
-- 页面 schema 存储和版本管理
-- 发布、权限、审计
-- C 端 runtime 渲染和安全控制
+Editor Engine：
+- selectNode / moveNode / resizeNode
+- moveIntoContainer / moveOutOfContainer
+- deleteNode / duplicateNode / reorderNode
+- undo / redo
+
+Component Registry：
+- Title / HeroBanner / RewardCard / Button / Image
+- HorizontalLayout / VerticalLayout
+- 默认尺寸、可编辑属性、默认样式、资源绑定、动作绑定、runtime render
+
+Canvas Renderer：
+- design：显示选中框、插入线、容器高亮、拖拽手柄
+- preview：隐藏编辑辅助，只读预览当前草稿
+- runtime：完全只读，读取发布 snapshot
 ```
-
-采用 Puck 的原因：
-
-- ExMarketing 前端是 React / Vite，Puck 与现有技术栈匹配。
-- Puck 允许使用自定义 React 组件，适合沉淀受控营销内容块。
-- 页面保存为结构化数据，而不是运营自由编辑 HTML。
-- 可以把编辑器体验和生产 runtime 解耦，便于发布版本快照和安全审计。
 
 使用约束：
 
 - 不开放任意 HTML / JS 组件。
-- Puck 组件必须映射到 ExMarketing 受控内容块。
-- Puck 输出数据需要转换为 ExMarketing Campaign Page schema。
+- 组件必须来自 Component Registry。
+- 运行时不执行运营输入脚本。
 - 线上 runtime 不直接依赖编辑器状态，不执行运营输入脚本。
 - 绑定表达式第一版只支持白名单字段路径。
 
-Puck 配置映射示例：
+组件注册映射示例：
 
 ```text
-Puck component HeroBanner    -> ExMarketing block HeroBanner
-Puck component RewardCard    -> ExMarketing block RewardCard
-Puck component Countdown     -> ExMarketing block Countdown
-Puck component ProgressBlock -> ExMarketing block ProgressBlock
-Puck component ClaimButton   -> ExMarketing block ClaimButton
-Puck component RuleText      -> ExMarketing block RuleText
+Component Title            -> ComponentNode Title
+Component HeroBanner       -> ComponentNode HeroBanner
+Component RewardCard       -> ComponentNode RewardCard
+Component Button           -> ComponentNode Button / ClaimButton
+Component Image            -> ComponentNode Image
+Component HorizontalLayout -> ContainerNode horizontal-layout
+Component VerticalLayout   -> ContainerNode vertical-layout
 ```
 
 技术流向：
 
 ```text
-Puck Editor
--> Puck data
--> normalizeCampaignSchema()
+Editor UI
+-> editorEngineReducer(action)
+-> Editor Schema
 -> campaign_page.schema
 -> publish version snapshot
 -> Campaign Runtime renderer
 ```
+
+Puck 可以作为历史 fallback 或技术验证材料保留，但不再进入主实现路径。
 
 ## 产品信息架构
 
@@ -92,7 +116,7 @@ Puck Editor
 
 ```text
 顶部 Header：活动选择 / 设备宽度 / 自动保存 / 预览 / 发布
-左侧主导航：页面 / 数据源 / 动作 / 样式 / 设置 / 模板库 / 页面库
+左侧主导航：页面 / 资源 / 设置 / 模板库
 中间工作区：当前能力的主要操作区域
 右侧面板：当前项详情、配置或预览
 ```
@@ -101,19 +125,16 @@ Puck Editor
 
 ```text
 页面
-数据源
-动作
-样式
+资源
 设置
 模板库
-页面库
 ```
 
-不要使用顶部大模块导航，避免从编辑器变成传统后台设置中心。
+`数据字段`、`数据源`、`动作事件`、`样式 Token`、`图片素材` 统一收敛到 `资源` 工作区内部。不要使用顶部大模块导航，避免从编辑器变成传统后台设置中心。
 
 ## 设计效果图
 
-效果图按当前确定的信息架构分类：页面、数据源、动作、样式、设置。五个工作区共用同一个编辑器外壳，避免在不同页面之间出现不同产品形态。
+本节图片是早期效果图资产，保留用于视觉参考。下一版信息架构以 v2 为准：主导航只保留 `页面 / 资源 / 设置 / 模板库`，数据字段、数据源、动作、样式 Token、图片素材都进入 `资源` 工作区。
 
 ### 页面设计
 
@@ -219,48 +240,62 @@ PC 预览：居中展示移动端页面
 布局：
 
 ```text
-左侧：页面内容结构
+左侧：结构 / 添加
 中间：393px 移动端长页面画布
-右侧：当前内容块配置
+右侧：Inspector
 ```
 
-页面内容结构示例：
+左侧面板只做两件事：
 
 ```text
-头图 HeroBanner
-活动标题 Title
-奖励卡片 RewardCard
-倒计时 Countdown
-参与进度 ProgressBlock
-领取按钮 ClaimButton
-活动规则 RuleText
-FAQ FAQBlock
+结构：页面树、搜索、展开收起、拖拽排序、移入/移出容器
+添加：组件库、布局组件、营销组件、内容组件
 ```
 
-内容结构行能力：
+页面树示例：
+
+```text
+Page 夏日充值返利活动
+  Section 首屏
+    VerticalLayout 主内容
+      HeroBanner 头图
+      Title 活动标题
+      RewardCard 奖励卡片
+      ClaimButton 领取按钮
+  Section 规则
+    RuleText 活动规则
+    FAQBlock 常见问题
+```
+
+树行原则：
 
 - 拖拽排序
-- 显示 / 隐藏
-- 已绑定标识
-- 有动作标识
-- 复制
-- 删除
+- 支持搜索、展开、收起
+- 默认不常驻显示一排操作图标
+- hover / 右键菜单展示复制、删除、显示隐藏、移入容器、移出容器
+- 选中树节点时同步画布选中
+- 拖动普通组件到容器内时，组件成为容器子节点
 
 中间画布能力：
 
-- 内容块直接选中
-- 选中态蓝色描边
-- 块间 `+ 添加内容块`
+- 默认搭建模式，按树结构和容器布局渲染
+- 组件直接选中，选中态只显示单层蓝色边框
+- 拖动时显示插入线和目标容器高亮
+- 容器决定方向、间距、对齐、换行
 - 长页面滚动
-- 画布宽度标识，例如 `393px 移动端画布`
+- 支持 375 / 393 / 414px 宽度切换
 - 底部移动端校验提示：无横向溢出、点击区域正常、长页面可滚动
+- 自由定位是高级模式，不是默认模式
 
-右侧配置分为：
+右侧 Inspector 分为：
 
 ```text
 内容
-绑定
-动作
+布局
+外观
+数据
+交互
+高级
 ```
 
 例如选中 `ClaimButton`：
@@ -272,30 +307,53 @@ FAQ FAQBlock
 - 宽度：全宽
 - 固定底部：开 / 关
 
-绑定：
+布局：
+- 宽度：全宽
+- 对齐：居中
+
+外观：
+- 按钮样式：主按钮
+- 圆角：8
+
+数据：
 - 禁用条件：{{ !eligibility.canClaim }}
 - 显示条件：{{ user.loggedIn }}
 
-动作：
+交互：
 - 点击动作：CLAIM_REWARD
 - 成功后：刷新页面数据
 - 失败提示：{{ eligibility.reason }}
+
+高级：
+- z-index
+- 自由定位
+- 自定义标识
 ```
 
-## 内容块设计
+## Component Registry
 
-第一版只做活动页高频内容块。
+组件必须统一注册，不能在页面里散落硬编码渲染逻辑。每个组件定义默认尺寸、可编辑属性、默认样式、可绑定资源、可绑定动作、runtime 渲染方式。
 
-| 内容块 | 用途 | 关键配置 |
+第一批组件：
+
+| 组件 | 类型 | 用途 | 关键配置 |
 | --- | --- | --- |
-| HeroBanner | 活动头图 | 图片、标题、副标题、活动时间 |
-| Title | 活动标题 | 文案、对齐、绑定字段 |
-| RewardCard | 奖励信息 | 奖励名称、金额、条件、图片 |
-| Countdown | 倒计时 | 结束时间、格式、过期文案 |
-| ProgressBlock | 参与进度 | 当前值、目标值、百分比、人数 |
-| ClaimButton | 领取按钮 | 文案、禁用条件、点击动作 |
-| RuleText | 活动规则 | 富文本、编号列表 |
-| FAQBlock | 常见问题 | 问题列表、折叠状态 |
+| Title | ComponentNode | 活动标题 | 文案、级别、对齐、绑定字段 |
+| HeroBanner | ComponentNode | 活动头图 | 图片、标题、副标题、活动时间 |
+| RewardCard | ComponentNode | 奖励信息 | 奖励名称、金额、条件、图片 |
+| Button | ComponentNode | 领取 / 跳转按钮 | 文案、禁用条件、动作绑定 |
+| Image | ComponentNode | 通用图片 | 图片资源、Alt、裁剪方式 |
+| HorizontalLayout | ContainerNode | 水平布局 | gap、align、justify、wrap、padding |
+| VerticalLayout | ContainerNode | 垂直布局 | gap、align、padding |
+
+兼容组件：
+
+| 组件 | 说明 |
+| --- | --- |
+| Countdown | 可作为营销组件扩展 |
+| ProgressBlock | 可作为营销组件扩展 |
+| RuleText | 可作为内容组件扩展 |
+| FAQBlock | 可作为内容组件扩展 |
 
 后续扩展：
 
@@ -807,17 +865,22 @@ POST /api/activities/:activityId/events
 
 ## 前端实现建议
 
-页面设计页基于 Puck 实现，但外层工作台、数据源、动作、样式、设置、模板库、页面库仍使用 ExMarketing 自己的 React 页面和 TailAdmin 风格组件。
+页面设计页基于自研 Editor Kernel 实现。所有拖拽、树操作、快捷键、Inspector 修改都通过 reducer 写入 Editor Schema，不在 React 组件里直接拼接局部状态。
 
 目录建议：
 
 ```text
-frontend/admin-flow/src/pages/campaign-editor/
-frontend/admin-flow/src/components/campaign-editor/
-frontend/admin-flow/src/components/campaign-blocks/
-frontend/admin-flow/src/components/campaign-puck/
-frontend/admin-flow/src/lib/campaign-editor/
-frontend/admin-flow/src/lib/campaign-runtime/
+frontend/admin-flow/src/campaign-editor/
+frontend/admin-flow/src/campaign-editor/editorSchema.ts
+frontend/admin-flow/src/campaign-editor/editorEngine.ts
+frontend/admin-flow/src/campaign-editor/componentRegistry.tsx
+frontend/admin-flow/src/campaign-editor/CanvasRenderer.tsx
+frontend/admin-flow/src/campaign-editor/PageWorkspace.tsx
+frontend/admin-flow/src/campaign-editor/ResourceWorkspace.tsx
+frontend/admin-flow/src/campaign-editor/Inspector.tsx
+frontend/admin-flow/src/campaign-editor/RuntimeView.tsx
+frontend/admin-flow/src/campaign-editor/ui/
+frontend/admin-flow/src/campaign-editor/styles/
 ```
 
 核心模块：
@@ -826,44 +889,57 @@ frontend/admin-flow/src/lib/campaign-runtime/
 CampaignEditorPage
 EditorShell
 LeftNav
-PageOutline
-PuckPageDesigner
-PuckComponentRegistry
-PuckFieldAdapters
-CampaignSchemaNormalizer
-BlockRenderer
-BlockInspector
-DataSourceWorkspace
-ActionWorkspace
-StyleWorkspace
+PageWorkspace
+PageTree
+ComponentPalette
+CanvasRenderer
+Inspector
+ResourceWorkspace
 SettingsWorkspace
 TemplateLibraryWorkspace
-PageLibraryWorkspace
+RuntimeView
+EditorSchema
+EditorEngine
+ComponentRegistry
+ResourceStorageApi
 ```
 
-Puck 组件注册建议：
+Editor Engine 必须覆盖：
 
 ```text
-HeroBannerPuckConfig
-TitlePuckConfig
-RewardCardPuckConfig
-CountdownPuckConfig
-ProgressBlockPuckConfig
-ClaimButtonPuckConfig
-RuleTextPuckConfig
-FAQBlockPuckConfig
+selectNode
+moveNode
+resizeNode
+moveIntoContainer
+moveOutOfContainer
+deleteNode
+duplicateNode
+reorderNode
+updateNodeProps
+updateNodeStyle
+bindResource
+bindAction
+undo
+redo
 ```
 
-每个 Puck config 只暴露允许运营编辑的字段。例如 `ClaimButton` 只暴露文案、样式、宽度、固定底部、禁用条件、点击动作，不暴露任意 CSS 和 JS。
+Canvas Renderer 模式：
+
+| 模式 | 用途 | 行为 |
+| --- | --- | --- |
+| design | 页面设计 | 显示选中框、插入线、容器高亮、拖拽手柄 |
+| preview | 草稿预览 | 隐藏编辑辅助，只读渲染当前草稿 |
+| runtime | 线上运行时 | 完全只读，读取发布 snapshot |
 
 渲染原则：
 
-- 页面设计编辑态使用 Puck 管理内容块选择、拖拽和字段编辑。
-- Puck data 保存前必须转换为 ExMarketing Campaign Page schema。
-- Runtime 复用受控 block renderer，但不加载 Puck 编辑器能力。
-- Schema 是唯一保存源，不保存 HTML。
+- 页面设计、预览模式、运行时使用同一个 `CanvasRenderer`。
+- Editor Schema 是唯一保存源，不保存 HTML。
+- legacy `blocks/freeElements` 只作为兼容迁移层，不作为新功能入口。
 - 发布时可生成静态 JSON + runtime 页面，也可 SSR/CSR 加载 schema 渲染。
-- 编辑器 preview 可以使用 Puck preview，生产 runtime 必须使用 ExMarketing runtime renderer。
+- 组件渲染只能来自 `ComponentRegistry`。
+- Inspector 编辑只调用 Editor Engine action。
+- 资源绑定、动作绑定、样式 Token 都通过 Resource Workspace 管理。
 
 ## 存储建议
 
@@ -894,8 +970,8 @@ campaign_page_audit_log
 ## 安全约束
 
 - 禁止运营输入任意 JS。
-- Puck 只允许注册 ExMarketing 白名单内容块。
-- Puck 字段配置必须经过 schema normalizer 校验后才能保存。
+- Component Registry 只允许注册 ExMarketing 白名单组件。
+- Inspector 字段配置必须经过 schema validator 校验后才能保存。
 - 富文本需要白名单清洗。
 - 图片上传限制类型、大小、域名和扫描策略。
 - 动作类型必须来自后端白名单。
@@ -905,85 +981,84 @@ campaign_page_audit_log
 
 ## 实施计划
 
-### Phase 1：静态原型
+### Phase 1：交互模型收敛
 
-目标：先验证信息架构和编辑体验。
+目标：把页面工作区收敛成业界成熟构建器模型。
 
 任务：
 
-- 实现统一编辑器外壳。
-- 实现左侧主导航：页面 / 数据源 / 动作 / 样式 / 设置 / 模板库 / 页面库。
-- 引入 Puck 并封装 `PuckPageDesigner`。
-- 注册第一批受控营销内容块 Puck config。
-- 实现页面设计页静态交互。
-- 实现移动端宽度长页面画布。
-- 基于 Puck 实现内容块选中、排序、添加、删除的前端状态。
-- 实现右侧内容 / 绑定 / 动作配置面板。
+- 主导航只保留 `页面 / 资源 / 设置 / 模板库`。
+- 页面左侧改为 `结构 / 添加`。
+- 页面树移除常驻三图标，改为 hover / 右键菜单。
+- 默认进入搭建模式，自由设计降级为高级模式。
+- Inspector 改为 `内容 / 布局 / 外观 / 数据 / 交互 / 高级`。
 
 验收：
 
-- 可以编辑夏日充值返利活动 demo 页。
-- 画布不套手机外框。
-- 375 / 393 / 414px 宽度切换可用。
-- 页面结构与画布选中状态同步。
+- 页面树、组件添加、画布、Inspector 各司其职，不互相挤压。
+- 普通运营可以通过容器和组件完成活动页，而不是依赖自由拖拽。
+- 页面设计和预览的布局表现一致。
 
-### Phase 2：Schema 与本地保存
+### Phase 2：Schema 和 Engine 接管
 
-目标：形成稳定页面 schema。
+目标：所有编辑行为都写入统一 Editor Schema。
 
 任务：
 
-- 定义 Campaign Page schema。
-- 定义 block schema。
-- 定义 bindings / action schema。
-- 定义 Puck data 到 Campaign Page schema 的转换器。
-- 定义 Campaign Page schema 到 Puck data 的反向适配器。
-- 接入本地 mock API 或 local storage。
+- 定义 Page / Node / ContainerNode / ComponentNode。
+- 定义 ResourceBinding / ActionBinding / StyleToken。
+- 抽出 `editorEngineReducer`。
+- 所有拖拽、树操作、快捷键、Inspector 修改都走 reducer。
+- 完成 undo / redo。
+- 接入 localStorage mock 持久化。
 - 实现 schema import / export 便于调试。
 
 验收：
 
 - 页面刷新后草稿可恢复。
-- 修改内容块会稳定写入 schema。
-- Puck data 和 Campaign Page schema 可以双向转换。
-- Runtime renderer 可以按 schema 渲染页面。
+- 修改组件、移动节点、容器嵌套、删除复制都稳定写入 Editor Schema。
+- legacy `blocks/freeElements` 不再作为新保存源。
+- undo / redo 以用户操作为单位。
 
-### Phase 3：Activity View Model
+### Phase 3：统一 Canvas Renderer
 
-目标：页面可以绑定真实活动数据。
-
-任务：
-
-- 后端提供 `GET /api/activities/:activityId/view-model`。
-- 数据源页展示 View Model 字段。
-- 内容块绑定字段。
-- 编辑器支持预览数据。
-- runtime 渲染时解析 `{{path.to.value}}`。
-
-验收：
-
-- 奖励金额、活动标题、倒计时、进度可从 View Model 渲染。
-- 缺失字段有明确提示。
-- 绑定字段可以显示使用位置。
-
-### Phase 4：动作绑定
-
-目标：按钮可以触发 ExMarketing workflow event。
+目标：页面设计、预览模式、运行时预览共用同一个 renderer。
 
 任务：
 
-- 后端提供 `POST /api/activities/:activityId/events`。
-- 动作页配置 `CLAIM_REWARD`。
-- ClaimButton 触发事件。
-- 成功后刷新 View Model。
-- 失败时展示 `eligibility.reason`。
+- 抽出 `CanvasRenderer`。
+- 支持 `design / preview / runtime` 三种模式。
+- 设计模式显示编辑辅助。
+- 预览模式隐藏编辑辅助，只读展示当前草稿。
+- 运行时读取发布 snapshot，只读渲染。
+- 统一居中、宽度、滚动、容器布局和资源绑定解析。
 
 验收：
 
-- 点击领取按钮能触发 workflow。
-- 重复点击有防抖。
-- 成功 / 失败状态清晰。
-- 审计日志能看到 pageId、blockId、eventType。
+- 设计态居中的内容，预览和运行时也居中。
+- 设计态没有横向滚动，预览和运行时也没有横向滚动。
+- 容器、普通组件、嵌套组件在三个模式下层级一致。
+
+### Phase 4：资源工作区完善
+
+目标：资源统一管理数据字段、数据源、动作事件、样式 Token、图片素材。
+
+任务：
+
+- 资源页使用左侧资源类型树 + 中间表格 + 右侧详情 / 新增面板。
+- 数据字段支持绑定组件和表达式预览。
+- 数据源支持接口地址、请求方法、刷新策略、实时拉取预览。
+- 动作事件支持 payload schema 和触发组件。
+- 样式 Token 支持颜色、字体、间距、圆角、阴影。
+- 图片素材支持批量上传、用途、推荐尺寸、Alt 文案。
+- 资源数据先用 localStorage mock 持久化，后续接后端。
+
+验收：
+
+- 刷新页面后资源不丢失。
+- 编辑、复制、删除对所有资源类型生效。
+- 数据源实时拉取有成功、失败、加载态。
+- 图片可以批量上传并绑定到组件。
 
 ### Phase 5：发布与版本
 
@@ -1004,7 +1079,7 @@ campaign_page_audit_log
 - 发布版本可回滚。
 - 分享预览信息正确。
 
-### Phase 6：模板库与页面库
+### Phase 6：模板库
 
 目标：提升运营创建和复用效率。
 
@@ -1018,13 +1093,6 @@ campaign_page_audit_log
   - 优惠券领取
 - 模板包含默认 blocks、样式和绑定需求。
 - 新建页面时可从模板创建。
-- 提供页面库：
-  - 全部页面
-  - 草稿
-  - 已发布
-  - 已下线
-  - 我创建的
-  - 最近编辑
 - 支持复制已有页面为新页面。
 - 支持从页面库进入编辑和发布页预览。
 
@@ -1033,11 +1101,181 @@ campaign_page_audit_log
 - 运营可以 1 分钟内从模板生成活动页草稿。
 - 模板能提示缺失数据源和动作配置。
 - 运营可以从已有活动页复制出新活动页。
-- 页面库能按状态筛选草稿、已发布和已下线页面。
+- 模板不破坏 Editor Schema 和 Component Registry 约束。
 
 ## 详细实施步骤
 
 本节把 Phase 拆成可以逐步开发、评审和验收的工程任务。建议按顺序推进，不要先做复杂模板库和发布中心。
+
+> 2026-07-08 更新：下一版按下面的 v2 实施拆解推进。后续 `Step 0 - Step 12` 中 Puck 相关步骤是历史方案记录，只用于理解早期设计取舍，不再作为执行计划。
+
+### v2 Step 1：页面工作区重整
+
+目标：把页面编辑变成 `结构 / 添加 + 画布 + Inspector` 的稳定三栏工作流。
+
+前端任务：
+
+- 左侧面板拆成 `结构` 和 `添加` 两个文字 tab。
+- 结构 tab 只显示页面树和搜索。
+- 添加 tab 只显示组件库和布局组件。
+- 页面树行默认不展示显隐、复制、删除图标，改为 hover / 右键菜单。
+- 组件添加支持点击插入和拖动插入。
+- 画布默认进入搭建模式。
+- 自由定位移动到高级模式。
+
+验收：
+
+- 结构管理和组件添加不再混在同一个列表里。
+- 树行文字不会被操作图标挤压。
+- 新用户可以先用容器和组件搭建页面，不需要理解 `x/y/z`。
+
+### v2 Step 2：Editor Schema 统一保存源
+
+目标：只保留一个页面结构模型。
+
+前端任务：
+
+- 定义 `Page`。
+- 定义 `Node` 基类。
+- 定义 `ContainerNode`。
+- 定义 `ComponentNode`。
+- 定义 `ResourceBinding`。
+- 定义 `ActionBinding`。
+- 定义 `StyleToken`。
+- 增加 legacy 数据迁移适配，但不让 legacy 结构继续扩展功能。
+
+验收：
+
+- 页面树、画布、Inspector、运行时读取同一份 Editor Schema。
+- 容器子组件在 schema 中是真实父子关系。
+- 发布 snapshot 可以直接由 Editor Schema 生成。
+
+### v2 Step 3：Editor Engine reducer
+
+目标：所有编辑行为都走 reducer，不在 React 组件里直接改状态。
+
+前端任务：
+
+- 实现 `selectNode`。
+- 实现 `moveNode`。
+- 实现 `resizeNode`。
+- 实现 `moveIntoContainer`。
+- 实现 `moveOutOfContainer`。
+- 实现 `deleteNode`。
+- 实现 `duplicateNode`。
+- 实现 `reorderNode`。
+- 实现 `undo / redo`。
+- 让树拖拽、画布拖拽、快捷键、Inspector 修改全部调用 reducer action。
+
+验收：
+
+- 拖动普通组件到容器内，树和画布同时更新。
+- 容器子组件可以拖出到根节点或其他容器。
+- 删除最后一个节点、删除容器、复制容器都能保持 schema 合法。
+- undo / redo 能恢复用户意图，而不是只恢复零散字段。
+
+### v2 Step 4：统一 Canvas Renderer
+
+目标：页面设计、预览模式、运行时预览都用同一个 renderer。
+
+前端任务：
+
+- 抽出 `CanvasRenderer`。
+- 实现 `design` 模式：选中框、插入线、容器高亮、拖拽手柄。
+- 实现 `preview` 模式：隐藏编辑辅助，只读渲染当前草稿。
+- 实现 `runtime` 模式：读取发布 snapshot，完全只读。
+- 统一移动端宽度、居中、滚动、容器布局、资源绑定解析。
+
+验收：
+
+- 设计时居中，预览和运行时也居中。
+- 设计时无横向滚动，预览和运行时也无横向滚动。
+- 容器内子组件在三个模式下位置一致。
+
+### v2 Step 5：Component Registry
+
+目标：所有组件通过统一注册系统进入编辑器。
+
+前端任务：
+
+- 注册 `Title`。
+- 注册 `HeroBanner`。
+- 注册 `RewardCard`。
+- 注册 `Button`。
+- 注册 `Image`。
+- 注册 `HorizontalLayout`。
+- 注册 `VerticalLayout`。
+- 每个组件定义默认尺寸、可编辑属性、默认样式、可绑定资源、可绑定动作、runtime 渲染方式。
+
+验收：
+
+- 添加 tab 从 registry 读取组件。
+- Inspector 从 registry 读取可编辑属性。
+- Runtime 从 registry 读取只读渲染方式。
+- 未注册组件不能保存和发布。
+
+### v2 Step 6：Design System 替换
+
+目标：页面树、Inspector、资源页、设置页使用统一 UI 组件。
+
+前端任务：
+
+- 扩展 `Button`。
+- 扩展 `Field`。
+- 扩展 `Tabs`。
+- 扩展 `Panel`。
+- 新增 `Tree`。
+- 新增 `Toolbar`。
+- 新增 `InspectorSection`。
+- 新增 `DataTable`。
+- 新增 `SegmentedControl`。
+- 统一 token：颜色、字号、行高、间距、圆角、边框、阴影。
+
+验收：
+
+- 同类按钮、输入框、表格、分组标题在所有工作区一致。
+- 页面树、资源表格、Inspector 不再各写一套散乱 class。
+- 主题色只通过 token 使用，不在页面里散落 `#fff`、`#1746ff` 等硬编码。
+
+### v2 Step 7：资源工作区持久化和真实预览
+
+目标：资源页从静态 UI 变成可保存、可复制、可删除、可预览的管理面。
+
+前端任务：
+
+- 增加 `resourceStorageApi`。
+- 先用 localStorage mock 持久化。
+- 数据源支持接口地址、请求方法、刷新策略、实时拉取预览。
+- 数据字段支持表达式预览。
+- 动作事件支持 payload schema 校验。
+- 图片支持批量上传队列。
+- 样式 Token 支持组件绑定关系展示。
+
+验收：
+
+- 刷新页面后资源不丢。
+- 每种资源的编辑、复制、删除都有效。
+- 数据源实时拉取有 loading、success、error。
+- 图片批量上传可以逐条设置用途和推荐尺寸。
+
+### v2 Step 8：发布模型完善
+
+目标：草稿、已发布版本、历史版本清晰隔离。
+
+前端和后端任务：
+
+- 按 `/campaign/:slug` 查找发布页面。
+- 支持多页面列表。
+- 区分当前草稿、已发布版本、历史版本。
+- 支持版本回滚。
+- 发布前校验 Editor Schema、资源绑定、动作绑定、移动端溢出。
+
+验收：
+
+- 草稿修改不影响线上。
+- 发布路径访问的是 published snapshot。
+- 回滚后运行时读回滚版本。
+- 发布失败可以定位到具体节点或资源。
 
 ### Step 0：技术验证
 
@@ -1631,27 +1869,23 @@ Error locator
 
 ```text
 页面设计
-数据源
-动作
-样式
+资源
 设置
 模板库
-页面库
 ```
 
-页面设计使用 Puck 实现内容块编辑体验，但运行时仍使用 ExMarketing Campaign Runtime。
+页面设计使用 Editor Kernel + Canvas Renderer 实现编辑体验，运行时读取发布 snapshot。资源工作区内部包含数据字段、数据源、动作事件、样式 Token、图片素材。
 
-内容块只做：
+组件只做：
 
 ```text
-HeroBanner
 Title
+HeroBanner
 RewardCard
-Countdown
-ProgressBlock
-ClaimButton
-RuleText
-FAQBlock
+Button
+Image
+HorizontalLayout
+VerticalLayout
 ```
 
 动作只做：
@@ -1677,14 +1911,20 @@ TRACK_EVENT
 - 页面设计页以移动端长页面编辑为核心。
 - 编辑态不套手机外框。
 - 预览态可以模拟手机外框。
-- 左侧主导航固定为页面 / 数据源 / 动作 / 样式 / 设置 / 模板库 / 页面库。
+- 左侧主导航固定为页面 / 资源 / 设置 / 模板库。
+- 资源内部管理数据字段、数据源、动作事件、样式 Token、图片素材。
 - 白天和黑夜模式下都可读、可操作。
-- 页面内容块可排序、选中、配置。
-- 数据源只展示 Activity View Model，不暴露内部流程节点。
+- 页面左侧有 `结构 / 添加` 两个入口。
+- 页面树支持搜索、展开收起、拖拽排序、移入容器、移出容器。
+- 页面树行不常驻堆叠操作图标。
+- 页面组件可排序、选中、配置。
+- 容器是主要布局能力，普通组件可以成为容器子节点。
+- 页面设计、预览模式、运行时使用同一个 Canvas Renderer。
+- 设计态居中，预览态和运行时也居中。
+- 数据源可以管理接口并实时拉取预览。
 - 动作只绑定 workflow event，不暴露任意脚本。
-- 样式只配置全局主题和基础视觉参数。
+- 样式通过 Style Token 管理，不散落硬编码颜色。
 - 设置只配置发布、分享、权限和版本。
 - 模板库可以从标准模板创建页面草稿。
-- 页面库可以管理、编辑、复制已有活动页。
 - 活动素材不被系统主题强制染色。
 - 发布版本和草稿隔离。

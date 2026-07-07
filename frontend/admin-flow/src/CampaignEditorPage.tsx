@@ -49,7 +49,6 @@ import {
   layoutChildWidth,
   layoutPalette,
   legacyFreeElementIdForBlock,
-  moveBlock,
   normalizeLayoutKind,
   syncFreeElementsWithBlocks,
 } from './campaign-editor/layout';
@@ -60,11 +59,14 @@ import { componentKeyForLayoutKind, componentRegistry, defaultElementFromCompone
 import { resourceStorageApi } from './campaign-editor/resourceStore';
 import { CampaignResourceWorkspace, defaultResourceRecords } from './campaign-editor/ResourceWorkspace';
 import { CampaignRuntimeView } from './campaign-editor/RuntimeView';
-import { CampaignModulePreview } from './campaign-editor/PageWorkspace';
-import { FreeElementInspector, InspectorContent } from './campaign-editor/Inspector';
+import { CampaignBuildCanvas, CampaignModulePreview } from './campaign-editor/PageWorkspace';
+import { FreeElementInspector } from './campaign-editor/Inspector';
 import { FreeDesignCanvas } from './campaign-editor/FreeCanvas';
 import { Button, DataTable, Field, Panel, SegmentedControl, Tabs, Tree, type DataTableColumn, type TreeNode } from './campaign-editor/ui';
 export { CampaignRuntimePage } from './campaign-editor/RuntimeView';
+
+type PageEditorMode = 'build' | 'free' | 'preview';
+type LeftPageTab = 'structure' | 'add';
 
 const navItems = [
   { id: 'page', label: '页面', icon: FileText },
@@ -136,6 +138,26 @@ const blockIcons: Record<CampaignBlockKind, typeof Image> = {
   FAQBlock: HelpCircle,
 };
 
+const blockNodeNameBase: Record<CampaignBlockKind, string> = {
+  HeroBanner: '头图',
+  Title: '标题',
+  RewardCard: '奖励卡片',
+  Countdown: '倒计时',
+  ProgressBlock: '参与进度',
+  ClaimButton: '按钮',
+  RuleText: '活动规则',
+  FAQBlock: 'FAQ',
+};
+
+function uniqueNodeName(baseName: string, usedNames: Iterable<string>) {
+  const base = baseName.replace(/\s+(?:副本|\d+)$/u, '').trim() || '节点';
+  const used = new Set(Array.from(usedNames).filter(Boolean));
+  if (!used.has(base)) return base;
+  let index = 2;
+  while (used.has(`${base} ${index}`)) index += 1;
+  return `${base} ${index}`;
+}
+
 function blockDescription(kind: CampaignBlockKind) {
   if (kind === 'ClaimButton') return '按钮文案、禁用条件、点击动作';
   if (kind === 'HeroBanner') return '活动主视觉、标题、副标题、时间';
@@ -149,10 +171,7 @@ export function CampaignEditorPage() {
     const loadedPage = campaignPageApi.loadPage();
     return {
       ...loadedPage,
-      designMode: 'free',
-      freeElements: loadedPage.freeElements?.length
-        ? loadedPage.freeElements
-        : blocksToFreeElements(loadedPage.blocks, loadedPage.device.defaultWidth),
+      designMode: 'controlled',
     };
   });
   const editorEngineHistoryRef = useRef<{ past: CampaignPageSchema['editor'][]; future: CampaignPageSchema['editor'][] }>({ past: [], future: [] });
@@ -166,16 +185,18 @@ export function CampaignEditorPage() {
   const [saveMessage, setSaveMessage] = useState('已自动保存');
   const [previewOpen, setPreviewOpen] = useState(false);
   const [validationIssues, setValidationIssues] = useState<CampaignValidationIssue[]>([]);
-  const [pageEditorMode, setPageEditorMode] = useState<'controlled' | 'free'>('free');
+  const [pageEditorMode, setPageEditorMode] = useState<PageEditorMode>('build');
+  const [leftPageTab, setLeftPageTab] = useState<LeftPageTab>('structure');
   const [selectedFreeId, setSelectedFreeId] = useState(() => pageSchema.freeElements?.[0]?.id ?? 'free_from_hero');
   const [draggingBlockKind, setDraggingBlockKind] = useState<CampaignBlockKind | null>(null);
   const [draggingLayoutKind, setDraggingLayoutKind] = useState<LayoutKind | null>(null);
   const [draggingComponentKey, setDraggingComponentKey] = useState<ComponentRegistryKey | null>(null);
   const [treeQuery, setTreeQuery] = useState('');
   const [treeOpen, setTreeOpen] = useState(true);
-  const [libraryOpen, setLibraryOpen] = useState(true);
   const blocks = pageSchema.blocks;
   const freeElements = pageSchema.editor?.nodes.length ? editorPageToFreeElements(pageSchema.editor) : pageSchema.freeElements ?? initialFreeElements;
+  const usedNodeNames = [...blocks.map((block) => block.title), ...freeElements.map((element) => element.name ?? (element.kind === 'layout' ? element.text.split('\\n')[0] : ''))];
+  const nextNodeName = (baseName: string, extraUsedNames: string[] = []) => uniqueNodeName(baseName, [...usedNodeNames, ...extraUsedNames]);
   const selectedBlock = blocks.find((block) => block.id === selectedId) ?? blocks[0];
   const selectedFreeElement = freeElements.find((element) => element.id === selectedFreeId) ?? freeElements[0];
   const visibleBlocks = useMemo(() => blocks.filter((block) => block.visible), [blocks]);
@@ -185,7 +206,13 @@ export function CampaignEditorPage() {
       const blockId = blockIdForFreeElementId(element.id);
       return blockId ? [[blockId, element]] : [];
     }));
-    const blockNodes: PageTreeNode[] = blocks.map((block) => ({ id: block.id, type: 'block' as const, title: block.title, meta: block.kind, block }));
+    const blockNodes: PageTreeNode[] = blocks.map((block) => ({
+      id: block.id,
+      type: 'block' as const,
+      title: freeByBlockId.get(block.id)?.name ?? block.title,
+      meta: block.kind,
+      block,
+    }));
     const blockNodeById = new Map(blockNodes.map((node) => [node.id, node]));
     const blockNodesByFreeId = new Map<string, PageTreeNode>();
     for (const block of blocks) {
@@ -200,7 +227,7 @@ export function CampaignEditorPage() {
       .map((element) => ({
         id: element.id,
         type: 'layout' as const,
-        title: element.text.split('\\n')[0] || '布局盒子',
+        title: element.name ?? (element.text.split('\\n')[0] || '布局盒子'),
         meta: normalizeLayoutKind(element.layout) === 'vertical-layout' ? 'VerticalLayout' : 'HorizontalLayout',
         element,
         children: freeElements
@@ -244,7 +271,7 @@ export function CampaignEditorPage() {
   };
 
   const updateFreeElements = (updater: (current: FreeDesignElement[]) => FreeDesignElement[]) => {
-    updatePage((current) => ({ ...current, freeElements: updater(current.freeElements ?? initialFreeElements), designMode: 'free', status: 'DRAFT' }));
+    updatePage((current) => ({ ...current, freeElements: updater(current.freeElements ?? initialFreeElements), designMode: pageEditorMode === 'free' ? 'free' : 'controlled', status: 'DRAFT' }));
   };
 
   const runEditorAction = (action: EditorEngineAction, selectedNodeId = selectedFreeId) => {
@@ -257,7 +284,7 @@ export function CampaignEditorPage() {
         ...current,
         editor: nextEngineState.page,
         freeElements: fitLayouts(editorPageToFreeElements(nextEngineState.page)),
-        designMode: 'free',
+        designMode: pageEditorMode === 'free' ? 'free' : 'controlled',
         status: 'DRAFT',
       };
     });
@@ -283,7 +310,7 @@ export function CampaignEditorPage() {
         blocks: removeBlockId ? current.blocks.filter((block) => block.id !== removeBlockId) : current.blocks,
         editor: nextEngineState.page,
         freeElements: fitLayouts(editorPageToFreeElements(nextEngineState.page)),
-        designMode: 'free',
+        designMode: pageEditorMode === 'free' ? 'free' : 'controlled',
         status: 'DRAFT',
       };
     });
@@ -293,13 +320,16 @@ export function CampaignEditorPage() {
   };
 
   const updateSelectedFreeElement = (patch: Partial<FreeDesignElement>) => {
-    updateFreeElements((items) => {
+    updatePage((current) => {
+      const items = current.freeElements ?? initialFreeElements;
       const selected = items.find((element) => element.id === selectedFreeId);
-      return fitLayouts(items.map((element) => {
+      const blockId = blockIdForFreeElementId(selectedFreeId);
+      const normalizedPatch = patch.name !== undefined ? { ...patch, name: patch.name.trim() || undefined } : patch;
+      const nextFreeElements = fitLayouts(items.map((element) => {
         if (element.id === selectedFreeId) {
-          const next = { ...element, ...patch };
+          const next = { ...element, ...normalizedPatch };
           const parent = next.parentId ? items.find((item) => item.id === next.parentId) : undefined;
-          const maxX = Math.max(0, (parent?.w ?? pageSchema.device.defaultWidth) - next.w);
+          const maxX = Math.max(0, (parent?.w ?? current.device.defaultWidth) - next.w);
           return {
             ...next,
             x: Math.min(maxX, Math.max(0, next.x)),
@@ -311,6 +341,15 @@ export function CampaignEditorPage() {
         }
         return element;
       }));
+      return {
+        ...current,
+        blocks: normalizedPatch.name !== undefined && blockId
+          ? current.blocks.map((block) => block.id === blockId ? { ...block, title: normalizedPatch.name || block.title } : block)
+          : current.blocks,
+        freeElements: nextFreeElements,
+        designMode: pageEditorMode === 'free' ? 'free' : 'controlled',
+        status: 'DRAFT',
+      };
     });
   };
 
@@ -326,7 +365,7 @@ export function CampaignEditorPage() {
           workingPage = normalizeCampaignPage({
             ...workingPage,
             freeElements: [...currentElements, nextElement],
-            designMode: 'free',
+            designMode: pageEditorMode === 'free' ? 'free' : 'controlled',
             status: 'DRAFT',
           });
         }
@@ -338,7 +377,7 @@ export function CampaignEditorPage() {
         ...workingPage,
         editor: nextEngineState.page,
         freeElements: fitLayouts(editorPageToFreeElements(nextEngineState.page)),
-        designMode: 'free',
+        designMode: pageEditorMode === 'free' ? 'free' : 'controlled',
         status: 'DRAFT',
       };
     });
@@ -367,21 +406,10 @@ export function CampaignEditorPage() {
     resourceStorageApi.saveRecords(resourceRecords);
   }, [resourceRecords]);
 
-  const duplicateBlock = () => {
-    const source = selectedBlock;
-    if (!source) return;
-    const copyBlock = { ...source, id: `${source.id}_${Date.now().toString(36)}`, title: `${source.title} 副本` };
-    const index = blocks.findIndex((block) => block.id === source.id);
-    const next = [...blocks];
-    next.splice(index + 1, 0, copyBlock);
-    updateBlocks(() => next);
-    setSelectedId(copyBlock.id);
-  };
-
   const duplicateBlockById = (blockId: string) => {
     const source = blocks.find((block) => block.id === blockId);
     if (!source) return;
-    const copyBlock = { ...source, id: `${source.id}_${Date.now().toString(36)}`, title: `${source.title} 副本` };
+    const copyBlock = { ...source, id: `${source.id}_${Date.now().toString(36)}`, title: nextNodeName(source.title) };
     const index = blocks.findIndex((block) => block.id === source.id);
     updateBlocks((items) => {
       const next = [...items];
@@ -389,6 +417,7 @@ export function CampaignEditorPage() {
       return next;
     });
     setSelectedId(copyBlock.id);
+    setSelectedFreeId(`free_from_${copyBlock.id}`);
   };
 
   const duplicateFreeElement = () => {
@@ -441,11 +470,10 @@ export function CampaignEditorPage() {
       }
       if (event.key !== 'Delete' && event.key !== 'Backspace') return;
       event.preventDefault();
-      if (pageEditorMode === 'free') {
+      if (pageEditorMode !== 'preview') {
         deleteFreeElement();
         return;
       }
-      deleteBlock();
     };
 
     window.addEventListener('keydown', handleKeyDown);
@@ -454,10 +482,11 @@ export function CampaignEditorPage() {
 
   const createBlock = (kind: CampaignBlockKind = 'RewardCard'): CampaignBlock => {
     const preset = blockPalette.find((item) => item.kind === kind) ?? blockPalette[2];
+    const title = nextNodeName(blockNodeNameBase[kind] ?? preset.title);
     return {
       id: `block_${kind.toLowerCase()}_${Date.now().toString(36)}`,
       kind,
-      title: preset.title,
+      title,
       visible: true,
       bound: kind !== 'FAQBlock',
       text: kind === 'ClaimButton' ? '立即领取' : undefined,
@@ -466,13 +495,6 @@ export function CampaignEditorPage() {
       width: kind === 'ClaimButton' ? 'full' : undefined,
       radius: kind === 'ClaimButton' ? '8' : undefined,
     };
-  };
-
-  const addBlock = (kind: CampaignBlockKind = 'RewardCard') => {
-    const nextBlock = createBlock(kind);
-    updateBlocks((items) => [...items, nextBlock]);
-    setSelectedId(nextBlock.id);
-    if (pageEditorMode === 'free') setSelectedFreeId(`free_from_${nextBlock.id}`);
   };
 
   const addBlockAtCanvasPosition = (kind: CampaignBlockKind, x: number, y: number, parentId?: string) => {
@@ -494,7 +516,7 @@ export function CampaignEditorPage() {
         y: Math.max(0, Math.round(y)),
       };
       const nextFreeElements = fitLayouts([...(current.freeElements ?? []), positionedElement]);
-      return { ...current, blocks: nextBlocks, freeElements: nextFreeElements, designMode: 'free', status: 'DRAFT' };
+      return { ...current, blocks: nextBlocks, freeElements: nextFreeElements, designMode: pageEditorMode === 'free' ? 'free' : 'controlled', status: 'DRAFT' };
     });
     setSelectedId(nextBlock.id);
     setSelectedFreeId(`free_from_${nextBlock.id}`);
@@ -502,6 +524,7 @@ export function CampaignEditorPage() {
 
   const createLayoutElement = (kind: LayoutKind, x = 18, y = 360): FreeDesignElement => {
     const componentKey = componentKeyForLayoutKind(kind);
+    const name = nextNodeName(kind === 'vertical-layout' ? '垂直布局' : '水平布局');
     const element = defaultElementFromComponent({
       componentKey,
       id: `layout_${kind}_${Date.now().toString(36)}`,
@@ -510,7 +533,7 @@ export function CampaignEditorPage() {
       x: Math.min(Math.max(0, pageSchema.device.defaultWidth - 345), Math.max(0, Math.round(x))),
       y: Math.max(0, Math.round(y)),
     });
-    return { ...element, layout: kind, ...flexPreset(kind) };
+    return { ...element, name, text: name, layout: kind, ...flexPreset(kind) };
   };
 
   const addLayoutAtCanvasPosition = (kind: LayoutKind, x = 18, y = 360) => {
@@ -521,6 +544,7 @@ export function CampaignEditorPage() {
 
   const addComponentAtCanvasPosition = (componentKey: ComponentRegistryKey, x = 32, y = 360, parentId?: string) => {
     const nextId = `free_${componentKey.toLowerCase()}_${Date.now().toString(36)}`;
+    const nextName = nextNodeName(componentRegistry[componentKey].paletteLabel);
     updatePage((current) => {
       const parent = parentId ? (current.freeElements ?? []).find((element) => element.id === parentId && element.kind === 'layout') : undefined;
       const nextElement = defaultElementFromComponent({
@@ -533,18 +557,20 @@ export function CampaignEditorPage() {
       });
       const positionedElement = parent ? {
         ...nextElement,
+        name: nextName,
         parentId: parent.id,
         x: 0,
         y: 0,
         w: layoutChildWidth(parent),
       } : {
         ...nextElement,
+        name: nextName,
         x: Math.min(Math.max(0, current.device.defaultWidth - nextElement.w), Math.max(0, Math.round(x))),
       };
       return {
         ...current,
         freeElements: fitLayouts([...(current.freeElements ?? []), positionedElement]),
-        designMode: 'free',
+        designMode: pageEditorMode === 'free' ? 'free' : 'controlled',
         status: 'DRAFT',
       };
     });
@@ -553,6 +579,7 @@ export function CampaignEditorPage() {
 
   const addFreeElement = (kind: FreeDesignElement['kind']) => {
     const componentKey = kind === 'button' ? 'Button' : kind === 'image' ? 'Image' : kind === 'card' ? 'RewardCard' : 'Title';
+    const nextName = nextNodeName(componentRegistry[componentKey].paletteLabel);
     const next = defaultElementFromComponent({
       componentKey,
       id: `free_${kind}_${Date.now().toString(36)}`,
@@ -561,18 +588,13 @@ export function CampaignEditorPage() {
       x: 32,
       y: 360,
     });
-    updateFreeElements((items) => [...items, next]);
+    updateFreeElements((items) => [...items, { ...next, name: nextName }]);
     setSelectedFreeId(next.id);
   };
 
-  const updateSelectedBlock = (patch: Partial<CampaignBlock>) => {
-    if (!selectedBlock) return;
-    updateBlocks((items) => items.map((block) => block.id === selectedBlock.id ? { ...block, ...patch } : block));
-  };
-
-  const setEditorMode = (mode: 'controlled' | 'free') => {
+  const setEditorMode = (mode: PageEditorMode) => {
     setPageEditorMode(mode);
-    if (mode === 'controlled') {
+    if (mode === 'build' || mode === 'preview') {
       const previewBlockIds = freeElements
         .map((element) => blockIdForFreeElementId(element.id))
         .filter((id) => id && blocks.some((block) => block.id === id));
@@ -613,10 +635,10 @@ export function CampaignEditorPage() {
 
   const rollbackVersion = (version: CampaignPageVersion) => {
     const nextPage = campaignPageApi.rollbackToVersion(version);
-    setPageSchema({ ...nextPage, designMode: 'free' });
+    setPageSchema({ ...nextPage, designMode: 'controlled' });
     setSelectedId(nextPage.blocks[0]?.id ?? '');
     setSelectedFreeId(nextPage.freeElements[0]?.id ?? '');
-    setPageEditorMode('free');
+    setPageEditorMode('build');
     setActiveSection('page');
   };
 
@@ -629,7 +651,7 @@ export function CampaignEditorPage() {
     setPageSchema(nextPage);
     setSelectedId(nextPage.blocks[0]?.id ?? '');
     setSelectedFreeId(nextPage.freeElements[0]?.id ?? '');
-    setPageEditorMode('free');
+    setPageEditorMode('build');
     setActiveSection('page');
   };
 
@@ -643,29 +665,35 @@ export function CampaignEditorPage() {
     URL.revokeObjectURL(url);
   };
 
+  const isPreviewMode = pageEditorMode === 'preview';
   const buildTreeNode = (node: PageTreeNode): TreeNode => {
     const isLayoutNode = node.type === 'layout';
     const block = node.type === 'block' ? node.block : undefined;
     const freeElementId = isLayoutNode ? node.id : currentFreeElementIdForBlock(node.id, freeElements) ?? `free_from_${node.id}`;
-    const active = pageEditorMode === 'free' ? selectedFreeId === freeElementId : node.id === selectedId;
+    const active = selectedFreeId ? selectedFreeId === freeElementId : node.id === selectedId;
     return {
       id: `${node.type}_${node.id}`,
       label: node.title,
       meta: node.meta,
       active,
-      draggable: Boolean(block),
+      draggable: !isPreviewMode && Boolean(block || isLayoutNode),
       onDragStart: (event) => {
-            if (!block) return;
-            event.dataTransfer.setData('application/x-campaign-tree-free-id', freeElementId);
-            event.dataTransfer.effectAllowed = 'move';
+        if (isPreviewMode) {
+          event.preventDefault();
+          return;
+        }
+        event.dataTransfer.setData('application/x-campaign-tree-free-id', freeElementId);
+        event.dataTransfer.effectAllowed = 'move';
       },
       onDragOver: (event) => {
+            if (isPreviewMode) return;
             if (!isLayoutNode) return;
             if (!event.dataTransfer.types.includes('application/x-campaign-tree-free-id')) return;
             event.preventDefault();
             event.dataTransfer.dropEffect = 'move';
       },
       onDrop: (event) => {
+            if (isPreviewMode) return;
             if (!isLayoutNode) return;
             const draggedFreeId = event.dataTransfer.getData('application/x-campaign-tree-free-id');
             if (!draggedFreeId) return;
@@ -675,17 +703,20 @@ export function CampaignEditorPage() {
       },
       onClick: () => {
         if (block) setSelectedId(block.id);
-        if (pageEditorMode === 'free') setSelectedFreeId(freeElementId);
+        setSelectedFreeId(freeElementId);
       },
       actions: (
         <>
-          <Button size="sm" variant="ghost" icon={<Eye size={16} />} iconOnly aria-label={block?.visible ? '隐藏内容块' : '显示内容块'} disabled={!block} onClick={() => {
+          <Button size="sm" variant="ghost" icon={<Eye size={16} />} iconOnly aria-label={block?.visible ? '隐藏内容块' : '显示内容块'} disabled={!block || isPreviewMode} onClick={() => {
+            if (isPreviewMode) return;
             if (block) toggleBlockVisible(block.id);
           }}>显隐</Button>
-          <Button size="sm" variant="ghost" icon={<Copy size={16} />} iconOnly aria-label="复制内容块" disabled={!block} onClick={() => {
+          <Button size="sm" variant="ghost" icon={<Copy size={16} />} iconOnly aria-label="复制内容块" disabled={!block || isPreviewMode} onClick={() => {
+            if (isPreviewMode) return;
             if (block) duplicateBlockById(block.id);
           }}>复制内容块</Button>
-          <Button size="sm" variant="ghost" icon={<Trash2 size={16} />} iconOnly aria-label="删除内容块" onClick={() => {
+          <Button size="sm" variant="ghost" icon={<Trash2 size={16} />} iconOnly aria-label="删除内容块" disabled={isPreviewMode} onClick={() => {
+            if (isPreviewMode) return;
             if (block) deleteBlockById(block.id);
             if (isLayoutNode) deleteFreeElementById(node.id);
           }}>删除内容块</Button>
@@ -699,6 +730,11 @@ export function CampaignEditorPage() {
     updatePage((current) => ({ ...current, device: { ...current.device, defaultWidth: width }, status: 'DRAFT' }));
   };
   const previewPage = normalizeCampaignPage({ ...pageSchema, device: { ...pageSchema.device, defaultWidth: deviceWidth } });
+  const selectFreeNode = (nodeId: string) => {
+    setSelectedFreeId(nodeId);
+    const blockId = blockIdForFreeElementId(nodeId);
+    if (blockId) setSelectedId(blockId);
+  };
 
   return (
     <main className="campaign-editor">
@@ -736,23 +772,33 @@ export function CampaignEditorPage() {
         {activeSection === 'page' ? (
           <>
               <aside className="campaign-outline">
-                <h2>页面树</h2>
+                <h2>{leftPageTab === 'structure' ? '页面结构' : '添加组件'}</h2>
+                <Tabs
+                  value={leftPageTab === 'structure' ? '结构' : '添加'}
+                  items={['结构', '添加']}
+                  onChange={(tab) => setLeftPageTab(tab === '结构' ? 'structure' : 'add')}
+                  ariaLabel="页面左侧面板"
+                />
+                {leftPageTab === 'structure' ? (
+                  <>
                 <label className="campaign-tree-search">
-                  <input value={treeQuery} onChange={(event) => setTreeQuery(event.target.value)} placeholder="搜索" aria-label="搜索页面树" />
+                  <input value={treeQuery} onChange={(event) => setTreeQuery(event.target.value)} placeholder="搜索节点" aria-label="搜索页面树" />
                 </label>
                 <button
                   className="campaign-page-tree-root"
                   type="button"
                   aria-expanded={treeOpen}
-                  onDragOver={(event) => {
-                    if (!event.dataTransfer.types.includes('application/x-campaign-tree-free-id')) return;
-                    event.preventDefault();
-                    event.dataTransfer.dropEffect = 'move';
-                  }}
-                  onDrop={(event) => {
-                    const draggedFreeId = event.dataTransfer.getData('application/x-campaign-tree-free-id');
-                    if (!draggedFreeId) return;
-                    event.preventDefault();
+	                  onDragOver={(event) => {
+	                    if (isPreviewMode) return;
+	                    if (!event.dataTransfer.types.includes('application/x-campaign-tree-free-id')) return;
+	                    event.preventDefault();
+	                    event.dataTransfer.dropEffect = 'move';
+	                  }}
+	                  onDrop={(event) => {
+	                    if (isPreviewMode) return;
+	                    const draggedFreeId = event.dataTransfer.getData('application/x-campaign-tree-free-id');
+	                    if (!draggedFreeId) return;
+	                    event.preventDefault();
                     event.stopPropagation();
                     moveFreeElementToRoot(draggedFreeId);
                   }}
@@ -765,15 +811,17 @@ export function CampaignEditorPage() {
                 {treeOpen ? (
                   <div
                     className="campaign-outline-list"
-                    onDragOver={(event) => {
-                      if (!event.dataTransfer.types.includes('application/x-campaign-tree-free-id')) return;
-                      event.preventDefault();
-                      event.dataTransfer.dropEffect = 'move';
-                    }}
-                    onDrop={(event) => {
-                      const draggedFreeId = event.dataTransfer.getData('application/x-campaign-tree-free-id');
-                      if (!draggedFreeId) return;
-                      event.preventDefault();
+	                    onDragOver={(event) => {
+	                      if (isPreviewMode) return;
+	                      if (!event.dataTransfer.types.includes('application/x-campaign-tree-free-id')) return;
+	                      event.preventDefault();
+	                      event.dataTransfer.dropEffect = 'move';
+	                    }}
+	                    onDrop={(event) => {
+	                      if (isPreviewMode) return;
+	                      const draggedFreeId = event.dataTransfer.getData('application/x-campaign-tree-free-id');
+	                      if (!draggedFreeId) return;
+	                      event.preventDefault();
                       moveFreeElementToRoot(draggedFreeId);
                     }}
                   >
@@ -787,11 +835,10 @@ export function CampaignEditorPage() {
                     {treeNodes.length === 0 ? <p className="campaign-tree-empty">没有匹配节点</p> : null}
                   </div>
                 ) : null}
-                <button className="campaign-library-title" type="button" aria-expanded={libraryOpen} onClick={() => setLibraryOpen((open) => !open)}>
-                  <ChevronDown size={14} className={libraryOpen ? 'open' : ''} />
-                  常用组件
-                </button>
-                {libraryOpen ? (
+                  </>
+                ) : (
+                  <>
+                  <p className="campaign-panel-hint">{pageEditorMode === 'preview' ? '预览模式为只读，切回页面设计或自由定位后添加组件。' : '点击插入到当前页面，或拖到画布指定位置。'}</p>
                   <div className="campaign-block-palette" aria-label="组件库">
                     {blockPalette.map((item) => {
                       const Icon = blockIcons[item.kind];
@@ -799,9 +846,17 @@ export function CampaignEditorPage() {
                         <button
                           key={item.kind}
                           type="button"
-                          draggable
-                          onClick={() => pageEditorMode === 'free' ? addBlockAtCanvasPosition(item.kind, 32, 360) : addBlock(item.kind)}
+                          disabled={pageEditorMode === 'preview'}
+                          draggable={pageEditorMode !== 'preview'}
+                          onClick={() => {
+                            if (pageEditorMode === 'preview') return;
+                            addBlockAtCanvasPosition(item.kind, 32, 360);
+                          }}
                           onDragStart={(event) => {
+                            if (pageEditorMode === 'preview') {
+                              event.preventDefault();
+                              return;
+                            }
                             setDraggingBlockKind(item.kind);
                             event.dataTransfer.setData('application/x-campaign-block', item.kind);
                             event.dataTransfer.effectAllowed = 'copy';
@@ -815,9 +870,17 @@ export function CampaignEditorPage() {
                     })}
                     <button
                       type="button"
-                      draggable
-                      onClick={() => addComponentAtCanvasPosition('Image', 32, 360)}
+                      disabled={pageEditorMode === 'preview'}
+                      draggable={pageEditorMode !== 'preview'}
+                      onClick={() => {
+                        if (pageEditorMode === 'preview') return;
+                        addComponentAtCanvasPosition('Image', 32, 360);
+                      }}
                       onDragStart={(event) => {
+                        if (pageEditorMode === 'preview') {
+                          event.preventDefault();
+                          return;
+                        }
                         setDraggingComponentKey('Image');
                         event.dataTransfer.setData('application/x-campaign-component', 'Image');
                         event.dataTransfer.effectAllowed = 'copy';
@@ -833,9 +896,17 @@ export function CampaignEditorPage() {
                         <button
                           key={item.kind}
                           type="button"
-                          draggable
-                          onClick={() => addLayoutAtCanvasPosition(item.kind, 24, 380)}
+                          disabled={pageEditorMode === 'preview'}
+                          draggable={pageEditorMode !== 'preview'}
+                          onClick={() => {
+                            if (pageEditorMode === 'preview') return;
+                            addLayoutAtCanvasPosition(item.kind, 24, 380);
+                          }}
                           onDragStart={(event) => {
+                            if (pageEditorMode === 'preview') {
+                              event.preventDefault();
+                              return;
+                            }
                             setDraggingLayoutKind(item.kind);
                             event.dataTransfer.setData('application/x-campaign-layout', item.kind);
                             event.dataTransfer.effectAllowed = 'copy';
@@ -848,24 +919,42 @@ export function CampaignEditorPage() {
                       );
                     })}
                   </div>
-                ) : null}
+                  </>
+                )}
               </aside>
 
             <section className="campaign-canvas-workspace">
               <div className="campaign-toolbar">
                 <Tabs
-                  value={pageEditorMode === 'free' ? '页面设计' : '模块预览'}
-                  items={['页面设计', '模块预览']}
-                  onChange={(mode) => setEditorMode(mode === '页面设计' ? 'free' : 'controlled')}
+                  value={pageEditorMode === 'build' ? '页面设计' : pageEditorMode === 'free' ? '自由定位' : '预览'}
+                  items={['页面设计', '自由定位', '预览']}
+                  onChange={(mode) => setEditorMode(mode === '页面设计' ? 'build' : mode === '自由定位' ? 'free' : 'preview')}
                   ariaLabel="页面编辑模式"
                 />
               </div>
-              {pageEditorMode === 'free' ? (
+              {pageEditorMode === 'build' ? (
+                <CampaignBuildCanvas
+                  page={previewPage}
+                  selectedNodeId={selectedFreeId}
+                  draggingBlockKind={draggingBlockKind}
+                  draggingLayoutKind={draggingLayoutKind}
+                  draggingComponentKey={draggingComponentKey}
+                  onSelectNode={selectFreeNode}
+                  onDropBlock={(kind, x, y) => addBlockAtCanvasPosition(kind, x, y)}
+                  onDropLayout={(kind, x, y) => addLayoutAtCanvasPosition(kind, x, y)}
+                  onDropComponent={(componentKey, x, y) => addComponentAtCanvasPosition(componentKey, x, y)}
+                  onDragDone={() => setDraggingBlockKind(null)}
+                  onLayoutDragDone={() => {
+                    setDraggingLayoutKind(null);
+                    setDraggingComponentKey(null);
+                  }}
+                />
+              ) : pageEditorMode === 'free' ? (
                 <FreeDesignCanvas
                   width={deviceWidth}
                   elements={freeElements}
                   selectedId={selectedFreeId}
-                  onSelect={setSelectedFreeId}
+                  onSelect={selectFreeNode}
                   onChange={updateFreeElements}
                   draggingBlockKind={draggingBlockKind}
                   draggingLayoutKind={draggingLayoutKind}
@@ -884,21 +973,18 @@ export function CampaignEditorPage() {
                 />
               ) : (
                 <CampaignModulePreview
-                  page={pageSchema}
+                  page={previewPage}
                   selectedId={selectedId}
                   onSelect={setSelectedId}
-                  draggingBlockKind={draggingBlockKind}
-                  onDropBlock={(kind) => addBlock(kind)}
-                  onDragDone={() => setDraggingBlockKind(null)}
                 />
               )}
             </section>
 
             <aside className="campaign-inspector">
-              {pageEditorMode === 'free' ? (
+              {pageEditorMode !== 'preview' ? (
                 <>
                   <header>
-                    <div><Type size={20} /><h2>{selectedFreeElement?.text || '自由元素'}</h2></div>
+                    <div><Type size={20} /><h2>{selectedFreeElement?.name || selectedFreeElement?.text?.split('\n')[0] || '页面节点'}</h2></div>
                     <span>{selectedFreeElement?.binding ? '已绑定' : '未绑定'}</span>
                     <button type="button" aria-label="复制自由元素" onClick={duplicateFreeElement}><Copy size={16} /></button>
                     <button type="button" aria-label="删除自由元素" onClick={deleteFreeElement}><Trash2 size={16} /></button>
@@ -920,24 +1006,12 @@ export function CampaignEditorPage() {
               ) : selectedBlock ? (
                 <>
                   <header>
-                    <div><SelectedIcon size={20} /><h2>{selectedBlock.title}</h2></div>
-                    <span>{selectedBlock.bound ? '已绑定' : '未绑定'}</span>
-                    <Copy size={16} />
-                    <Trash2 size={16} />
+                    <div><SelectedIcon size={20} /><h2>预览模式</h2></div>
+                    <span>只读</span>
                   </header>
-                  <nav>
-                    <SegmentedControl
-                      value={inspectorTab}
-                      items={[
-                        { value: 'content', label: '内容' },
-                        { value: 'binding', label: '绑定' },
-                        { value: 'action', label: '动作' },
-                      ]}
-                      onChange={setInspectorTab}
-                      ariaLabel="Inspector tabs"
-                    />
-                  </nav>
-                  <InspectorContent block={selectedBlock} tab={inspectorTab} deviceWidth={deviceWidth} onBlockChange={updateSelectedBlock} onMove={(direction) => updateBlocks((items) => moveBlock(items, selectedBlock.id, direction))} />
+                  <div className="campaign-inspector-body">
+                    <p>预览模式隐藏编辑辅助线和选中边框，只按当前草稿渲染页面。需要调整内容时切回页面设计。</p>
+                  </div>
                 </>
               ) : (
                 <div className="campaign-inspector-body"><p>当前页面没有内容块，可以从左侧常用组件继续添加。</p></div>

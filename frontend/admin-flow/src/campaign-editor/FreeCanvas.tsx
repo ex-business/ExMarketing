@@ -51,6 +51,24 @@ export function FreeLayerPanel({
   );
 }
 
+const DRAG_SCROLL_EDGE = 80;
+const DRAG_SCROLL_MAX_STEP = 24;
+
+function scrollWorkspaceDuringDrag(workspace: HTMLElement | null, pointerY: number) {
+  if (!workspace) return 0;
+  const rect = workspace.getBoundingClientRect();
+  let delta = 0;
+  if (pointerY > rect.bottom - DRAG_SCROLL_EDGE) {
+    delta = Math.min(DRAG_SCROLL_MAX_STEP, pointerY - (rect.bottom - DRAG_SCROLL_EDGE));
+  } else if (pointerY < rect.top + DRAG_SCROLL_EDGE) {
+    delta = -Math.min(DRAG_SCROLL_MAX_STEP, rect.top + DRAG_SCROLL_EDGE - pointerY);
+  }
+  if (!delta) return 0;
+  const before = workspace.scrollTop;
+  workspace.scrollTop += delta;
+  return workspace.scrollTop - before;
+}
+
 export function FreeDesignCanvas({
   width,
   elements,
@@ -93,14 +111,18 @@ export function FreeDesignCanvas({
     const startX = event.clientX;
     const startY = event.clientY;
     const original = { x: element.x, y: element.y };
+    const scrollWorkspace = event.currentTarget.closest('.campaign-canvas-workspace') as HTMLElement | null;
+    const startScrollTop = scrollWorkspace?.scrollTop ?? 0;
     let latest = original;
     event.currentTarget.setPointerCapture(event.pointerId);
     onSelect(element.id);
     const move = (moveEvent: PointerEvent) => {
+      scrollWorkspaceDuringDrag(scrollWorkspace, moveEvent.clientY);
+      const scrollDeltaY = (scrollWorkspace?.scrollTop ?? startScrollTop) - startScrollTop;
       const parent = element.parentId ? elements.find((item) => item.id === element.parentId) : undefined;
       const maxX = Math.max(0, (parent?.w ?? width) - element.w);
       const nextX = Math.min(maxX, Math.max(0, original.x + moveEvent.clientX - startX));
-      const nextY = Math.max(0, original.y + moveEvent.clientY - startY);
+      const nextY = Math.max(0, original.y + moveEvent.clientY - startY + scrollDeltaY);
       latest = { x: Math.round(nextX), y: Math.round(nextY) };
       const verticalGuide = nearestGuide(nextX, [0, Math.round(maxX / 2), maxX]);
       const maxY = parent ? Math.max(0, parent.h - element.h) : 320;

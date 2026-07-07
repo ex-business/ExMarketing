@@ -90,6 +90,18 @@ function nextNodeId(baseId: NodeId, existingIds: Set<NodeId>) {
   return id;
 }
 
+function nextNodeName(baseName: string, existingNames: Set<string>) {
+  const normalizedBase = baseName.replace(/\s+(?:副本|\d+)$/u, '').trim() || '节点';
+  let index = 2;
+  let name = normalizedBase;
+  while (existingNames.has(name)) {
+    name = `${normalizedBase} ${index}`;
+    index += 1;
+  }
+  existingNames.add(name);
+  return name;
+}
+
 function reorderIds(ids: NodeId[], nodeId: NodeId, position: ReorderPosition) {
   const currentIndex = ids.indexOf(nodeId);
   if (currentIndex < 0) return ids;
@@ -257,6 +269,7 @@ export function duplicateNode(state: EditorEngineState, nodeId: NodeId): EditorE
   if (!node) return state;
   const idsToClone = [nodeId, ...descendantsOf(state.page, nodeId)];
   const existingIds = new Set(state.page.nodes.map((item) => item.id));
+  const existingNames = new Set(state.page.nodes.map((item) => item.name));
   const idMap = new Map<NodeId, NodeId>();
   for (const id of idsToClone) idMap.set(id, nextNodeId(id, existingIds));
   const clonedNodes = state.page.nodes.flatMap((current): EditorNode[] => {
@@ -270,7 +283,7 @@ export function duplicateNode(state: EditorEngineState, nodeId: NodeId): EditorE
       return [{
         ...current,
         id: clonedId,
-        name: `${current.name} 副本`,
+        name: nextNodeName(current.name, existingNames),
         parentId: clonedParentId,
         frame,
         children: current.children.map((childId) => idMap.get(childId)).filter((id): id is NodeId => Boolean(id)),
@@ -279,7 +292,7 @@ export function duplicateNode(state: EditorEngineState, nodeId: NodeId): EditorE
     return [{
       ...current,
       id: clonedId,
-      name: `${current.name} 副本`,
+      name: nextNodeName(current.name, existingNames),
       parentId: clonedParentId,
       frame,
       sourceBlockId: current.sourceBlockId ? `${current.sourceBlockId}_copy` : undefined,

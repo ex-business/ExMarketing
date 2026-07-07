@@ -219,6 +219,7 @@ export function defaultElementFromComponent({
   const size = definition.defaultSize(width);
   return {
     id,
+    name: block?.title ?? definition.defaultTitle,
     component: componentKey,
     kind: definition.elementKind,
     text: definition.defaultText(block),

@@ -77,6 +77,33 @@ test.describe('campaign layout reducer', () => {
     expect(afterShow.some((element) => element.text.includes('夏日充值返利活动'))).toBe(true);
   });
 
+  test('repairs semantic block text when stored canvas content belongs to another component', () => {
+    const faqBlocks: CampaignBlock[] = [
+      { id: 'faq', kind: 'FAQBlock', title: '活动标', visible: true, bound: true },
+    ];
+    const staleFaqElement: FreeDesignElement = {
+      id: 'free_from_faq',
+      kind: 'card',
+      component: 'RewardCard',
+      name: '活动标',
+      text: '活动规则\\n1. 单笔充值满 500 元可领取奖励',
+      x: 18,
+      y: 28,
+      w: 345,
+      h: 94,
+      z: 1,
+      radius: '8',
+    };
+
+    const synced = syncFreeElementsWithBlocks(faqBlocks, 393, [staleFaqElement]);
+
+    expect(synced[0]).toMatchObject({
+      id: 'free_from_faq',
+      name: '活动标',
+      text: 'FAQ\\n奖励到账时间、参与资格和领取问题。',
+    });
+  });
+
   test('moves a child back to root and clamps it inside the canvas width', () => {
     const child: FreeDesignElement = {
       id: 'free_hero_title',

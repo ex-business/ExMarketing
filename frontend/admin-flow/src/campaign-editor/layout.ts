@@ -22,6 +22,7 @@ export const blockPalette: Array<{ kind: CampaignBlockKind; label: string; title
   { kind: 'Title', label: '标题', title: '新标题' },
   { kind: 'RewardCard', label: '奖励卡', title: '新奖励卡片' },
   { kind: 'Countdown', label: '倒计时', title: '新倒计时' },
+  { kind: 'ProgressBlock', label: '进度', title: '新参与进度' },
   { kind: 'ClaimButton', label: '按钮', title: '新领取按钮' },
   { kind: 'RuleText', label: '规则', title: '新活动规则' },
   { kind: 'FAQBlock', label: 'FAQ', title: '新 FAQ' },
@@ -62,7 +63,7 @@ export const initialBlocks: CampaignBlock[] = [
   { id: 'progress', kind: 'ProgressBlock', title: '参与进度', visible: true, bound: true },
   { id: 'claim', kind: 'ClaimButton', title: '领取按钮', visible: true, bound: true, action: 'CLAIM_REWARD', text: '立即领取', binding: '{{ !eligibility.canClaim }}', visibleWhen: '{{ user.loggedIn }}', payload: '{{ activity.id, reward.code, user.id }}', variant: 'primary', width: 'full', radius: '8' },
   { id: 'rules', kind: 'RuleText', title: '活动规则', visible: true, bound: true },
-  { id: 'faq', kind: 'FAQBlock', title: 'FAQ', visible: false, bound: false },
+  { id: 'faq', kind: 'FAQBlock', title: 'FAQ', visible: true, bound: true },
 ];
 
 export const initialFreeElements: FreeDesignElement[] = [
@@ -79,6 +80,21 @@ export function blockToFreeText(block: CampaignBlock) {
   if (block.kind === 'ProgressBlock') return '参与进度\\n已参与 1,258 人 · 62%';
   if (block.kind === 'RuleText') return '活动规则\\n1. 单笔充值满 500 元可领取奖励\\n2. 每个用户仅可领取一次';
   return 'FAQ\\n奖励到账时间、参与资格和领取问题。';
+}
+
+const semanticBlockTextPrefix: Partial<Record<CampaignBlockKind, string>> = {
+  Countdown: '活动倒计时',
+  ProgressBlock: '参与进度',
+  RuleText: '活动规则',
+  FAQBlock: 'FAQ',
+};
+
+export function syncedBlockText(block: CampaignBlock, existingText: string | undefined, freshText: string) {
+  if (!existingText) return freshText;
+  const expectedPrefix = semanticBlockTextPrefix[block.kind];
+  if (!expectedPrefix) return existingText;
+  const firstLine = existingText.split('\\n')[0]?.trim();
+  return firstLine === expectedPrefix ? existingText : freshText;
 }
 
 export function blockToFreeKind(kind: CampaignBlockKind): FreeDesignElement['kind'] {
@@ -144,8 +160,35 @@ export function blockToFreeElement(block: CampaignBlock, width: DeviceWidth, z: 
 export function syncFreeElementsWithBlocks(blocks: CampaignBlock[], width: DeviceWidth, currentFreeElements: FreeDesignElement[]) {
   const visibleBlocks = blocks.filter((block) => block.visible);
   const visibleBlockById = new Map(visibleBlocks.map((block) => [block.id, block]));
+  const defaultElementsByBlockId = new Map(
+    blocksToFreeElements(visibleBlocks, width).map((element) => [blockIdForFreeElementId(element.id), element]),
+  );
   const existingById = new Map(currentFreeElements.map((element) => [element.id, element]));
   const visibleFreeIds = new Set(visibleBlocks.map((block) => `free_from_${block.id}`));
+  const currentBlockIds = new Set(currentFreeElements.map((element) => blockIdForFreeElementId(element.id)).filter(Boolean));
+  const missingDefaultBlock = visibleBlocks.some((block) => !currentBlockIds.has(block.id));
+  const legacyInitialIds = new Set(['free_hero_title', 'free_reward_card', 'free_claim']);
+  const legacyOnlySnapshot = missingDefaultBlock && currentFreeElements.length > 0 && currentFreeElements.every((element) => legacyInitialIds.has(element.id));
+  if (legacyOnlySnapshot) {
+    const legacyByBlockId = new Map(currentFreeElements.map((element) => [blockIdForFreeElementId(element.id), element]));
+    return fitLayouts(visibleBlocks.map((block, index) => {
+      const fresh = defaultElementsByBlockId.get(block.id) ?? blockToFreeElement(block, width, index + 1);
+      const legacy = legacyByBlockId.get(block.id);
+      if (!legacy) return fresh;
+      return {
+        ...fresh,
+        id: legacy.id,
+        name: legacy.name ?? fresh.name,
+        text: syncedBlockText(block, legacy.text, fresh.text),
+        binding: legacy.binding,
+        visibleWhen: legacy.visibleWhen,
+        action: legacy.action,
+        payload: legacy.payload,
+        variant: legacy.variant ?? fresh.variant,
+        radius: legacy.radius ?? fresh.radius,
+      };
+    }));
+  }
   const nonBlockElements = currentFreeElements.filter((element) => !element.id.startsWith('free_from_'));
   const legacySyncedElements = nonBlockElements.flatMap((element) => {
     const blockId = blockIdForFreeElementId(element.id);
@@ -157,13 +200,14 @@ export function syncFreeElementsWithBlocks(blocks: CampaignBlock[], width: Devic
     return [{
       ...fresh,
       ...element,
-      text: fresh.text,
-      binding: fresh.binding,
-      visibleWhen: fresh.visibleWhen,
-      action: fresh.action,
-      payload: fresh.payload,
-      variant: fresh.variant,
-      radius: fresh.radius,
+      name: element.name ?? fresh.name,
+      text: syncedBlockText(block, element.text, fresh.text),
+      binding: element.binding,
+      visibleWhen: element.visibleWhen,
+      action: element.action,
+      payload: element.payload,
+      variant: element.variant ?? fresh.variant,
+      radius: element.radius ?? fresh.radius,
       w: parent ? layoutChildWidth(parent) : element.w,
     }];
   });
@@ -171,20 +215,21 @@ export function syncFreeElementsWithBlocks(blocks: CampaignBlock[], width: Devic
   const defaultBlockIds = new Set(initialBlocks.map((block) => block.id));
   const blockElements = visibleBlocks.flatMap((block, index) => {
     if (legacyBlockIds.has(block.id)) return [];
-    const fresh = blockToFreeElement(block, width, index + 1);
+    const fresh = defaultElementsByBlockId.get(block.id) ?? blockToFreeElement(block, width, index + 1);
     const existing = existingById.get(fresh.id);
     if (!existing) return [fresh];
     const parent = existing.parentId ? currentFreeElements.find((element) => element.id === existing.parentId && element.kind === 'layout') : undefined;
     return [{
       ...fresh,
       ...existing,
-      text: fresh.text,
-      binding: fresh.binding,
-      visibleWhen: fresh.visibleWhen,
-      action: fresh.action,
-      payload: fresh.payload,
-      variant: fresh.variant,
-      radius: fresh.radius,
+      name: existing.name ?? fresh.name,
+      text: syncedBlockText(block, existing.text, fresh.text),
+      binding: existing.binding,
+      visibleWhen: existing.visibleWhen,
+      action: existing.action,
+      payload: existing.payload,
+      variant: existing.variant ?? fresh.variant,
+      radius: existing.radius ?? fresh.radius,
       w: parent ? layoutChildWidth(parent) : existing.w,
     }];
   });

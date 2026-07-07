@@ -58,6 +58,7 @@ export function FreeElementInspector({
   return (
     <div className="campaign-inspector-body">
       <InspectorSection>
+        <Field label="节点名称"><input value={element.name ?? ''} placeholder="节点名称" onChange={(event) => onChange({ name: event.target.value })} /></Field>
         <Field label="元素文案"><textarea value={element.text.split('\\n').join('\n')} onChange={(event) => onChange({ text: event.target.value.split('\n').join('\\n') })} /></Field>
         <div className="campaign-free-grid">
           <Field label="X"><input type="number" value={element.x} onChange={(event) => onChange({ x: Math.max(0, Number(event.target.value)) })} /></Field>
@@ -134,7 +135,10 @@ export function InspectorContent({
   return (
     <div className="campaign-inspector-body">
       <InspectorSection>
-        <Field label={block.kind === 'ClaimButton' ? '按钮文案' : '模块标题'}><input value={block.kind === 'ClaimButton' ? block.text ?? '立即领取' : block.title} onChange={(event) => onBlockChange(block.kind === 'ClaimButton' ? { text: event.target.value, title: event.target.value || '领取按钮' } : { title: event.target.value })} /></Field>
+        <Field label="节点名称"><input value={block.title} onChange={(event) => onBlockChange({ title: event.target.value })} /></Field>
+        {block.kind === 'ClaimButton' ? (
+          <Field label="按钮文案"><input value={block.text ?? '立即领取'} onChange={(event) => onBlockChange({ text: event.target.value })} /></Field>
+        ) : null}
         <div className="campaign-button-preview">{block.kind === 'ClaimButton' ? block.text ?? '立即领取' : block.title}</div>
         <Field label="按钮样式"><select value={block.variant ?? 'primary'} onChange={(event) => onBlockChange({ variant: event.target.value as CampaignBlock['variant'] })}><option value="primary">主要按钮（蓝色）</option><option value="secondary">次要按钮</option></select></Field>
         <Field label="宽度"><select value={block.width ?? 'full'} onChange={(event) => onBlockChange({ width: event.target.value as CampaignBlock['width'] })}><option value="full">全宽</option><option value="content">内容宽度</option></select></Field>

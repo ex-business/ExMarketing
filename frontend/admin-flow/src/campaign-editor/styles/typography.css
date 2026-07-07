@@ -1,0 +1,85 @@
+.campaign-editor :is(
+  .campaign-outline h2,
+  .campaign-inspector h2,
+  .campaign-resource-title h2,
+  .campaign-resource-bar .exm-toolbar-title h2,
+  .campaign-resource-detail-body h3,
+  .campaign-secondary-groups h2,
+  .campaign-secondary-list h2,
+  .campaign-secondary-detail h2,
+  .exm-panel-head h2,
+  .exm-toolbar-title h2,
+  .exm-inspector-section h3
+) {
+  font-family: var(--campaign-title-font);
+  font-weight: var(--ui-weight-title);
+  letter-spacing: 0;
+  text-rendering: geometricPrecision;
+}
+
+.campaign-editor .campaign-brand b {
+  font-size: 17px;
+  line-height: 1.08;
+  font-weight: var(--ui-weight-strong);
+}
+
+.campaign-editor .campaign-brand small {
+  font-size: 12px;
+  line-height: 1.15;
+  font-weight: var(--ui-weight-medium);
+}
+
+.campaign-outline h2,
+.campaign-inspector h2 {
+  font-size: 17px;
+  line-height: 1.24;
+}
+
+.campaign-resource-title h2,
+.campaign-resource-bar .exm-toolbar-title h2 {
+  font-size: var(--ui-font-2xl);
+  line-height: 1.12;
+}
+
+.campaign-resource-tree-head,
+.campaign-resource-detail-body h3 {
+  font-family: var(--campaign-title-font);
+  font-weight: var(--ui-weight-title);
+  letter-spacing: 0;
+}
+
+.campaign-resource-detail-body h3 {
+  font-size: var(--ui-font-xl);
+  line-height: 1.22;
+}
+
+.campaign-secondary-groups h2,
+.campaign-secondary-list h2,
+.campaign-secondary-detail h2 {
+  font-size: var(--ui-font-2xl);
+  line-height: 1.18;
+}
+
+.campaign-secondary-detail h2 {
+  font-size: 26px;
+}
+
+.exm-panel-head h2,
+.exm-toolbar-title h2 {
+  font-size: var(--ui-font-lg);
+  line-height: 1.2;
+}
+
+.exm-inspector-section h3 {
+  font-size: var(--ui-font-md);
+  line-height: 1.22;
+}
+
+.campaign-editor :is(
+  .campaign-outline-list strong,
+  .campaign-resource-tree-head,
+  .campaign-secondary-table-item strong,
+  .campaign-secondary-list strong
+) {
+  font-weight: var(--ui-weight-semibold);
+}

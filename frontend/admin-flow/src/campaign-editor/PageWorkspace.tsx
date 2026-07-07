@@ -1,4 +1,4 @@
-import type { CampaignBlock, CampaignBlockKind, CampaignPageSchema } from './types';
+import type { CampaignBlock, CampaignBlockKind, CampaignPageSchema, ComponentRegistryKey, LayoutKind } from './types';
 import { AddBetween } from './FreeCanvas';
 import { CanvasRenderer, pageElementsForRenderer } from './CanvasRenderer';
 import { blockIdForFreeElementId } from './layout';
@@ -7,16 +7,10 @@ export function CampaignModulePreview({
   page,
   selectedId,
   onSelect,
-  draggingBlockKind,
-  onDropBlock,
-  onDragDone,
 }: {
   page: CampaignPageSchema;
   selectedId: string;
   onSelect: (id: string) => void;
-  draggingBlockKind: CampaignBlockKind | null;
-  onDropBlock: (kind: CampaignBlockKind) => void;
-  onDragDone: () => void;
 }) {
   const previewBlockIds = pageElementsForRenderer(page)
     .map((element) => blockIdForFreeElementId(element.id))
@@ -27,10 +21,50 @@ export function CampaignModulePreview({
       page={page}
       mode="preview"
       selectedNodeId={activeBlockId}
-      draggingBlockKind={draggingBlockKind}
-      onDropBlock={onDropBlock}
-      onDragDone={onDragDone}
       onSelectNode={onSelect}
+    />
+  );
+}
+
+export function CampaignBuildCanvas({
+  page,
+  selectedNodeId,
+  draggingBlockKind,
+  draggingLayoutKind,
+  draggingComponentKey,
+  onSelectNode,
+  onDropBlock,
+  onDropLayout,
+  onDropComponent,
+  onDragDone,
+  onLayoutDragDone,
+}: {
+  page: CampaignPageSchema;
+  selectedNodeId: string;
+  draggingBlockKind: CampaignBlockKind | null;
+  draggingLayoutKind: LayoutKind | null;
+  draggingComponentKey: ComponentRegistryKey | null;
+  onSelectNode: (id: string) => void;
+  onDropBlock: (kind: CampaignBlockKind, x: number, y: number) => void;
+  onDropLayout: (kind: LayoutKind, x: number, y: number) => void;
+  onDropComponent: (componentKey: ComponentRegistryKey, x: number, y: number) => void;
+  onDragDone: () => void;
+  onLayoutDragDone: () => void;
+}) {
+  return (
+    <CanvasRenderer
+      page={page}
+      mode="design"
+      selectedNodeId={selectedNodeId}
+      draggingBlockKind={draggingBlockKind}
+      draggingLayoutKind={draggingLayoutKind}
+      draggingComponentKey={draggingComponentKey}
+      onSelectNode={onSelectNode}
+      onDropBlock={onDropBlock}
+      onDropLayout={onDropLayout}
+      onDropComponent={onDropComponent}
+      onDragDone={onDragDone}
+      onLayoutDragDone={onLayoutDragDone}
     />
   );
 }

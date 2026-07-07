@@ -10,7 +10,7 @@ import type {
   FreeDesignElement,
   LayoutKind,
 } from './types';
-import { blockIdForFreeElementId, blockToFreeKind, blockToFreeText, blocksToFreeElements, normalizeLayoutKind } from './layout';
+import { blockIdForFreeElementId, blockToFreeKind, blockToFreeText, blocksToFreeElements, normalizeLayoutKind, syncedBlockText } from './layout';
 import { componentDefinitionForElement, componentKeyForBlockKind, componentKeyForLayoutKind } from './componentRegistry';
 
 export type NodeId = string;
@@ -152,7 +152,8 @@ export function campaignPageToEditorPage(page: CampaignPageLike): Page {
     const frame: NodeFrame = { x: element.x, y: element.y, width: element.w, height: element.h, z: element.z };
     const block = blockForElement(element, blocksById);
     const definition = componentDefinitionForElement(element);
-    const name = element.text.split('\\n')[0] || block?.title || definition.defaultTitle || '未命名节点';
+    const name = element.name || block?.title || element.text.split('\\n')[0] || definition.defaultTitle || '未命名节点';
+    const text = block ? syncedBlockText(block, element.text, blockToFreeText(block)) : element.text;
     const resourceBindings = bindingFromExpression(element.id, element.binding);
     const actionBindings = actionFromElement(element.id, element.action, element.payload);
     const styleTokens = styleTokensFromElement(element.id, element);
@@ -172,7 +173,7 @@ export function campaignPageToEditorPage(page: CampaignPageLike): Page {
         layout,
         children: childrenByParent[element.id] ?? [],
         content: {
-          text: element.text,
+          text,
         },
         flexDirection: element.flexDirection ?? (layout === 'vertical-layout' ? 'column' : 'row'),
         justifyContent: element.justifyContent ?? 'flex-start',
@@ -184,7 +185,7 @@ export function campaignPageToEditorPage(page: CampaignPageLike): Page {
     return {
       id: element.id,
       type: 'component',
-      name: block?.title ?? name,
+      name,
       visible: block?.visible ?? true,
       parentId: element.parentId,
       frame,
@@ -195,7 +196,7 @@ export function campaignPageToEditorPage(page: CampaignPageLike): Page {
       component: componentKindForElement(element, block),
       sourceBlockId: block?.id,
       content: {
-        text: element.text,
+        text,
         variant: element.variant,
       },
     };
@@ -228,6 +229,7 @@ export function editorPageToFreeElements(editorPage: Page): FreeDesignElement[] 
             ? 'button'
             : 'card',
     text: node.type === 'component' ? node.content.text : node.content.text,
+    name: node.name,
     component: node.type === 'container'
       ? componentKeyForLayoutKind(node.layout)
       : node.sourceBlockId

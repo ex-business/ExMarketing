@@ -52,8 +52,15 @@
   height: 52px;
   border-bottom: 1px solid var(--theme-border);
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: 1fr;
+  align-items: center;
   padding: 0 20px;
+}
+
+.campaign-inspector nav .exm-segmented {
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .campaign-inspector nav button {
@@ -64,6 +71,7 @@
   cursor: pointer;
   font-size: 14px;
   font-weight: 850;
+  white-space: nowrap;
 }
 
 .campaign-inspector nav button.active {

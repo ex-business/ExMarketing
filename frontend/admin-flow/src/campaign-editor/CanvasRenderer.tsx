@@ -74,6 +74,7 @@ export function CanvasRenderer({
   const childrenByParent = groupsByParent(elements);
   const isRuntime = mode === 'runtime';
   const isDesign = mode === 'design';
+  const isInteractive = mode === 'design';
   const canvasWidth = width ?? page?.device.defaultWidth ?? 393;
   const canvasHeight = embedded || !isRuntime ? freeCanvasHeight(elements, embedded ? 0 : 760) : undefined;
   const canvasClass = isRuntime
@@ -84,7 +85,7 @@ export function CanvasRenderer({
   const elementClass = isDesign ? 'campaign-free-element' : 'campaign-runtime-element';
 
   const selectElement = (id: string) => {
-    if (!isRuntime) onSelectNode?.(isDesign ? id : selectionIdForElement(id));
+    if (isInteractive) onSelectNode?.(isDesign ? id : selectionIdForElement(id));
   };
 
   return (
@@ -113,10 +114,10 @@ export function CanvasRenderer({
           const renderedChildren = childElements.length ? childElements.map((child) => (
             <span
               key={child.id}
-              className={`${elementClass} nested ${child.kind} ${child.w === 0 || child.h === 0 ? 'zero-size' : ''} ${child.variant ?? 'primary'} ${!isRuntime && selectedMatches(child.id, selectedNodeId) ? 'selected' : ''}`}
+              className={`${elementClass} nested ${child.kind} ${child.w === 0 || child.h === 0 ? 'zero-size' : ''} ${child.variant ?? 'primary'} ${isInteractive && selectedMatches(child.id, selectedNodeId) ? 'selected' : ''}`}
               style={freeElementStyle(child, true)}
               onPointerDown={isDesign ? (event) => onPointerDownNested?.(event, child) : undefined}
-              onClick={!isRuntime ? (event) => {
+              onClick={isInteractive ? (event) => {
                 event.stopPropagation();
                 selectElement(child.id);
               } : undefined}
@@ -127,13 +128,13 @@ export function CanvasRenderer({
           return (
             <div
               key={element.id}
-              className={`${elementClass} ${element.kind} ${element.layout ?? ''} ${childElements.length ? 'has-children' : ''} ${element.w === 0 || element.h === 0 ? 'zero-size' : ''} ${element.variant ?? 'primary'} ${!isRuntime && selectedMatches(element.id, selectedNodeId) ? 'selected' : ''}`}
+              className={`${elementClass} ${element.kind} ${element.layout ?? ''} ${childElements.length ? 'has-children' : ''} ${element.w === 0 || element.h === 0 ? 'zero-size' : ''} ${element.variant ?? 'primary'} ${isInteractive && selectedMatches(element.id, selectedNodeId) ? 'selected' : ''}`}
               role={isRuntime ? undefined : 'button'}
               tabIndex={isDesign ? 0 : undefined}
               data-action={element.action ?? ''}
               style={freeElementStyle(element)}
               onPointerDown={isDesign ? (event) => onPointerDownElement?.(event, element) : undefined}
-              onClick={!isRuntime ? () => selectElement(element.id) : undefined}
+              onClick={isInteractive ? () => selectElement(element.id) : undefined}
             >
               {renderRuntimeComponent(element, renderedChildren)}
               {isDesign && selectedMatches(element.id, selectedNodeId) ? <span className="campaign-free-resize" aria-label="调整尺寸" onPointerDown={(event) => onResizePointerDown?.(event, element)} /> : null}

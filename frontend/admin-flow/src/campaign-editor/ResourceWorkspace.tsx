@@ -134,7 +134,6 @@ export function CampaignResourceWorkspace({
     id: `resource_group_${tab}`,
     label: resourceGroupLabels[tab],
     count: records.filter((record) => record.tab === tab).length,
-    active: activeTab === tab,
     open: expandedGroups[tab],
     onClick: () => toggleResourceGroup(tab),
     onToggle: () => toggleResourceGroup(tab),

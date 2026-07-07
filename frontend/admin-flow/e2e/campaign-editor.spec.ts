@@ -19,7 +19,7 @@ test.describe('Campaign Editor page design', () => {
     for (const label of ['页面', '资源', '设置', '模板库']) {
       await nav.getByRole('button', { name: label, exact: true }).click();
       if (label === '页面') {
-        await expect(page.getByRole('heading', { name: '页面树' })).toBeVisible();
+        await expect(page.getByRole('heading', { name: '页面结构' })).toBeVisible();
       } else if (label === '资源') {
         await expect(page.locator('.campaign-resource-workspace')).toBeVisible();
         await expect(page.locator('.campaign-resource-bar')).toContainText('资源');
@@ -116,31 +116,28 @@ test.describe('Campaign Editor page design', () => {
   });
 
   test('edits blocks, persists schema, publishes and previews', async ({ page }) => {
-    await page.getByRole('button', { name: '模块预览' }).click();
-    await page.getByRole('button', { name: /领取按钮/ }).click();
-    await page.locator('.campaign-inspector-body input').first().fill('马上领取');
-    await expect(page.locator('.campaign-runtime-element.button')).toContainText('马上领取');
+    await page.locator('.campaign-free-element.button').first().click();
+    await page.locator('.campaign-inspector-body textarea').first().fill('马上领取');
+    await expect(page.locator('.campaign-free-element.button')).toContainText('马上领取');
 
     await page.locator('.campaign-inspector nav').getByRole('button', { name: '动作' }).click();
     await page.locator('.campaign-inspector-body select').selectOption('TRACK_EVENT');
 
     await page.reload({ waitUntil: 'networkidle' });
-    await page.getByRole('button', { name: '模块预览' }).click();
-    await expect(page.locator('.campaign-runtime-element.button')).toContainText('马上领取');
+    await expect(page.locator('.campaign-free-element.button')).toContainText('马上领取');
 
     await page.getByRole('button', { name: /发布/ }).click();
     await page.getByLabel('Campaign editor navigation').getByRole('button', { name: '设置', exact: true }).click();
     await expect(page.locator('.campaign-secondary-detail')).toContainText('最近发布');
 
-    await page.getByRole('button', { name: '预览', exact: true }).click();
+    await page.locator('.campaign-editor-header').getByRole('button', { name: '预览', exact: true }).click();
     await expect(page.getByRole('dialog', { name: '移动端预览' })).toBeVisible();
     await expect(page.locator('.campaign-phone-screen')).toContainText('马上领取');
     await page.getByRole('button', { name: '关闭', exact: true }).click();
 
     await page.getByLabel('Campaign editor navigation').getByRole('button', { name: '页面', exact: true }).click();
-    await page.getByRole('button', { name: '模块预览' }).click();
     await page.locator('.campaign-outline-row', { hasText: 'ClaimButton' }).click();
-    await page.locator('.campaign-inspector-body input').first().fill('草稿按钮');
+    await page.locator('.campaign-inspector-body textarea').first().fill('草稿按钮');
     await page.goto('/admin-flow/campaign/summer-rebate', { waitUntil: 'networkidle' });
     await expect(page.locator('.campaign-runtime-canvas')).toContainText('马上领取');
     await expect(page.locator('.campaign-runtime-canvas')).not.toContainText('草稿按钮');
@@ -149,9 +146,8 @@ test.describe('Campaign Editor page design', () => {
     await page.getByLabel('Campaign editor navigation').getByRole('button', { name: '设置', exact: true }).click();
     await page.locator('.campaign-secondary-form label').filter({ hasText: '页面路径' }).locator('input').fill('/campaign/custom-rebate');
     await page.getByLabel('Campaign editor navigation').getByRole('button', { name: '页面', exact: true }).click();
-    await page.getByRole('button', { name: '模块预览' }).click();
     await page.locator('.campaign-outline-row', { hasText: 'ClaimButton' }).click();
-    await page.locator('.campaign-inspector-body input').first().fill('自定义路径按钮');
+    await page.locator('.campaign-inspector-body textarea').first().fill('自定义路径按钮');
     await page.getByRole('button', { name: /发布/ }).click();
     await page.goto('/admin-flow/campaign/custom-rebate', { waitUntil: 'networkidle' });
     await expect(page.locator('.campaign-runtime-canvas')).toContainText('自定义路径按钮');
@@ -159,10 +155,9 @@ test.describe('Campaign Editor page design', () => {
     await page.goto('/admin-flow/campaign-editor', { waitUntil: 'networkidle' });
     await page.getByLabel('Campaign editor navigation').getByRole('button', { name: '设置', exact: true }).click();
     await page.locator('.campaign-version-list button').last().click();
-    await expect(page.getByRole('heading', { name: '页面树' })).toBeVisible();
-    await page.getByRole('button', { name: '模块预览' }).click();
-    await expect(page.locator('.campaign-runtime-element.button')).toContainText('马上领取');
-    await expect(page.locator('.campaign-runtime-element.button')).not.toContainText('自定义路径按钮');
+    await expect(page.getByRole('heading', { name: '页面结构' })).toBeVisible();
+    await expect(page.locator('.campaign-free-element.button')).toContainText('马上领取');
+    await expect(page.locator('.campaign-free-element.button')).not.toContainText('自定义路径按钮');
   });
 
   test('does not render a stale legacy publish snapshot for another runtime path', async ({ page }) => {
@@ -189,10 +184,10 @@ test.describe('Campaign Editor page design', () => {
     await expect(page.locator('.campaign-runtime-element')).toHaveCount(0);
   });
 
-  test('keeps click preview from scrolling when content fits the phone screen', async ({ page }) => {
+  test('keeps click preview width fixed and scrolls vertically only when content is taller', async ({ page }) => {
     await page.setViewportSize({ width: 1198, height: 969 });
     await page.reload({ waitUntil: 'networkidle' });
-    await page.getByRole('button', { name: '预览', exact: true }).click();
+    await page.locator('.campaign-editor-header').getByRole('button', { name: '预览', exact: true }).click();
     await expect(page.getByRole('dialog', { name: '移动端预览' })).toBeVisible();
     const screenMetrics = await page.locator('.campaign-phone-screen').evaluate((screen) => ({
       clientHeight: screen.clientHeight,
@@ -200,7 +195,7 @@ test.describe('Campaign Editor page design', () => {
       clientWidth: screen.clientWidth,
       scrollWidth: screen.scrollWidth,
     }));
-    expect(screenMetrics.scrollHeight - screenMetrics.clientHeight).toBeLessThanOrEqual(1);
+    expect(screenMetrics.scrollHeight).toBeGreaterThanOrEqual(screenMetrics.clientHeight);
     expect(screenMetrics.scrollWidth - screenMetrics.clientWidth).toBeLessThanOrEqual(1);
   });
 
@@ -228,35 +223,68 @@ test.describe('Campaign Editor page design', () => {
   });
 
   test('keeps page authoring as two clear modes', async ({ page }) => {
-    await expect(page.locator('.campaign-toolbar')).toContainText('模块预览');
+    await expect(page.locator('.campaign-toolbar')).toContainText('预览');
+    await expect(page.locator('.campaign-toolbar')).toContainText('自由定位');
     await expect(page.locator('.campaign-toolbar')).toContainText('页面设计');
     await expect(page.locator('.campaign-toolbar button').first()).toHaveText('页面设计');
-    await expect(page.locator('.campaign-toolbar button').nth(1)).toHaveText('模块预览');
+    await expect(page.locator('.campaign-toolbar button').nth(1)).toHaveText('自由定位');
+    await expect(page.locator('.campaign-toolbar button').nth(2)).toHaveText('预览');
     await expect(page.locator('.campaign-toolbar button').first()).toHaveClass(/active/);
     await expect(page.locator('.campaign-free-canvas')).toBeVisible();
-    await expect(page.getByRole('heading', { name: '页面树' })).toBeVisible();
-    await expect(page.getByRole('button', { name: '常用组件' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '页面结构' })).toBeVisible();
+    await page.locator('.campaign-outline .exm-tabs').getByRole('button', { name: '添加' }).click();
+    await expect(page.getByRole('heading', { name: '添加组件' })).toBeVisible();
     await expect(page.locator('.campaign-toolbar')).not.toContainText('Puck');
     await expect(page.locator('.campaign-toolbar')).not.toContainText('标题');
     await expect(page.locator('.campaign-toolbar')).not.toContainText('头图');
-    await expect(page.getByRole('button', { name: '常用组件' })).toBeVisible();
+    await expect(page.locator('.campaign-free-canvas')).toContainText('活动倒计时');
+    await expect(page.locator('.campaign-free-canvas')).toContainText('参与进度');
+    await expect(page.locator('.campaign-free-canvas')).toContainText('活动规则');
+    await expect(page.locator('.campaign-free-canvas')).toContainText('FAQ');
 
     await page.locator('.campaign-block-palette').getByRole('button', { name: '垂直布局' }).click();
     await expect(page.locator('.campaign-free-element.layout.vertical-layout')).toBeVisible();
-    await page.getByRole('button', { name: '模块预览' }).click();
+    await page.getByLabel('页面编辑模式').getByRole('button', { name: '预览' }).click();
     await page.getByRole('button', { name: '页面设计' }).click();
     await expect(page.locator('.campaign-free-element.layout.vertical-layout')).toBeVisible();
   });
 
   test('adds modules from the component library by click and drag', async ({ page }) => {
-    await page.getByRole('button', { name: '模块预览' }).click();
     await expect(page.locator('.campaign-outline-row')).toHaveCount(8);
+    await page.locator('.campaign-outline .exm-tabs').getByRole('button', { name: '添加' }).click();
     await page.locator('.campaign-block-palette').getByRole('button', { name: '标题' }).click();
+    await page.locator('.campaign-outline .exm-tabs').getByRole('button', { name: '结构' }).click();
     await expect(page.locator('.campaign-outline-row')).toHaveCount(9);
-    await expect(page.locator('.campaign-outline-list')).toContainText('新标题');
+    await expect(page.locator('.campaign-outline-list')).toContainText('标题');
+    await page.locator('.campaign-outline .exm-tabs').getByRole('button', { name: '添加' }).click();
+    await page.locator('.campaign-block-palette').getByRole('button', { name: '标题' }).click();
+    await page.locator('.campaign-outline .exm-tabs').getByRole('button', { name: '结构' }).click();
+    await expect(page.locator('.campaign-outline-row')).toHaveCount(10);
+    await expect(page.locator('.campaign-outline-list')).toContainText('标题 2');
 
-    await page.locator('.campaign-block-palette').getByRole('button', { name: 'FAQ' }).dragTo(page.locator('.campaign-mobile-canvas'));
-    await expect(page.locator('.campaign-outline-list')).toContainText('新 FAQ');
+    await page.locator('.campaign-outline .exm-tabs').getByRole('button', { name: '添加' }).click();
+    await page.locator('.campaign-block-palette').getByRole('button', { name: 'FAQ' }).dragTo(page.locator('.campaign-free-canvas'));
+    await page.locator('.campaign-outline .exm-tabs').getByRole('button', { name: '结构' }).click();
+    await expect(page.locator('.campaign-outline-list')).toContainText('FAQ 2');
+  });
+
+  test('keeps inspector node name aligned with the page tree', async ({ page }) => {
+    await page.locator('.campaign-free-element.button').first().click();
+    await page.locator('.campaign-inspector-body label').filter({ hasText: '节点名称' }).locator('input').fill('主按钮节点');
+    await expect(page.locator('.campaign-inspector header')).toContainText('主按钮节点');
+    await expect(page.locator('.campaign-outline-row.active')).toContainText('主按钮节点');
+
+    await page.locator('.campaign-inspector-body label').filter({ hasText: '元素文案' }).locator('textarea').fill('马上领取');
+    await expect(page.locator('.campaign-free-element.button')).toContainText('马上领取');
+    await expect(page.locator('.campaign-outline-row.active')).toContainText('主按钮节点');
+    await expect(page.locator('.campaign-outline-row.active')).not.toContainText('马上领取');
+  });
+
+  test('falls back to a valid page tree name when clearing the node name', async ({ page }) => {
+    await page.locator('.campaign-free-element.button').first().click();
+    await page.locator('.campaign-inspector-body label').filter({ hasText: '节点名称' }).locator('input').fill('');
+    await expect(page.locator('.campaign-outline-row.active')).toContainText('领取按钮');
+    await expect(page.locator('.campaign-outline-row.active')).toContainText('ClaimButton');
   });
 
   test('searches the page tree', async ({ page }) => {
@@ -269,27 +297,48 @@ test.describe('Campaign Editor page design', () => {
     await expect(page.locator('.campaign-tree-empty')).toBeVisible();
   });
 
+  test('keeps page tree rows compact', async ({ page }) => {
+    const rowHeight = await page.locator('.campaign-outline-row', { hasText: 'HeroBanner' }).first().evaluate((element) => element.getBoundingClientRect().height);
+    expect(rowHeight).toBeLessThanOrEqual(26);
+  });
+
   test('collapses and expands the page tree and component library', async ({ page }) => {
     await page.locator('.campaign-page-tree-root').click();
     await expect(page.locator('.campaign-outline-row')).toHaveCount(0);
     await page.locator('.campaign-page-tree-root').click();
     await expect(page.locator('.campaign-outline-row')).toHaveCount(8);
 
-    await page.getByRole('button', { name: '常用组件' }).click();
+    await page.locator('.campaign-outline .exm-tabs').getByRole('button', { name: '添加' }).click();
+    await expect(page.locator('.campaign-block-palette button')).toHaveCount(11);
+    await page.locator('.campaign-outline .exm-tabs').getByRole('button', { name: '结构' }).click();
     await expect(page.locator('.campaign-block-palette')).toHaveCount(0);
-    await page.getByRole('button', { name: '常用组件' }).click();
-    await expect(page.locator('.campaign-block-palette button')).toHaveCount(10);
+  });
+
+	  test('keeps add component actions read-only in preview mode', async ({ page }) => {
+	    await page.getByLabel('页面编辑模式').getByRole('button', { name: '预览' }).click();
+	    await expect(page.locator('.campaign-outline-row').first()).toHaveAttribute('draggable', 'false');
+	    await expect(page.getByLabel('隐藏内容块').first()).toBeDisabled();
+	    await expect(page.getByLabel('复制内容块').first()).toBeDisabled();
+	    await expect(page.getByLabel('删除内容块').first()).toBeDisabled();
+	    await page.locator('.campaign-outline .exm-tabs').getByRole('button', { name: '添加' }).click();
+	    await expect(page.locator('.campaign-panel-hint')).toContainText('预览模式为只读');
+	    await expect(page.locator('.campaign-block-palette').getByRole('button', { name: '标题' })).toBeDisabled();
+    await page.locator('.campaign-block-palette').getByRole('button', { name: '标题' }).click({ force: true });
+    await page.locator('.campaign-outline .exm-tabs').getByRole('button', { name: '结构' }).click();
+    await expect(page.locator('.campaign-outline-row')).toHaveCount(8);
   });
 
   test('keeps module editing and page design on the same page content', async ({ page }) => {
     await page.locator('.campaign-editor-header select').selectOption('375');
+    await page.locator('.campaign-outline .exm-tabs').getByRole('button', { name: '添加' }).click();
     await page.locator('.campaign-block-palette').getByRole('button', { name: '水平布局' }).click();
+    await page.locator('.campaign-outline .exm-tabs').getByRole('button', { name: '结构' }).click();
     await expect(page.locator('.campaign-free-element.layout.horizontal-layout')).toBeVisible();
     const pageDesignCanvasBox = await page.locator('.campaign-free-canvas').boundingBox();
     const pageDesignLayoutBox = await page.locator('.campaign-free-element.layout.horizontal-layout').boundingBox();
     expect(pageDesignCanvasBox).not.toBeNull();
     expect(pageDesignLayoutBox).not.toBeNull();
-    await page.getByRole('button', { name: '预览', exact: true }).click();
+    await page.locator('.campaign-editor-header').getByRole('button', { name: '预览', exact: true }).click();
     await expect(page.getByRole('dialog', { name: '移动端预览' })).toBeVisible();
     const phoneFrameBox = await page.locator('.campaign-phone-frame').boundingBox();
     const phoneScreenBox = await page.locator('.campaign-phone-screen').boundingBox();
@@ -304,7 +353,7 @@ test.describe('Campaign Editor page design', () => {
     expect(Math.abs(Math.round(freeModePreviewLayoutBox!.x - freeModePreviewCanvasBox!.x) - Math.round(pageDesignLayoutBox!.x - pageDesignCanvasBox!.x))).toBeLessThanOrEqual(1);
     expect(Math.abs(Math.round(freeModePreviewLayoutBox!.y - freeModePreviewCanvasBox!.y) - Math.round(pageDesignLayoutBox!.y - pageDesignCanvasBox!.y))).toBeLessThanOrEqual(1);
     await page.getByRole('button', { name: '关闭', exact: true }).click();
-    await page.getByRole('button', { name: '模块预览' }).click();
+    await page.getByLabel('页面编辑模式').getByRole('button', { name: '预览' }).click();
     const modulePreviewLayout = page.locator('.campaign-runtime-element.layout.horizontal-layout');
     await expect(modulePreviewLayout).toBeVisible();
     const modulePreviewWorkspaceBox = await page.locator('.campaign-canvas-workspace').boundingBox();
@@ -316,7 +365,7 @@ test.describe('Campaign Editor page design', () => {
     expect(Math.abs((modulePreviewCanvasBox!.x + modulePreviewCanvasBox!.width / 2) - (modulePreviewWorkspaceBox!.x + modulePreviewWorkspaceBox!.width / 2))).toBeLessThanOrEqual(1);
     expect(Math.round(modulePreviewLayoutBox!.x)).toBe(Math.round(pageDesignLayoutBox!.x));
     expect(Math.round(modulePreviewLayoutBox!.y)).toBe(Math.round(pageDesignLayoutBox!.y));
-    await page.getByRole('button', { name: '预览', exact: true }).click();
+    await page.locator('.campaign-editor-header').getByRole('button', { name: '预览', exact: true }).click();
     await expect(page.getByRole('dialog', { name: '移动端预览' })).toBeVisible();
     const moduleModePreviewCanvasBox = await page.locator('.campaign-phone-screen .campaign-runtime-canvas').boundingBox();
     const moduleModePreviewLayoutBox = await page.locator('.campaign-phone-screen .campaign-runtime-element.layout.horizontal-layout').boundingBox();
@@ -325,25 +374,26 @@ test.describe('Campaign Editor page design', () => {
     expect(Math.abs(Math.round(moduleModePreviewLayoutBox!.x - moduleModePreviewCanvasBox!.x) - Math.round(pageDesignLayoutBox!.x - pageDesignCanvasBox!.x))).toBeLessThanOrEqual(1);
     expect(Math.abs(Math.round(moduleModePreviewLayoutBox!.y - moduleModePreviewCanvasBox!.y) - Math.round(pageDesignLayoutBox!.y - pageDesignCanvasBox!.y))).toBeLessThanOrEqual(1);
     await page.getByRole('button', { name: '关闭', exact: true }).click();
-    await page.getByRole('button', { name: /领取按钮/ }).click();
-    await page.locator('.campaign-inspector-body input').first().fill('马上领取');
-    await expect(page.locator('.campaign-runtime-element.button')).toContainText('马上领取');
-
     await page.getByRole('button', { name: '页面设计' }).click();
+    await page.locator('.campaign-outline .exm-tabs').getByRole('button', { name: '结构' }).click();
+    await page.locator('.campaign-outline-row', { hasText: '领取按钮' }).click();
+    await page.locator('.campaign-inspector-body textarea').first().fill('马上领取');
+    await expect(page.locator('.campaign-free-element.button')).toContainText('马上领取');
+
     await expect(page.locator('.campaign-free-canvas')).toContainText('马上领取');
-    await expect(page.locator('.campaign-outline-list')).toContainText('马上领取');
+    await expect(page.locator('.campaign-outline-list')).toContainText('ClaimButton');
     await expect(page.locator('.campaign-free-element.layout.horizontal-layout')).toBeVisible();
   });
 
   test('deletes the selected page design element with the keyboard', async ({ page }) => {
-    await expect(page.locator('.campaign-free-element')).toHaveCount(3);
+    await expect(page.locator('.campaign-free-element')).toHaveCount(8);
     await expect(page.locator('.campaign-outline-row')).toHaveCount(8);
 
     await page.locator('.campaign-free-element.button').first().click();
     await expect(page.locator('.campaign-free-element.selected')).toContainText('立即领取');
     await page.keyboard.press('Delete');
 
-    await expect(page.locator('.campaign-free-element')).toHaveCount(2);
+    await expect(page.locator('.campaign-free-element')).toHaveCount(7);
     await expect(page.locator('.campaign-outline-row')).toHaveCount(7);
     await expect(page.locator('.campaign-free-canvas')).not.toContainText('立即领取');
     await expect(page.locator('.campaign-outline-list')).not.toContainText('领取按钮');
@@ -352,7 +402,9 @@ test.describe('Campaign Editor page design', () => {
   test('deletes the last page tree node', async ({ page }) => {
     await expect(page.locator('.campaign-outline-row')).toHaveCount(8);
     for (let remaining = 8; remaining > 0; remaining -= 1) {
-      await page.locator('.campaign-outline-row').first().getByRole('button', { name: '删除内容块' }).click();
+      const firstRow = page.locator('.campaign-outline-row').first();
+      await firstRow.hover();
+      await firstRow.getByRole('button', { name: '删除内容块' }).click();
       await expect(page.locator('.campaign-outline-row')).toHaveCount(remaining - 1);
     }
     await expect(page.locator('.campaign-tree-empty')).toBeVisible();
@@ -360,12 +412,15 @@ test.describe('Campaign Editor page design', () => {
   });
 
   test('adds layout boxes to the page design canvas', async ({ page }) => {
+    await page.getByRole('button', { name: '自由定位' }).click();
+    await page.locator('.campaign-outline .exm-tabs').getByRole('button', { name: '添加' }).click();
     await page.locator('.campaign-block-palette').getByRole('button', { name: '水平布局' }).click();
+    await page.locator('.campaign-outline .exm-tabs').getByRole('button', { name: '结构' }).click();
     const layout = page.locator('.campaign-free-element.layout.horizontal-layout');
     await expect(layout).toBeVisible();
-    await expect(layout).toContainText('水平布局盒子');
+    await expect(layout).toContainText('水平布局');
     await expect(layout).toHaveCSS('display', 'grid');
-    await expect(page.locator('.campaign-outline-list')).toContainText('水平布局盒子');
+    await expect(page.locator('.campaign-outline-list')).toContainText('水平布局');
     await expect(page.locator('.campaign-outline-row')).toHaveCount(9);
     const layoutBeforeDrag = await layout.boundingBox();
     expect(layoutBeforeDrag).not.toBeNull();
@@ -428,7 +483,7 @@ test.describe('Campaign Editor page design', () => {
       return element.clientWidth - Number.parseFloat(style.paddingLeft) - Number.parseFloat(style.paddingRight);
     });
     expect(Math.round(nestedExistingTitleBox!.width)).toBe(Math.round(verticalContentWidth));
-    await page.locator('.campaign-outline-row', { hasText: '123' }).first().click();
+    await page.locator('.campaign-outline-row', { hasText: '水平布局' }).first().click();
     await page.locator('.campaign-inspector-body label').filter({ hasText: '宽' }).locator('input').fill('320');
     const resizedVerticalBox = await vertical.boundingBox();
     const resizedNestedTitleBox = await nestedExistingTitle.boundingBox();
@@ -440,7 +495,7 @@ test.describe('Campaign Editor page design', () => {
     });
     expect(Math.round(resizedNestedTitleBox!.width)).toBe(Math.round(resizedVerticalContentWidth));
 
-    await page.locator('.campaign-outline-row', { hasText: 'HeroBanner' }).dragTo(page.locator('.campaign-outline-row', { hasText: '123' }).first());
+    await page.locator('.campaign-outline-row', { hasText: 'HeroBanner' }).dragTo(page.locator('.campaign-outline-row', { hasText: '水平布局' }).first());
     const treeNestedHero = page.locator('.campaign-outline-children .campaign-outline-row', { hasText: 'HeroBanner' });
     await expect(treeNestedHero).toBeVisible();
     const nestedHero = vertical.locator('.campaign-free-element.nested.card', { hasText: '夏日充值返利活动' });
@@ -461,12 +516,14 @@ test.describe('Campaign Editor page design', () => {
     await expect(vertical.locator('.campaign-free-element.nested.card', { hasText: '夏日充值返利活动' })).toHaveCount(0);
     await expect(page.locator('.campaign-free-canvas > .campaign-free-element.card', { hasText: '夏日充值返利活动' })).toBeVisible();
 
+    await page.locator('.campaign-outline .exm-tabs').getByRole('button', { name: '添加' }).click();
     await page.locator('.campaign-block-palette').getByRole('button', { name: '标题' }).dragTo(vertical, {
       targetPosition: { x: 40, y: 40 },
     });
-    const nestedTitle = vertical.locator('.campaign-free-element.nested.text', { hasText: '新标题' });
+    await page.locator('.campaign-outline .exm-tabs').getByRole('button', { name: '结构' }).click();
+    const nestedTitle = vertical.locator('.campaign-free-element.nested.text', { hasText: '标题' });
     await expect(nestedTitle).toBeVisible();
-    await expect(nestedTitle).toContainText('新标题');
+    await expect(nestedTitle).toContainText('标题');
     await expect(nestedTitle).toHaveCSS('position', 'relative');
     const nestedTitleBox = await nestedTitle.boundingBox();
     const verticalBoxAfterPaletteDrop = await vertical.boundingBox();
@@ -477,7 +534,7 @@ test.describe('Campaign Editor page design', () => {
       return element.clientWidth - Number.parseFloat(style.paddingLeft) - Number.parseFloat(style.paddingRight);
     });
     expect(Math.round(nestedTitleBox!.width)).toBe(Math.round(verticalContentWidthAfterPaletteDrop));
-    await page.locator('.campaign-outline-row', { hasText: '123' }).first().click();
+    await page.locator('.campaign-outline-row', { hasText: '水平布局' }).first().click();
     await expect(vertical).toHaveClass(/selected/);
     await nestedTitle.click();
     await expect(nestedTitle).toHaveClass(/selected/);
@@ -493,11 +550,11 @@ test.describe('Campaign Editor page design', () => {
     expect(nestedGuideBox!.x).toBeLessThanOrEqual(verticalBoxAfterPaletteDrop!.x + verticalBoxAfterPaletteDrop!.width);
     await page.mouse.up();
     await expect(page.locator('.campaign-outline-children .campaign-outline-row')).toHaveCount(2);
-    await expect(page.locator('.campaign-outline-children')).toContainText('新标题');
+    await expect(page.locator('.campaign-outline-children')).toContainText('标题');
     const grownLayoutBox = await vertical.boundingBox();
     expect(grownLayoutBox).not.toBeNull();
     expect(Math.round(grownLayoutBox!.height - initialLayoutBox!.height)).toBeGreaterThan(20);
-    await page.locator('.campaign-outline-row', { hasText: '123' }).first().click();
+    await page.locator('.campaign-outline-row', { hasText: '水平布局' }).first().click();
     const canvasBoxAfterChildrenDrag = await page.locator('.campaign-free-canvas').boundingBox();
     expect(canvasBoxAfterChildrenDrag).not.toBeNull();
     expect(Math.round(grownLayoutBox!.x + grownLayoutBox!.width)).toBeLessThanOrEqual(Math.round(canvasBoxAfterChildrenDrag!.x + canvasBoxAfterChildrenDrag!.width) + 1);
@@ -511,17 +568,19 @@ test.describe('Campaign Editor page design', () => {
     await expect(vertical).toHaveCSS('overflow-x', 'hidden');
     await expect(vertical).toHaveCSS('overflow-y', 'auto');
 
-    await page.locator('.campaign-outline-row', { hasText: '123' }).first().getByRole('button', { name: '删除内容块' }).click();
+    const layoutTreeRow = page.locator('.campaign-outline-row', { hasText: '水平布局' }).first();
+    await layoutTreeRow.hover();
+    await layoutTreeRow.getByRole('button', { name: '删除内容块' }).click();
     await expect(page.locator('.campaign-free-element.layout')).toHaveCount(0);
   });
 
   test('supports free design canvas drag and persistence', async ({ page }) => {
+    await page.getByRole('button', { name: '自由定位' }).click();
     await expect(page.locator('.campaign-free-canvas')).toBeVisible();
-    await expect(page.getByRole('heading', { name: '页面树' })).toBeVisible();
-    await expect(page.getByRole('button', { name: '常用组件' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '页面结构' })).toBeVisible();
 
     const freeElements = page.locator('.campaign-free-element');
-    await expect(freeElements).toHaveCount(3);
+    await expect(freeElements).toHaveCount(8);
     await expect(page.locator('.campaign-outline-row')).toHaveCount(8);
 
     const target = page.locator('.campaign-free-element.text').first();
@@ -565,7 +624,7 @@ test.describe('Campaign Editor page design', () => {
     expect(storedBeforeReload).toMatchObject({ id: 'free_hero_title' });
 
     await page.reload({ waitUntil: 'networkidle' });
-    await expect(page.locator('.campaign-free-element')).toHaveCount(3);
+    await expect(page.locator('.campaign-free-element')).toHaveCount(8);
     const targetAfterReload = page.locator('.campaign-free-element.text').first();
     const persisted = await targetAfterReload.boundingBox();
     expect(persisted).not.toBeNull();
@@ -593,7 +652,7 @@ test.describe('Campaign Editor page design', () => {
     await page.locator('.campaign-inspector nav').getByRole('button', { name: '动作' }).click();
     await page.locator('.campaign-inspector-body select').selectOption('TRACK_EVENT');
 
-    await page.getByRole('button', { name: '预览', exact: true }).click();
+    await page.locator('.campaign-editor-header').getByRole('button', { name: '预览', exact: true }).click();
     await expect(page.getByRole('dialog', { name: '移动端预览' })).toBeVisible();
     await expect(page.locator('.campaign-runtime-canvas')).toContainText('自由设计标题');
     await page.getByRole('button', { name: '关闭', exact: true }).click();
@@ -617,6 +676,30 @@ test.describe('Campaign Editor page design', () => {
     expect(scrolled).toBeGreaterThan(0);
   });
 
+  test('auto-scrolls the page design canvas while dragging near the bottom edge', async ({ page }) => {
+    await page.getByRole('button', { name: '自由定位' }).click();
+    const target = page.locator('.campaign-free-element', { hasText: '立即领取' });
+    await target.click();
+    const yInput = page.locator('.campaign-inspector-body label').filter({ hasText: 'Y' }).locator('input');
+    const beforeY = Number(await yInput.inputValue());
+    const box = await target.boundingBox();
+    const workspaceBox = await page.locator('.campaign-canvas-workspace').boundingBox();
+    expect(box).not.toBeNull();
+    expect(workspaceBox).not.toBeNull();
+
+    await page.mouse.move(box!.x + box!.width / 2, box!.y + box!.height / 2);
+    await page.mouse.down();
+    for (let step = 0; step < 8; step += 1) {
+      await page.mouse.move(box!.x + box!.width / 2, workspaceBox!.y + workspaceBox!.height - 12, { steps: 2 });
+    }
+    await page.mouse.up();
+
+    const afterY = Number(await yInput.inputValue());
+    const scrollTop = await page.locator('.campaign-canvas-workspace').evaluate((element) => element.scrollTop);
+    expect(afterY).toBeGreaterThan(beforeY + 120);
+    expect(scrollTop).toBeGreaterThan(0);
+  });
+
   test('does not duplicate resolution controls inside page design canvas', async ({ page }) => {
     await expect(page.locator('.campaign-free-workspace .campaign-canvas-ruler')).toHaveCount(0);
     const canvasWidth = await page.locator('.campaign-free-canvas').evaluate((element) => element.getBoundingClientRect().width);
@@ -624,11 +707,13 @@ test.describe('Campaign Editor page design', () => {
   });
 
   test('drops a component into a specific page design canvas position', async ({ page }) => {
+    await page.getByRole('button', { name: '自由定位' }).click();
+    await page.locator('.campaign-outline .exm-tabs').getByRole('button', { name: '添加' }).click();
     const canvas = page.locator('.campaign-free-canvas');
     await page.locator('.campaign-block-palette').getByRole('button', { name: '标题' }).dragTo(canvas, {
       targetPosition: { x: 80, y: 520 },
     });
-    const dropped = page.locator('.campaign-free-element', { hasText: '新标题' });
+    const dropped = page.locator('.campaign-free-element', { hasText: '标题' });
     await expect(dropped).toBeVisible();
     const canvasBox = await canvas.boundingBox();
     const droppedBox = await dropped.boundingBox();
@@ -639,6 +724,7 @@ test.describe('Campaign Editor page design', () => {
   });
 
   test('allows zero width and height for free design elements', async ({ page }) => {
+    await page.getByRole('button', { name: '自由定位' }).click();
     const target = page.locator('.campaign-free-element.text').first();
     await target.click();
     await page.locator('.campaign-inspector-body label').filter({ hasText: '宽' }).locator('input').fill('0');
@@ -652,7 +738,7 @@ test.describe('Campaign Editor page design', () => {
     await nav.getByRole('button', { name: '模板库', exact: true }).click();
     await page.getByRole('button', { name: /夏日充值返利/ }).first().click();
     await page.getByRole('button', { name: '从模板创建' }).click();
-    await expect(page.getByRole('heading', { name: '页面树' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '页面结构' })).toBeVisible();
     await expect(page.locator('.campaign-select')).toContainText('页面草稿');
   });
 });

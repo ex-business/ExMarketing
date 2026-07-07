@@ -3,6 +3,8 @@
 Date: 2026-06-29
 Scope: `frontend/admin-flow/src/CampaignEditorPage.tsx`, `CampaignEditorPage.css`, `frontend/admin-flow/e2e/campaign-editor.spec.ts`
 
+> 2026-07-08 更新：资源页属于 Campaign Editor v2 的 `资源` 一级入口，内部统一管理数据字段、数据源、动作事件、样式 Token、图片素材。下一步实现必须补 `resourceStorageApi`，先用 localStorage mock 持久化，再接真实后端；数据源实时拉取预览需要有 loading / success / error 状态。
+
 ## 目标
 
 按照用户提供的资源页截图，把 Campaign Editor 的 `资源` 工作区从卡片式资源中心重构为蓝白简洁的表格型管理台。
@@ -82,5 +84,5 @@ Scope: `frontend/admin-flow/src/CampaignEditorPage.tsx`, `CampaignEditorPage.css
 ## 非目标
 
 - 不接真实上传 API。
-- 不实现真实持久化。
+- 第一阶段不直连后端持久化，但必须通过 `resourceStorageApi` 抽象并提供 localStorage mock。
 - 不改变页面设计画布、模块预览、发布预览逻辑。

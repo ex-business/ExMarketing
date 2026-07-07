@@ -29,6 +29,7 @@ export type CampaignBlock = {
 
 export type FreeDesignElement = {
   id: string;
+  name?: string;
   component?: ComponentRegistryKey;
   kind: 'text' | 'button' | 'image' | 'card' | 'layout';
   text: string;

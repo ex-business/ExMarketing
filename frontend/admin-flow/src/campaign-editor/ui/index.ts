@@ -1,5 +1,12 @@
 export { Button } from './Button';
+export { DataTable } from './DataTable';
 export { Field } from './Field';
+export { InspectorSection } from './InspectorSection';
 export { Panel } from './Panel';
 export { ResourceTable } from './ResourceTable';
+export { SegmentedControl } from './SegmentedControl';
 export { Tabs } from './Tabs';
+export { Toolbar } from './Toolbar';
+export { Tree } from './Tree';
+export type { DataTableColumn } from './DataTable';
+export type { TreeNode } from './Tree';

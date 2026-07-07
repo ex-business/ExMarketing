@@ -68,6 +68,7 @@
   --ui-bg-app: var(--theme-page);
   --ui-bg-panel: var(--theme-surface);
   --ui-bg-panel-muted: var(--theme-surface-raised);
+  --ui-bg-muted: var(--theme-surface-raised);
   --ui-bg-control: var(--theme-control);
   --ui-bg-control-hover: var(--theme-control-hover);
   --ui-border-subtle: var(--theme-border);
@@ -99,6 +100,7 @@
   --ui-weight-regular: 500;
   --ui-weight-medium: 600;
   --ui-weight-semibold: 700;
+  --ui-shadow-xs: 0 1px 2px rgba(31, 80, 155, .08);
   height: 100vh;
   overflow: hidden;
   background: var(--theme-page);

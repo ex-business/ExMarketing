@@ -1,4 +1,7 @@
+import type { Page as EditorPage } from './editorSchema';
+
 export type CampaignBlockKind = 'HeroBanner' | 'Title' | 'RewardCard' | 'Countdown' | 'ProgressBlock' | 'ClaimButton' | 'RuleText' | 'FAQBlock';
+export type ComponentRegistryKey = 'Title' | 'HeroBanner' | 'RewardCard' | 'Button' | 'Image' | 'HorizontalLayout' | 'VerticalLayout';
 export type EditorTab = 'content' | 'binding' | 'action';
 export type DeviceWidth = 375 | 393 | 414;
 export type WorkspaceSection = 'page' | 'resources' | 'settings' | 'templates';
@@ -26,6 +29,7 @@ export type CampaignBlock = {
 
 export type FreeDesignElement = {
   id: string;
+  component?: ComponentRegistryKey;
   kind: 'text' | 'button' | 'image' | 'card' | 'layout';
   text: string;
   x: number;
@@ -64,6 +68,7 @@ export type CampaignPageSchema = {
     contentGap: number;
     fontFamily: string;
   };
+  editor: EditorPage;
   blocks: CampaignBlock[];
   freeElements: FreeDesignElement[];
   status: 'DRAFT' | 'PUBLISHED' | 'OFFLINE';

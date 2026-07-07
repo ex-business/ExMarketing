@@ -1,8 +1,8 @@
 import { Copy, Gift, Image, Plane, Plus, Trash2, Type } from 'lucide-react';
 import { useState, type PointerEvent as ReactPointerEvent } from 'react';
-import type { CampaignBlockKind, DeviceWidth, FreeDesignElement, LayoutKind } from './types';
-import { ALLOWED_BLOCK_KINDS, ALLOWED_LAYOUT_KINDS, findContainingLayout, fitLayouts, freeCanvasHeight, freeElementStyle, layoutChildWidth } from './layout';
-import { renderFreeElementText } from './renderUtils';
+import type { CampaignBlockKind, ComponentRegistryKey, DeviceWidth, FreeDesignElement, LayoutKind } from './types';
+import { findContainingLayout, fitLayouts, layoutChildWidth } from './layout';
+import { CanvasRenderer } from './CanvasRenderer';
 
 export function AddBetween({ onClick }: { onClick: () => void }) {
   return <button className="campaign-between-add" type="button" onClick={onClick}><Plus size={14} />添加内容块</button>;
@@ -59,10 +59,15 @@ export function FreeDesignCanvas({
   onChange,
   draggingBlockKind,
   draggingLayoutKind,
+  draggingComponentKey,
   onDropBlock,
   onDropLayout,
+  onDropComponent,
   onDragDone,
   onLayoutDragDone,
+  onMoveElement,
+  onResizeElement,
+  onMoveIntoLayout,
 }: {
   width: DeviceWidth;
   elements: FreeDesignElement[];
@@ -71,20 +76,18 @@ export function FreeDesignCanvas({
   onChange: (updater: (current: FreeDesignElement[]) => FreeDesignElement[]) => void;
   draggingBlockKind: CampaignBlockKind | null;
   draggingLayoutKind: LayoutKind | null;
+  draggingComponentKey?: ComponentRegistryKey | null;
   onDropBlock: (kind: CampaignBlockKind, x: number, y: number, parentId?: string) => void;
   onDropLayout: (kind: LayoutKind, x: number, y: number) => void;
+  onDropComponent?: (componentKey: ComponentRegistryKey, x: number, y: number, parentId?: string) => void;
   onDragDone: () => void;
   onLayoutDragDone: () => void;
+  onMoveElement?: (id: string, x: number, y: number) => void;
+  onResizeElement?: (id: string, w: number, h: number) => void;
+  onMoveIntoLayout?: (id: string, layoutId: string) => void;
 }) {
   const [guides, setGuides] = useState<{ x?: number; y?: number }>({});
   const nearestGuide = (value: number, targets: number[]) => targets.reduce((nearest, target) => Math.abs(target - value) < Math.abs(nearest - value) ? target : nearest, targets[0]);
-  const topLevelElements = elements.filter((element) => !element.parentId);
-  const childrenByParent = elements.reduce<Record<string, FreeDesignElement[]>>((groups, element) => {
-    if (!element.parentId) return groups;
-    return { ...groups, [element.parentId]: [...(groups[element.parentId] ?? []), element] };
-  }, {});
-  const canvasWidth = width;
-  const canvasHeight = freeCanvasHeight(elements);
 
   const startDrag = (event: ReactPointerEvent<HTMLElement>, element: FreeDesignElement) => {
     const startX = event.clientX;
@@ -106,7 +109,11 @@ export function FreeDesignCanvas({
         x: (parent?.x ?? 0) + verticalGuide + element.w / 2,
         y: (parent?.y ?? 0) + horizontalGuide,
       });
-      onChange((items) => items.map((item) => item.id === element.id ? { ...item, ...latest } : item));
+      if (onMoveElement) {
+        onMoveElement(element.id, latest.x, latest.y);
+      } else {
+        onChange((items) => items.map((item) => item.id === element.id ? { ...item, ...latest } : item));
+      }
     };
     const end = () => {
       setGuides({});
@@ -116,13 +123,17 @@ export function FreeDesignCanvas({
         const parent = findContainingLayout(elements.filter((item) => item.id !== element.id), centerX, centerY);
         if (parent) {
           const localX = Math.max(0, Math.min(Math.max(0, parent.w - element.w), Math.round(latest.x - parent.x)));
-          onChange((items) => fitLayouts(items.map((item) => item.id === element.id ? {
-            ...item,
-            parentId: parent.id,
-            x: localX,
-            y: Math.max(0, Math.round(latest.y - parent.y)),
-            w: layoutChildWidth(parent),
-          } : item)));
+          if (onMoveIntoLayout) {
+            onMoveIntoLayout(element.id, parent.id);
+          } else {
+            onChange((items) => fitLayouts(items.map((item) => item.id === element.id ? {
+              ...item,
+              parentId: parent.id,
+              x: localX,
+              y: Math.max(0, Math.round(latest.y - parent.y)),
+              w: layoutChildWidth(parent),
+            } : item)));
+          }
         }
       }
       window.removeEventListener('pointermove', move);
@@ -142,7 +153,11 @@ export function FreeDesignCanvas({
     const move = (moveEvent: PointerEvent) => {
       const nextW = Math.max(0, original.w + moveEvent.clientX - startX);
       const nextH = Math.max(0, original.h + moveEvent.clientY - startY);
-      onChange((items) => items.map((item) => item.id === element.id ? { ...item, w: Math.round(nextW), h: Math.round(nextH) } : item));
+      if (onResizeElement) {
+        onResizeElement(element.id, Math.round(nextW), Math.round(nextH));
+      } else {
+        onChange((items) => items.map((item) => item.id === element.id ? { ...item, w: Math.round(nextW), h: Math.round(nextH) } : item));
+      }
     };
     const end = () => {
       window.removeEventListener('pointermove', move);
@@ -154,66 +169,43 @@ export function FreeDesignCanvas({
 
   return (
     <section className="campaign-free-workspace">
-      <div
-        className="campaign-free-canvas"
-        style={{ width: canvasWidth, height: canvasHeight }}
-        onDragOver={(event) => event.preventDefault()}
-        onDrop={(event) => {
-          const rect = event.currentTarget.getBoundingClientRect();
-          const blockKind = (event.dataTransfer.getData('application/x-campaign-block') || draggingBlockKind) as CampaignBlockKind;
-          const layoutKind = (event.dataTransfer.getData('application/x-campaign-layout') || draggingLayoutKind) as LayoutKind;
-          if (ALLOWED_BLOCK_KINDS.has(blockKind)) {
-            const x = event.clientX - rect.left;
-            const y = event.clientY - rect.top;
-            const parent = findContainingLayout(elements, x, y);
-            onDropBlock(blockKind, x, y, parent?.id);
-          }
-          if (ALLOWED_LAYOUT_KINDS.has(layoutKind)) {
-            onDropLayout(layoutKind, event.clientX - rect.left, event.clientY - rect.top);
-          }
-          onDragDone();
-          onLayoutDragDone();
+      <CanvasRenderer
+        mode="design"
+        width={width}
+        elements={elements}
+        selectedNodeId={selectedId}
+        draggingBlockKind={draggingBlockKind}
+        draggingLayoutKind={draggingLayoutKind}
+        draggingComponentKey={draggingComponentKey}
+        onSelectNode={onSelect}
+        onDropBlock={(kind, x, y) => {
+          const parent = findContainingLayout(elements, x, y);
+          onDropBlock(kind, x, y, parent?.id);
         }}
-      >
-        {guides.x !== undefined ? <span className="campaign-guide vertical" style={{ left: guides.x }} /> : null}
-        {guides.y !== undefined ? <span className="campaign-guide horizontal" style={{ top: guides.y }} /> : null}
-        {topLevelElements.map((element) => {
-          const childElements = childrenByParent[element.id] ?? [];
-          return (
-          <div
-            key={element.id}
-            className={`campaign-free-element ${element.kind} ${element.layout ?? ''} ${childElements.length ? 'has-children' : ''} ${element.w === 0 || element.h === 0 ? 'zero-size' : ''} ${selectedId === element.id ? 'selected' : ''}`}
-            role="button"
-            tabIndex={0}
-            style={freeElementStyle(element)}
-            onPointerDown={(event) => startDrag(event, element)}
-          >
-            {childElements.length ? childElements.map((child) => (
-              <span
-                key={child.id}
-                className={`campaign-free-element nested ${child.kind} ${child.w === 0 || child.h === 0 ? 'zero-size' : ''} ${selectedId === child.id ? 'selected' : ''}`}
-                style={freeElementStyle(child, true)}
-                onPointerDown={(event) => {
-                  event.stopPropagation();
-                  if (selectedId === child.id) {
-                    startDrag(event, child);
-                    return;
-                  }
-                  onSelect(child.id);
-                }}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onSelect(child.id);
-                }}
-              >
-                {renderFreeElementText(child.text)}
-              </span>
-            )) : renderFreeElementText(element.text)}
-            {selectedId === element.id ? <span className="campaign-free-resize" aria-label="调整尺寸" onPointerDown={(event) => startResize(event, element)} /> : null}
-          </div>
-          );
-        })}
-      </div>
+        onDropLayout={onDropLayout}
+        onDropComponent={(componentKey, x, y) => {
+          const parent = findContainingLayout(elements, x, y);
+          onDropComponent?.(componentKey, x, y, parent?.id);
+        }}
+        onDragDone={onDragDone}
+        onLayoutDragDone={onLayoutDragDone}
+        onPointerDownElement={(event, element) => startDrag(event, element)}
+        onPointerDownNested={(event, child) => {
+          event.stopPropagation();
+          if (selectedId === child.id) {
+            startDrag(event, child);
+            return;
+          }
+          onSelect(child.id);
+        }}
+        onResizePointerDown={(event, element) => startResize(event, element)}
+        overlay={(
+          <>
+            {guides.x !== undefined ? <span className="campaign-guide vertical" style={{ left: guides.x }} /> : null}
+            {guides.y !== undefined ? <span className="campaign-guide horizontal" style={{ top: guides.y }} /> : null}
+          </>
+        )}
+      />
       <div className="campaign-mobile-check">自由设计：元素可拖拽定位，保存到 Campaign Page schema。</div>
     </section>
   );

@@ -1,7 +1,7 @@
-import type { CampaignBlock, CampaignBlockKind, CampaignPageSchema, FreeDesignElement } from './types';
+import type { CampaignBlock, CampaignBlockKind, CampaignPageSchema } from './types';
 import { AddBetween } from './FreeCanvas';
-import { ALLOWED_BLOCK_KINDS, blockIdForFreeElementId, freeCanvasHeight, freeElementStyle } from './layout';
-import { renderFreeElementText } from './renderUtils';
+import { CanvasRenderer, pageElementsForRenderer } from './CanvasRenderer';
+import { blockIdForFreeElementId } from './layout';
 
 export function CampaignModulePreview({
   page,
@@ -18,64 +18,20 @@ export function CampaignModulePreview({
   onDropBlock: (kind: CampaignBlockKind) => void;
   onDragDone: () => void;
 }) {
-  const elements = [...(page.freeElements ?? [])].sort((a, b) => a.z - b.z);
-  const topLevelElements = elements.filter((element) => !element.parentId);
-  const childrenByParent = elements.reduce<Record<string, FreeDesignElement[]>>((groups, element) => {
-    if (!element.parentId) return groups;
-    return { ...groups, [element.parentId]: [...(groups[element.parentId] ?? []), element] };
-  }, {});
-  const selectBlockFromFreeElement = (id: string) => {
-    const blockId = blockIdForFreeElementId(id);
-    if (blockId) onSelect(blockId);
-  };
-  const previewBlockIds = elements.map((element) => blockIdForFreeElementId(element.id)).filter(Boolean);
+  const previewBlockIds = pageElementsForRenderer(page)
+    .map((element) => blockIdForFreeElementId(element.id))
+    .filter(Boolean);
   const activeBlockId = previewBlockIds.includes(selectedId) ? selectedId : previewBlockIds[0] ?? selectedId;
-  const canvasHeight = freeCanvasHeight(elements);
   return (
-    <section className="campaign-free-workspace">
-      <div
-        className="campaign-free-canvas campaign-mobile-canvas campaign-module-preview-canvas"
-        style={{ width: page.device.defaultWidth, height: canvasHeight }}
-        onDragOver={(event) => event.preventDefault()}
-        onDrop={(event) => {
-          const kind = (event.dataTransfer.getData('application/x-campaign-block') || draggingBlockKind) as CampaignBlockKind;
-          if (ALLOWED_BLOCK_KINDS.has(kind)) onDropBlock(kind);
-          onDragDone();
-        }}
-      >
-        {topLevelElements.map((element) => {
-          const childElements = childrenByParent[element.id] ?? [];
-          const blockId = blockIdForFreeElementId(element.id);
-          return (
-            <div
-              key={element.id}
-              className={`campaign-runtime-element ${element.kind} ${element.layout ?? ''} ${childElements.length ? 'has-children' : ''} ${element.w === 0 || element.h === 0 ? 'zero-size' : ''} ${element.variant ?? 'primary'} ${activeBlockId === blockId ? 'selected' : ''}`}
-              role="button"
-              data-action={element.action ?? ''}
-              style={freeElementStyle(element)}
-              onClick={() => selectBlockFromFreeElement(element.id)}
-            >
-              {childElements.length ? childElements.map((child) => {
-                const childBlockId = blockIdForFreeElementId(child.id);
-                return (
-                  <span
-                    key={child.id}
-                    className={`campaign-runtime-element nested ${child.kind} ${child.w === 0 || child.h === 0 ? 'zero-size' : ''} ${child.variant ?? 'primary'} ${activeBlockId === childBlockId ? 'selected' : ''}`}
-                    style={freeElementStyle(child, true)}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      selectBlockFromFreeElement(child.id);
-                    }}
-                  >
-                    {renderFreeElementText(child.text)}
-                  </span>
-                );
-              }) : renderFreeElementText(element.text)}
-            </div>
-          );
-        })}
-      </div>
-    </section>
+    <CanvasRenderer
+      page={page}
+      mode="preview"
+      selectedNodeId={activeBlockId}
+      draggingBlockKind={draggingBlockKind}
+      onDropBlock={onDropBlock}
+      onDragDone={onDragDone}
+      onSelectNode={onSelect}
+    />
   );
 }
 

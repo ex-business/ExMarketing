@@ -68,9 +68,9 @@
   background: transparent;
   color: var(--theme-text-body);
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 24px 24px 24px;
+  grid-template-columns: 18px minmax(0, 1fr) max-content;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   padding: 5px 6px;
   cursor: pointer;
   text-align: left;
@@ -121,6 +121,19 @@
   font-size: 11px;
 }
 
+.campaign-outline-row .exm-tree-toggle,
+.campaign-outline-row .exm-tree-indent {
+  width: 18px;
+  height: 18px;
+}
+
+.campaign-outline-row .exm-tree-actions {
+  justify-self: end;
+  display: inline-grid;
+  grid-template-columns: repeat(3, 22px);
+  gap: 2px;
+}
+
 .campaign-outline-list em {
   border-radius: 6px;
   background: var(--theme-accent-soft);
@@ -137,7 +150,7 @@
   color: var(--theme-warning);
 }
 
-.campaign-outline-row > button {
+.campaign-outline-row .exm-tree-actions button {
   width: 22px;
   height: 22px;
   border: 0;
@@ -150,7 +163,7 @@
   padding: 0;
 }
 
-.campaign-outline-row > button:hover {
+.campaign-outline-row .exm-tree-actions button:hover {
   background: var(--theme-surface-hover);
   color: var(--theme-accent);
 }

@@ -2,7 +2,7 @@ import { useEffect, useState, type Dispatch, type SetStateAction } from 'react';
 import { ChevronDown, ListChecks, Plus } from 'lucide-react';
 import type { ResourceRecord, ResourceStatus, ResourceTab, UploadQueueItem } from './types';
 import { resourceStorageApi } from './resourceStore';
-import { Button, Field, Panel, ResourceTable } from './ui';
+import { Button, Field, Panel, ResourceTable, Toolbar, Tree, type TreeNode } from './ui';
 
 const resourceTabs: ResourceTab[] = ['数据', '数据源', '动作', '样式', '图片'];
 
@@ -130,6 +130,26 @@ export function CampaignResourceWorkspace({
   });
   const selectedRecord = records.find((record) => record.id === selectedId && record.tab === activeTab) ?? filteredRecords[0] ?? records.find((record) => record.tab === activeTab) ?? records[0];
   const sourceOptions = ['全部', ...Array.from(new Set(records.filter((record) => record.tab === activeTab).map((record) => record.source)))];
+  const treeNodes: TreeNode[] = resourceTabs.map((tab) => ({
+    id: `resource_group_${tab}`,
+    label: resourceGroupLabels[tab],
+    count: records.filter((record) => record.tab === tab).length,
+    active: activeTab === tab,
+    open: expandedGroups[tab],
+    onClick: () => toggleResourceGroup(tab),
+    onToggle: () => toggleResourceGroup(tab),
+    children: expandedGroups[tab] ? resourceTree[tab].map((child) => ({
+      id: `resource_category_${tab}_${child.name}`,
+      label: child.name,
+      count: records.filter((record) => record.tab === tab && record.category === child.name).length || child.count,
+      active: activeTab === tab && activeCategory === child.name,
+      onClick: () => {
+        setActiveTab(tab);
+        setActiveCategory(child.name);
+        setExpandedGroups((groups) => ({ ...groups, [tab]: true }));
+      },
+    })) : [],
+  }));
 
   const toggleResourceGroup = (tab: ResourceTab) => {
     const isActive = activeTab === tab;
@@ -274,8 +294,7 @@ export function CampaignResourceWorkspace({
 
   return (
     <section className="campaign-resource-workspace" data-testid="resource-workspace">
-      <header className="campaign-resource-bar">
-        <div className="campaign-resource-title"><h2>资源</h2></div>
+      <Toolbar title="资源" className="campaign-resource-bar">
         <label className="campaign-resource-search">
           <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索资源（名称、标识符...）" />
         </label>
@@ -286,30 +305,12 @@ export function CampaignResourceWorkspace({
           {['全部', '启用', '停用', '待保存', '尺寸提醒'].map((status) => <option key={status}>{status}</option>)}
         </select>
         <Button variant="primary" icon={<Plus size={16} />} onClick={startAdd}>添加</Button>
-      </header>
+      </Toolbar>
 
       <div className="campaign-resource-layout">
         <aside className="campaign-resource-tree" data-testid="resource-type-tree">
           <div className="campaign-resource-tree-head"><strong>资源类型</strong><button type="button" aria-label="添加资源类型"><Plus size={16} /></button></div>
-          {resourceTabs.map((tab) => (
-            <div key={tab} className="campaign-resource-tree-group">
-              <button type="button" className={`${expandedGroups[tab] ? 'open' : ''} ${activeTab === tab ? 'active' : ''}`} onClick={() => toggleResourceGroup(tab)}>
-                <ChevronDown size={14} />
-                <span>{resourceGroupLabels[tab]}</span>
-                <b>{records.filter((record) => record.tab === tab).length}</b>
-              </button>
-              {expandedGroups[tab] ? (
-                <div>
-                  {resourceTree[tab].map((child) => (
-                    <button key={child.name} type="button" className={activeCategory === child.name ? 'active' : ''} onClick={() => setActiveCategory(child.name)}>
-                      <span>{child.name}</span>
-                      <b>{records.filter((record) => record.tab === tab && record.category === child.name).length || child.count}</b>
-                    </button>
-                  ))}
-                </div>
-              ) : null}
-            </div>
-          ))}
+          <Tree nodes={treeNodes} className="campaign-resource-tree-list" />
           <button className="campaign-resource-tree-footer" type="button"><ListChecks size={16} />常用组件<ChevronDown size={14} /></button>
         </aside>
 

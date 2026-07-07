@@ -9,6 +9,7 @@ import type {
   FreeDesignElement,
   LayoutKind,
 } from './types';
+import { componentKeyForBlockKind, componentKeyForLayoutKind, componentRegistry, defaultElementFromComponent } from './componentRegistry';
 
 export const LAYOUT_CHILD_HORIZONTAL_INSET = 26;
 
@@ -21,7 +22,6 @@ export const blockPalette: Array<{ kind: CampaignBlockKind; label: string; title
   { kind: 'Title', label: '标题', title: '新标题' },
   { kind: 'RewardCard', label: '奖励卡', title: '新奖励卡片' },
   { kind: 'Countdown', label: '倒计时', title: '新倒计时' },
-  { kind: 'ProgressBlock', label: '进度', title: '新参与进度' },
   { kind: 'ClaimButton', label: '按钮', title: '新领取按钮' },
   { kind: 'RuleText', label: '规则', title: '新活动规则' },
   { kind: 'FAQBlock', label: 'FAQ', title: '新 FAQ' },
@@ -36,7 +36,16 @@ export const ALLOWED_BLOCK_KINDS = new Set<CampaignBlockKind>(['HeroBanner', 'Ti
 export const ALLOWED_LAYOUT_KINDS = new Set<LayoutKind>(['horizontal-layout', 'vertical-layout']);
 
 export function flexPreset(kind: LayoutKind): Pick<FreeDesignElement, 'flexDirection' | 'justifyContent' | 'alignItems' | 'flexWrap' | 'gap'> {
-  if (kind === 'vertical-layout' || kind === 'vertical-center') return { flexDirection: 'column', justifyContent: 'flex-start', alignItems: 'stretch', flexWrap: 'nowrap', gap: 8 };
+  const definition = componentRegistry[componentKeyForLayoutKind(kind)];
+  if (definition.elementKind === 'layout') {
+    return {
+      flexDirection: definition.defaultStyle.flexDirection ?? 'row',
+      justifyContent: definition.defaultStyle.justifyContent ?? 'flex-start',
+      alignItems: definition.defaultStyle.alignItems ?? 'center',
+      flexWrap: definition.defaultStyle.flexWrap ?? 'nowrap',
+      gap: definition.defaultStyle.gap ?? 8,
+    };
+  }
   if (kind === 'two-column') return { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'stretch', flexWrap: 'nowrap', gap: 10 };
   return { flexDirection: 'row', justifyContent: 'flex-start', alignItems: 'center', flexWrap: 'nowrap', gap: 8 };
 }
@@ -63,19 +72,18 @@ export const initialFreeElements: FreeDesignElement[] = [
 ];
 
 export function blockToFreeText(block: CampaignBlock) {
-  if (block.kind === 'HeroBanner') return '夏日充值返利活动\\n充值越多，返利越高';
-  if (block.kind === 'Title') return block.title === '活动标题' ? '夏日充值返利活动' : block.title;
-  if (block.kind === 'RewardCard') return '奖励金额 ￥188\\n单笔充值满 500 元可领';
+  if (block.kind === 'HeroBanner' || block.kind === 'Title' || block.kind === 'RewardCard' || block.kind === 'ClaimButton') {
+    return componentRegistry[componentKeyForBlockKind(block.kind)].defaultText(block);
+  }
   if (block.kind === 'Countdown') return '活动倒计时\\n06 天 18 时 32 分';
   if (block.kind === 'ProgressBlock') return '参与进度\\n已参与 1,258 人 · 62%';
-  if (block.kind === 'ClaimButton') return block.text ?? block.title;
   if (block.kind === 'RuleText') return '活动规则\\n1. 单笔充值满 500 元可领取奖励\\n2. 每个用户仅可领取一次';
   return 'FAQ\\n奖励到账时间、参与资格和领取问题。';
 }
 
 export function blockToFreeKind(kind: CampaignBlockKind): FreeDesignElement['kind'] {
-  if (kind === 'ClaimButton') return 'button';
-  if (kind === 'HeroBanner' || kind === 'RewardCard' || kind === 'Countdown' || kind === 'ProgressBlock' || kind === 'RuleText' || kind === 'FAQBlock') return 'card';
+  if (kind === 'HeroBanner' || kind === 'Title' || kind === 'RewardCard' || kind === 'ClaimButton') return componentRegistry[componentKeyForBlockKind(kind)].elementKind;
+  if (kind === 'Countdown' || kind === 'ProgressBlock' || kind === 'RuleText' || kind === 'FAQBlock') return 'card';
   return 'text';
 }
 
@@ -101,49 +109,35 @@ export function currentFreeElementIdForBlock(blockId: string, elements: FreeDesi
 export function blocksToFreeElements(blocks: CampaignBlock[], width: DeviceWidth): FreeDesignElement[] {
   let cursorY = 28;
   return blocks.filter((block) => block.visible).map((block, index) => {
-    const kind = blockToFreeKind(block.kind);
-    const h = kind === 'button' ? 52 : block.kind === 'Title' ? 46 : block.kind === 'HeroBanner' ? 120 : block.kind === 'RuleText' ? 132 : 94;
-    const w = kind === 'text' ? Math.min(260, width - 56) : width - 36;
     const element: FreeDesignElement = {
-      id: `free_from_${block.id}`,
-      kind,
-      text: blockToFreeText(block),
-      x: kind === 'text' ? 28 : 18,
+      ...blockToFreeElement(block, width, index + 1),
       y: cursorY,
-      w,
-      h,
-      z: index + 1,
-      binding: block.binding,
-      visibleWhen: block.visibleWhen,
-      action: block.action,
-      payload: block.payload,
-      variant: block.variant,
-      radius: block.radius ?? '8',
     };
-    cursorY += h + 18;
+    cursorY += element.h + 18;
     return element;
   });
 }
 
 export function blockToFreeElement(block: CampaignBlock, width: DeviceWidth, z: number): FreeDesignElement {
-  const kind = blockToFreeKind(block.kind);
-  const h = kind === 'button' ? 52 : block.kind === 'Title' ? 46 : block.kind === 'HeroBanner' ? 120 : block.kind === 'RuleText' ? 132 : 94;
-  const w = kind === 'text' ? Math.min(260, width - 56) : width - 36;
-  return {
+  const componentKey = componentKeyForBlockKind(block.kind);
+  const element = defaultElementFromComponent({
+    componentKey,
     id: `free_from_${block.id}`,
-    kind,
-    text: blockToFreeText(block),
-    x: kind === 'text' ? 28 : 18,
-    y: 28,
-    w,
-    h,
+    width,
     z,
+    block,
+  });
+  return {
+    ...element,
+    text: blockToFreeText(block),
+    kind: blockToFreeKind(block.kind),
+    component: componentKey,
     binding: block.binding,
     visibleWhen: block.visibleWhen,
     action: block.action,
     payload: block.payload,
-    variant: block.variant,
-    radius: block.radius ?? '8',
+    variant: block.variant ?? element.variant,
+    radius: block.radius ?? element.radius ?? '8',
   };
 }
 

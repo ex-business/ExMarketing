@@ -1,5 +1,7 @@
 import type { CampaignBlockKind, CampaignPageSchema, CampaignPageSummary, CampaignPageVersion, CampaignValidationIssue, LayoutKind } from './types';
 import { initialBlocks, initialFreeElements } from './layout';
+import { withEditorPage } from './editorSchema';
+import { normalizePage } from './editorEngine';
 
 const CAMPAIGN_PAGE_STORAGE_KEY = 'exmarketing.campaignEditor.page.v1';
 const CAMPAIGN_PUBLISHED_PAGE_STORAGE_KEY = 'exmarketing.campaignEditor.publishedPage.v1';
@@ -9,6 +11,7 @@ const CAMPAIGN_PAGE_LIST_STORAGE_KEY = 'exmarketing.campaignEditor.pages.v1';
 const ALLOWED_ACTIONS = new Set(['CLAIM_REWARD', 'OPEN_LOGIN', 'NAVIGATE', 'TRACK_EVENT']);
 const ALLOWED_BLOCK_KINDS = new Set<CampaignBlockKind>(['HeroBanner', 'Title', 'RewardCard', 'Countdown', 'ProgressBlock', 'ClaimButton', 'RuleText', 'FAQBlock']);
 const ALLOWED_LAYOUT_KINDS = new Set<LayoutKind>(['horizontal-layout', 'vertical-layout']);
+type CampaignPageInput = Parameters<typeof withEditorPage>[0];
 
 export function nowISO() {
   return new Date().toISOString();
@@ -29,8 +32,16 @@ export function writeJSON(key: string, value: unknown) {
   window.localStorage.setItem(key, JSON.stringify(value));
 }
 
-export function defaultCampaignPage(): CampaignPageSchema {
+export function normalizeCampaignPage(page: CampaignPageInput): CampaignPageSchema {
+  const pageWithEditor = withEditorPage(page);
   return {
+    ...pageWithEditor,
+    editor: normalizePage(pageWithEditor.editor),
+  };
+}
+
+export function defaultCampaignPage(): CampaignPageSchema {
+  return normalizeCampaignPage({
     id: 'page_20250520_001',
     activityId: 'act_20250520_001',
     name: '夏日充值返利活动',
@@ -51,7 +62,7 @@ export function defaultCampaignPage(): CampaignPageSchema {
     status: 'DRAFT',
     version: 'v1.0.0',
     updatedAt: nowISO(),
-  };
+  });
 }
 
 export function pageSummary(page: CampaignPageSchema): CampaignPageSummary {
@@ -76,14 +87,14 @@ function publishedPageKey(path: string) {
 
 function unpublishedRuntimePage(path: string): CampaignPageSchema {
   const fallback = defaultCampaignPage();
-  return {
+  return normalizeCampaignPage({
     ...fallback,
     name: '页面未发布',
     path: publishedPageKey(path),
     blocks: [],
     freeElements: [],
     status: 'OFFLINE',
-  };
+  });
 }
 
 function readPublishedPageMap() {
@@ -98,20 +109,20 @@ export const campaignPageApi = {
   loadPage: () => {
     const fallback = defaultCampaignPage();
     const stored = readJSON<CampaignPageSchema>(CAMPAIGN_PAGE_STORAGE_KEY, fallback);
-    return {
+    return normalizeCampaignPage({
       ...fallback,
       ...stored,
       designMode: stored.designMode ?? 'controlled',
       freeElements: stored.freeElements ?? initialFreeElements,
-    };
+    });
   },
   loadPublishedPage: (path?: string) => {
     const legacy = readJSON<CampaignPageSchema | null>(CAMPAIGN_PUBLISHED_PAGE_STORAGE_KEY, null);
-    if (!path) return legacy;
+    if (!path) return legacy ? normalizeCampaignPage(legacy) : null;
     const map = readPublishedPageMap();
     const key = publishedPageKey(path);
-    if (map[key]) return map[key];
-    return legacy && publishedPageKey(legacy.path) === key ? legacy : null;
+    if (map[key]) return normalizeCampaignPage(map[key]);
+    return legacy && publishedPageKey(legacy.path) === key ? normalizeCampaignPage(legacy) : null;
   },
   loadRuntimePage: (path: string) => {
     const published = campaignPageApi.loadPublishedPage(path);
@@ -119,22 +130,23 @@ export const campaignPageApi = {
     const draft = campaignPageApi.loadPage();
     return publishedPageKey(draft.path) === publishedPageKey(path) ? draft : unpublishedRuntimePage(path);
   },
-  saveDraft: (page: CampaignPageSchema) => writeJSON(CAMPAIGN_PAGE_STORAGE_KEY, page),
+  saveDraft: (page: CampaignPageSchema) => writeJSON(CAMPAIGN_PAGE_STORAGE_KEY, normalizeCampaignPage(page)),
   savePublishedPage: (page: CampaignPageSchema) => {
-    writeJSON(CAMPAIGN_PUBLISHED_PAGE_STORAGE_KEY, page);
+    const normalizedPage = normalizeCampaignPage(page);
+    writeJSON(CAMPAIGN_PUBLISHED_PAGE_STORAGE_KEY, normalizedPage);
     savePublishedPageMap({
       ...readPublishedPageMap(),
-      [publishedPageKey(page.path)]: page,
-      [`/admin-flow${publishedPageKey(page.path)}`]: page,
+      [publishedPageKey(normalizedPage.path)]: normalizedPage,
+      [`/admin-flow${publishedPageKey(normalizedPage.path)}`]: normalizedPage,
     });
   },
   savePageList: (items: CampaignPageSummary[]) => writeJSON(CAMPAIGN_PAGE_LIST_STORAGE_KEY, items),
-  loadPageList: () => readJSON<CampaignPageSummary[]>(CAMPAIGN_PAGE_LIST_STORAGE_KEY, [pageSummary(readJSON(CAMPAIGN_PAGE_STORAGE_KEY, defaultCampaignPage()))]),
+  loadPageList: () => readJSON<CampaignPageSummary[]>(CAMPAIGN_PAGE_LIST_STORAGE_KEY, [pageSummary(normalizeCampaignPage(readJSON(CAMPAIGN_PAGE_STORAGE_KEY, defaultCampaignPage())))]),
   saveVersions: (items: CampaignPageVersion[]) => writeJSON(CAMPAIGN_VERSION_STORAGE_KEY, items),
   loadVersions: () => readJSON<CampaignPageVersion[]>(CAMPAIGN_VERSION_STORAGE_KEY, []),
   publish: (page: CampaignPageSchema, versions: CampaignPageVersion[]) => {
     const versionLabel = nextVersionLabel(versions);
-    const publishedPage: CampaignPageSchema = { ...page, status: 'PUBLISHED', version: versionLabel, updatedAt: nowISO() };
+    const publishedPage: CampaignPageSchema = normalizeCampaignPage({ ...page, status: 'PUBLISHED', version: versionLabel, updatedAt: nowISO() });
     const version: CampaignPageVersion = {
       id: `ver_${Date.now().toString(36)}`,
       pageId: publishedPage.id,
@@ -148,11 +160,11 @@ export const campaignPageApi = {
     return { publishedPage, version };
   },
   rollbackToVersion: (version: CampaignPageVersion) => {
-    const rolledBackPage: CampaignPageSchema = {
+    const rolledBackPage: CampaignPageSchema = normalizeCampaignPage({
       ...version.schemaSnapshot,
       status: 'DRAFT',
       updatedAt: nowISO(),
-    };
+    });
     campaignPageApi.saveDraft(rolledBackPage);
     return rolledBackPage;
   },
@@ -167,7 +179,25 @@ export function validateCampaignPage(page: CampaignPageSchema): CampaignValidati
   const issues: CampaignValidationIssue[] = [];
   if (!page.name.trim()) issues.push({ code: 'PAGE_NAME_REQUIRED', message: '页面名称不能为空。' });
   if (!page.path.startsWith('/campaign/')) issues.push({ code: 'PAGE_PATH_INVALID', message: '页面路径必须以 /campaign/ 开头。' });
-  if (!page.blocks.length) issues.push({ code: 'PAGE_BLOCKS_REQUIRED', message: '页面至少需要一个内容块。' });
+  if (!page.editor.nodes.length) issues.push({ code: 'PAGE_NODES_REQUIRED', message: '页面至少需要一个节点。' });
+  if (!page.editor.rootNodeIds.length && page.editor.nodes.length) issues.push({ code: 'PAGE_ROOT_NODES_REQUIRED', message: '页面需要至少一个根节点。' });
+  const nodeIds = new Set(page.editor.nodes.map((node) => node.id));
+  for (const node of page.editor.nodes) {
+    if (!node.name.trim()) issues.push({ code: 'NODE_NAME_REQUIRED', message: `${node.id} 的节点名称不能为空。` });
+    if (node.parentId && !nodeIds.has(node.parentId)) issues.push({ code: 'NODE_PARENT_MISSING', message: `${node.name} 的父节点不存在。` });
+    for (const binding of node.resourceBindings) {
+      if (!validateBindingExpression(binding.expression)) issues.push({ code: 'NODE_BINDING_INVALID', message: `${node.name} 的资源绑定表达式不合法。` });
+    }
+    for (const action of node.actionBindings) {
+      if (!ALLOWED_ACTIONS.has(action.actionId)) issues.push({ code: 'NODE_ACTION_UNSUPPORTED', message: `${node.name} 的动作不在白名单内。` });
+    }
+    if (node.type === 'container') {
+      if (!ALLOWED_LAYOUT_KINDS.has(node.layout)) issues.push({ code: 'NODE_LAYOUT_UNSUPPORTED', message: `${node.name} 的布局类型不在白名单内。` });
+      for (const childId of node.children) {
+        if (!nodeIds.has(childId)) issues.push({ code: 'NODE_CHILD_MISSING', message: `${node.name} 的子节点不存在。` });
+      }
+    }
+  }
   for (const block of page.blocks) {
     if (!ALLOWED_BLOCK_KINDS.has(block.kind)) issues.push({ code: 'BLOCK_TYPE_UNSUPPORTED', message: `${block.title} 的内容块类型不在白名单内。` });
     if (!validateBindingExpression(block.binding)) issues.push({ code: 'BLOCK_BINDING_INVALID', message: `${block.title} 的绑定表达式不合法。` });

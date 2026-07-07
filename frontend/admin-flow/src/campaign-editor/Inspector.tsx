@@ -11,6 +11,7 @@ import type {
   LayoutKind,
 } from './types';
 import { flexPreset, normalizeLayoutKind } from './layout';
+import { Button, Field, InspectorSection } from './ui';
 
 function blockDescription(kind: CampaignBlockKind) {
   if (kind === 'ClaimButton') return '按钮文案、禁用条件、点击动作';
@@ -37,40 +38,43 @@ export function FreeElementInspector({
   if (tab === 'binding') {
     return (
       <div className="campaign-inspector-body">
-        <label><span>绑定字段</span><input value={element.binding ?? ''} placeholder="{{ activity.title }}" onChange={(event) => onChange({ binding: event.target.value })} /></label>
-        <label><span>展示条件</span><input value={element.visibleWhen ?? ''} placeholder="{{ user.loggedIn }}" onChange={(event) => onChange({ visibleWhen: event.target.value })} /></label>
-        <p>自由元素绑定同样使用 Activity View Model 白名单表达式。</p>
+        <InspectorSection description="自由元素绑定同样使用 Activity View Model 白名单表达式。">
+          <Field label="绑定字段"><input value={element.binding ?? ''} placeholder="{{ activity.title }}" onChange={(event) => onChange({ binding: event.target.value })} /></Field>
+          <Field label="展示条件"><input value={element.visibleWhen ?? ''} placeholder="{{ user.loggedIn }}" onChange={(event) => onChange({ visibleWhen: event.target.value })} /></Field>
+        </InspectorSection>
       </div>
     );
   }
   if (tab === 'action') {
     return (
       <div className="campaign-inspector-body">
-        <label><span>点击动作</span><select value={element.action || 'NONE'} onChange={(event) => onChange({ action: event.target.value === 'NONE' ? undefined : event.target.value })}><option>CLAIM_REWARD</option><option>OPEN_LOGIN</option><option>NAVIGATE</option><option>TRACK_EVENT</option><option>NONE</option></select></label>
-        <label><span>Payload</span><input value={element.payload ?? ''} placeholder="{{ activity.id, reward.code, user.id }}" onChange={(event) => onChange({ payload: event.target.value })} /></label>
-        <p>自由设计动作在发布 schema 中保存，运行时按 workflow event 触发。</p>
+        <InspectorSection description="自由设计动作在发布 schema 中保存，运行时按 workflow event 触发。">
+          <Field label="点击动作"><select value={element.action || 'NONE'} onChange={(event) => onChange({ action: event.target.value === 'NONE' ? '' : event.target.value })}><option>CLAIM_REWARD</option><option>OPEN_LOGIN</option><option>NAVIGATE</option><option>TRACK_EVENT</option><option>NONE</option></select></Field>
+          <Field label="Payload"><input value={element.payload ?? ''} placeholder="{{ activity.id, reward.code, user.id }}" onChange={(event) => onChange({ payload: event.target.value })} /></Field>
+        </InspectorSection>
       </div>
     );
   }
   return (
     <div className="campaign-inspector-body">
-      <label><span>元素文案</span><textarea value={element.text.split('\\n').join('\n')} onChange={(event) => onChange({ text: event.target.value.split('\n').join('\\n') })} /></label>
-      <div className="campaign-free-grid">
-        <label><span>X</span><input type="number" value={element.x} onChange={(event) => onChange({ x: Math.max(0, Number(event.target.value)) })} /></label>
-        <label><span>Y</span><input type="number" value={element.y} onChange={(event) => onChange({ y: Math.max(0, Number(event.target.value)) })} /></label>
-        <label><span>宽</span><input type="number" value={element.w} onChange={(event) => onChange({ w: Math.max(0, Number(event.target.value)) })} /></label>
-        <label><span>高</span><input type="number" value={element.h} onChange={(event) => onChange({ h: Math.max(0, Number(event.target.value)) })} /></label>
-      </div>
-      <label><span>层级</span><input type="number" value={element.z} onChange={(event) => onChange({ z: Number(event.target.value) })} /></label>
-      <div className="campaign-inspector-actions">
-        <button type="button" onClick={() => onLayerMove(1)}>上移一层</button>
-        <button type="button" onClick={() => onLayerMove(-1)}>下移一层</button>
-      </div>
-      <label><span>圆角</span><input value={element.radius ?? '8'} onChange={(event) => onChange({ radius: event.target.value })} /></label>
+      <InspectorSection>
+        <Field label="元素文案"><textarea value={element.text.split('\\n').join('\n')} onChange={(event) => onChange({ text: event.target.value.split('\n').join('\\n') })} /></Field>
+        <div className="campaign-free-grid">
+          <Field label="X"><input type="number" value={element.x} onChange={(event) => onChange({ x: Math.max(0, Number(event.target.value)) })} /></Field>
+          <Field label="Y"><input type="number" value={element.y} onChange={(event) => onChange({ y: Math.max(0, Number(event.target.value)) })} /></Field>
+          <Field label="宽"><input type="number" value={element.w} onChange={(event) => onChange({ w: Math.max(0, Number(event.target.value)) })} /></Field>
+          <Field label="高"><input type="number" value={element.h} onChange={(event) => onChange({ h: Math.max(0, Number(event.target.value)) })} /></Field>
+        </div>
+        <Field label="层级"><input type="number" value={element.z} onChange={(event) => onChange({ z: Number(event.target.value) })} /></Field>
+        <div className="campaign-inspector-actions">
+          <Button onClick={() => onLayerMove(1)}>上移一层</Button>
+          <Button onClick={() => onLayerMove(-1)}>下移一层</Button>
+        </div>
+        <Field label="圆角"><input value={element.radius ?? '8'} onChange={(event) => onChange({ radius: event.target.value })} /></Field>
+      </InspectorSection>
       {element.kind === 'layout' ? (
-        <>
-          <label>
-            <span>布局方式</span>
+        <InspectorSection title="布局">
+          <Field label="布局方式">
             <select value={normalizeLayoutKind(element.layout)} onChange={(event) => {
               const layout = event.target.value as LayoutKind;
               onChange({ layout, ...flexPreset(layout) });
@@ -78,17 +82,17 @@ export function FreeElementInspector({
               <option value="horizontal-layout">水平布局</option>
               <option value="vertical-layout">垂直布局</option>
             </select>
-          </label>
+          </Field>
           <div className="campaign-free-grid">
-            <label><span>方向</span><select value={element.flexDirection ?? 'row'} onChange={(event) => onChange({ flexDirection: event.target.value as FlexDirection })}><option value="row">横向</option><option value="column">纵向</option></select></label>
-            <label><span>换行</span><select value={element.flexWrap ?? 'nowrap'} onChange={(event) => onChange({ flexWrap: event.target.value as FlexWrap })}><option value="nowrap">不换行</option><option value="wrap">换行</option></select></label>
-            <label><span>主轴</span><select value={element.justifyContent ?? 'center'} onChange={(event) => onChange({ justifyContent: event.target.value as FlexJustify })}><option value="flex-start">开始</option><option value="center">居中</option><option value="flex-end">结束</option><option value="space-between">两端</option><option value="space-around">环绕</option></select></label>
-            <label><span>交叉轴</span><select value={element.alignItems ?? 'center'} onChange={(event) => onChange({ alignItems: event.target.value as FlexAlign })}><option value="flex-start">开始</option><option value="center">居中</option><option value="flex-end">结束</option><option value="stretch">拉伸</option></select></label>
-            <label><span>间距</span><input type="number" value={element.gap ?? 8} onChange={(event) => onChange({ gap: Math.max(0, Number(event.target.value)) })} /></label>
+            <Field label="方向"><select value={element.flexDirection ?? 'row'} onChange={(event) => onChange({ flexDirection: event.target.value as FlexDirection })}><option value="row">横向</option><option value="column">纵向</option></select></Field>
+            <Field label="换行"><select value={element.flexWrap ?? 'nowrap'} onChange={(event) => onChange({ flexWrap: event.target.value as FlexWrap })}><option value="nowrap">不换行</option><option value="wrap">换行</option></select></Field>
+            <Field label="主轴"><select value={element.justifyContent ?? 'center'} onChange={(event) => onChange({ justifyContent: event.target.value as FlexJustify })}><option value="flex-start">开始</option><option value="center">居中</option><option value="flex-end">结束</option><option value="space-between">两端</option><option value="space-around">环绕</option></select></Field>
+            <Field label="交叉轴"><select value={element.alignItems ?? 'center'} onChange={(event) => onChange({ alignItems: event.target.value as FlexAlign })}><option value="flex-start">开始</option><option value="center">居中</option><option value="flex-end">结束</option><option value="stretch">拉伸</option></select></Field>
+            <Field label="间距"><input type="number" value={element.gap ?? 8} onChange={(event) => onChange({ gap: Math.max(0, Number(event.target.value)) })} /></Field>
           </div>
-        </>
+        </InspectorSection>
       ) : null}
-      <label><span>样式</span><select value={element.variant ?? 'primary'} onChange={(event) => onChange({ variant: event.target.value as FreeDesignElement['variant'] })}><option value="primary">主要样式</option><option value="secondary">次要样式</option></select></label>
+      <Field label="样式"><select value={element.variant ?? 'primary'} onChange={(event) => onChange({ variant: event.target.value as FreeDesignElement['variant'] })}><option value="primary">主要样式</option><option value="secondary">次要样式</option></select></Field>
       <p>{width}px 自由画布 · 文案、位置、尺寸、层级、样式会进入发布 schema。</p>
     </div>
   );
@@ -110,32 +114,36 @@ export function InspectorContent({
   if (tab === 'binding') {
     return (
       <div className="campaign-inspector-body">
-        <label><span>禁用条件 / 绑定字段</span><input value={block.binding ?? (block.kind === 'ClaimButton' ? '{{ !eligibility.canClaim }}' : '{{ activity.title }}')} onChange={(event) => onBlockChange({ binding: event.target.value, bound: true })} /></label>
-        <label><span>展示条件</span><input value={block.visibleWhen ?? '{{ user.loggedIn }}'} onChange={(event) => onBlockChange({ visibleWhen: event.target.value })} /></label>
-        <p>绑定表达式只支持 Activity View Model 白名单字段，不暴露 workflow 内部节点。</p>
+        <InspectorSection description="绑定表达式只支持 Activity View Model 白名单字段，不暴露 workflow 内部节点。">
+          <Field label="禁用条件 / 绑定字段"><input value={block.binding ?? (block.kind === 'ClaimButton' ? '{{ !eligibility.canClaim }}' : '{{ activity.title }}')} onChange={(event) => onBlockChange({ binding: event.target.value, bound: true })} /></Field>
+          <Field label="展示条件"><input value={block.visibleWhen ?? '{{ user.loggedIn }}'} onChange={(event) => onBlockChange({ visibleWhen: event.target.value })} /></Field>
+        </InspectorSection>
       </div>
     );
   }
   if (tab === 'action') {
     return (
       <div className="campaign-inspector-body">
-        <label><span>点击动作</span><select value={block.action || 'NONE'} onChange={(event) => onBlockChange({ action: event.target.value === 'NONE' ? undefined : event.target.value })}><option>CLAIM_REWARD</option><option>OPEN_LOGIN</option><option>NAVIGATE</option><option>TRACK_EVENT</option><option>NONE</option></select></label>
-        <label><span>Payload</span><input value={block.payload ?? '{{ activity.id, reward.code, user.id }}'} onChange={(event) => onBlockChange({ payload: event.target.value })} /></label>
-        <p>动作绑定到 ExMarketing workflow event，不允许任意脚本。</p>
+        <InspectorSection description="动作绑定到 ExMarketing workflow event，不允许任意脚本。">
+          <Field label="点击动作"><select value={block.action || 'NONE'} onChange={(event) => onBlockChange({ action: event.target.value === 'NONE' ? '' : event.target.value })}><option>CLAIM_REWARD</option><option>OPEN_LOGIN</option><option>NAVIGATE</option><option>TRACK_EVENT</option><option>NONE</option></select></Field>
+          <Field label="Payload"><input value={block.payload ?? '{{ activity.id, reward.code, user.id }}'} onChange={(event) => onBlockChange({ payload: event.target.value })} /></Field>
+        </InspectorSection>
       </div>
     );
   }
   return (
     <div className="campaign-inspector-body">
-      <label><span>{block.kind === 'ClaimButton' ? '按钮文案' : '模块标题'}</span><input value={block.kind === 'ClaimButton' ? block.text ?? '立即领取' : block.title} onChange={(event) => onBlockChange(block.kind === 'ClaimButton' ? { text: event.target.value, title: event.target.value || '领取按钮' } : { title: event.target.value })} /></label>
-      <div className="campaign-button-preview">{block.kind === 'ClaimButton' ? block.text ?? '立即领取' : block.title}</div>
-      <label><span>按钮样式</span><select value={block.variant ?? 'primary'} onChange={(event) => onBlockChange({ variant: event.target.value as CampaignBlock['variant'] })}><option value="primary">主要按钮（蓝色）</option><option value="secondary">次要按钮</option></select></label>
-      <label><span>宽度</span><select value={block.width ?? 'full'} onChange={(event) => onBlockChange({ width: event.target.value as CampaignBlock['width'] })}><option value="full">全宽</option><option value="content">内容宽度</option></select></label>
-      <label><span>圆角</span><input value={block.radius ?? '8'} onChange={(event) => onBlockChange({ radius: event.target.value })} /></label>
-      <div className="campaign-inspector-actions">
-        <button type="button" onClick={() => onMove(-1)}>上移</button>
-        <button type="button" onClick={() => onMove(1)}>下移</button>
-      </div>
+      <InspectorSection>
+        <Field label={block.kind === 'ClaimButton' ? '按钮文案' : '模块标题'}><input value={block.kind === 'ClaimButton' ? block.text ?? '立即领取' : block.title} onChange={(event) => onBlockChange(block.kind === 'ClaimButton' ? { text: event.target.value, title: event.target.value || '领取按钮' } : { title: event.target.value })} /></Field>
+        <div className="campaign-button-preview">{block.kind === 'ClaimButton' ? block.text ?? '立即领取' : block.title}</div>
+        <Field label="按钮样式"><select value={block.variant ?? 'primary'} onChange={(event) => onBlockChange({ variant: event.target.value as CampaignBlock['variant'] })}><option value="primary">主要按钮（蓝色）</option><option value="secondary">次要按钮</option></select></Field>
+        <Field label="宽度"><select value={block.width ?? 'full'} onChange={(event) => onBlockChange({ width: event.target.value as CampaignBlock['width'] })}><option value="full">全宽</option><option value="content">内容宽度</option></select></Field>
+        <Field label="圆角"><input value={block.radius ?? '8'} onChange={(event) => onBlockChange({ radius: event.target.value })} /></Field>
+        <div className="campaign-inspector-actions">
+          <Button onClick={() => onMove(-1)}>上移</Button>
+          <Button onClick={() => onMove(1)}>下移</Button>
+        </div>
+      </InspectorSection>
       <p>{deviceWidth}px 画布 · {blockDescription(block.kind)}</p>
     </div>
   );

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react';
+import { useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import {
   Bell,
   ChevronDown,
@@ -26,6 +26,7 @@ import type {
   CampaignPageSummary,
   CampaignPageVersion,
   CampaignValidationIssue,
+  ComponentRegistryKey,
   DeviceWidth,
   EditorTab,
   FreeDesignElement,
@@ -40,7 +41,6 @@ import {
   blocksToFreeElements,
   blockToFreeElement,
   blockIdForFreeElementId,
-  campaignLayoutReducer,
   currentFreeElementIdForBlock,
   fitLayouts,
   flexPreset,
@@ -53,14 +53,17 @@ import {
   normalizeLayoutKind,
   syncFreeElementsWithBlocks,
 } from './campaign-editor/layout';
-import { campaignPageApi, defaultCampaignPage, nowISO, pageSummary, validateCampaignPage } from './campaign-editor/campaignPageStore';
+import { campaignPageApi, defaultCampaignPage, normalizeCampaignPage, nowISO, pageSummary, validateCampaignPage } from './campaign-editor/campaignPageStore';
+import { editorPageToFreeElements } from './campaign-editor/editorSchema';
+import { createEditorEngineState, editorEngineReducer, type EditorEngineAction } from './campaign-editor/editorEngine';
+import { componentKeyForLayoutKind, componentRegistry, defaultElementFromComponent } from './campaign-editor/componentRegistry';
 import { resourceStorageApi } from './campaign-editor/resourceStore';
 import { CampaignResourceWorkspace, defaultResourceRecords } from './campaign-editor/ResourceWorkspace';
 import { CampaignRuntimeView } from './campaign-editor/RuntimeView';
 import { CampaignModulePreview } from './campaign-editor/PageWorkspace';
 import { FreeElementInspector, InspectorContent } from './campaign-editor/Inspector';
 import { FreeDesignCanvas } from './campaign-editor/FreeCanvas';
-import { Tabs } from './campaign-editor/ui';
+import { Button, DataTable, Field, Panel, SegmentedControl, Tabs, Tree, type DataTableColumn, type TreeNode } from './campaign-editor/ui';
 export { CampaignRuntimePage } from './campaign-editor/RuntimeView';
 
 const navItems = [
@@ -152,6 +155,7 @@ export function CampaignEditorPage() {
         : blocksToFreeElements(loadedPage.blocks, loadedPage.device.defaultWidth),
     };
   });
+  const editorEngineHistoryRef = useRef<{ past: CampaignPageSchema['editor'][]; future: CampaignPageSchema['editor'][] }>({ past: [], future: [] });
   const [resourceRecords, setResourceRecords] = useState<ResourceRecord[]>(() => resourceStorageApi.loadRecords(defaultResourceRecords));
   const [versions, setVersions] = useState<CampaignPageVersion[]>(() => campaignPageApi.loadVersions());
   const [pages, setPages] = useState<CampaignPageSummary[]>(() => campaignPageApi.loadPageList());
@@ -166,11 +170,12 @@ export function CampaignEditorPage() {
   const [selectedFreeId, setSelectedFreeId] = useState(() => pageSchema.freeElements?.[0]?.id ?? 'free_from_hero');
   const [draggingBlockKind, setDraggingBlockKind] = useState<CampaignBlockKind | null>(null);
   const [draggingLayoutKind, setDraggingLayoutKind] = useState<LayoutKind | null>(null);
+  const [draggingComponentKey, setDraggingComponentKey] = useState<ComponentRegistryKey | null>(null);
   const [treeQuery, setTreeQuery] = useState('');
   const [treeOpen, setTreeOpen] = useState(true);
   const [libraryOpen, setLibraryOpen] = useState(true);
   const blocks = pageSchema.blocks;
-  const freeElements = pageSchema.freeElements ?? initialFreeElements;
+  const freeElements = pageSchema.editor?.nodes.length ? editorPageToFreeElements(pageSchema.editor) : pageSchema.freeElements ?? initialFreeElements;
   const selectedBlock = blocks.find((block) => block.id === selectedId) ?? blocks[0];
   const selectedFreeElement = freeElements.find((element) => element.id === selectedFreeId) ?? freeElements[0];
   const visibleBlocks = useMemo(() => blocks.filter((block) => block.visible), [blocks]);
@@ -219,7 +224,7 @@ export function CampaignEditorPage() {
   const updatePage = (patch: Partial<CampaignPageSchema> | ((current: CampaignPageSchema) => CampaignPageSchema)) => {
     setPageSchema((current) => {
       const next = typeof patch === 'function' ? patch(current) : { ...current, ...patch };
-      const nextPage = { ...next, updatedAt: nowISO() };
+      const nextPage = normalizeCampaignPage({ ...next, updatedAt: nowISO() });
       campaignPageApi.saveDraft(nextPage);
       return nextPage;
     });
@@ -240,6 +245,51 @@ export function CampaignEditorPage() {
 
   const updateFreeElements = (updater: (current: FreeDesignElement[]) => FreeDesignElement[]) => {
     updatePage((current) => ({ ...current, freeElements: updater(current.freeElements ?? initialFreeElements), designMode: 'free', status: 'DRAFT' }));
+  };
+
+  const runEditorAction = (action: EditorEngineAction, selectedNodeId = selectedFreeId) => {
+    const previewEngineState = editorEngineReducer({ ...createEditorEngineState(pageSchema.editor, selectedNodeId), ...editorEngineHistoryRef.current }, action);
+    updatePage((current) => {
+      const engineState = { ...createEditorEngineState(current.editor, selectedNodeId), ...editorEngineHistoryRef.current };
+      const nextEngineState = editorEngineReducer(engineState, action);
+      editorEngineHistoryRef.current = { past: nextEngineState.past, future: nextEngineState.future };
+      return {
+        ...current,
+        editor: nextEngineState.page,
+        freeElements: fitLayouts(editorPageToFreeElements(nextEngineState.page)),
+        designMode: 'free',
+        status: 'DRAFT',
+      };
+    });
+    if (previewEngineState.selectedNodeId) {
+      setSelectedFreeId(previewEngineState.selectedNodeId);
+      const blockId = blockIdForFreeElementId(previewEngineState.selectedNodeId);
+      if (blockId) setSelectedId(blockId);
+    }
+  };
+
+  const deleteNodeWithEngine = (nodeId: string, removeBlockId?: string) => {
+    if (!nodeId) return;
+    const nextFreeIds = freeElements
+      .filter((element) => element.id !== nodeId && element.parentId !== nodeId)
+      .map((element) => element.id);
+    const nextSelectedFreeId = nextFreeIds[0] ?? '';
+    updatePage((current) => {
+      const engineState = { ...createEditorEngineState(current.editor, nodeId), ...editorEngineHistoryRef.current };
+      const nextEngineState = editorEngineReducer(engineState, { type: 'deleteNode', nodeId });
+      editorEngineHistoryRef.current = { past: nextEngineState.past, future: nextEngineState.future };
+      return {
+        ...current,
+        blocks: removeBlockId ? current.blocks.filter((block) => block.id !== removeBlockId) : current.blocks,
+        editor: nextEngineState.page,
+        freeElements: fitLayouts(editorPageToFreeElements(nextEngineState.page)),
+        designMode: 'free',
+        status: 'DRAFT',
+      };
+    });
+    setSelectedFreeId(nextSelectedFreeId);
+    const nextBlockId = removeBlockId ? blocks.find((block) => block.id !== removeBlockId)?.id ?? '' : blockIdForFreeElementId(nextSelectedFreeId);
+    setSelectedId(nextBlockId);
   };
 
   const updateSelectedFreeElement = (patch: Partial<FreeDesignElement>) => {
@@ -265,26 +315,38 @@ export function CampaignEditorPage() {
   };
 
   const moveFreeElementIntoLayout = (freeElementId: string, layoutId: string) => {
-    updateFreeElements((items) => {
-      return campaignLayoutReducer(items, {
-        type: 'move-into-layout',
-        freeElementId,
-        layoutId,
-        blocks,
-        width: pageSchema.device.defaultWidth,
-      });
+    updatePage((current) => {
+      let workingPage = current;
+      if (!workingPage.editor.nodes.some((node) => node.id === freeElementId)) {
+        const blockId = blockIdForFreeElementId(freeElementId);
+        const sourceBlock = blockId ? workingPage.blocks.find((block) => block.id === blockId) : undefined;
+        if (sourceBlock) {
+          const currentElements = editorPageToFreeElements(workingPage.editor);
+          const nextElement = blockToFreeElement(sourceBlock, workingPage.device.defaultWidth, Math.max(0, ...currentElements.map((element) => element.z)) + 1);
+          workingPage = normalizeCampaignPage({
+            ...workingPage,
+            freeElements: [...currentElements, nextElement],
+            designMode: 'free',
+            status: 'DRAFT',
+          });
+        }
+      }
+      const engineState = { ...createEditorEngineState(workingPage.editor, freeElementId), ...editorEngineHistoryRef.current };
+      const nextEngineState = editorEngineReducer(engineState, { type: 'moveIntoContainer', nodeId: freeElementId, containerId: layoutId });
+      editorEngineHistoryRef.current = { past: nextEngineState.past, future: nextEngineState.future };
+      return {
+        ...workingPage,
+        editor: nextEngineState.page,
+        freeElements: fitLayouts(editorPageToFreeElements(nextEngineState.page)),
+        designMode: 'free',
+        status: 'DRAFT',
+      };
     });
     setSelectedFreeId(freeElementId);
   };
 
   const moveFreeElementToRoot = (freeElementId: string) => {
-    updateFreeElements((items) => {
-      return campaignLayoutReducer(items, {
-        type: 'move-to-root',
-        freeElementId,
-        width: pageSchema.device.defaultWidth,
-      });
-    });
+    runEditorAction({ type: 'moveOutOfContainer', nodeId: freeElementId }, freeElementId);
     setSelectedFreeId(freeElementId);
   };
 
@@ -331,39 +393,17 @@ export function CampaignEditorPage() {
 
   const duplicateFreeElement = () => {
     if (!selectedFreeElement) return;
-    const copyElement: FreeDesignElement = {
-      ...selectedFreeElement,
-      id: `${selectedFreeElement.id}_${Date.now().toString(36)}`,
-      text: `${selectedFreeElement.text} 副本`,
-      x: selectedFreeElement.x + 18,
-      y: selectedFreeElement.y + 18,
-      z: Math.max(0, ...freeElements.map((element) => element.z)) + 1,
-    };
-    updateFreeElements((items) => [...items, copyElement]);
-    setSelectedFreeId(copyElement.id);
+    runEditorAction({ type: 'duplicateNode', nodeId: selectedFreeElement.id }, selectedFreeElement.id);
   };
 
   const deleteFreeElementById = (targetId: string) => {
     if (!targetId) return;
     const sourceBlockId = blockIdForFreeElementId(targetId);
     if (sourceBlockId) {
-      const selectedIndex = blocks.findIndex((block) => block.id === sourceBlockId);
-      const nextBlocks = blocks.filter((block) => block.id !== sourceBlockId);
-      const nextSelectedBlock = nextBlocks[Math.max(0, selectedIndex - 1)] ?? nextBlocks[0];
-      updatePage((current) => ({
-        ...current,
-        blocks: nextBlocks,
-        freeElements: (current.freeElements ?? []).filter((element) => blockIdForFreeElementId(element.id) !== sourceBlockId),
-        designMode: 'free',
-        status: 'DRAFT',
-      }));
-      setSelectedId(nextSelectedBlock?.id ?? '');
-      setSelectedFreeId(nextSelectedBlock ? (currentFreeElementIdForBlock(nextSelectedBlock.id, freeElements) ?? `free_from_${nextSelectedBlock.id}`) : '');
+      deleteNodeWithEngine(targetId, sourceBlockId);
       return;
     }
-    const next = freeElements.filter((element) => element.id !== targetId && element.parentId !== targetId);
-    updateFreeElements(() => next);
-    setSelectedFreeId(next[0]?.id ?? '');
+    deleteNodeWithEngine(targetId);
   };
 
   const deleteFreeElement = () => {
@@ -372,44 +412,34 @@ export function CampaignEditorPage() {
 
   const moveFreeLayer = (direction: -1 | 1) => {
     if (!selectedFreeElement) return;
-    const nextZ = selectedFreeElement.z + direction;
-    updateSelectedFreeElement({ z: Math.max(1, nextZ) });
+    runEditorAction({ type: 'reorderNode', nodeId: selectedFreeElement.id, position: direction > 0 ? 'forward' : 'backward' }, selectedFreeElement.id);
   };
 
   const deleteBlock = () => {
     if (!selectedBlock) return;
-    const next = blocks.filter((block) => block.id !== selectedBlock.id);
-    updatePage((current) => ({
-      ...current,
-      blocks: next,
-      freeElements: (current.freeElements ?? []).filter((element) => blockIdForFreeElementId(element.id) !== selectedBlock.id),
-      status: 'DRAFT',
-    }));
-    const nextSelectedBlock = next[Math.max(0, blocks.findIndex((block) => block.id === selectedBlock.id) - 1)] ?? next[0];
-    setSelectedId(nextSelectedBlock?.id ?? '');
-    setSelectedFreeId(nextSelectedBlock ? (currentFreeElementIdForBlock(nextSelectedBlock.id, freeElements) ?? `free_from_${nextSelectedBlock.id}`) : '');
+    const freeElementId = currentFreeElementIdForBlock(selectedBlock.id, freeElements) ?? `free_from_${selectedBlock.id}`;
+    deleteNodeWithEngine(freeElementId, selectedBlock.id);
   };
 
   const deleteBlockById = (blockId: string) => {
-    const next = blocks.filter((block) => block.id !== blockId);
-    updatePage((current) => ({
-      ...current,
-      blocks: next,
-      freeElements: (current.freeElements ?? []).filter((element) => blockIdForFreeElementId(element.id) !== blockId),
-      status: 'DRAFT',
-    }));
-    if (selectedId === blockId || blockIdForFreeElementId(selectedFreeId) === blockId) {
-      setSelectedId(next[0]?.id ?? '');
-      setSelectedFreeId(next[0] ? (currentFreeElementIdForBlock(next[0].id, freeElements) ?? `free_from_${next[0].id}`) : '');
-    }
+    const freeElementId = currentFreeElementIdForBlock(blockId, freeElements) ?? `free_from_${blockId}`;
+    deleteNodeWithEngine(freeElementId, blockId);
   };
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== 'Delete' && event.key !== 'Backspace') return;
       const target = event.target as HTMLElement | null;
       if (target?.closest('input, textarea, select') || target?.isContentEditable) return;
       if (activeSection !== 'page') return;
+      const shortcutKey = event.key.toLowerCase();
+      const isUndo = (event.metaKey || event.ctrlKey) && shortcutKey === 'z' && !event.shiftKey;
+      const isRedo = ((event.metaKey || event.ctrlKey) && shortcutKey === 'z' && event.shiftKey) || (event.ctrlKey && shortcutKey === 'y');
+      if (isUndo || isRedo) {
+        event.preventDefault();
+        runEditorAction({ type: isUndo ? 'undo' : 'redo' });
+        return;
+      }
+      if (event.key !== 'Delete' && event.key !== 'Backspace') return;
       event.preventDefault();
       if (pageEditorMode === 'free') {
         deleteFreeElement();
@@ -420,7 +450,7 @@ export function CampaignEditorPage() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activeSection, pageEditorMode, selectedFreeId, freeElements, blocks, selectedBlock]);
+  }, [activeSection, pageEditorMode, selectedFreeId, freeElements, blocks, selectedBlock, pageSchema.editor]);
 
   const createBlock = (kind: CampaignBlockKind = 'RewardCard'): CampaignBlock => {
     const preset = blockPalette.find((item) => item.kind === kind) ?? blockPalette[2];
@@ -471,21 +501,16 @@ export function CampaignEditorPage() {
   };
 
   const createLayoutElement = (kind: LayoutKind, x = 18, y = 360): FreeDesignElement => {
-    const preset = layoutPalette.find((item) => item.kind === kind) ?? layoutPalette[0];
-    return {
+    const componentKey = componentKeyForLayoutKind(kind);
+    const element = defaultElementFromComponent({
+      componentKey,
       id: `layout_${kind}_${Date.now().toString(36)}`,
-      kind: 'layout',
-      text: `${preset.title}\\n拖入组件到盒子内`,
+      width: pageSchema.device.defaultWidth,
+      z: Math.max(0, ...freeElements.map((item) => item.z)) + 1,
       x: Math.min(Math.max(0, pageSchema.device.defaultWidth - 345), Math.max(0, Math.round(x))),
       y: Math.max(0, Math.round(y)),
-      w: 345,
-      h: kind === 'vertical-layout' ? 144 : 96,
-      z: Math.max(0, ...freeElements.map((element) => element.z)) + 1,
-      variant: 'secondary',
-      layout: kind,
-      ...flexPreset(kind),
-      radius: '8',
-    };
+    });
+    return { ...element, layout: kind, ...flexPreset(kind) };
   };
 
   const addLayoutAtCanvasPosition = (kind: LayoutKind, x = 18, y = 360) => {
@@ -494,20 +519,48 @@ export function CampaignEditorPage() {
     setSelectedFreeId(nextLayout.id);
   };
 
+  const addComponentAtCanvasPosition = (componentKey: ComponentRegistryKey, x = 32, y = 360, parentId?: string) => {
+    const nextId = `free_${componentKey.toLowerCase()}_${Date.now().toString(36)}`;
+    updatePage((current) => {
+      const parent = parentId ? (current.freeElements ?? []).find((element) => element.id === parentId && element.kind === 'layout') : undefined;
+      const nextElement = defaultElementFromComponent({
+        componentKey,
+        id: nextId,
+        width: current.device.defaultWidth,
+        z: Math.max(0, ...(current.freeElements ?? []).map((element) => element.z)) + 1,
+        x: parent ? 0 : 0,
+        y: parent ? 0 : Math.max(0, Math.round(y)),
+      });
+      const positionedElement = parent ? {
+        ...nextElement,
+        parentId: parent.id,
+        x: 0,
+        y: 0,
+        w: layoutChildWidth(parent),
+      } : {
+        ...nextElement,
+        x: Math.min(Math.max(0, current.device.defaultWidth - nextElement.w), Math.max(0, Math.round(x))),
+      };
+      return {
+        ...current,
+        freeElements: fitLayouts([...(current.freeElements ?? []), positionedElement]),
+        designMode: 'free',
+        status: 'DRAFT',
+      };
+    });
+    setSelectedFreeId(nextId);
+  };
+
   const addFreeElement = (kind: FreeDesignElement['kind']) => {
-    const next: FreeDesignElement = {
+    const componentKey = kind === 'button' ? 'Button' : kind === 'image' ? 'Image' : kind === 'card' ? 'RewardCard' : 'Title';
+    const next = defaultElementFromComponent({
+      componentKey,
       id: `free_${kind}_${Date.now().toString(36)}`,
-      kind,
-      text: kind === 'button' ? '按钮' : kind === 'image' ? '图片占位' : kind === 'card' ? '自由卡片' : '自由文本',
+      width: pageSchema.device.defaultWidth,
+      z: Math.max(0, ...freeElements.map((element) => element.z)) + 1,
       x: 32,
       y: 360,
-      w: kind === 'text' ? 180 : 260,
-      h: kind === 'text' ? 44 : 88,
-      z: Math.max(0, ...freeElements.map((element) => element.z)) + 1,
-      variant: kind === 'button' ? 'primary' : undefined,
-      action: kind === 'button' ? 'CLAIM_REWARD' : undefined,
-      radius: kind === 'text' ? '0' : '8',
-    };
+    });
     updateFreeElements((items) => [...items, next]);
     setSelectedFreeId(next.id);
   };
@@ -590,74 +643,62 @@ export function CampaignEditorPage() {
     URL.revokeObjectURL(url);
   };
 
-  const renderTreeNode = (node: PageTreeNode, depth = 0) => {
+  const buildTreeNode = (node: PageTreeNode): TreeNode => {
     const isLayoutNode = node.type === 'layout';
     const block = node.type === 'block' ? node.block : undefined;
     const freeElementId = isLayoutNode ? node.id : currentFreeElementIdForBlock(node.id, freeElements) ?? `free_from_${node.id}`;
     const active = pageEditorMode === 'free' ? selectedFreeId === freeElementId : node.id === selectedId;
-    return (
-      <div key={`${node.type}_${node.id}`} className={depth > 0 ? 'campaign-outline-branch' : undefined}>
-        <div
-          className={active ? 'campaign-outline-row active' : 'campaign-outline-row'}
-          role="button"
-          tabIndex={0}
-          draggable={Boolean(block)}
-          onDragStart={(event) => {
+    return {
+      id: `${node.type}_${node.id}`,
+      label: node.title,
+      meta: node.meta,
+      active,
+      draggable: Boolean(block),
+      onDragStart: (event) => {
             if (!block) return;
             event.dataTransfer.setData('application/x-campaign-tree-free-id', freeElementId);
             event.dataTransfer.effectAllowed = 'move';
-          }}
-          onDragOver={(event) => {
+      },
+      onDragOver: (event) => {
             if (!isLayoutNode) return;
             if (!event.dataTransfer.types.includes('application/x-campaign-tree-free-id')) return;
             event.preventDefault();
             event.dataTransfer.dropEffect = 'move';
-          }}
-          onDrop={(event) => {
+      },
+      onDrop: (event) => {
             if (!isLayoutNode) return;
             const draggedFreeId = event.dataTransfer.getData('application/x-campaign-tree-free-id');
             if (!draggedFreeId) return;
             event.preventDefault();
             event.stopPropagation();
             moveFreeElementIntoLayout(draggedFreeId, node.id);
-          }}
-          onClick={() => {
-          if (block) setSelectedId(block.id);
-          if (pageEditorMode === 'free') setSelectedFreeId(freeElementId);
-        }} onKeyDown={(event) => {
-          if (event.key === 'Enter' || event.key === ' ') {
-            if (block) setSelectedId(block.id);
-            if (pageEditorMode === 'free') setSelectedFreeId(freeElementId);
-          }
-        }}>
-          <span><strong>{node.title}</strong><small>{node.meta}</small></span>
-          <button type="button" aria-label={block?.visible ? '隐藏内容块' : '显示内容块'} disabled={!block} onClick={(event) => {
-            event.stopPropagation();
+      },
+      onClick: () => {
+        if (block) setSelectedId(block.id);
+        if (pageEditorMode === 'free') setSelectedFreeId(freeElementId);
+      },
+      actions: (
+        <>
+          <Button size="sm" variant="ghost" icon={<Eye size={16} />} iconOnly aria-label={block?.visible ? '隐藏内容块' : '显示内容块'} disabled={!block} onClick={() => {
             if (block) toggleBlockVisible(block.id);
-          }}><Eye size={16} /></button>
-          <button type="button" aria-label="复制内容块" disabled={!block} onClick={(event) => {
-            event.stopPropagation();
+          }}>显隐</Button>
+          <Button size="sm" variant="ghost" icon={<Copy size={16} />} iconOnly aria-label="复制内容块" disabled={!block} onClick={() => {
             if (block) duplicateBlockById(block.id);
-          }}><Copy size={16} /></button>
-          <button type="button" aria-label="删除内容块" onClick={(event) => {
-            event.stopPropagation();
+          }}>复制内容块</Button>
+          <Button size="sm" variant="ghost" icon={<Trash2 size={16} />} iconOnly aria-label="删除内容块" onClick={() => {
             if (block) deleteBlockById(block.id);
             if (isLayoutNode) deleteFreeElementById(node.id);
-          }}><Trash2 size={16} /></button>
-        </div>
-        {node.children?.length ? (
-          <div className="campaign-outline-children">
-            {node.children.map((child) => renderTreeNode(child, depth + 1))}
-          </div>
-        ) : null}
-      </div>
-    );
+          }}>删除内容块</Button>
+        </>
+      ),
+      children: node.children?.map((child) => buildTreeNode(child)),
+    };
   };
   const setEditorDeviceWidth = (width: DeviceWidth) => {
     setDeviceWidth(width);
     updatePage((current) => ({ ...current, device: { ...current.device, defaultWidth: width }, status: 'DRAFT' }));
   };
-  const previewPage = { ...pageSchema, device: { ...pageSchema.device, defaultWidth: deviceWidth } };
+  const previewPage = normalizeCampaignPage({ ...pageSchema, device: { ...pageSchema.device, defaultWidth: deviceWidth } });
 
   return (
     <main className="campaign-editor">
@@ -736,7 +777,13 @@ export function CampaignEditorPage() {
                       moveFreeElementToRoot(draggedFreeId);
                     }}
                   >
-                    {treeNodes.map((node) => renderTreeNode(node))}
+                    <Tree
+                      nodes={treeNodes.map((node) => buildTreeNode(node))}
+                      className="campaign-outline-tree"
+                      rowClassName="campaign-outline-row"
+                      childrenClassName="campaign-outline-children"
+                      noWrapper
+                    />
                     {treeNodes.length === 0 ? <p className="campaign-tree-empty">没有匹配节点</p> : null}
                   </div>
                 ) : null}
@@ -766,6 +813,20 @@ export function CampaignEditorPage() {
                         </button>
                       );
                     })}
+                    <button
+                      type="button"
+                      draggable
+                      onClick={() => addComponentAtCanvasPosition('Image', 32, 360)}
+                      onDragStart={(event) => {
+                        setDraggingComponentKey('Image');
+                        event.dataTransfer.setData('application/x-campaign-component', 'Image');
+                        event.dataTransfer.effectAllowed = 'copy';
+                      }}
+                      onDragEnd={() => setDraggingComponentKey(null)}
+                    >
+                      <Image size={16} />
+                      {componentRegistry.Image.paletteLabel}
+                    </button>
                     {layoutPalette.map((item) => {
                       const Icon = Rows3;
                       return (
@@ -808,10 +869,18 @@ export function CampaignEditorPage() {
                   onChange={updateFreeElements}
                   draggingBlockKind={draggingBlockKind}
                   draggingLayoutKind={draggingLayoutKind}
+                  draggingComponentKey={draggingComponentKey}
                   onDropBlock={(kind, x, y, parentId) => addBlockAtCanvasPosition(kind, x, y, parentId)}
                   onDropLayout={(kind, x, y) => addLayoutAtCanvasPosition(kind, x, y)}
+                  onDropComponent={(componentKey, x, y, parentId) => addComponentAtCanvasPosition(componentKey, x, y, parentId)}
                   onDragDone={() => setDraggingBlockKind(null)}
-                  onLayoutDragDone={() => setDraggingLayoutKind(null)}
+                  onLayoutDragDone={() => {
+                    setDraggingLayoutKind(null);
+                    setDraggingComponentKey(null);
+                  }}
+                  onMoveElement={(id, x, y) => runEditorAction({ type: 'moveNode', nodeId: id, position: { x, y } }, id)}
+                  onResizeElement={(id, w, h) => runEditorAction({ type: 'resizeNode', nodeId: id, size: { width: w, height: h } }, id)}
+                  onMoveIntoLayout={(id, layoutId) => moveFreeElementIntoLayout(id, layoutId)}
                 />
               ) : (
                 <CampaignModulePreview
@@ -835,11 +904,16 @@ export function CampaignEditorPage() {
                     <button type="button" aria-label="删除自由元素" onClick={deleteFreeElement}><Trash2 size={16} /></button>
                   </header>
                   <nav>
-                    {(['content', 'binding', 'action'] as EditorTab[]).map((tab) => (
-                      <button key={tab} className={inspectorTab === tab ? 'active' : ''} type="button" onClick={() => setInspectorTab(tab)}>
-                        {tab === 'content' ? '内容' : tab === 'binding' ? '绑定' : '动作'}
-                      </button>
-                    ))}
+                    <SegmentedControl
+                      value={inspectorTab}
+                      items={[
+                        { value: 'content', label: '内容' },
+                        { value: 'binding', label: '绑定' },
+                        { value: 'action', label: '动作' },
+                      ]}
+                      onChange={setInspectorTab}
+                      ariaLabel="Inspector tabs"
+                    />
                   </nav>
                   <FreeElementInspector element={selectedFreeElement} tab={inspectorTab} width={deviceWidth} onChange={updateSelectedFreeElement} onLayerMove={moveFreeLayer} />
                 </>
@@ -852,11 +926,16 @@ export function CampaignEditorPage() {
                     <Trash2 size={16} />
                   </header>
                   <nav>
-                    {(['content', 'binding', 'action'] as EditorTab[]).map((tab) => (
-                      <button key={tab} className={inspectorTab === tab ? 'active' : ''} type="button" onClick={() => setInspectorTab(tab)}>
-                        {tab === 'content' ? '内容' : tab === 'binding' ? '绑定' : '动作'}
-                      </button>
-                    ))}
+                    <SegmentedControl
+                      value={inspectorTab}
+                      items={[
+                        { value: 'content', label: '内容' },
+                        { value: 'binding', label: '绑定' },
+                        { value: 'action', label: '动作' },
+                      ]}
+                      onChange={setInspectorTab}
+                      ariaLabel="Inspector tabs"
+                    />
                   </nav>
                   <InspectorContent block={selectedBlock} tab={inspectorTab} deviceWidth={deviceWidth} onBlockChange={updateSelectedBlock} onMove={(direction) => updateBlocks((items) => moveBlock(items, selectedBlock.id, direction))} />
                 </>
@@ -928,44 +1007,52 @@ function CampaignWorkspace({
   const [title, description] = sectionTitle(section);
   const cards = config.items.filter((item) => activeGroup === '全部' || item.group === activeGroup);
   const current = cards[selected] ?? cards[0] ?? config.items[0];
+  const groupNodes: TreeNode[] = config.groups.map((group) => ({
+    id: `workspace_group_${section}_${group}`,
+    label: group,
+    count: config.items.filter((item) => group === '全部' || item.group === group).length,
+    active: activeGroup === group,
+    onClick: () => {
+      setActiveGroup(group);
+      setSelected(0);
+    },
+  }));
+  const itemColumns: Array<DataTableColumn<WorkspaceItem>> = [
+    {
+      key: 'item',
+      header: activeGroup,
+      render: (item) => (
+        <span className="campaign-secondary-table-item">
+          <strong>{item.title}</strong>
+          <small>{item.meta}</small>
+          <em>{item.detail}</em>
+        </span>
+      ),
+    },
+  ];
   if (section === 'resources') return <CampaignResourceWorkspace records={resourceRecords} onRecordsChange={onResourceRecordsChange} />;
   return (
     <section className="campaign-secondary-workspace">
       <aside className="campaign-secondary-groups">
         <h2>{title}</h2>
         <p>{description}</p>
-        {config.groups.map((group) => (
-          <button
-            key={group}
-            className={activeGroup === group ? 'active' : ''}
-            type="button"
-            onClick={() => {
-              setActiveGroup(group);
-              setSelected(0);
-            }}
-          >
-            {group}
-            <span>{config.items.filter((item) => group === '全部' || item.group === group).length}</span>
-          </button>
-        ))}
+        <Tree nodes={groupNodes} className="campaign-secondary-group-tree" />
       </aside>
       <div className="campaign-secondary-list">
         <header>
           <h2>{activeGroup}</h2>
           <p>{config.detailTitle === '模板详情' ? '选择模板后可从模板创建页面草稿。' : description}</p>
         </header>
-        <div>
-          {cards.map((card, index) => (
-            <button key={card.title} className={selected === index ? 'active' : ''} type="button" onClick={() => setSelected(index)}>
-              <strong>{card.title}</strong>
-              <span>{card.meta}</span>
-              <small>{card.detail}</small>
-            </button>
-          ))}
-        </div>
+        <DataTable
+          className="campaign-secondary-table"
+          columns={itemColumns}
+          rows={cards}
+          rowKey={(item) => item.title}
+          selectedKey={current.title}
+          onRowClick={(item) => setSelected(cards.findIndex((card) => card.title === item.title))}
+        />
       </div>
-      <div className="campaign-secondary-detail">
-        <span>{config.detailTitle}</span>
+      <Panel title={config.detailTitle} className="campaign-secondary-detail" bodyClassName="campaign-secondary-detail-body">
         <h2>{current.title}</h2>
         <p>{current.detail}</p>
         <div className="campaign-secondary-tags">
@@ -986,9 +1073,9 @@ function CampaignWorkspace({
         ) : null}
         {section === 'settings' ? (
           <div className="campaign-secondary-form">
-            <label><span>页面名称</span><input value={page.name} onChange={(event) => onPagePatch({ name: event.target.value })} /></label>
-            <label><span>页面路径</span><input value={page.path} onChange={(event) => onPagePatch({ path: event.target.value })} /></label>
-            <label><span>活动 ID</span><input value={page.activityId} onChange={(event) => onPagePatch({ activityId: event.target.value })} /></label>
+            <Field label="页面名称"><input value={page.name} onChange={(event) => onPagePatch({ name: event.target.value })} /></Field>
+            <Field label="页面路径"><input value={page.path} onChange={(event) => onPagePatch({ path: event.target.value })} /></Field>
+            <Field label="活动 ID"><input value={page.activityId} onChange={(event) => onPagePatch({ activityId: event.target.value })} /></Field>
           </div>
         ) : null}
         {section === 'settings' && versions.length ? (
@@ -1004,9 +1091,9 @@ function CampaignWorkspace({
           </div>
         ) : null}
         {section === 'templates' ? (
-          <button className="campaign-secondary-primary" type="button" onClick={() => onCreateFromTemplate(current.title)}>从模板创建</button>
+          <Button className="campaign-secondary-primary" variant="primary" onClick={() => onCreateFromTemplate(current.title)}>从模板创建</Button>
         ) : null}
-      </div>
+      </Panel>
     </section>
   );
 }

@@ -1,11 +1,14 @@
-import type { ResourceRecord } from './types';
+import type { ResourceCategoryMap, ResourceRecord } from './types';
 import { readJSON, writeJSON } from './campaignPageStore';
 
 const CAMPAIGN_RESOURCE_STORAGE_KEY = 'exmarketing.campaignEditor.resources.v1';
+const CAMPAIGN_RESOURCE_CATEGORY_STORAGE_KEY = 'exmarketing.campaignEditor.resourceCategories.v1';
 
 export const resourceStorageApi = {
   loadRecords: (fallback: ResourceRecord[]) => readJSON<ResourceRecord[]>(CAMPAIGN_RESOURCE_STORAGE_KEY, fallback),
   saveRecords: (records: ResourceRecord[]) => writeJSON(CAMPAIGN_RESOURCE_STORAGE_KEY, records),
+  loadCategories: (fallback: ResourceCategoryMap) => readJSON<ResourceCategoryMap>(CAMPAIGN_RESOURCE_CATEGORY_STORAGE_KEY, fallback),
+  saveCategories: (categories: ResourceCategoryMap) => writeJSON(CAMPAIGN_RESOURCE_CATEGORY_STORAGE_KEY, categories),
   previewDataSource: async (record: ResourceRecord) => {
     if (record.tab !== '数据源') return null;
     if (!record.endpoint || record.endpoint.startsWith('local://')) {

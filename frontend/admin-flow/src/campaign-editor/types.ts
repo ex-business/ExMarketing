@@ -104,6 +104,8 @@ export type CampaignValidationIssue = {
 
 export type WorkspaceItem = { title: string; meta: string; detail: string; group: string; tags: string[] };
 export type ResourceTab = '数据' | '数据源' | '动作' | '样式' | '图片';
+export type ResourceCategory = { name: string; count: number };
+export type ResourceCategoryMap = Record<ResourceTab, ResourceCategory[]>;
 export type ResourceStatus = '启用' | '停用' | '待保存' | '尺寸提醒' | '大小错误';
 
 export type ResourceRecord = {

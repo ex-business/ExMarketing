@@ -1,6 +1,6 @@
-import { useEffect, useState, type Dispatch, type SetStateAction } from 'react';
-import { ChevronDown, ListChecks, Plus } from 'lucide-react';
-import type { ResourceRecord, ResourceStatus, ResourceTab, UploadQueueItem } from './types';
+import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react';
+import { Plus } from 'lucide-react';
+import type { ResourceCategoryMap, ResourceRecord, ResourceStatus, ResourceTab, UploadQueueItem } from './types';
 import { resourceStorageApi } from './resourceStore';
 import { Button, Field, Panel, ResourceTable, Toolbar, Tree, type TreeNode } from './ui';
 
@@ -14,7 +14,7 @@ const resourceGroupLabels: Record<ResourceTab, string> = {
   图片: '图片素材',
 };
 
-const resourceTree: Record<ResourceTab, Array<{ name: string; count: number }>> = {
+const resourceTree: ResourceCategoryMap = {
   数据: [
     { name: '活动信息', count: 4 },
     { name: '奖励配置', count: 3 },
@@ -91,6 +91,18 @@ function recommendedImageSize(purpose: string) {
   return '1920 x 1080';
 }
 
+function mergeResourceCategories(categories: ResourceCategoryMap, records: ResourceRecord[]): ResourceCategoryMap {
+  const next = { ...categories } as ResourceCategoryMap;
+  resourceTabs.forEach((tab) => {
+    const byName = new Map(next[tab].map((category) => [category.name, category]));
+    records.filter((record) => record.tab === tab).forEach((record) => {
+      if (!byName.has(record.category)) byName.set(record.category, { name: record.category, count: 0 });
+    });
+    next[tab] = Array.from(byName.values());
+  });
+  return next;
+}
+
 export function CampaignResourceWorkspace({
   records,
   onRecordsChange,
@@ -112,6 +124,9 @@ export function CampaignResourceWorkspace({
   const [statusFilter, setStatusFilter] = useState('全部');
   const [selectedId, setSelectedId] = useState(defaultResourceRecords[0].id);
   const [addMode, setAddMode] = useState<ResourceTab | null>(null);
+  const [resourceCategories, setResourceCategories] = useState(() => resourceStorageApi.loadCategories(resourceTree));
+  const [addingCategory, setAddingCategory] = useState(false);
+  const [draftCategoryName, setDraftCategoryName] = useState('');
   const [draftName, setDraftName] = useState('activity.title');
   const [draftType, setDraftType] = useState('文本');
   const [draftSource, setDraftSource] = useState('Activity View Model');
@@ -119,7 +134,8 @@ export function CampaignResourceWorkspace({
   const [uploadQueue, setUploadQueue] = useState<UploadQueueItem[]>([]);
   const [editingRecord, setEditingRecord] = useState<ResourceRecord | null>(null);
   const normalizedQuery = query.trim().toLowerCase();
-  const activeChildren = resourceTree[activeTab];
+  const effectiveCategories = useMemo(() => mergeResourceCategories(resourceCategories, records), [resourceCategories, records]);
+  const activeChildren = effectiveCategories[activeTab];
   const activeCategories = activeChildren.map((item) => item.name);
   const filteredRecords = records.filter((record) => {
     const categoryMatch = activeCategories.includes(activeCategory) ? record.category === activeCategory : true;
@@ -128,7 +144,7 @@ export function CampaignResourceWorkspace({
     const statusMatch = statusFilter === '全部' || record.status === statusFilter;
     return record.tab === activeTab && categoryMatch && queryMatch && sourceMatch && statusMatch;
   });
-  const selectedRecord = records.find((record) => record.id === selectedId && record.tab === activeTab) ?? filteredRecords[0] ?? records.find((record) => record.tab === activeTab) ?? records[0];
+  const selectedRecord = filteredRecords.find((record) => record.id === selectedId) ?? filteredRecords[0] ?? null;
   const sourceOptions = ['全部', ...Array.from(new Set(records.filter((record) => record.tab === activeTab).map((record) => record.source)))];
   const treeNodes: TreeNode[] = resourceTabs.map((tab) => ({
     id: `resource_group_${tab}`,
@@ -137,7 +153,7 @@ export function CampaignResourceWorkspace({
     open: expandedGroups[tab],
     onClick: () => toggleResourceGroup(tab),
     onToggle: () => toggleResourceGroup(tab),
-    children: expandedGroups[tab] ? resourceTree[tab].map((child) => ({
+    children: expandedGroups[tab] ? effectiveCategories[tab].map((child) => ({
       id: `resource_category_${tab}_${child.name}`,
       label: child.name,
       count: records.filter((record) => record.tab === tab && record.category === child.name).length || child.count,
@@ -155,12 +171,17 @@ export function CampaignResourceWorkspace({
     const shouldOpen = isActive ? !expandedGroups[tab] : true;
     setActiveTab(tab);
     setExpandedGroups((groups) => ({ ...groups, [tab]: shouldOpen }));
-    if (!isActive) setActiveCategory(resourceTree[tab][0].name);
+    if (!isActive) setActiveCategory(effectiveCategories[tab][0]?.name ?? '');
     setAddMode(null);
     setEditingRecord(null);
+    setAddingCategory(false);
     const next = records.find((record) => record.tab === tab);
     if (next) setSelectedId(next.id);
   };
+
+  useEffect(() => {
+    resourceStorageApi.saveCategories(resourceCategories);
+  }, [resourceCategories]);
 
   const startAdd = () => {
     setAddMode(activeTab);
@@ -176,6 +197,30 @@ export function CampaignResourceWorkspace({
         { id: 'sample_share', fileName: 'share.png', purpose: '分享图', recommendedSize: '1:1', status: '待保存', sizeLabel: '210 KB' },
       ]);
     }
+  };
+
+  const startAddCategory = () => {
+    setAddingCategory(true);
+    setDraftCategoryName('');
+    setExpandedGroups((groups) => ({ ...groups, [activeTab]: true }));
+    setAddMode(null);
+    setEditingRecord(null);
+  };
+
+  const saveCategory = () => {
+    const name = draftCategoryName.trim();
+    if (!name) return;
+    const exists = effectiveCategories[activeTab].some((item) => item.name === name);
+    if (!exists) {
+      setResourceCategories((categories) => ({
+        ...categories,
+        [activeTab]: [...categories[activeTab], { name, count: 0 }],
+      }));
+    }
+    setActiveCategory(name);
+    setExpandedGroups((groups) => ({ ...groups, [activeTab]: true }));
+    setAddingCategory(false);
+    setDraftCategoryName('');
   };
 
   const addRecord = () => {
@@ -308,9 +353,27 @@ export function CampaignResourceWorkspace({
 
       <div className="campaign-resource-layout">
         <aside className="campaign-resource-tree" data-testid="resource-type-tree">
-          <div className="campaign-resource-tree-head"><strong>资源类型</strong><button type="button" aria-label="添加资源类型"><Plus size={16} /></button></div>
+          <div className="campaign-resource-tree-head"><strong>资源类型</strong><button type="button" aria-label="添加资源类型" onClick={startAddCategory}><Plus size={16} /></button></div>
+          {addingCategory ? (
+            <form
+              className="campaign-resource-category-form"
+              onSubmit={(event) => {
+                event.preventDefault();
+                saveCategory();
+              }}
+            >
+              <input
+                autoFocus
+                aria-label="资源类型名称"
+                value={draftCategoryName}
+                onChange={(event) => setDraftCategoryName(event.target.value)}
+                placeholder={`${resourceGroupLabels[activeTab]}分类名称`}
+              />
+              <Button size="sm" variant="primary" type="submit">保存</Button>
+              <Button size="sm" type="button" onClick={() => setAddingCategory(false)}>取消</Button>
+            </form>
+          ) : null}
           <Tree nodes={treeNodes} className="campaign-resource-tree-list" />
-          <button className="campaign-resource-tree-footer" type="button"><ListChecks size={16} />常用组件<ChevronDown size={14} /></button>
         </aside>
 
         <section className="campaign-resource-table-wrap" data-testid="resource-table">
@@ -364,13 +427,20 @@ export function CampaignResourceWorkspace({
               onCancel={() => setEditingRecord(null)}
               onSave={saveEditingRecord}
             />
-          ) : (
+          ) : selectedRecord ? (
             <ResourceDetailPanel
               record={selectedRecord}
               onEdit={() => setEditingRecord({ ...selectedRecord })}
               onDuplicate={() => duplicateRecord(selectedRecord)}
               onDelete={() => deleteRecord(selectedRecord)}
             />
+          ) : (
+            <Panel title="资源详情" bodyClassName="campaign-resource-detail-body">
+              <div className="campaign-resource-empty-state">
+                <h3>当前分类暂无资源</h3>
+                <p>可以点击右上角添加按钮，在“{activeCategory}”分类下创建新的{resourceGroupLabels[activeTab]}。</p>
+              </div>
+            </Panel>
           )}
         </aside>
       </div>

@@ -45,12 +45,21 @@ export type NodeFrame = {
   z: number;
 };
 
-type NodeBase = {
+export type PositioningMode = 'flow' | 'absolute';
+export type WidthMode = 'fill' | 'hug' | 'fixed';
+export type HeightMode = 'auto' | 'fixed' | 'scroll';
+
+export type NodeBase = {
   id: NodeId;
   name: string;
   visible: boolean;
+  visibilityExpression?: string;
   parentId?: NodeId;
   frame: NodeFrame;
+  positioning: PositioningMode;
+  widthMode: WidthMode;
+  heightMode: HeightMode;
+  locked: boolean;
   radius?: string;
   resourceBindings: ResourceBinding[];
   actionBindings: ActionBinding[];
@@ -128,7 +137,7 @@ function componentKindForElement(element: FreeDesignElement, block?: CampaignBlo
   if (element.component === 'Button') return 'Button';
   if (element.component === 'Image') return 'Image';
   if (element.component === 'Title') return 'Text';
-  if (element.component === 'HeroBanner' || element.component === 'RewardCard') return element.component;
+  if (element.component === 'HeroBanner' || element.component === 'RewardCard' || element.component === 'Countdown' || element.component === 'ProgressBlock' || element.component === 'RuleText' || element.component === 'FAQBlock') return element.component;
   if (element.kind === 'text') return 'Text';
   if (element.kind === 'image') return 'Image';
   if (element.kind === 'button') return 'Button';
@@ -148,59 +157,7 @@ export function campaignPageToEditorPage(page: CampaignPageLike): Page {
     if (!element.parentId) return groups;
     return { ...groups, [element.parentId]: [...(groups[element.parentId] ?? []), element.id] };
   }, {});
-  const nodes: Node[] = elements.map((element) => {
-    const frame: NodeFrame = { x: element.x, y: element.y, width: element.w, height: element.h, z: element.z };
-    const block = blockForElement(element, blocksById);
-    const definition = componentDefinitionForElement(element);
-    const name = element.name || block?.title || element.text.split('\\n')[0] || definition.defaultTitle || '未命名节点';
-    const text = block ? syncedBlockText(block, element.text, blockToFreeText(block)) : element.text;
-    const resourceBindings = bindingFromExpression(element.id, element.binding);
-    const actionBindings = actionFromElement(element.id, element.action, element.payload);
-    const styleTokens = styleTokensFromElement(element.id, element);
-    if (element.kind === 'layout') {
-      const layout = normalizeLayoutKind(element.layout);
-      return {
-        id: element.id,
-        type: 'container',
-        name,
-        visible: true,
-        parentId: element.parentId,
-        frame,
-        radius: element.radius,
-        resourceBindings,
-        actionBindings,
-        styleTokens,
-        layout,
-        children: childrenByParent[element.id] ?? [],
-        content: {
-          text,
-        },
-        flexDirection: element.flexDirection ?? (layout === 'vertical-layout' ? 'column' : 'row'),
-        justifyContent: element.justifyContent ?? 'flex-start',
-        alignItems: element.alignItems ?? 'stretch',
-        flexWrap: element.flexWrap ?? 'nowrap',
-        gap: element.gap ?? 8,
-      };
-    }
-    return {
-      id: element.id,
-      type: 'component',
-      name,
-      visible: block?.visible ?? true,
-      parentId: element.parentId,
-      frame,
-      radius: element.radius,
-      resourceBindings,
-      actionBindings,
-      styleTokens,
-      component: componentKindForElement(element, block),
-      sourceBlockId: block?.id,
-      content: {
-        text,
-        variant: element.variant,
-      },
-    };
-  });
+  const nodes: Node[] = elements.map((element) => editorNodeFromFreeElement(element, blockForElement(element, blocksById), childrenByParent[element.id] ?? []));
   return {
     schemaVersion: 1,
     id: page.id,
@@ -213,6 +170,69 @@ export function campaignPageToEditorPage(page: CampaignPageLike): Page {
     resourceBindings: nodes.flatMap((node) => node.resourceBindings),
     actionBindings: nodes.flatMap((node) => node.actionBindings),
     styleTokens: nodes.flatMap((node) => node.styleTokens),
+  };
+}
+
+export function editorNodeFromFreeElement(element: FreeDesignElement, block?: CampaignBlock, children: NodeId[] = []): Node {
+  const frame: NodeFrame = { x: element.x, y: element.y, width: element.w, height: element.h, z: element.z };
+  const definition = componentDefinitionForElement(element);
+  const name = element.name || block?.title || element.text.split('\\n')[0] || definition.defaultTitle || '未命名节点';
+  const text = block ? syncedBlockText(block, element.text, blockToFreeText(block)) : element.text;
+  const resourceBindings = bindingFromExpression(element.id, element.binding);
+  const actionBindings = actionFromElement(element.id, element.action, element.payload);
+  const styleTokens = styleTokensFromElement(element.id, element);
+  if (element.kind === 'layout') {
+      const layout = normalizeLayoutKind(element.layout);
+      return {
+        id: element.id,
+        type: 'container',
+        name,
+        visible: true,
+        visibilityExpression: element.visibleWhen,
+        parentId: element.parentId,
+        frame,
+        positioning: element.positioning ?? 'flow',
+        widthMode: element.widthMode ?? 'fill',
+        heightMode: element.heightMode ?? 'auto',
+        locked: false,
+        radius: element.radius,
+        resourceBindings,
+        actionBindings,
+        styleTokens,
+        layout,
+        children,
+        content: {
+          text,
+        },
+        flexDirection: element.flexDirection ?? (layout === 'vertical-layout' ? 'column' : 'row'),
+        justifyContent: element.justifyContent ?? 'flex-start',
+        alignItems: element.alignItems ?? 'stretch',
+        flexWrap: element.flexWrap ?? 'nowrap',
+        gap: element.gap ?? 8,
+      };
+  }
+  return {
+      id: element.id,
+      type: 'component',
+      name,
+      visible: block?.visible ?? true,
+      visibilityExpression: element.visibleWhen ?? block?.visibleWhen,
+      parentId: element.parentId,
+      frame,
+      positioning: element.positioning ?? 'flow',
+      widthMode: element.widthMode ?? 'fill',
+      heightMode: element.heightMode ?? 'auto',
+      locked: false,
+      radius: element.radius,
+      resourceBindings,
+      actionBindings,
+      styleTokens,
+      component: componentKindForElement(element, block),
+      sourceBlockId: block?.id,
+      content: {
+        text,
+        variant: element.variant,
+      },
   };
 }
 
@@ -248,7 +268,9 @@ export function editorPageToFreeElements(editorPage: Page): FreeDesignElement[] 
     w: node.frame.width,
     h: node.frame.height,
     z: node.frame.z,
+    visible: node.visible,
     parentId: node.parentId,
+    visibleWhen: node.visibilityExpression,
     binding: node.resourceBindings[0]?.expression,
     action: node.actionBindings[0]?.actionId,
     payload: node.actionBindings[0]?.payloadExpression,
@@ -260,20 +282,28 @@ export function editorPageToFreeElements(editorPage: Page): FreeDesignElement[] 
     flexWrap: node.type === 'container' ? node.flexWrap : undefined,
     gap: node.type === 'container' ? node.gap : undefined,
     radius: node.radius,
+    positioning: node.positioning,
+    widthMode: node.widthMode,
+    heightMode: node.heightMode,
   }));
 }
 
 export function editorPageToBlocks(editorPage: Page, currentBlocks: CampaignBlock[]): CampaignBlock[] {
   const blocksById = new Map(currentBlocks.map((block) => [block.id, block]));
   return editorPage.nodes.flatMap((node): CampaignBlock[] => {
-    if (node.type !== 'component' || !node.sourceBlockId) return [];
-    const current = blocksById.get(node.sourceBlockId);
-    if (!current) return [];
+    if (node.type !== 'component') return [];
+    const blockKind = node.component === 'Button' ? 'ClaimButton' : node.component;
+    if (!['HeroBanner', 'Title', 'RewardCard', 'Countdown', 'ProgressBlock', 'ClaimButton', 'RuleText', 'FAQBlock'].includes(blockKind)) return [];
+    const blockId = node.sourceBlockId ?? node.id;
+    const current = blocksById.get(blockId);
     return [{
-      ...current,
+      ...(current ?? { id: blockId, kind: blockKind as CampaignBlockKind, title: node.name, visible: node.visible }),
+      id: blockId,
+      kind: blockKind as CampaignBlockKind,
       title: node.name,
       visible: node.visible,
-      text: node.component === 'ClaimButton' ? node.content.text : current.text,
+      visibleWhen: node.visibilityExpression,
+      text: blockKind === 'ClaimButton' ? node.content.text : current?.text,
       binding: node.resourceBindings[0]?.expression,
       action: node.actionBindings[0]?.actionId,
       payload: node.actionBindings[0]?.payloadExpression,
@@ -324,6 +354,10 @@ function withExistingEditorPage(page: CampaignPageLike & { editor: Page }): Page
       visible: fallbackNode.visible,
       parentId: fallbackNode.parentId,
       frame: fallbackNode.frame,
+      positioning: existingNode.positioning ?? fallbackNode.positioning ?? 'flow',
+      widthMode: existingNode.widthMode ?? fallbackNode.widthMode ?? 'fill',
+      heightMode: existingNode.heightMode ?? fallbackNode.heightMode ?? 'auto',
+      locked: existingNode.locked ?? false,
       radius: fallbackNode.radius,
       resourceBindings: mergedResourceBindings(existingNode, fallbackNode),
       actionBindings: mergedActionBindings(existingNode, fallbackNode),

@@ -1,8 +1,8 @@
-import type { Page as EditorPage } from './editorSchema';
+import type { Node as EditorNode, Page as EditorPage } from './editorSchema';
 
 export type CampaignBlockKind = 'HeroBanner' | 'Title' | 'RewardCard' | 'Countdown' | 'ProgressBlock' | 'ClaimButton' | 'RuleText' | 'FAQBlock';
-export type ComponentRegistryKey = 'Title' | 'HeroBanner' | 'RewardCard' | 'Button' | 'Image' | 'HorizontalLayout' | 'VerticalLayout';
-export type EditorTab = 'content' | 'binding' | 'action';
+export type ComponentRegistryKey = 'Title' | 'HeroBanner' | 'RewardCard' | 'Countdown' | 'ProgressBlock' | 'Button' | 'RuleText' | 'FAQBlock' | 'Image' | 'HorizontalLayout' | 'VerticalLayout';
+export type EditorTab = 'properties' | 'style' | 'data';
 export type DeviceWidth = 375 | 393 | 414;
 export type WorkspaceSection = 'page' | 'resources' | 'settings' | 'templates';
 export type LayoutKind = 'horizontal-layout' | 'vertical-layout' | 'horizontal-center' | 'vertical-center' | 'two-column';
@@ -38,6 +38,7 @@ export type FreeDesignElement = {
   w: number;
   h: number;
   z: number;
+  visible?: boolean;
   binding?: string;
   visibleWhen?: string;
   action?: string;
@@ -51,6 +52,9 @@ export type FreeDesignElement = {
   flexWrap?: FlexWrap;
   gap?: number;
   radius?: string;
+  positioning?: 'flow' | 'absolute';
+  widthMode?: 'fill' | 'hug' | 'fixed';
+  heightMode?: 'auto' | 'fixed' | 'scroll';
 };
 
 export type CampaignPageSchema = {
@@ -140,6 +144,10 @@ export type UploadQueueItem = {
   sizeLabel: string;
 };
 
-export type PageTreeNode =
-  | { id: string; type: 'block'; title: string; meta: string; block: CampaignBlock; children?: PageTreeNode[] }
-  | { id: string; type: 'layout'; title: string; meta: string; element: FreeDesignElement; children?: PageTreeNode[] };
+export type PageTreeNode = {
+  id: string;
+  title: string;
+  meta: string;
+  node: EditorNode;
+  children?: PageTreeNode[];
+};

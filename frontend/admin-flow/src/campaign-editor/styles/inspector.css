@@ -147,3 +147,27 @@
   line-height: 1.55;
   font-weight: 700;
 }
+
+.campaign-inspector-advanced {
+  border-top: 1px solid var(--theme-border);
+  padding-top: 12px;
+}
+
+.campaign-inspector-advanced summary {
+  margin-bottom: 12px;
+  color: var(--theme-text-body);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.campaign-binding-preview {
+  overflow-wrap: anywhere;
+  border: 1px solid var(--theme-border);
+  border-radius: 7px;
+  background: var(--theme-page);
+  color: var(--theme-accent);
+  padding: 9px 11px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}

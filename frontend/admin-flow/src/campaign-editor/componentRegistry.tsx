@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import type { Node as EditorNode } from './editorSchema';
 import type {
   CampaignBlock,
   CampaignBlockKind,
@@ -41,7 +42,7 @@ export type ComponentDefinition = {
   defaultStyle: Partial<Pick<FreeDesignElement, 'variant' | 'radius' | 'flexDirection' | 'justifyContent' | 'alignItems' | 'flexWrap' | 'gap'>>;
   resourceBindings: BindingCapability[];
   actionBindings: ActionCapability[];
-  runtimeRender: (element: FreeDesignElement, children: ReactNode) => ReactNode;
+  runtimeRender: (node: EditorNode, children: ReactNode) => ReactNode;
 };
 
 const commonContentProps: EditableProperty[] = [
@@ -72,7 +73,7 @@ export const componentRegistry: Record<ComponentRegistryKey, ComponentDefinition
     defaultStyle: { radius: '0' },
     resourceBindings: [{ slot: 'text', label: '标题文案', defaultExpression: '{{ activity.title }}' }],
     actionBindings: [],
-    runtimeRender: (element) => renderFreeElementText(element.text),
+    runtimeRender: (node) => renderFreeElementText(node.content.text),
   },
   HeroBanner: {
     key: 'HeroBanner',
@@ -89,7 +90,7 @@ export const componentRegistry: Record<ComponentRegistryKey, ComponentDefinition
       { slot: 'image', label: '头图图片', defaultExpression: '{{ hero.banner }}' },
     ],
     actionBindings: [{ trigger: 'exposure', label: '曝光事件', defaultActionId: 'TRACK_EVENT' }],
-    runtimeRender: (element) => renderFreeElementText(element.text),
+    runtimeRender: (node) => renderFreeElementText(node.content.text),
   },
   RewardCard: {
     key: 'RewardCard',
@@ -106,7 +107,35 @@ export const componentRegistry: Record<ComponentRegistryKey, ComponentDefinition
       { slot: 'condition', label: '领取条件', defaultExpression: '{{ reward.condition }}' },
     ],
     actionBindings: [{ trigger: 'exposure', label: '奖励曝光', defaultActionId: 'TRACK_EVENT' }],
-    runtimeRender: (element) => renderFreeElementText(element.text),
+    runtimeRender: (node) => renderFreeElementText(node.content.text),
+  },
+  Countdown: {
+    key: 'Countdown',
+    label: '倒计时',
+    paletteLabel: '倒计时',
+    defaultTitle: '新倒计时',
+    elementKind: 'card',
+    defaultSize: (width) => ({ w: width - 36, h: 82 }),
+    defaultText: () => '活动倒计时\n06天 18时 32分 45秒',
+    editableProperties: commonContentProps,
+    defaultStyle: { radius: '8', variant: 'secondary' },
+    resourceBindings: [{ slot: 'endTime', label: '结束时间', defaultExpression: '{{ countdown.endTime }}' }],
+    actionBindings: [{ trigger: 'timer', label: '倒计时结束事件' }],
+    runtimeRender: (node) => renderFreeElementText(node.content.text),
+  },
+  ProgressBlock: {
+    key: 'ProgressBlock',
+    label: '参与进度',
+    paletteLabel: '进度',
+    defaultTitle: '新参与进度',
+    elementKind: 'card',
+    defaultSize: (width) => ({ w: width - 36, h: 88 }),
+    defaultText: () => '参与进度\n已参与 1,258 人 · 62%',
+    editableProperties: commonContentProps,
+    defaultStyle: { radius: '8' },
+    resourceBindings: [{ slot: 'percent', label: '进度值', defaultExpression: '{{ progress.percent }}' }],
+    actionBindings: [],
+    runtimeRender: (node) => renderFreeElementText(node.content.text),
   },
   Button: {
     key: 'Button',
@@ -124,7 +153,35 @@ export const componentRegistry: Record<ComponentRegistryKey, ComponentDefinition
     defaultStyle: { radius: '8', variant: 'primary' },
     resourceBindings: [{ slot: 'disabled', label: '禁用条件', defaultExpression: '{{ !eligibility.canClaim }}' }],
     actionBindings: [{ trigger: 'click', label: '点击动作', defaultActionId: 'CLAIM_REWARD' }],
-    runtimeRender: (element) => renderFreeElementText(element.text),
+    runtimeRender: (node) => renderFreeElementText(node.content.text),
+  },
+  RuleText: {
+    key: 'RuleText',
+    label: '活动规则',
+    paletteLabel: '规则',
+    defaultTitle: '新活动规则',
+    elementKind: 'card',
+    defaultSize: (width) => ({ w: width - 36, h: 94 }),
+    defaultText: () => '活动规则\n1. 单笔充值满 500 元可领取奖励\n2. 每个用户仅可领取一次',
+    editableProperties: commonContentProps,
+    defaultStyle: { radius: '8', variant: 'secondary' },
+    resourceBindings: [{ slot: 'rules', label: '规则文案', defaultExpression: '{{ activity.rules }}' }],
+    actionBindings: [],
+    runtimeRender: (node) => renderFreeElementText(node.content.text),
+  },
+  FAQBlock: {
+    key: 'FAQBlock',
+    label: 'FAQ',
+    paletteLabel: 'FAQ',
+    defaultTitle: '新 FAQ',
+    elementKind: 'card',
+    defaultSize: (width) => ({ w: width - 36, h: 94 }),
+    defaultText: () => 'FAQ\n奖励到账时间、参与资格和领取问题。',
+    editableProperties: commonContentProps,
+    defaultStyle: { radius: '8', variant: 'secondary' },
+    resourceBindings: [{ slot: 'items', label: 'FAQ 数据', defaultExpression: '{{ faq.block }}' }],
+    actionBindings: [],
+    runtimeRender: (node) => renderFreeElementText(node.content.text),
   },
   Image: {
     key: 'Image',
@@ -141,7 +198,7 @@ export const componentRegistry: Record<ComponentRegistryKey, ComponentDefinition
       { slot: 'alt', label: 'Alt 文案', defaultExpression: '{{ image.alt }}' },
     ],
     actionBindings: [{ trigger: 'click', label: '图片点击', defaultActionId: 'NAVIGATE' }],
-    runtimeRender: (element) => renderFreeElementText(element.text),
+    runtimeRender: (node) => renderFreeElementText(node.content.text),
   },
   HorizontalLayout: {
     key: 'HorizontalLayout',
@@ -156,7 +213,7 @@ export const componentRegistry: Record<ComponentRegistryKey, ComponentDefinition
     defaultStyle: { radius: '8', flexDirection: 'row', justifyContent: 'flex-start', alignItems: 'center', flexWrap: 'nowrap', gap: 8 },
     resourceBindings: [],
     actionBindings: [],
-    runtimeRender: (element, children) => children || renderFreeElementText(element.text),
+    runtimeRender: (node, children) => children || renderFreeElementText(node.content.text),
   },
   VerticalLayout: {
     key: 'VerticalLayout',
@@ -171,7 +228,7 @@ export const componentRegistry: Record<ComponentRegistryKey, ComponentDefinition
     defaultStyle: { radius: '8', flexDirection: 'column', justifyContent: 'flex-start', alignItems: 'stretch', flexWrap: 'nowrap', gap: 8 },
     resourceBindings: [],
     actionBindings: [],
-    runtimeRender: (element, children) => children || renderFreeElementText(element.text),
+    runtimeRender: (node, children) => children || renderFreeElementText(node.content.text),
   },
 };
 
@@ -181,7 +238,11 @@ export function componentKeyForBlockKind(kind: CampaignBlockKind): ComponentRegi
   if (kind === 'Title') return 'Title';
   if (kind === 'HeroBanner') return 'HeroBanner';
   if (kind === 'RewardCard') return 'RewardCard';
+  if (kind === 'Countdown') return 'Countdown';
+  if (kind === 'ProgressBlock') return 'ProgressBlock';
   if (kind === 'ClaimButton') return 'Button';
+  if (kind === 'RuleText') return 'RuleText';
+  if (kind === 'FAQBlock') return 'FAQBlock';
   return 'RewardCard';
 }
 
@@ -196,6 +257,18 @@ export function componentDefinitionForElement(element: FreeDesignElement): Compo
   if (element.kind === 'button') return componentRegistry.Button;
   if (element.kind === 'image') return componentRegistry.Image;
   return componentRegistry.RewardCard;
+}
+
+export function componentKeyForNode(node: EditorNode): ComponentRegistryKey {
+  if (node.type === 'container') return componentKeyForLayoutKind(node.layout);
+  if (node.component === 'ClaimButton' || node.component === 'Button') return 'Button';
+  if (node.component === 'Text') return 'Title';
+  if (node.component === 'Card') return 'RewardCard';
+  return node.component as ComponentRegistryKey;
+}
+
+export function componentDefinitionForNode(node: EditorNode): ComponentDefinition {
+  return componentRegistry[componentKeyForNode(node)];
 }
 
 export function defaultElementFromComponent({
@@ -243,6 +316,6 @@ export function defaultElementFromComponent({
   };
 }
 
-export function renderRuntimeComponent(element: FreeDesignElement, children: ReactNode) {
-  return componentDefinitionForElement(element).runtimeRender(element, children);
+export function renderRuntimeNode(node: EditorNode, children: ReactNode) {
+  return componentDefinitionForNode(node).runtimeRender(node, children);
 }

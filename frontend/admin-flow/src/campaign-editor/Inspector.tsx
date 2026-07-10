@@ -1,154 +1,166 @@
-import type {
-  CampaignBlock,
-  CampaignBlockKind,
-  DeviceWidth,
-  EditorTab,
-  FlexAlign,
-  FlexDirection,
-  FlexJustify,
-  FlexWrap,
-  FreeDesignElement,
-  LayoutKind,
-} from './types';
+import type { Node as EditorNode } from './editorSchema';
+import type { EditorNodePatch } from './editorEngine';
+import type { DeviceWidth, EditorTab, FlexAlign, FlexDirection, FlexJustify, FlexWrap, LayoutKind, ResourceRecord } from './types';
 import { flexPreset, normalizeLayoutKind } from './layout';
 import { Button, Field, InspectorSection } from './ui';
 
-function blockDescription(kind: CampaignBlockKind) {
-  if (kind === 'ClaimButton') return '按钮文案、禁用条件、点击动作';
-  if (kind === 'HeroBanner') return '活动主视觉、标题、副标题、时间';
-  if (kind === 'RewardCard') return '奖励金额、领取条件、奖品图';
-  if (kind === 'ProgressBlock') return '参与人数、目标人数、进度比例';
-  return '内容、绑定字段和显示状态';
+function numericValue(value: string) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
 }
 
-export function FreeElementInspector({
-  element,
+function expressionFor(record?: ResourceRecord) {
+  return record ? `{{ ${record.identifier} }}` : '';
+}
+
+export function NodeInspector({
+  node,
   tab,
   width,
+  resources,
   onChange,
-  onLayerMove,
+  onReorder,
 }: {
-  element?: FreeDesignElement;
+  node?: EditorNode;
   tab: EditorTab;
   width: DeviceWidth;
-  onChange: (patch: Partial<FreeDesignElement>) => void;
-  onLayerMove: (direction: -1 | 1) => void;
+  resources: ResourceRecord[];
+  onChange: (patch: EditorNodePatch) => void;
+  onReorder: (direction: -1 | 1) => void;
 }) {
-  if (!element) return <div className="campaign-inspector-body"><p>选择一个自由元素后编辑属性。</p></div>;
-  if (tab === 'binding') {
+  if (!node) return <div className="campaign-inspector-body"><p>在页面结构或画布中选择一个节点。</p></div>;
+
+  if (tab === 'data') {
+    const bindableResources = resources.filter((record) => (record.tab === '数据' || record.tab === '图片') && record.status === '启用');
+    const actions = resources.filter((record) => record.tab === '动作' && record.status === '启用');
+    const currentResource = node.resourceBindings[0];
+    const currentAction = node.actionBindings[0];
+    const currentResourceRecord = bindableResources.find((record) => record.id === currentResource?.resourceId || expressionFor(record) === currentResource?.expression);
+    const currentActionRecord = actions.find((record) => record.name === currentAction?.actionId || record.identifier === currentAction?.actionId);
     return (
       <div className="campaign-inspector-body">
-        <InspectorSection description="自由元素绑定同样使用 Activity View Model 白名单表达式。">
-          <Field label="绑定字段"><input value={element.binding ?? ''} placeholder="{{ activity.title }}" onChange={(event) => onChange({ binding: event.target.value })} /></Field>
-          <Field label="展示条件"><input value={element.visibleWhen ?? ''} placeholder="{{ user.loggedIn }}" onChange={(event) => onChange({ visibleWhen: event.target.value })} /></Field>
-        </InspectorSection>
-      </div>
-    );
-  }
-  if (tab === 'action') {
-    return (
-      <div className="campaign-inspector-body">
-        <InspectorSection description="自由设计动作在发布 schema 中保存，运行时按 workflow event 触发。">
-          <Field label="点击动作"><select value={element.action || 'NONE'} onChange={(event) => onChange({ action: event.target.value === 'NONE' ? '' : event.target.value })}><option>CLAIM_REWARD</option><option>OPEN_LOGIN</option><option>NAVIGATE</option><option>TRACK_EVENT</option><option>NONE</option></select></Field>
-          <Field label="Payload"><input value={element.payload ?? ''} placeholder="{{ activity.id, reward.code, user.id }}" onChange={(event) => onChange({ payload: event.target.value })} /></Field>
-        </InspectorSection>
-      </div>
-    );
-  }
-  return (
-    <div className="campaign-inspector-body">
-      <InspectorSection>
-        <Field label="节点名称"><input value={element.name ?? ''} placeholder="节点名称" onChange={(event) => onChange({ name: event.target.value })} /></Field>
-        <Field label="元素文案"><textarea value={element.text.split('\\n').join('\n')} onChange={(event) => onChange({ text: event.target.value.split('\n').join('\\n') })} /></Field>
-        <div className="campaign-free-grid">
-          <Field label="X"><input type="number" value={element.x} onChange={(event) => onChange({ x: Math.max(0, Number(event.target.value)) })} /></Field>
-          <Field label="Y"><input type="number" value={element.y} onChange={(event) => onChange({ y: Math.max(0, Number(event.target.value)) })} /></Field>
-          <Field label="宽"><input type="number" value={element.w} onChange={(event) => onChange({ w: Math.max(0, Number(event.target.value)) })} /></Field>
-          <Field label="高"><input type="number" value={element.h} onChange={(event) => onChange({ h: Math.max(0, Number(event.target.value)) })} /></Field>
-        </div>
-        <Field label="层级"><input type="number" value={element.z} onChange={(event) => onChange({ z: Number(event.target.value) })} /></Field>
-        <div className="campaign-inspector-actions">
-          <Button onClick={() => onLayerMove(1)}>上移一层</Button>
-          <Button onClick={() => onLayerMove(-1)}>下移一层</Button>
-        </div>
-        <Field label="圆角"><input value={element.radius ?? '8'} onChange={(event) => onChange({ radius: event.target.value })} /></Field>
-      </InspectorSection>
-      {element.kind === 'layout' ? (
-        <InspectorSection title="布局">
-          <Field label="布局方式">
-            <select value={normalizeLayoutKind(element.layout)} onChange={(event) => {
-              const layout = event.target.value as LayoutKind;
-              onChange({ layout, ...flexPreset(layout) });
-            }}>
-              <option value="horizontal-layout">水平布局</option>
-              <option value="vertical-layout">垂直布局</option>
+        <InspectorSection title="数据绑定" description="从资源中心选择字段。表达式由编辑器生成，避免手工输入错误。">
+          <Field label="内容来源">
+            <select
+              value={currentResourceRecord?.id ?? ''}
+              onChange={(event) => {
+                const record = bindableResources.find((item) => item.id === event.target.value);
+                onChange({ resourceBindings: record ? [{ id: `${node.id}_resource`, resourceId: record.id, expression: expressionFor(record) }] : [] });
+              }}
+            >
+              <option value="">不绑定</option>
+              {bindableResources.map((record) => <option key={record.id} value={record.id}>{record.name} · {record.identifier}</option>)}
             </select>
           </Field>
-          <div className="campaign-free-grid">
-            <Field label="方向"><select value={element.flexDirection ?? 'row'} onChange={(event) => onChange({ flexDirection: event.target.value as FlexDirection })}><option value="row">横向</option><option value="column">纵向</option></select></Field>
-            <Field label="换行"><select value={element.flexWrap ?? 'nowrap'} onChange={(event) => onChange({ flexWrap: event.target.value as FlexWrap })}><option value="nowrap">不换行</option><option value="wrap">换行</option></select></Field>
-            <Field label="主轴"><select value={element.justifyContent ?? 'center'} onChange={(event) => onChange({ justifyContent: event.target.value as FlexJustify })}><option value="flex-start">开始</option><option value="center">居中</option><option value="flex-end">结束</option><option value="space-between">两端</option><option value="space-around">环绕</option></select></Field>
-            <Field label="交叉轴"><select value={element.alignItems ?? 'center'} onChange={(event) => onChange({ alignItems: event.target.value as FlexAlign })}><option value="flex-start">开始</option><option value="center">居中</option><option value="flex-end">结束</option><option value="stretch">拉伸</option></select></Field>
-            <Field label="间距"><input type="number" value={element.gap ?? 8} onChange={(event) => onChange({ gap: Math.max(0, Number(event.target.value)) })} /></Field>
-          </div>
+          {currentResource ? <div className="campaign-binding-preview">{currentResource.expression}</div> : null}
+          <Field label="显示条件">
+            <select value={node.visibilityExpression ?? ''} onChange={(event) => onChange({ visibilityExpression: event.target.value })}>
+              <option value="">始终显示</option>
+              <option value="{{ user.loggedIn }}">用户已登录</option>
+              <option value="{{ eligibility.canClaim }}">可领取奖励</option>
+              <option value="{{ activity.active }}">活动进行中</option>
+            </select>
+          </Field>
         </InspectorSection>
-      ) : null}
-      <Field label="样式"><select value={element.variant ?? 'primary'} onChange={(event) => onChange({ variant: event.target.value as FreeDesignElement['variant'] })}><option value="primary">主要样式</option><option value="secondary">次要样式</option></select></Field>
-      <p>{width}px 自由画布 · 文案、位置、尺寸、层级、样式会进入发布 schema。</p>
-    </div>
-  );
-}
+        <InspectorSection title="动作" description="动作由资源中心统一管理，组件只保存引用。">
+          <Field label="点击动作">
+            <select
+              value={currentActionRecord?.id ?? ''}
+              onChange={(event) => {
+                const record = actions.find((item) => item.id === event.target.value);
+                onChange({ actionBindings: record ? [{ id: `${node.id}_action`, actionId: record.name, trigger: 'click' }] : [] });
+              }}
+            >
+              <option value="">无动作</option>
+              {actions.map((record) => <option key={record.id} value={record.id}>{record.name} · {record.identifier}</option>)}
+            </select>
+          </Field>
+          {currentAction ? <div className="campaign-binding-preview">{currentAction.actionId}</div> : null}
+        </InspectorSection>
+      </div>
+    );
+  }
 
-export function InspectorContent({
-  block,
-  tab,
-  deviceWidth,
-  onBlockChange,
-  onMove,
-}: {
-  block: CampaignBlock;
-  tab: EditorTab;
-  deviceWidth: DeviceWidth;
-  onBlockChange: (patch: Partial<CampaignBlock>) => void;
-  onMove: (direction: -1 | 1) => void;
-}) {
-  if (tab === 'binding') {
+  if (tab === 'style') {
     return (
       <div className="campaign-inspector-body">
-        <InspectorSection description="绑定表达式只支持 Activity View Model 白名单字段，不暴露 workflow 内部节点。">
-          <Field label="禁用条件 / 绑定字段"><input value={block.binding ?? (block.kind === 'ClaimButton' ? '{{ !eligibility.canClaim }}' : '{{ activity.title }}')} onChange={(event) => onBlockChange({ binding: event.target.value, bound: true })} /></Field>
-          <Field label="展示条件"><input value={block.visibleWhen ?? '{{ user.loggedIn }}'} onChange={(event) => onBlockChange({ visibleWhen: event.target.value })} /></Field>
+        <InspectorSection title="尺寸策略">
+          <div className="campaign-free-grid">
+            <Field label="宽度">
+              <select value={node.widthMode} onChange={(event) => onChange({ widthMode: event.target.value as EditorNode['widthMode'] })}>
+                <option value="fill">填满容器</option>
+                <option value="hug">适应内容</option>
+                <option value="fixed">固定宽度</option>
+              </select>
+            </Field>
+            <Field label="高度">
+              <select value={node.heightMode} onChange={(event) => onChange({ heightMode: event.target.value as EditorNode['heightMode'] })}>
+                <option value="auto">适应内容</option>
+                <option value="fixed">固定高度</option>
+                <option value="scroll">固定并滚动</option>
+              </select>
+            </Field>
+          </div>
+          {node.widthMode === 'fixed' || node.heightMode !== 'auto' ? (
+            <div className="campaign-free-grid">
+              {node.widthMode === 'fixed' ? <Field label="宽"><input type="number" min="0" value={node.frame.width} onChange={(event) => onChange({ frame: { width: numericValue(event.target.value) } })} /></Field> : null}
+              {node.heightMode !== 'auto' ? <Field label="高"><input type="number" min="0" value={node.frame.height} onChange={(event) => onChange({ frame: { height: numericValue(event.target.value) } })} /></Field> : null}
+            </div>
+          ) : null}
+          <Field label="圆角"><input type="number" min="0" value={node.radius ?? '8'} onChange={(event) => onChange({ radius: event.target.value })} /></Field>
+          {node.type === 'component' ? (
+            <Field label="样式变体"><select value={node.content.variant ?? 'primary'} onChange={(event) => onChange({ content: { variant: event.target.value as 'primary' | 'secondary' } })}><option value="primary">主要</option><option value="secondary">次要</option></select></Field>
+          ) : null}
         </InspectorSection>
+        {node.type === 'container' ? (
+          <InspectorSection title="容器布局">
+            <Field label="布局方式">
+              <select value={normalizeLayoutKind(node.layout)} onChange={(event) => {
+                const layout = event.target.value as LayoutKind;
+                onChange({ layout, ...flexPreset(layout) });
+              }}>
+                <option value="horizontal-layout">水平布局</option>
+                <option value="vertical-layout">垂直布局</option>
+              </select>
+            </Field>
+            <div className="campaign-free-grid">
+              <Field label="方向"><select value={node.flexDirection} onChange={(event) => onChange({ flexDirection: event.target.value as FlexDirection })}><option value="row">横向</option><option value="column">纵向</option></select></Field>
+              <Field label="换行"><select value={node.flexWrap} onChange={(event) => onChange({ flexWrap: event.target.value as FlexWrap })}><option value="nowrap">不换行</option><option value="wrap">换行</option></select></Field>
+              <Field label="主轴"><select value={node.justifyContent} onChange={(event) => onChange({ justifyContent: event.target.value as FlexJustify })}><option value="flex-start">开始</option><option value="center">居中</option><option value="flex-end">结束</option><option value="space-between">两端</option><option value="space-around">环绕</option></select></Field>
+              <Field label="交叉轴"><select value={node.alignItems} onChange={(event) => onChange({ alignItems: event.target.value as FlexAlign })}><option value="flex-start">开始</option><option value="center">居中</option><option value="flex-end">结束</option><option value="stretch">拉伸</option></select></Field>
+              <Field label="间距"><input type="number" min="0" value={node.gap} onChange={(event) => onChange({ gap: numericValue(event.target.value) })} /></Field>
+            </div>
+          </InspectorSection>
+        ) : null}
       </div>
     );
   }
-  if (tab === 'action') {
-    return (
-      <div className="campaign-inspector-body">
-        <InspectorSection description="动作绑定到 ExMarketing workflow event，不允许任意脚本。">
-          <Field label="点击动作"><select value={block.action || 'NONE'} onChange={(event) => onBlockChange({ action: event.target.value === 'NONE' ? '' : event.target.value })}><option>CLAIM_REWARD</option><option>OPEN_LOGIN</option><option>NAVIGATE</option><option>TRACK_EVENT</option><option>NONE</option></select></Field>
-          <Field label="Payload"><input value={block.payload ?? '{{ activity.id, reward.code, user.id }}'} onChange={(event) => onBlockChange({ payload: event.target.value })} /></Field>
-        </InspectorSection>
-      </div>
-    );
-  }
+
   return (
     <div className="campaign-inspector-body">
       <InspectorSection>
-        <Field label="节点名称"><input value={block.title} onChange={(event) => onBlockChange({ title: event.target.value })} /></Field>
-        {block.kind === 'ClaimButton' ? (
-          <Field label="按钮文案"><input value={block.text ?? '立即领取'} onChange={(event) => onBlockChange({ text: event.target.value })} /></Field>
+        <Field label="节点名称"><input value={node.name} onChange={(event) => onChange({ name: event.target.value })} /></Field>
+        <Field label="内容"><textarea value={node.content.text.split('\\n').join('\n')} onChange={(event) => onChange({ content: { text: event.target.value.split('\n').join('\\n') } })} /></Field>
+        <Field label="定位方式">
+          <select value={node.positioning} onChange={(event) => onChange({ positioning: event.target.value as EditorNode['positioning'] })}>
+            <option value="flow">自动布局</option>
+            <option value="absolute">自由定位</option>
+          </select>
+        </Field>
+        {node.positioning === 'absolute' ? (
+          <details className="campaign-inspector-advanced" open>
+            <summary>位置与层级</summary>
+            <div className="campaign-free-grid">
+              <Field label="X"><input type="number" min="0" value={node.frame.x} onChange={(event) => onChange({ frame: { x: numericValue(event.target.value) } })} /></Field>
+              <Field label="Y"><input type="number" min="0" value={node.frame.y} onChange={(event) => onChange({ frame: { y: numericValue(event.target.value) } })} /></Field>
+            </div>
+            <Field label="层级"><input type="number" value={node.frame.z} onChange={(event) => onChange({ frame: { z: Number(event.target.value) || 0 } })} /></Field>
+            <div className="campaign-inspector-actions"><Button onClick={() => onReorder(1)}>上移</Button><Button onClick={() => onReorder(-1)}>下移</Button></div>
+          </details>
         ) : null}
-        <div className="campaign-button-preview">{block.kind === 'ClaimButton' ? block.text ?? '立即领取' : block.title}</div>
-        <Field label="按钮样式"><select value={block.variant ?? 'primary'} onChange={(event) => onBlockChange({ variant: event.target.value as CampaignBlock['variant'] })}><option value="primary">主要按钮（蓝色）</option><option value="secondary">次要按钮</option></select></Field>
-        <Field label="宽度"><select value={block.width ?? 'full'} onChange={(event) => onBlockChange({ width: event.target.value as CampaignBlock['width'] })}><option value="full">全宽</option><option value="content">内容宽度</option></select></Field>
-        <Field label="圆角"><input value={block.radius ?? '8'} onChange={(event) => onBlockChange({ radius: event.target.value })} /></Field>
-        <div className="campaign-inspector-actions">
-          <Button onClick={() => onMove(-1)}>上移</Button>
-          <Button onClick={() => onMove(1)}>下移</Button>
-        </div>
+        <Field label="状态"><select value={node.visible ? 'visible' : 'hidden'} onChange={(event) => onChange({ visible: event.target.value === 'visible' })}><option value="visible">显示</option><option value="hidden">隐藏</option></select></Field>
       </InspectorSection>
-      <p>{deviceWidth}px 画布 · {blockDescription(block.kind)}</p>
+      <p>{width}px 预览宽度 · 默认使用自动布局，需要覆盖时再启用自由定位。</p>
     </div>
   );
 }

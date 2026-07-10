@@ -173,7 +173,7 @@
 .campaign-outline .campaign-outline-row .exm-tree-actions {
   justify-self: end;
   display: inline-grid;
-  grid-template-columns: repeat(3, 17px);
+  grid-template-columns: 28px;
   gap: 2px;
   opacity: 0;
   pointer-events: none;
@@ -219,6 +219,49 @@
 .campaign-outline .campaign-outline-row .exm-tree-actions button:hover {
   background: var(--theme-surface-hover);
   color: var(--theme-accent);
+}
+
+.campaign-tree-actions-menu {
+  position: relative;
+}
+
+.campaign-tree-actions-menu > summary {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  list-style: none;
+}
+
+.campaign-tree-actions-menu > summary::-webkit-details-marker {
+  display: none;
+}
+
+.campaign-tree-actions-menu[open] > summary {
+  background: var(--theme-surface-hover);
+  color: var(--theme-accent);
+}
+
+.campaign-tree-actions-menu > div {
+  position: absolute;
+  top: 32px;
+  right: 0;
+  z-index: 30;
+  width: 124px;
+  border: 1px solid var(--theme-border);
+  border-radius: 8px;
+  background: var(--theme-surface);
+  box-shadow: var(--theme-shadow-float);
+  padding: 5px;
+}
+
+.campaign-outline .campaign-tree-actions-menu > div button {
+  width: 100%;
+  height: 30px;
+  justify-content: flex-start;
+  padding: 0 8px;
 }
 
 .campaign-page-tree-root {

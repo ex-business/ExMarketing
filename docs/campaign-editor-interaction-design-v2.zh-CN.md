@@ -1,15 +1,33 @@
 # Campaign Editor 交互设计 v2
 
 Date: 2026-07-08
+Implementation update: 2026-07-10
 
 本文档定义 ExMarketing Campaign Editor 下一版交互模型。目标不是继续堆按钮和表单，而是把编辑器收敛成业界成熟页面构建工具常见的稳定工作流：结构优先、容器优先、画布居中、属性面板统一、运行时渲染一致。
+
+## 当前实现状态
+
+- Editor Schema 已成为节点编辑的唯一源；`blocks/freeElements` 只在兼容保存边界派生。
+- 页面树直接读取 `rootNodeIds / ContainerNode.children`，不再由 legacy 内容块拼装。
+- 节点新增、Inspector 修改、显隐、复制、删除、重排、容器移入移出、画布移动和缩放全部通过 reducer action。
+- pointer 交互使用 transaction，一次拖动或缩放只生成一条 undo 记录。
+- 编辑、预览和运行时共用直接渲染 `Node` 的 `CanvasRenderer`，不再经过 `FreeDesignElement` 适配层。
+- Component Registry 已覆盖 Title、HeroBanner、RewardCard、Countdown、ProgressBlock、Button、RuleText、FAQBlock、Image、HorizontalLayout、VerticalLayout。
+- 顶部只保留 `编辑 / 预览`；自由定位改为节点级高级属性。
+- 节点新增按“当前容器末尾 / 当前节点之后”智能放置，树和画布共用 `placeNode(parentId, index)`。
+- Inspector 收敛为 `属性 / 样式 / 数据与动作`，资源和动作通过选择器引用资源中心记录。
+- 设备尺寸只改变预览宽度，不再覆盖页面默认发布宽度。
+- Header 提供明确的 undo / redo；页面树行操作收进 hover 更多菜单。
+- Campaign Editor 新规格 E2E、Editor Engine reducer 单测、类型检查和生产构建纳入验收。
+
+仍保留的兼容边界：本地存储和导出 Schema 暂时继续携带 `blocks/freeElements`，后续 API 升级为 Editor Schema v1 后可移除。
 
 ## 背景问题
 
 当前编辑器已经具备页面树、组件库、自由拖拽、资源、设置、模板库、Inspector 和运行时预览，但使用时仍然“不顺手”。根因不是单个 UI 样式，而是交互模型混杂：
 
 - 页面树和组件库放在同一个窄面板里，结构管理和添加组件互相挤压。
-- 默认进入自由拖拽，用户需要同时理解 `x/y/w/h/z`、层级、容器和普通组件。
+- 旧版默认自由拖拽要求用户同时理解 `x/y/w/h/z`、层级、容器和普通组件；v2 已改为自动布局默认。
 - 容器没有成为主要布局心智，导致用户仍在用绝对定位解决大多数排版问题。
 - Inspector 只有 `内容 / 绑定 / 动作`，布局、外观、交互、数据绑定被混在一起。
 - 页面设计、模块预览、运行时虽然已走同一 renderer 方向，但编辑态的入口和模式命名仍不够清晰。
@@ -215,14 +233,14 @@ FAQ
 - 不展示 resize 点，除非组件支持尺寸配置。
 - 不直接暴露 `x/y`，只在高级面板显示。
 
-### 自由设计模式
+### 节点级自由定位
 
 自由设计模式是高级能力。
 
 入口：
 
 ```text
-画布工具条 > 模式 > 自由定位
+Inspector > 属性 > 定位方式 > 自由定位
 ```
 
 适用场景：
@@ -234,7 +252,8 @@ FAQ
 限制：
 
 - 默认不打开。
-- 自由元素仍必须属于某个容器或 Section。
+- 顶部不增加第三种模式，避免“页面设计”和“自由定位”产生两套编辑状态。
+- 自由节点仍属于 Page 或某个容器。
 - 自由定位保存到同一 Editor Schema。
 - 预览和运行时仍使用同一 Canvas Renderer。
 
@@ -256,9 +275,13 @@ FAQ
 
 ## 右侧 Inspector
 
-Inspector 按属性心智分组，不按技术对象分组。
+Inspector 按属性心智分组，不按技术对象分组。一级 tab 固定为：
 
-统一分组：
+```text
+属性 | 样式 | 数据与动作
+```
+
+tab 内统一分组：
 
 ```text
 内容
@@ -293,7 +316,7 @@ Inspector 按属性心智分组，不按技术对象分组。
 - 内边距 padding
 - 换行 wrap
 
-只有自由设计模式或高级对象才显示：
+只有节点启用自由定位后才显示：
 
 - X
 - Y
@@ -398,6 +421,9 @@ StyleToken
   "layout": "vertical-layout",
   "children": ["hero", "reward", "claim"],
   "frame": { "x": 0, "y": 0, "width": 393, "height": 0, "z": 1 },
+  "positioning": "flow",
+  "widthMode": "fill",
+  "heightMode": "auto",
   "flexDirection": "column",
   "justifyContent": "flex-start",
   "alignItems": "stretch",
@@ -420,6 +446,9 @@ StyleToken
   "parentId": "section_hero",
   "visible": true,
   "frame": { "x": 0, "y": 0, "width": 345, "height": 52, "z": 3 },
+  "positioning": "flow",
+  "widthMode": "fill",
+  "heightMode": "auto",
   "content": { "text": "立即领取", "variant": "primary" },
   "resourceBindings": [
     { "id": "claim_disabled", "expression": "{{ !eligibility.canClaim }}" }
@@ -443,6 +472,7 @@ moveNode
 resizeNode
 moveIntoContainer
 moveOutOfContainer
+placeNode
 deleteNode
 duplicateNode
 reorderNode

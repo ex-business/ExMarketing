@@ -1,6 +1,6 @@
 import type { CampaignBlockKind, CampaignPageSchema, CampaignPageSummary, CampaignPageVersion, CampaignValidationIssue, LayoutKind } from './types';
-import { initialBlocks, initialFreeElements, syncFreeElementsWithBlocks } from './layout';
-import { withEditorPage } from './editorSchema';
+import { fitLayouts, initialBlocks, initialFreeElements, syncFreeElementsWithBlocks } from './layout';
+import { editorPageToBlocks, editorPageToFreeElements, withEditorPage, type Page } from './editorSchema';
 import { normalizePage } from './editorEngine';
 
 const CAMPAIGN_PAGE_STORAGE_KEY = 'exmarketing.campaignEditor.page.v1';
@@ -33,18 +33,36 @@ export function writeJSON(key: string, value: unknown) {
 }
 
 export function normalizeCampaignPage(page: CampaignPageInput): CampaignPageSchema {
-  const pageWithSyncedElements = {
-    ...page,
-    freeElements: syncFreeElementsWithBlocks(
-      page.blocks,
-      page.device.defaultWidth,
-      page.freeElements ?? initialFreeElements,
-    ),
-  };
-  const pageWithEditor = withEditorPage(pageWithSyncedElements);
+  const hasCanonicalEditor = Boolean(page.editor?.schemaVersion === 1 && Array.isArray(page.editor.nodes) && Array.isArray(page.editor.rootNodeIds));
+  const editor = hasCanonicalEditor
+    ? normalizePage(page.editor!)
+    : normalizePage(withEditorPage({
+        ...page,
+        freeElements: syncFreeElementsWithBlocks(page.blocks, page.device.defaultWidth, page.freeElements ?? initialFreeElements),
+      }).editor);
+  const freeElements = fitLayouts(editorPageToFreeElements(editor));
   return {
-    ...pageWithEditor,
-    editor: normalizePage(pageWithEditor.editor),
+    ...page,
+    editor,
+    blocks: editorPageToBlocks(editor, page.blocks),
+    freeElements,
+  };
+}
+
+export function syncCampaignPageFromEditor(page: CampaignPageSchema, editorPage: Page): CampaignPageSchema {
+  const editor = normalizePage({
+    ...editorPage,
+    id: page.id,
+    activityId: page.activityId,
+    name: page.name,
+    path: page.path,
+    device: page.device,
+  });
+  return {
+    ...page,
+    editor,
+    blocks: editorPageToBlocks(editor, page.blocks),
+    freeElements: fitLayouts(editorPageToFreeElements(editor)),
   };
 }
 
@@ -101,6 +119,16 @@ function unpublishedRuntimePage(path: string): CampaignPageSchema {
     path: publishedPageKey(path),
     blocks: [],
     freeElements: [],
+    editor: {
+      ...fallback.editor,
+      name: '页面未发布',
+      path: publishedPageKey(path),
+      rootNodeIds: [],
+      nodes: [],
+      resourceBindings: [],
+      actionBindings: [],
+      styleTokens: [],
+    },
     status: 'OFFLINE',
   });
 }
@@ -182,8 +210,9 @@ function validateBindingExpression(value: string | undefined): boolean {
   return /^\{\{\s*!?[a-z]+(?:\.[A-Za-z0-9_]+)+\s*\}\}$/.test(value.trim());
 }
 
-export function validateCampaignPage(page: CampaignPageSchema): CampaignValidationIssue[] {
+export function validateCampaignPage(page: CampaignPageSchema, registeredActionIds: Iterable<string> = []): CampaignValidationIssue[] {
   const issues: CampaignValidationIssue[] = [];
+  const allowedActionIds = new Set([...ALLOWED_ACTIONS, ...registeredActionIds]);
   if (!page.name.trim()) issues.push({ code: 'PAGE_NAME_REQUIRED', message: '页面名称不能为空。' });
   if (!page.path.startsWith('/campaign/')) issues.push({ code: 'PAGE_PATH_INVALID', message: '页面路径必须以 /campaign/ 开头。' });
   if (!page.editor.nodes.length) issues.push({ code: 'PAGE_NODES_REQUIRED', message: '页面至少需要一个节点。' });
@@ -196,7 +225,7 @@ export function validateCampaignPage(page: CampaignPageSchema): CampaignValidati
       if (!validateBindingExpression(binding.expression)) issues.push({ code: 'NODE_BINDING_INVALID', message: `${node.name} 的资源绑定表达式不合法。` });
     }
     for (const action of node.actionBindings) {
-      if (!ALLOWED_ACTIONS.has(action.actionId)) issues.push({ code: 'NODE_ACTION_UNSUPPORTED', message: `${node.name} 的动作不在白名单内。` });
+      if (!allowedActionIds.has(action.actionId)) issues.push({ code: 'NODE_ACTION_UNSUPPORTED', message: `${node.name} 的动作未在资源中心注册。` });
     }
     if (node.type === 'container') {
       if (!ALLOWED_LAYOUT_KINDS.has(node.layout)) issues.push({ code: 'NODE_LAYOUT_UNSUPPORTED', message: `${node.name} 的布局类型不在白名单内。` });
@@ -209,13 +238,13 @@ export function validateCampaignPage(page: CampaignPageSchema): CampaignValidati
     if (!ALLOWED_BLOCK_KINDS.has(block.kind)) issues.push({ code: 'BLOCK_TYPE_UNSUPPORTED', message: `${block.title} 的内容块类型不在白名单内。` });
     if (!validateBindingExpression(block.binding)) issues.push({ code: 'BLOCK_BINDING_INVALID', message: `${block.title} 的绑定表达式不合法。` });
     if (!validateBindingExpression(block.visibleWhen)) issues.push({ code: 'BLOCK_VISIBLE_EXPR_INVALID', message: `${block.title} 的展示条件不合法。` });
-    if (block.action && !ALLOWED_ACTIONS.has(block.action)) issues.push({ code: 'BLOCK_ACTION_UNSUPPORTED', message: `${block.title} 的动作不在白名单内。` });
+    if (block.action && !allowedActionIds.has(block.action)) issues.push({ code: 'BLOCK_ACTION_UNSUPPORTED', message: `${block.title} 的动作未在资源中心注册。` });
   }
   for (const element of page.freeElements ?? []) {
     if (!element.text.trim()) issues.push({ code: 'FREE_ELEMENT_TEXT_REQUIRED', message: `${element.id} 的自由元素内容不能为空。` });
     if (!validateBindingExpression(element.binding)) issues.push({ code: 'FREE_ELEMENT_BINDING_INVALID', message: `${element.id} 的绑定表达式不合法。` });
     if (!validateBindingExpression(element.visibleWhen)) issues.push({ code: 'FREE_ELEMENT_VISIBLE_EXPR_INVALID', message: `${element.id} 的展示条件不合法。` });
-    if (element.action && !ALLOWED_ACTIONS.has(element.action)) issues.push({ code: 'FREE_ELEMENT_ACTION_UNSUPPORTED', message: `${element.id} 的动作不在白名单内。` });
+    if (element.action && !allowedActionIds.has(element.action)) issues.push({ code: 'FREE_ELEMENT_ACTION_UNSUPPORTED', message: `${element.id} 的动作未在资源中心注册。` });
   }
   return issues;
 }

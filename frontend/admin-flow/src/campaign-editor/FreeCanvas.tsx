@@ -1,12 +1,8 @@
-import { Copy, Gift, Image, Plane, Plus, Trash2, Type } from 'lucide-react';
+import { Copy, Gift, Image, Plane, Trash2, Type } from 'lucide-react';
 import { useState, type PointerEvent as ReactPointerEvent } from 'react';
 import type { CampaignBlockKind, ComponentRegistryKey, DeviceWidth, FreeDesignElement, LayoutKind } from './types';
 import { findContainingLayout, fitLayouts, layoutChildWidth } from './layout';
 import { CanvasRenderer } from './CanvasRenderer';
-
-export function AddBetween({ onClick }: { onClick: () => void }) {
-  return <button className="campaign-between-add" type="button" onClick={onClick}><Plus size={14} />添加内容块</button>;
-}
 
 export function FreeLayerPanel({
   elements,
@@ -86,12 +82,14 @@ export function FreeDesignCanvas({
   onMoveElement,
   onResizeElement,
   onMoveIntoLayout,
+  onBeginInteraction,
+  onCommitInteraction,
 }: {
   width: DeviceWidth;
   elements: FreeDesignElement[];
   selectedId: string;
   onSelect: (id: string) => void;
-  onChange: (updater: (current: FreeDesignElement[]) => FreeDesignElement[]) => void;
+  onChange?: (updater: (current: FreeDesignElement[]) => FreeDesignElement[]) => void;
   draggingBlockKind: CampaignBlockKind | null;
   draggingLayoutKind: LayoutKind | null;
   draggingComponentKey?: ComponentRegistryKey | null;
@@ -103,11 +101,14 @@ export function FreeDesignCanvas({
   onMoveElement?: (id: string, x: number, y: number) => void;
   onResizeElement?: (id: string, w: number, h: number) => void;
   onMoveIntoLayout?: (id: string, layoutId: string) => void;
+  onBeginInteraction?: () => void;
+  onCommitInteraction?: () => void;
 }) {
   const [guides, setGuides] = useState<{ x?: number; y?: number }>({});
   const nearestGuide = (value: number, targets: number[]) => targets.reduce((nearest, target) => Math.abs(target - value) < Math.abs(nearest - value) ? target : nearest, targets[0]);
 
   const startDrag = (event: ReactPointerEvent<HTMLElement>, element: FreeDesignElement) => {
+    onBeginInteraction?.();
     const startX = event.clientX;
     const startY = event.clientY;
     const original = { x: element.x, y: element.y };
@@ -134,7 +135,7 @@ export function FreeDesignCanvas({
       if (onMoveElement) {
         onMoveElement(element.id, latest.x, latest.y);
       } else {
-        onChange((items) => items.map((item) => item.id === element.id ? { ...item, ...latest } : item));
+        onChange?.((items) => items.map((item) => item.id === element.id ? { ...item, ...latest } : item));
       }
     };
     const end = () => {
@@ -148,7 +149,7 @@ export function FreeDesignCanvas({
           if (onMoveIntoLayout) {
             onMoveIntoLayout(element.id, parent.id);
           } else {
-            onChange((items) => fitLayouts(items.map((item) => item.id === element.id ? {
+            onChange?.((items) => fitLayouts(items.map((item) => item.id === element.id ? {
               ...item,
               parentId: parent.id,
               x: localX,
@@ -158,6 +159,7 @@ export function FreeDesignCanvas({
           }
         }
       }
+      onCommitInteraction?.();
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', end);
     };
@@ -170,6 +172,7 @@ export function FreeDesignCanvas({
     const startX = event.clientX;
     const startY = event.clientY;
     const original = { w: element.w, h: element.h };
+    onBeginInteraction?.();
     event.currentTarget.setPointerCapture(event.pointerId);
     onSelect(element.id);
     const move = (moveEvent: PointerEvent) => {
@@ -178,10 +181,11 @@ export function FreeDesignCanvas({
       if (onResizeElement) {
         onResizeElement(element.id, Math.round(nextW), Math.round(nextH));
       } else {
-        onChange((items) => items.map((item) => item.id === element.id ? { ...item, w: Math.round(nextW), h: Math.round(nextH) } : item));
+        onChange?.((items) => items.map((item) => item.id === element.id ? { ...item, w: Math.round(nextW), h: Math.round(nextH) } : item));
       }
     };
     const end = () => {
+      onCommitInteraction?.();
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', end);
     };

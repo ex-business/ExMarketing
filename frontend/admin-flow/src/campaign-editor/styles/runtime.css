@@ -14,6 +14,16 @@
   background: var(--campaign-mobile-bg);
 }
 
+.campaign-runtime-canvas,
+.campaign-module-preview-canvas.campaign-flow-canvas {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+  padding: 16px;
+}
+
 .campaign-module-preview-canvas {
   min-height: 0;
   position: relative;
@@ -47,6 +57,13 @@
   font-size: 14px;
   font-weight: 850;
   line-height: 1.25;
+}
+
+.campaign-runtime-element.flow {
+  position: relative;
+  inset: auto;
+  contain: layout paint;
+  overflow: visible;
 }
 
 .campaign-runtime-element.selected {
@@ -106,8 +123,7 @@
 }
 
 .campaign-runtime-element.layout {
-  overflow-x: hidden;
-  overflow-y: auto;
+  overflow: visible;
   border: 1px dashed var(--theme-accent);
   background: var(--theme-accent-soft);
   color: var(--theme-text-body);
